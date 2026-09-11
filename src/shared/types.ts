@@ -184,3 +184,75 @@ export interface SkillMeta {
 export interface SkillFile extends SkillMeta {
   raw: string
 }
+
+export interface Chapter {
+  id: string
+  outlineId: string
+  projectId: string
+  version: number
+  content: string
+  wordCount: number
+  status: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ChapterBrief extends OutlineItem {
+  hasDraft: boolean
+  wordCount: number
+  chapterStatus: string
+}
+
+export interface ChapterSummary {
+  id: string
+  chapterId: string
+  summary: string
+  events: string[]
+  timeline: string
+  characterStates: Array<{ name: string; state: string }>
+  foreshadowsPlanted: Array<{ content: string; quote?: string }>
+  foreshadowsResolved: string[]
+  createdAt: number
+}
+
+export interface Foreshadow {
+  id: string
+  projectId: string
+  content: string
+  plantedChapter: string
+  status: string
+  resolvedChapter: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ForeshadowInput {
+  projectId: string
+  content: string
+  plantedChapter?: string
+  status?: string
+  resolvedChapter?: string
+}
+
+export interface ContextPart {
+  name: string
+  detail: string
+  tokens: number
+}
+
+export interface BuiltContext {
+  system: string
+  user: string
+  parts: ContextPart[]
+  totalTokens: number
+}
+
+export type PipelineAction = 'outline' | 'chapter' | 'summary' | 'polish' | 'check'
+
+export interface OutlineGenParams {
+  projectId: string
+  idea: string
+  volume: number
+  startNo: number
+  count: number
+}

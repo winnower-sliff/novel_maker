@@ -1,7 +1,12 @@
 import { randomUUID } from 'node:crypto'
 import type {
+  Chapter,
+  ChapterBrief,
+  ChapterSummary,
   Character,
   CharacterInput,
+  Foreshadow,
+  ForeshadowInput,
   OutlineItem,
   OutlineStatus,
   OutlineInput,
@@ -168,6 +173,11 @@ export function listOutlines(projectId: string): OutlineItem[] {
     .map((r) => mapOutline(r as Row))
 }
 
+export function getOutline(id: string): OutlineItem | null {
+  const r = getDb().prepare('SELECT * FROM outlines WHERE id = ?').get(id) as Row | undefined
+  return r ? mapOutline(r) : null
+}
+
 export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem {
   const db = getDb()
   const ts = now()
@@ -196,4 +206,162 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
 
 export function deleteOutline(id: string): void {
   getDb().prepare('DELETE FROM outlines WHERE id = ?').run(id)
+}
+
+type ChapterRow = {
+  id: string
+  outline_id: string
+  project_id: string
+  version: number
+  content: string
+  word_count: number
+  status: string
+  created_at: number
+  updated_at: number
+}
+
+export function countWords(text: string): number {
+  return text.replace(/\s/g, '').length
+}
+
+export function listChapterBriefs(projectId: string): ChapterBrief[] {
+  const rows = getDb()
+    .prepare(
+      `SELECT o.*, c.id AS chapter_id, c.word_count AS wc, c.status AS chapter_status
+       FROM outlines o LEFT JOIN chapters c ON c.outline_id = o.id
+       WHERE o.project_id = ? ORDER BY o.volume, o.chapter_no`
+    )
+    .all(projectId) as Array<Record<string, unknown>>
+  return rows.map((r) => ({
+    ...mapOutline(r),
+    hasDraft: !!r.chapter_id,
+    wordCount: (r.wc as number) ?? 0,
+    chapterStatus: (r.chapter_status as string) ?? ''
+  }))
+}
+
+export function getChapterByOutline(outlineId: string): Chapter | null {
+  const r = getDb().prepare('SELECT * FROM chapters WHERE outline_id = ?').get(outlineId) as
+    | ChapterRow
+    | undefined
+  if (!r) return null
+  return {
+    id: r.id,
+    outlineId: r.outline_id,
+    projectId: r.project_id,
+    version: r.version,
+    content: r.content,
+    wordCount: r.word_count,
+    status: r.status,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
+
+export function saveChapter(args: {
+  outlineId: string
+  projectId: string
+  content: string
+  status?: string
+}): Chapter {
+  const db = getDb()
+  const ts = now()
+  const existing = db
+    .prepare('SELECT * FROM chapters WHERE outline_id = ?')
+    .get(args.outlineId) as ChapterRow | undefined
+  const wc = countWords(args.content)
+  if (existing) {
+    db.prepare(
+      'UPDATE chapters SET content = ?, word_count = ?, version = version + 1, status = COALESCE(?, status), updated_at = ? WHERE id = ?'
+    ).run(args.content, wc, args.status ?? null, ts, existing.id)
+  } else {
+    const id = randomUUID()
+    db.prepare(
+      'INSERT INTO chapters (id, outline_id, project_id, version, content, word_count, status, created_at, updated_at) VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)'
+    ).run(id, args.outlineId, args.projectId, args.content, wc, args.status ?? 'draft', ts, ts)
+  }
+  return getChapterByOutline(args.outlineId) as Chapter
+}
+
+export function getSummary(chapterId: string): ChapterSummary | null {
+  const r = getDb().prepare('SELECT * FROM summaries WHERE chapter_id = ?').get(chapterId) as
+    | { id: string; chapter_id: string; content: string; created_at: number }
+    | undefined
+  if (!r) return null
+  try {
+    const parsed = JSON.parse(r.content) as Omit<ChapterSummary, 'id' | 'chapterId' | 'createdAt'>
+    return { id: r.id, chapterId: r.chapter_id, createdAt: r.created_at, ...parsed }
+  } catch {
+    return null
+  }
+}
+
+export function saveSummary(chapterId: string, summary: Omit<ChapterSummary, 'id' | 'chapterId' | 'createdAt'>): void {
+  const db = getDb()
+  const raw = JSON.stringify(summary)
+  const existing = db.prepare('SELECT id FROM summaries WHERE chapter_id = ?').get(chapterId) as
+    | { id: string }
+    | undefined
+  if (existing) {
+    db.prepare('UPDATE summaries SET content = ? WHERE chapter_id = ?').run(raw, chapterId)
+  } else {
+    db.prepare('INSERT INTO summaries (id, chapter_id, content, created_at) VALUES (?, ?, ?, ?)').run(
+      randomUUID(),
+      chapterId,
+      raw,
+      now()
+    )
+  }
+}
+
+export function listForeshadows(projectId: string): Foreshadow[] {
+  return getDb()
+    .prepare('SELECT * FROM foreshadows WHERE project_id = ? ORDER BY created_at DESC')
+    .all(projectId)
+    .map((r) => {
+      const row = r as Record<string, unknown>
+      return {
+        id: row.id as string,
+        projectId: row.project_id as string,
+        content: row.content as string,
+        plantedChapter: (row.planted_chapter as string) ?? '',
+        status: (row.status as string) ?? 'open',
+        resolvedChapter: (row.resolved_chapter as string) ?? '',
+        createdAt: row.created_at as number,
+        updatedAt: row.updated_at as number
+      }
+    })
+}
+
+export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foreshadow {
+  const db = getDb()
+  const ts = now()
+  if (input.id) {
+    db.prepare(
+      'UPDATE foreshadows SET content = ?, planted_chapter = ?, status = ?, resolved_chapter = ?, updated_at = ? WHERE id = ?'
+    ).run(input.content, input.plantedChapter ?? '', input.status ?? 'open', input.resolvedChapter ?? '', ts, input.id)
+  } else {
+    const id = randomUUID()
+    db.prepare(
+      'INSERT INTO foreshadows (id, project_id, content, planted_chapter, status, resolved_chapter, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+    ).run(id, input.projectId, input.content, input.plantedChapter ?? '', input.status ?? 'open', input.resolvedChapter ?? '', ts, ts)
+  }
+  const row = input.id
+    ? db.prepare('SELECT * FROM foreshadows WHERE id = ?').get(input.id)
+    : db.prepare('SELECT * FROM foreshadows WHERE project_id = ? ORDER BY created_at DESC LIMIT 1').get(input.projectId)
+  const r = row as Record<string, unknown>
+  return {
+    id: r.id as string,
+    projectId: r.project_id as string,
+    content: r.content as string,
+    plantedChapter: (r.planted_chapter as string) ?? '',
+    status: (r.status as string) ?? 'open',
+    resolvedChapter: (r.resolved_chapter as string) ?? '',
+    createdAt: r.created_at as number,
+    updatedAt: r.updated_at as number
+  }
+}
+
+export function deleteForeshadow(id: string): void {
+  getDb().prepare('DELETE FROM foreshadows WHERE id = ?').run(id)
 }

@@ -1,12 +1,20 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  BuiltContext,
+  Chapter,
+  ChapterBrief,
+  ChapterSummary,
   Character,
   CharacterInput,
   ChatParams,
   ChatResult,
+  Foreshadow,
+  ForeshadowInput,
   ModelProbeResult,
+  OutlineGenParams,
   OutlineInput,
   OutlineItem,
+  PipelineAction,
   Project,
   ProjectInput,
   SettingsPatch,
@@ -19,7 +27,13 @@ import type {
   WorldbuildInput
 } from '../shared/types'
 
-export type DonePayload = Pick<ChatResult, 'usage' | 'model' | 'stopReason' | 'durationMs' | 'headers'>
+export type DonePayload = Pick<
+  ChatResult,
+  'usage' | 'model' | 'stopReason' | 'durationMs' | 'headers'
+> & {
+  action?: PipelineAction
+  data?: unknown
+}
 
 const api = {
   settings: {
@@ -77,7 +91,29 @@ const api = {
       ipcRenderer.invoke('novel:outlines', projectId),
     outlineSave: (input: OutlineInput & { id?: string }): Promise<OutlineItem> =>
       ipcRenderer.invoke('novel:outlineSave', input),
-    outlineDelete: (id: string): Promise<void> => ipcRenderer.invoke('novel:outlineDelete', id)
+    outlineDelete: (id: string): Promise<void> => ipcRenderer.invoke('novel:outlineDelete', id),
+    chapterBriefs: (projectId: string): Promise<ChapterBrief[]> =>
+      ipcRenderer.invoke('novel:chapterBriefs', projectId),
+    chapter: (outlineId: string): Promise<Chapter | null> =>
+      ipcRenderer.invoke('novel:chapter', outlineId),
+    saveChapter: (input: {
+      outlineId: string
+      projectId: string
+      content: string
+      status?: string
+    }): Promise<Chapter> => ipcRenderer.invoke('novel:saveChapter', input),
+    contextPreview: (outlineId: string): Promise<BuiltContext> =>
+      ipcRenderer.invoke('novel:contextPreview', outlineId),
+    foreshadows: (projectId: string): Promise<Foreshadow[]> =>
+      ipcRenderer.invoke('novel:foreshadows', projectId),
+    foreshadowSave: (input: ForeshadowInput & { id?: string }): Promise<Foreshadow> =>
+      ipcRenderer.invoke('novel:foreshadowSave', input),
+    foreshadowDelete: (id: string): Promise<void> =>
+      ipcRenderer.invoke('novel:foreshadowDelete', id)
+  },
+  pipeline: {
+    run: (action: PipelineAction, params: unknown): Promise<string> =>
+      ipcRenderer.invoke('pipeline:run', action, params)
   },
   skills: {
     list: (): Promise<SkillMeta[]> => ipcRenderer.invoke('skills:list'),

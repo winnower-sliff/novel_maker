@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import type { Project, SettingsView, UsageStats } from '@shared/types'
 import Characters from './pages/Characters'
+import Foreshadows from './pages/Foreshadows'
 import Outline from './pages/Outline'
 import Playground from './pages/Playground'
 import Projects from './pages/Projects'
@@ -8,13 +9,16 @@ import Settings from './pages/Settings'
 import Skills from './pages/Skills'
 import Usage from './pages/Usage'
 import Worldbuild from './pages/Worldbuild'
+import Writing from './pages/Writing'
 import { fmtTokens } from './lib/format'
 
 type Page =
   | 'projects'
+  | 'writing'
   | 'outline'
   | 'characters'
   | 'worldbuild'
+  | 'foreshadows'
   | 'playground'
   | 'skills'
   | 'usage'
@@ -33,6 +37,15 @@ const GROUP_CREATIVE: NavItem[] = [
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
         <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+      </svg>
+    )
+  },
+  {
+    id: 'writing',
+    label: '写作台',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+        <path d="m16.5 3.5 4 4L8 20l-5 1 1-5L16.5 3.5Z" strokeLinejoin="round" />
       </svg>
     )
   },
@@ -62,6 +75,16 @@ const GROUP_CREATIVE: NavItem[] = [
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
         <circle cx="12" cy="12" r="9" />
         <path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9Z" />
+      </svg>
+    )
+  },
+  {
+    id: 'foreshadows',
+    label: '伏笔',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+        <path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" strokeLinecap="round" />
+        <circle cx="12" cy="12" r="3" />
       </svg>
     )
   }
@@ -213,9 +236,11 @@ export default function App() {
           {page === 'projects' && (
             <Projects currentProjectId={cfg?.currentProjectId ?? ''} onSwitch={switchProject} />
           )}
+          {page === 'writing' && <Writing projectId={currentProject?.id ?? ''} />}
           {page === 'outline' && <Outline projectId={currentProject?.id ?? ''} />}
           {page === 'characters' && <Characters projectId={currentProject?.id ?? ''} />}
           {page === 'worldbuild' && <Worldbuild projectId={currentProject?.id ?? ''} />}
+          {page === 'foreshadows' && <Foreshadows projectId={currentProject?.id ?? ''} />}
           {page === 'playground' && <Playground />}
           {page === 'skills' && <Skills />}
           {page === 'usage' && <Usage />}

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
 
@@ -24,6 +24,15 @@ interface EditState {
 export default function Outline({ projectId }: { projectId: string }) {
   const [items, setItems] = useState<OutlineItem[]>([])
   const [edit, setEdit] = useState<EditState | null>(null)
+  const [genOpen, setGenOpen] = useState(false)
+  const [idea, setIdea] = useState('')
+  const [volume, setVolume] = useState('1')
+  const [startNo, setStartNo] = useState('1')
+  const [count, setCount] = useState('30')
+  const [generating, setGenerating] = useState(false)
+  const [genOutput, setGenOutput] = useState('')
+  const [genNotice, setGenNotice] = useState('')
+  const genRequestId = useRef<string | null>(null)
 
   const load = useCallback((): void => {
     if (!projectId) return
@@ -35,6 +44,33 @@ export default function Outline({ projectId }: { projectId: string }) {
     setEdit(null)
     load()
   }, [load])
+
+  useEffect(() => {
+    const offDelta = window.api.llm.onDelta((id, text) => {
+      if (id === genRequestId.current) setGenOutput((prev) => (prev + text).slice(-2000))
+    })
+    const offDone = window.api.llm.onDone((id, payload) => {
+      if (id !== genRequestId.current) return
+      setGenerating(false)
+      const d = payload.data as { created?: number; skipped?: number; parsed?: boolean; error?: string }
+      if (d?.error) setGenNotice(`解析失败：${d.error}`)
+      else if (!d?.parsed) setGenNotice('输出未解析出有效 JSON，请调整创意后重试')
+      else setGenNotice(`已导入 ${d.created} 章${d.skipped ? `（跳过已存在 ${d.skipped} 章）` : ''}`)
+      load()
+      void window.api.novel.outlines(projectId).then(setItems)
+    })
+    const offError = window.api.llm.onError((id, message) => {
+      if (id === genRequestId.current) {
+        setGenerating(false)
+        setGenNotice(`出错：${message}`)
+      }
+    })
+    return () => {
+      offDelta()
+      offDone()
+      offError()
+    }
+  }, [load, projectId])
 
   const volumes = useMemo(() => {
     const map = new Map<number, OutlineItem[]>()
@@ -89,20 +125,97 @@ export default function Outline({ projectId }: { projectId: string }) {
               `（草稿 ${counts.draft ?? 0} / 审定 ${counts.approved ?? 0} / 已写 ${counts.written ?? 0} / 已润色 ${counts.polished ?? 0}）`}
           </span>
         </div>
-        <Button
-          onClick={() =>
-            setEdit({
-              volume: String(items.at(-1)?.volume ?? 1),
-              chapterNo: String((items.at(-1)?.chapterNo ?? 0) + 1),
-              title: '',
-              synopsis: '',
-              status: 'draft'
-            })
-          }
-        >
-          新增章节
-        </Button>
+        <div className="ml-auto flex gap-2">
+          <Button variant="ghost" onClick={() => setGenOpen((v) => !v)}>
+            AI 生成大纲
+          </Button>
+          <Button
+            onClick={() =>
+              setEdit({
+                volume: String(items.at(-1)?.volume ?? 1),
+                chapterNo: String((items.at(-1)?.chapterNo ?? 0) + 1),
+                title: '',
+                synopsis: '',
+                status: 'draft'
+              })
+            }
+          >
+            新增章节
+          </Button>
+        </div>
       </div>
+
+      {genOpen && (
+        <Card className="space-y-3 p-4">
+          <div>
+            <Label>核心创意（题材、主角、金手指、主线冲突；已有世界观/人物会自动作为上下文）</Label>
+            <Textarea
+              rows={3}
+              value={idea}
+              onChange={(e) => setIdea(e.target.value)}
+              placeholder="例：末法时代最后一位炼丹师重生都市，靠一手丹术搅动风云…"
+              disabled={generating}
+            />
+          </div>
+          <div className="grid grid-cols-3 gap-3">
+            <div>
+              <Label>卷号</Label>
+              <Input type="number" value={volume} onChange={(e) => setVolume(e.target.value)} disabled={generating} />
+            </div>
+            <div>
+              <Label>起始章号</Label>
+              <Input type="number" value={startNo} onChange={(e) => setStartNo(e.target.value)} disabled={generating} />
+            </div>
+            <div>
+              <Label>生成章数</Label>
+              <Input type="number" value={count} onChange={(e) => setCount(e.target.value)} disabled={generating} />
+            </div>
+          </div>
+          <div className="flex items-center gap-3">
+            <Button
+              disabled={generating || !idea.trim()}
+              onClick={() => {
+                setGenerating(true)
+                setGenOutput('')
+                setGenNotice('')
+                void window.api.pipeline
+                  .run('outline', {
+                    projectId,
+                    idea: idea.trim(),
+                    volume: parseInt(volume, 10) || 1,
+                    startNo: parseInt(startNo, 10) || 1,
+                    count: Math.min(60, Math.max(1, parseInt(count, 10) || 30))
+                  })
+                  .then((id) => {
+                    genRequestId.current = id
+                  })
+                  .catch((err: unknown) => {
+                    setGenerating(false)
+                    setGenNotice((err as Error).message)
+                  })
+              }}
+            >
+              {generating ? '生成中…' : '生成并导入'}
+            </Button>
+            {generating && (
+              <Button
+                variant="danger"
+                onClick={() => {
+                  if (genRequestId.current) void window.api.llm.abort(genRequestId.current)
+                }}
+              >
+                中断
+              </Button>
+            )}
+            {genNotice && <span className="text-xs text-zinc-400">{genNotice}</span>}
+          </div>
+          {generating && (
+            <pre className="max-h-32 overflow-hidden rounded bg-zinc-950 p-2 font-mono text-[10px] leading-4 text-zinc-600">
+              {genOutput || '等待模型输出…'}
+            </pre>
+          )}
+        </Card>
+      )}
 
       {edit && (
         <Card className="grid grid-cols-12 gap-3 p-4">
