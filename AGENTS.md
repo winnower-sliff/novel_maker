@@ -4,6 +4,7 @@
 - `npm run dev` 启动开发（Electron 窗口）
 - `npm run typecheck` 两套 tsconfig（node=主进程/preload，web=renderer）类型检查
 - `npm run build` 产物到 out/
+- `npm run dist` 打包 NSIS 安装包到 dist/（需先 `export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`，否则国内下载 Electron/NSIS 会超时）
 - Lint 暂无（后续可加 eslint）
 
 ## 架构
