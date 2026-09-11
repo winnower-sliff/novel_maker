@@ -116,6 +116,128 @@ export function buildSummaryRequest(projectId: string, outlineId: string): ChatP
   }
 }
 
+export function buildPolishRequest(projectId: string, outlineId: string): ChatParams {
+  const project = store.listProjects().find((x) => x.id === projectId)
+  const outline = store.getOutline(outlineId)
+  const chapter = outline ? store.getChapterByOutline(outlineId) : null
+  if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法润色')
+  const system = [
+    skillBody('style-polisher'),
+    project?.styleGuide && `【作品风格】\n${project.styleGuide}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [
+      { role: 'user', content: `第${outline.chapterNo}章《${outline.title}》正文：\n\n${chapter.content}` }
+    ],
+    maxTokens: 8192,
+    temperature: 0.5,
+    purpose: 'polish'
+  }
+}
+
+export function buildCheckRequest(projectId: string, outlineId: string): ChatParams {
+  const outline = store.getOutline(outlineId)
+  const chapter = outline ? store.getChapterByOutline(outlineId) : null
+  if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法检查')
+  const ctx = buildChapterContext(projectId, outlineId)
+  const system = [skillBody('continuity-checker'), ctx.system].filter(Boolean).join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: `请检查以下章节正文：\n\n${chapter.content}` }],
+    maxTokens: 4096,
+    temperature: 0.2,
+    purpose: 'check'
+  }
+}
+
+export interface CheckIssue {
+  type: string
+  quote: string
+  issue: string
+  fix: string
+}
+
+export function parseCheckResult(text: string): { issues: CheckIssue[]; parsed: boolean } {
+  const arr = extractJsonArray(text)
+  if (!arr) return { issues: [], parsed: false }
+  const issues = arr
+    .map((item) => item as Record<string, unknown>)
+    .map((r) => ({
+      type: String(r.type ?? ''),
+      quote: String(r.quote ?? ''),
+      issue: String(r.issue ?? ''),
+      fix: String(r.fix ?? '')
+    }))
+    .filter((i) => i.issue)
+  return { issues, parsed: true }
+}
+
+export function buildCharacterRequest(projectId: string, brief: string): ChatParams {
+  const project = store.listProjects().find((x) => x.id === projectId)
+  const wb = store
+    .listWorldbuild(projectId)
+    .map((e) => `- [${e.category}] ${e.title}`)
+    .join('\n')
+  const chars = store
+    .listCharacters(projectId)
+    .map((c) => `- ${c.name}（${c.role || '未定位'}）`)
+    .join('\n')
+  const system = [
+    skillBody('character-smith'),
+    project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
+    wb && `【世界观条目】\n${wb}`,
+    chars && `【已有人物（避免定位重复，需咬合关系网）】\n${chars}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: brief }],
+    maxTokens: 4096,
+    temperature: 0.8,
+    purpose: 'outline'
+  }
+}
+
+export function guessCharacterName(card: string, fallback: string): string {
+  const heading = /^#{1,3}\s*(.+)$/m.exec(card)
+  if (heading) {
+    const raw = heading[1].trim()
+    const name = raw.replace(/[（(【].*$/, '').trim()
+    if (name) return name.slice(0, 20)
+  }
+  return fallback || '新人物'
+}
+
+export function buildWorldbuildRequest(projectId: string, brief: string): ChatParams {
+  const project = store.listProjects().find((x) => x.id === projectId)
+  const existing = store
+    .listWorldbuild(projectId)
+    .map((e) => `- [${e.category}] ${e.title}`)
+    .join('\n')
+  const system = [
+    skillBody('worldbuilder'),
+    project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
+    existing && `【已有条目（保持自洽，不要重复）】\n${existing}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: brief }],
+    maxTokens: 4096,
+    temperature: 0.7,
+    purpose: 'outline'
+  }
+}
+
 export function applyOutlineResult(
   p: OutlineGenParams,
   text: string

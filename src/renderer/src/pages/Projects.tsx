@@ -49,6 +49,16 @@ export default function Projects({ currentProjectId, onSwitch }: Props) {
     })
   }
 
+  const exportAll = (project: Project, format: 'txt' | 'md' | 'docx'): void => {
+    void window.api.exporter
+      .run({ projectId: project.id, format, scope: 'all' })
+      .then((r) => window.alert(`已导出：${r.path}\n共 ${r.words} 字`))
+      .catch((err: unknown) => {
+        const msg = (err as Error).message
+        if (msg !== '已取消导出') window.alert(`导出失败：${msg}`)
+      })
+  }
+
   return (
     <div className="mx-auto max-w-3xl space-y-4 overflow-y-auto p-6">
       <div className="flex items-center justify-between">
@@ -118,6 +128,13 @@ export default function Projects({ currentProjectId, onSwitch }: Props) {
                 打开
               </Button>
             )}
+            <span className="mx-1 flex gap-1">
+              {(['txt', 'md', 'docx'] as const).map((f) => (
+                <Button key={f} variant="ghost" className="px-2 py-1 text-xs" onClick={() => exportAll(p, f)}>
+                  {f}
+                </Button>
+              ))}
+            </span>
             <Button variant="danger" onClick={() => remove(p)}>
               删除
             </Button>

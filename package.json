@@ -12,6 +12,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json"
   },
   "dependencies": {
+    "docx": "^9.7.1",
     "react": "^19.3.0",
     "react-dom": "^19.3.0"
   },

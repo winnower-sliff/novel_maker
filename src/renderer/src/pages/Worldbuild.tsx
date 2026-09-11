@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import type { WorldbuildEntry } from '@shared/types'
 import { Button, Card, Input, Label, Select, Textarea } from '../components/ui'
+import { runPipeline } from '../lib/ipc'
 
 const CATEGORIES = ['力量体系', '地理', '势力', '历史', '物品', '其他']
 
@@ -18,6 +19,12 @@ export default function Worldbuild({ projectId }: { projectId: string }) {
   const [filter, setFilter] = useState('全部')
   const [edit, setEdit] = useState<EditState>(EMPTY)
   const [formOpen, setFormOpen] = useState(false)
+  const [genOpen, setGenOpen] = useState(false)
+  const [genBrief, setGenBrief] = useState('')
+  const [genCategory, setGenCategory] = useState('力量体系')
+  const [genTitle, setGenTitle] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [genOutput, setGenOutput] = useState('')
 
   const load = useCallback((): void => {
     if (!projectId) return
@@ -78,10 +85,81 @@ export default function Worldbuild({ projectId }: { projectId: string }) {
             </button>
           ))}
         </div>
-        <Button className="ml-auto" onClick={() => { setEdit(EMPTY); setFormOpen(true) }}>
-          新增条目
-        </Button>
+        <div className="ml-auto flex gap-2">
+          <Button variant="ghost" onClick={() => { setGenOpen((v) => !v) }} disabled={generating}>
+            {generating ? 'AI 生成中…' : 'AI 生成条目'}
+          </Button>
+          <Button onClick={() => { setEdit(EMPTY); setFormOpen(true) }}>
+            新增条目
+          </Button>
+        </div>
       </div>
+
+      {genOpen && (
+        <Card className="space-y-2.5 p-4">
+          <div className="grid grid-cols-12 gap-3">
+            <div className="col-span-2">
+              <Label>分类</Label>
+              <Select value={genCategory} onChange={(e) => setGenCategory(e.target.value)} className="w-full" disabled={generating}>
+                {CATEGORIES.map((c) => (
+                  <option key={c} value={c}>
+                    {c}
+                  </option>
+                ))}
+              </Select>
+            </div>
+            <div className="col-span-3">
+              <Label>条目标题 *</Label>
+              <Input value={genTitle} onChange={(e) => setGenTitle(e.target.value)} disabled={generating} />
+            </div>
+            <div className="col-span-7">
+              <Label>生成需求</Label>
+              <Input
+                value={genBrief}
+                onChange={(e) => setGenBrief(e.target.value)}
+                placeholder="例：修仙九大境界，每境界三层，突破需渡劫，最高境界只剩传说"
+                disabled={generating}
+              />
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <Button
+              onClick={() => {
+                if (!genBrief.trim() || !genTitle.trim() || generating) return
+                setGenerating(true)
+                setGenOutput('')
+                void runPipeline(
+                  'worldbuild',
+                  { projectId, brief: genBrief.trim(), category: genCategory, title: genTitle.trim() },
+                  (text) => setGenOutput((prev) => (prev + text).slice(-1500))
+                )
+                  .then((payload) => {
+                    const d = payload.data as { entryId?: string; error?: string }
+                    if (d?.error) window.alert(`生成完成但保存失败：${d.error}`)
+                    setGenerating(false)
+                    setGenOpen(false)
+                    setGenBrief('')
+                    setGenTitle('')
+                    load()
+                  })
+                  .catch((err: unknown) => {
+                    setGenerating(false)
+                    window.alert(`出错：${(err as Error).message}`)
+                  })
+              }}
+              disabled={!genBrief.trim() || !genTitle.trim() || generating}
+            >
+              生成并保存
+            </Button>
+            <span className="text-xs text-zinc-600">已有条目会作为自洽性上下文注入</span>
+          </div>
+          {generating && (
+            <pre className="max-h-28 overflow-hidden rounded bg-zinc-950 p-2 font-mono text-[10px] leading-4 text-zinc-600">
+              {genOutput || '等待模型输出…'}
+            </pre>
+          )}
+        </Card>
+      )}
 
       {formOpen ? (
         <Card className="space-y-3 p-4">

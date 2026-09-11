@@ -109,11 +109,21 @@ const api = {
     foreshadowSave: (input: ForeshadowInput & { id?: string }): Promise<Foreshadow> =>
       ipcRenderer.invoke('novel:foreshadowSave', input),
     foreshadowDelete: (id: string): Promise<void> =>
-      ipcRenderer.invoke('novel:foreshadowDelete', id)
+      ipcRenderer.invoke('novel:foreshadowDelete', id),
+    summary: (outlineId: string): Promise<ChapterSummary | null> =>
+      ipcRenderer.invoke('novel:summary', outlineId)
   },
   pipeline: {
     run: (action: PipelineAction, params: unknown): Promise<string> =>
       ipcRenderer.invoke('pipeline:run', action, params)
+  },
+  exporter: {
+    run: (opts: {
+      projectId: string
+      format: 'txt' | 'md' | 'docx'
+      scope: 'all' | 'single'
+      outlineId?: string
+    }): Promise<{ path: string; words: number }> => ipcRenderer.invoke('export:run', opts)
   },
   skills: {
     list: (): Promise<SkillMeta[]> => ipcRenderer.invoke('skills:list'),

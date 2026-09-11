@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Character } from '@shared/types'
 import { Badge, Button, Card, Input, Label, Textarea } from '../components/ui'
+import { runPipeline } from '../lib/ipc'
 
 interface EditState {
   id?: string
@@ -16,6 +17,11 @@ export default function Characters({ projectId }: { projectId: string }) {
   const [list, setList] = useState<Character[]>([])
   const [edit, setEdit] = useState<EditState>(EMPTY)
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [genOpen, setGenOpen] = useState(false)
+  const [genBrief, setGenBrief] = useState('')
+  const [genName, setGenName] = useState('')
+  const [generating, setGenerating] = useState(false)
+  const [genOutput, setGenOutput] = useState('')
 
   const load = useCallback((): void => {
     if (!projectId) return
@@ -45,6 +51,37 @@ export default function Characters({ projectId }: { projectId: string }) {
         setEdit(EMPTY)
         setSelectedId(null)
         load()
+      })
+  }
+
+  const generate = (): void => {
+    if (!genBrief.trim() || generating) return
+    setGenerating(true)
+    setGenOutput('')
+    void runPipeline(
+      'character',
+      { projectId, brief: genBrief.trim(), name: genName.trim() },
+      (text) => setGenOutput((prev) => (prev + text).slice(-1500))
+    )
+      .then((payload) => {
+        const d = payload.data as { characterId?: string; name?: string; error?: string }
+        if (d?.error) window.alert(`生成完成但保存失败：${d.error}`)
+        setGenerating(false)
+        setGenOpen(false)
+        setGenBrief('')
+        setGenName('')
+        load()
+        if (d?.characterId) {
+          setSelectedId(d.characterId)
+          void window.api.novel.characters(projectId).then((cs) => {
+            const c = cs.find((x) => x.id === d.characterId)
+            if (c) setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card })
+          })
+        }
+      })
+      .catch((err: unknown) => {
+        setGenerating(false)
+        window.alert(`出错：${(err as Error).message}`)
       })
   }
 
@@ -87,9 +124,46 @@ export default function Characters({ projectId }: { projectId: string }) {
       </Card>
 
       <Card className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4">
-        <div className="mb-4 text-sm font-medium text-zinc-200">
-          {edit.id ? '编辑人物' : '新建人物'}
+        <div className="mb-3 flex items-center justify-between">
+          <div className="text-sm font-medium text-zinc-200">
+            {edit.id ? '编辑人物' : '新建人物'}
+          </div>
+          <Button variant="ghost" onClick={() => setGenOpen((v) => !v)} disabled={generating}>
+            {generating ? 'AI 生成中…' : 'AI 生成人物卡'}
+          </Button>
         </div>
+
+        {genOpen && (
+          <div className="mb-4 space-y-2.5 rounded-md border border-zinc-800 bg-zinc-900 p-3">
+            <div className="grid grid-cols-4 gap-3">
+              <div>
+                <Label>预备名（可空，AI 会从输出推断）</Label>
+                <Input value={genName} onChange={(e) => setGenName(e.target.value)} disabled={generating} />
+              </div>
+              <div className="col-span-3">
+                <Label>人物需求（定位、性格方向、与主线的关联）</Label>
+                <Input
+                  value={genBrief}
+                  onChange={(e) => setGenBrief(e.target.value)}
+                  placeholder="例：女主的师兄，表面温和实则城府极深，后期黑化成第二卷大反派"
+                  disabled={generating}
+                />
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <Button onClick={generate} disabled={!genBrief.trim() || generating}>
+                生成并保存
+              </Button>
+              <span className="text-xs text-zinc-600">生成结果自动保存为新人物卡</span>
+            </div>
+            {generating && (
+              <pre className="max-h-28 overflow-hidden rounded bg-zinc-950 p-2 font-mono text-[10px] leading-4 text-zinc-600">
+                {genOutput || '等待模型输出…'}
+              </pre>
+            )}
+          </div>
+        )}
+
         <div className="grid grid-cols-3 gap-3">
           <div>
             <Label>姓名 *</Label>

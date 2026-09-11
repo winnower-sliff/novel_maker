@@ -247,7 +247,16 @@ export interface BuiltContext {
   totalTokens: number
 }
 
-export type PipelineAction = 'outline' | 'chapter' | 'summary' | 'polish' | 'check'
+export type PipelineAction =
+  | 'outline'
+  | 'chapter'
+  | 'summary'
+  | 'polish'
+  | 'check'
+  | 'character'
+  | 'worldbuild'
+
+export type ExportFormat = 'txt' | 'md' | 'docx'
 
 export interface OutlineGenParams {
   projectId: string

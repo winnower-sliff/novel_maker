@@ -3,6 +3,7 @@ import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import type {
   Chapter,
   ChapterBrief,
+  ChapterSummary,
   Character,
   CharacterInput,
   ChatParams,
@@ -26,13 +27,20 @@ import type {
   WorldbuildInput
 } from '../shared/types'
 import { buildChapterContext } from './context'
+import { exportProject } from './export'
 import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
 import {
   applyOutlineResult,
   applySummaryResult,
   buildChapterRequest,
+  buildCharacterRequest,
+  buildCheckRequest,
   buildOutlineRequest,
-  buildSummaryRequest
+  buildPolishRequest,
+  buildSummaryRequest,
+  buildWorldbuildRequest,
+  guessCharacterName,
+  parseCheckResult
 } from './pipeline'
 import { getApiKey, getBaseUrl, getPromptCacheEnabled, loadSettingsView, saveSettings } from './settings'
 import * as store from './store'
@@ -177,22 +185,68 @@ export function registerIpc(): void {
         })
       }
       if (action === 'summary') {
-        const { outlineId } = params as { outlineId: string }
+        const { outlineId, finalize } = params as { outlineId: string; finalize?: boolean }
         const outline = store.getOutline(outlineId)
         if (!outline) throw new Error('章节不存在')
         if (!store.getChapterByOutline(outlineId)) throw new Error('该章节还没有正文')
-        store.saveOutline({
-          id: outlineId,
-          projectId: outline.projectId,
-          volume: outline.volume,
-          chapterNo: outline.chapterNo,
-          title: outline.title,
-          synopsis: outline.synopsis,
-          status: 'written'
-        })
+        if (finalize) {
+          store.saveOutline({
+            id: outlineId,
+            projectId: outline.projectId,
+            volume: outline.volume,
+            chapterNo: outline.chapterNo,
+            title: outline.title,
+            synopsis: outline.synopsis,
+            status: 'written'
+          })
+        }
         return startStream(e.sender, buildSummaryRequest(outline.projectId, outlineId), {
           action,
           afterDone: (r) => applySummaryResult(outline.projectId, outlineId, r.text)
+        })
+      }
+      if (action === 'polish') {
+        const { outlineId } = params as { outlineId: string }
+        const outline = store.getOutline(outlineId)
+        if (!outline) throw new Error('章节不存在')
+        return startStream(e.sender, buildPolishRequest(outline.projectId, outlineId), {
+          action,
+          afterDone: (r) => ({ wordCount: r.text.replace(/\s/g, '').length })
+        })
+      }
+      if (action === 'check') {
+        const { outlineId } = params as { outlineId: string }
+        const outline = store.getOutline(outlineId)
+        if (!outline) throw new Error('章节不存在')
+        return startStream(e.sender, buildCheckRequest(outline.projectId, outlineId), {
+          action,
+          afterDone: (r) => parseCheckResult(r.text)
+        })
+      }
+      if (action === 'character') {
+        const p = params as { projectId: string; brief: string; name?: string }
+        return startStream(e.sender, buildCharacterRequest(p.projectId, p.brief), {
+          action,
+          afterDone: (r) => {
+            const name = guessCharacterName(r.text, p.name ?? '')
+            const character = store.saveCharacter({ projectId: p.projectId, name, card: r.text })
+            return { characterId: character.id, name: character.name }
+          }
+        })
+      }
+      if (action === 'worldbuild') {
+        const p = params as { projectId: string; brief: string; category: string; title: string }
+        return startStream(e.sender, buildWorldbuildRequest(p.projectId, p.brief), {
+          action,
+          afterDone: (r) => {
+            const entry = store.saveWorldbuild({
+              projectId: p.projectId,
+              category: p.category,
+              title: p.title,
+              content: r.text
+            })
+            return { entryId: entry.id, title: entry.title }
+          }
         })
       }
       throw new Error(`未知动作: ${action}`)
@@ -256,6 +310,17 @@ export function registerIpc(): void {
     (_e, input: ForeshadowInput & { id?: string }): Foreshadow => store.saveForeshadow(input)
   )
   ipcMain.handle('novel:foreshadowDelete', (_e, id: string): void => store.deleteForeshadow(id))
+  ipcMain.handle('novel:summary', (_e, outlineId: string): ChapterSummary | null => {
+    const chapter = store.getChapterByOutline(outlineId)
+    return chapter ? store.getSummary(chapter.id) : null
+  })
+  ipcMain.handle(
+    'export:run',
+    (
+      _e,
+      opts: { projectId: string; format: 'txt' | 'md' | 'docx'; scope: 'all' | 'single'; outlineId?: string }
+    ) => exportProject(opts)
+  )
 
   ipcMain.handle('skills:list', (): SkillMeta[] => listSkills())
   ipcMain.handle('skills:get', (_e, filename: string): SkillFile | null => getSkill(filename))
