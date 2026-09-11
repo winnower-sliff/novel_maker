@@ -1,12 +1,22 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type {
+  Character,
+  CharacterInput,
   ChatParams,
   ChatResult,
   ModelProbeResult,
+  OutlineInput,
+  OutlineItem,
+  Project,
+  ProjectInput,
   SettingsPatch,
   SettingsView,
+  SkillFile,
+  SkillMeta,
   UsageRecord,
-  UsageStats
+  UsageStats,
+  WorldbuildEntry,
+  WorldbuildInput
 } from '../shared/types'
 
 export type DonePayload = Pick<ChatResult, 'usage' | 'model' | 'stopReason' | 'durationMs' | 'headers'>
@@ -44,6 +54,37 @@ const api = {
   usage: {
     list: (limit?: number): Promise<UsageRecord[]> => ipcRenderer.invoke('usage:list', limit),
     stats: (): Promise<UsageStats> => ipcRenderer.invoke('usage:stats')
+  },
+  novel: {
+    projects: (): Promise<Project[]> => ipcRenderer.invoke('novel:projects'),
+    projectCreate: (input: ProjectInput): Promise<Project> =>
+      ipcRenderer.invoke('novel:projectCreate', input),
+    projectUpdate: (id: string, input: Partial<ProjectInput>): Promise<void> =>
+      ipcRenderer.invoke('novel:projectUpdate', id, input),
+    projectDelete: (id: string): Promise<void> => ipcRenderer.invoke('novel:projectDelete', id),
+    characters: (projectId: string): Promise<Character[]> =>
+      ipcRenderer.invoke('novel:characters', projectId),
+    characterSave: (input: CharacterInput & { id?: string }): Promise<Character> =>
+      ipcRenderer.invoke('novel:characterSave', input),
+    characterDelete: (id: string): Promise<void> => ipcRenderer.invoke('novel:characterDelete', id),
+    worldbuild: (projectId: string): Promise<WorldbuildEntry[]> =>
+      ipcRenderer.invoke('novel:worldbuild', projectId),
+    worldbuildSave: (input: WorldbuildInput & { id?: string }): Promise<WorldbuildEntry> =>
+      ipcRenderer.invoke('novel:worldbuildSave', input),
+    worldbuildDelete: (id: string): Promise<void> =>
+      ipcRenderer.invoke('novel:worldbuildDelete', id),
+    outlines: (projectId: string): Promise<OutlineItem[]> =>
+      ipcRenderer.invoke('novel:outlines', projectId),
+    outlineSave: (input: OutlineInput & { id?: string }): Promise<OutlineItem> =>
+      ipcRenderer.invoke('novel:outlineSave', input),
+    outlineDelete: (id: string): Promise<void> => ipcRenderer.invoke('novel:outlineDelete', id)
+  },
+  skills: {
+    list: (): Promise<SkillMeta[]> => ipcRenderer.invoke('skills:list'),
+    get: (filename: string): Promise<SkillFile | null> => ipcRenderer.invoke('skills:get', filename),
+    save: (filename: string, raw: string): Promise<void> =>
+      ipcRenderer.invoke('skills:save', filename, raw),
+    delete: (filename: string): Promise<void> => ipcRenderer.invoke('skills:delete', filename)
   }
 }
 

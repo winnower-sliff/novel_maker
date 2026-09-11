@@ -55,6 +55,7 @@ export interface SettingsView {
   modelRouting: ModelRouting
   quota5hPrompts: number
   promptCache: boolean
+  currentProjectId: string
 }
 
 export interface SettingsPatch {
@@ -65,6 +66,7 @@ export interface SettingsPatch {
   modelRouting?: ModelRouting
   quota5hPrompts?: number
   promptCache?: boolean
+  currentProjectId?: string
 }
 
 export interface ModelProbeResult {
@@ -94,4 +96,91 @@ export interface UsageStats {
   byDay: GroupStats[]
   byModel: GroupStats[]
   byPurpose: GroupStats[]
+}
+
+export interface Project {
+  id: string
+  title: string
+  genre: string
+  styleGuide: string
+  targetWords: number
+  status: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface ProjectInput {
+  title: string
+  genre?: string
+  styleGuide?: string
+  targetWords?: number
+}
+
+export interface Character {
+  id: string
+  projectId: string
+  name: string
+  role: string
+  tags: string
+  card: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface CharacterInput {
+  projectId: string
+  name: string
+  role?: string
+  tags?: string
+  card?: string
+}
+
+export interface WorldbuildEntry {
+  id: string
+  projectId: string
+  category: string
+  title: string
+  content: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface WorldbuildInput {
+  projectId: string
+  category: string
+  title: string
+  content?: string
+}
+
+export type OutlineStatus = 'draft' | 'approved' | 'written' | 'polished'
+
+export interface OutlineItem {
+  id: string
+  projectId: string
+  volume: number
+  chapterNo: number
+  title: string
+  synopsis: string
+  status: OutlineStatus
+  createdAt: number
+  updatedAt: number
+}
+
+export interface OutlineInput {
+  projectId: string
+  volume: number
+  chapterNo: number
+  title?: string
+  synopsis?: string
+  status?: OutlineStatus
+}
+
+export interface SkillMeta {
+  name: string
+  description: string
+  filename: string
+}
+
+export interface SkillFile extends SkillMeta {
+  raw: string
 }

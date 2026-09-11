@@ -12,6 +12,7 @@ interface StoredSettings {
   modelRouting: ModelRouting
   quota5hPrompts: number
   promptCache: boolean
+  currentProjectId: string
 }
 
 const DEFAULTS: StoredSettings = {
@@ -20,7 +21,8 @@ const DEFAULTS: StoredSettings = {
   customModels: '',
   modelRouting: {},
   quota5hPrompts: 0,
-  promptCache: true
+  promptCache: true,
+  currentProjectId: ''
 }
 
 function settingsFile(): string {
@@ -92,7 +94,8 @@ export async function loadSettingsView(): Promise<SettingsView> {
     customModels: stored.customModels,
     modelRouting: stored.modelRouting,
     quota5hPrompts: stored.quota5hPrompts,
-    promptCache: stored.promptCache
+    promptCache: stored.promptCache,
+    currentProjectId: stored.currentProjectId
   }
 }
 
@@ -107,7 +110,8 @@ export async function saveSettings(patch: SettingsPatch): Promise<SettingsView> 
       patch.quota5hPrompts !== undefined
         ? Math.max(0, Math.floor(patch.quota5hPrompts) || 0)
         : stored.quota5hPrompts,
-    promptCache: patch.promptCache !== undefined ? patch.promptCache : stored.promptCache
+    promptCache: patch.promptCache !== undefined ? patch.promptCache : stored.promptCache,
+    currentProjectId: patch.currentProjectId ?? stored.currentProjectId
   }
   if (patch.apiKey !== undefined) {
     const encoded = encodeKey(patch.apiKey.trim())

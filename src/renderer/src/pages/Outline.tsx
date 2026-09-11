@@ -1,0 +1,222 @@
+import { useCallback, useEffect, useMemo, useState } from 'react'
+import type { OutlineItem, OutlineStatus } from '@shared/types'
+import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
+
+const STATUS: Array<{ value: OutlineStatus; label: string; tone: 'default' | 'amber' | 'green' | 'red' }> = [
+  { value: 'draft', label: '草稿', tone: 'default' },
+  { value: 'approved', label: '已审定', tone: 'amber' },
+  { value: 'written', label: '已写', tone: 'green' },
+  { value: 'polished', label: '已润色', tone: 'green' }
+]
+
+const statusLabel = (s: string): { label: string; tone: 'default' | 'amber' | 'green' | 'red' } =>
+  STATUS.find((x) => x.value === s) ?? { label: s, tone: 'default' }
+
+interface EditState {
+  id?: string
+  volume: string
+  chapterNo: string
+  title: string
+  synopsis: string
+  status: OutlineStatus
+}
+
+export default function Outline({ projectId }: { projectId: string }) {
+  const [items, setItems] = useState<OutlineItem[]>([])
+  const [edit, setEdit] = useState<EditState | null>(null)
+
+  const load = useCallback((): void => {
+    if (!projectId) return
+    void window.api.novel.outlines(projectId).then(setItems)
+  }, [projectId])
+
+  useEffect(() => {
+    setItems([])
+    setEdit(null)
+    load()
+  }, [load])
+
+  const volumes = useMemo(() => {
+    const map = new Map<number, OutlineItem[]>()
+    for (const it of items) {
+      const list = map.get(it.volume) ?? []
+      list.push(it)
+      map.set(it.volume, list)
+    }
+    return [...map.entries()].sort((a, b) => a[0] - b[0])
+  }, [items])
+
+  const counts = useMemo(() => {
+    const c: Record<string, number> = {}
+    for (const it of items) c[it.status] = (c[it.status] ?? 0) + 1
+    return c
+  }, [items])
+
+  if (!projectId) {
+    return (
+      <div className="flex h-full items-center justify-center text-sm text-zinc-600">
+        请先在「项目」页打开一个项目
+      </div>
+    )
+  }
+
+  const save = (): void => {
+    if (!edit || !edit.chapterNo.trim()) return
+    void window.api.novel
+      .outlineSave({
+        id: edit.id,
+        projectId,
+        volume: parseInt(edit.volume, 10) || 1,
+        chapterNo: parseInt(edit.chapterNo, 10),
+        title: edit.title.trim(),
+        synopsis: edit.synopsis.trim(),
+        status: edit.status
+      })
+      .then(() => {
+        setEdit(null)
+        load()
+      })
+  }
+
+  return (
+    <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <h1 className="text-lg font-semibold text-zinc-100">大纲</h1>
+          <span className="text-xs text-zinc-500">
+            共 {items.length} 章
+            {items.length > 0 &&
+              `（草稿 ${counts.draft ?? 0} / 审定 ${counts.approved ?? 0} / 已写 ${counts.written ?? 0} / 已润色 ${counts.polished ?? 0}）`}
+          </span>
+        </div>
+        <Button
+          onClick={() =>
+            setEdit({
+              volume: String(items.at(-1)?.volume ?? 1),
+              chapterNo: String((items.at(-1)?.chapterNo ?? 0) + 1),
+              title: '',
+              synopsis: '',
+              status: 'draft'
+            })
+          }
+        >
+          新增章节
+        </Button>
+      </div>
+
+      {edit && (
+        <Card className="grid grid-cols-12 gap-3 p-4">
+          <div className="col-span-2">
+            <Label>卷</Label>
+            <Input type="number" value={edit.volume} onChange={(e) => setEdit({ ...edit, volume: e.target.value })} />
+          </div>
+          <div className="col-span-2">
+            <Label>章号 *</Label>
+            <Input
+              type="number"
+              value={edit.chapterNo}
+              onChange={(e) => setEdit({ ...edit, chapterNo: e.target.value })}
+            />
+          </div>
+          <div className="col-span-4">
+            <Label>章节名</Label>
+            <Input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
+          </div>
+          <div className="col-span-3">
+            <Label>状态</Label>
+            <Select
+              value={edit.status}
+              onChange={(e) => setEdit({ ...edit, status: e.target.value as OutlineStatus })}
+              className="w-full"
+            >
+              {STATUS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="col-span-12">
+            <Label>梗概</Label>
+            <Textarea
+              rows={3}
+              value={edit.synopsis}
+              onChange={(e) => setEdit({ ...edit, synopsis: e.target.value })}
+              placeholder="本章目标 / 关键冲突 / 结尾钩子"
+            />
+          </div>
+          <div className="col-span-12 flex justify-end gap-2">
+            <Button variant="ghost" onClick={() => setEdit(null)}>
+              取消
+            </Button>
+            <Button onClick={save} disabled={!edit.chapterNo.trim()}>
+              保存
+            </Button>
+          </div>
+        </Card>
+      )}
+
+      {volumes.length === 0 && (
+        <Card className="p-10 text-center text-sm text-zinc-600">
+          暂无大纲（M4 将支持 AI 一键生成，当前可手动录入）
+        </Card>
+      )}
+
+      {volumes.map(([vol, list]) => (
+        <Card key={vol}>
+          <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-300">
+            第 {vol} 卷
+            <span className="ml-2 text-xs font-normal text-zinc-600">{list.length} 章</span>
+          </div>
+          <div className="divide-y divide-zinc-800/60">
+            {list.map((it) => {
+              const s = statusLabel(it.status)
+              return (
+                <div key={it.id} className="group flex items-start gap-3 px-4 py-3 hover:bg-zinc-800/30">
+                  <span className="w-12 shrink-0 pt-0.5 text-right font-mono text-xs text-zinc-500">
+                    {it.chapterNo}
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <span className="text-sm font-medium text-zinc-200">{it.title || '未命名'}</span>
+                      <Badge tone={s.tone}>{s.label}</Badge>
+                    </div>
+                    <div className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{it.synopsis}</div>
+                  </div>
+                  <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <Button
+                      variant="ghost"
+                      className="px-2 py-1"
+                      onClick={() =>
+                        setEdit({
+                          id: it.id,
+                          volume: String(it.volume),
+                          chapterNo: String(it.chapterNo),
+                          title: it.title,
+                          synopsis: it.synopsis,
+                          status: it.status
+                        })
+                      }
+                    >
+                      编辑
+                    </Button>
+                    <Button
+                      variant="danger"
+                      className="px-2 py-1"
+                      onClick={() => {
+                        if (window.confirm(`删除第 ${it.chapterNo} 章「${it.title}」的大纲？`))
+                          void window.api.novel.outlineDelete(it.id).then(load)
+                      }}
+                    >
+                      删除
+                    </Button>
+                  </div>
+                </div>
+              )
+            })}
+          </div>
+        </Card>
+      ))}
+    </div>
+  )
+}

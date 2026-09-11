@@ -1,6 +1,8 @@
 import { join } from 'node:path'
 import { app, BrowserWindow, shell } from 'electron'
+import { getDb } from './db'
 import { registerIpc } from './ipc'
+import { listSkills } from './skills'
 
 function createWindow(): void {
   const win = new BrowserWindow({
@@ -34,6 +36,8 @@ function createWindow(): void {
 }
 
 app.whenReady().then(() => {
+  getDb()
+  listSkills()
   registerIpc()
   createWindow()
 
