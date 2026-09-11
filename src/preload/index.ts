@@ -5,7 +5,8 @@ import type {
   ModelProbeResult,
   SettingsPatch,
   SettingsView,
-  UsageRecord
+  UsageRecord,
+  UsageStats
 } from '../shared/types'
 
 export type DonePayload = Pick<ChatResult, 'usage' | 'model' | 'stopReason' | 'durationMs' | 'headers'>
@@ -41,7 +42,8 @@ const api = {
     }
   },
   usage: {
-    list: (limit?: number): Promise<UsageRecord[]> => ipcRenderer.invoke('usage:list', limit)
+    list: (limit?: number): Promise<UsageRecord[]> => ipcRenderer.invoke('usage:list', limit),
+    stats: (): Promise<UsageStats> => ipcRenderer.invoke('usage:stats')
   }
 }
 

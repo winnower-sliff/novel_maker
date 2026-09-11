@@ -21,7 +21,7 @@ export default function Playground() {
     void (async () => {
       const s = await window.api.settings.get()
       setSettings(s)
-      setModel(s.defaultModel)
+      setModel(s.modelRouting.playground || s.defaultModel)
       try {
         const p = await window.api.models.probe()
         setProbe(p)

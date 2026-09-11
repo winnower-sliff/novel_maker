@@ -1,3 +1,18 @@
+import type { Purpose } from '@shared/types'
+
+export const PURPOSE_LABELS: Record<string, string> = {
+  playground: '试写',
+  outline: '大纲',
+  chapter: '正文',
+  summary: '摘要',
+  polish: '润色',
+  check: '检查'
+}
+
+export function purposeLabel(p: Purpose | string): string {
+  return PURPOSE_LABELS[p] ?? p
+}
+
 export function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(2)}M`
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`

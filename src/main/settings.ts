@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
-import type { SettingsPatch, SettingsView } from '../shared/types'
+import type { ModelRouting, SettingsPatch, SettingsView } from '../shared/types'
 
 interface StoredSettings {
   apiKeyEnc?: string
@@ -9,12 +9,18 @@ interface StoredSettings {
   baseUrl: string
   defaultModel: string
   customModels: string
+  modelRouting: ModelRouting
+  quota5hPrompts: number
+  promptCache: boolean
 }
 
 const DEFAULTS: StoredSettings = {
   baseUrl: 'https://open.bigmodel.cn/api/anthropic',
   defaultModel: 'glm-4.6',
-  customModels: ''
+  customModels: '',
+  modelRouting: {},
+  quota5hPrompts: 0,
+  promptCache: true
 }
 
 function settingsFile(): string {
@@ -29,6 +35,7 @@ function readStored(): StoredSettings {
     return {
       ...DEFAULTS,
       ...raw,
+      modelRouting: raw.modelRouting ?? {},
       apiKeyEnc: raw.apiKeyEnc,
       apiKeyPlain: raw.apiKeyPlain
     }
@@ -70,6 +77,10 @@ export async function getBaseUrl(): Promise<string> {
   return readStored().baseUrl
 }
 
+export async function getPromptCacheEnabled(): Promise<boolean> {
+  return readStored().promptCache
+}
+
 export async function loadSettingsView(): Promise<SettingsView> {
   const stored = readStored()
   const key = decodeKey(stored)
@@ -78,7 +89,10 @@ export async function loadSettingsView(): Promise<SettingsView> {
     apiKeyMasked: mask(key),
     baseUrl: stored.baseUrl,
     defaultModel: stored.defaultModel,
-    customModels: stored.customModels
+    customModels: stored.customModels,
+    modelRouting: stored.modelRouting,
+    quota5hPrompts: stored.quota5hPrompts,
+    promptCache: stored.promptCache
   }
 }
 
@@ -87,7 +101,13 @@ export async function saveSettings(patch: SettingsPatch): Promise<SettingsView> 
   const next: StoredSettings = {
     baseUrl: patch.baseUrl?.trim() || stored.baseUrl,
     defaultModel: patch.defaultModel?.trim() || stored.defaultModel,
-    customModels: patch.customModels ?? stored.customModels
+    customModels: patch.customModels ?? stored.customModels,
+    modelRouting: patch.modelRouting ?? stored.modelRouting,
+    quota5hPrompts:
+      patch.quota5hPrompts !== undefined
+        ? Math.max(0, Math.floor(patch.quota5hPrompts) || 0)
+        : stored.quota5hPrompts,
+    promptCache: patch.promptCache !== undefined ? patch.promptCache : stored.promptCache
   }
   if (patch.apiKey !== undefined) {
     const encoded = encodeKey(patch.apiKey.trim())

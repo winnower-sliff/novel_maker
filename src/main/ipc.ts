@@ -1,9 +1,16 @@
 import { randomUUID } from 'node:crypto'
 import { ipcMain, type IpcMainInvokeEvent } from 'electron'
-import type { ChatParams, ModelProbeResult, SettingsPatch, SettingsView, UsageRecord } from '../shared/types'
+import type {
+  ChatParams,
+  ModelProbeResult,
+  SettingsPatch,
+  SettingsView,
+  UsageRecord,
+  UsageStats
+} from '../shared/types'
 import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
-import { getApiKey, getBaseUrl, loadSettingsView, saveSettings } from './settings'
-import { appendUsage, listUsage } from './usage'
+import { getApiKey, getBaseUrl, getPromptCacheEnabled, loadSettingsView, saveSettings } from './settings'
+import { appendUsage, computeStats, listUsage } from './usage'
 
 const activeRequests = new Map<string, AbortController>()
 
@@ -24,6 +31,8 @@ export function registerIpc(): void {
     const apiKey = await getApiKey()
     if (!apiKey) throw new Error('未配置 API Key，请先在设置中填写')
     const baseUrl = await getBaseUrl()
+    const promptCache = await getPromptCacheEnabled()
+    if (promptCache && params.system) params.cacheSystem = true
 
     const requestId = randomUUID()
     const controller = new AbortController()
@@ -82,4 +91,5 @@ export function registerIpc(): void {
   })
 
   ipcMain.handle('usage:list', (_e, limit?: number): UsageRecord[] => listUsage(limit ?? 200))
+  ipcMain.handle('usage:stats', (): UsageStats => computeStats())
 }

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
-import type { ModelProbeResult, SettingsView } from '@shared/types'
+import { PURPOSES, type ModelProbeResult, type ModelRouting, type SettingsView } from '@shared/types'
 import { Badge, Button, Card, Input, Label } from '../components/ui'
+import { purposeLabel } from '../lib/format'
 
 export default function Settings() {
   const [view, setView] = useState<SettingsView | null>(null)
@@ -8,6 +9,9 @@ export default function Settings() {
   const [baseUrl, setBaseUrl] = useState('')
   const [defaultModel, setDefaultModel] = useState('')
   const [customModels, setCustomModels] = useState('')
+  const [modelRouting, setModelRouting] = useState<ModelRouting>({})
+  const [quota5h, setQuota5h] = useState('0')
+  const [promptCache, setPromptCache] = useState(true)
   const [saving, setSaving] = useState(false)
   const [savedAt, setSavedAt] = useState(0)
   const [probing, setProbing] = useState(false)
@@ -20,15 +24,33 @@ export default function Settings() {
       setBaseUrl(s.baseUrl)
       setDefaultModel(s.defaultModel)
       setCustomModels(s.customModels)
+      setModelRouting(s.modelRouting)
+      setQuota5h(String(s.quota5hPrompts))
+      setPromptCache(s.promptCache)
     })
   }, [])
+
+  const modelOptions = (() => {
+    const ids = new Set<string>(['glm-5.3', 'glm-4.6', 'glm-4.5-air', 'glm-4.5'])
+    if (probeResult) probeResult.models.forEach((m) => ids.add(m))
+    customModels
+      .split(/[,，\s]+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((m) => ids.add(m))
+    if (defaultModel) ids.add(defaultModel)
+    return [...ids]
+  })()
 
   const save = (): void => {
     setSaving(true)
     const patch: Parameters<typeof window.api.settings.save>[0] = {
       baseUrl,
       defaultModel,
-      customModels
+      customModels,
+      modelRouting,
+      quota5hPrompts: Math.max(0, parseInt(quota5h, 10) || 0),
+      promptCache
     }
     if (apiKey.trim() !== '') patch.apiKey = apiKey.trim()
     void window.api.settings
@@ -93,6 +115,64 @@ export default function Settings() {
             {saving ? '保存中…' : '保存'}
           </Button>
           {savedAt > 0 && <span className="text-xs text-emerald-400">已保存</span>}
+        </div>
+      </Card>
+
+      <Card className="space-y-3 p-5">
+        <div className="text-sm font-medium text-zinc-200">模型路由（各环节使用的模型）</div>
+        <datalist id="model-options">
+          {modelOptions.map((m) => (
+            <option key={m} value={m} />
+          ))}
+        </datalist>
+        <div className="grid grid-cols-3 gap-3">
+          {PURPOSES.map((p) => (
+            <div key={p}>
+              <Label>{purposeLabel(p)}</Label>
+              <Input
+                list="model-options"
+                value={modelRouting[p] ?? ''}
+                placeholder={p === 'playground' ? defaultModel || 'glm-4.6' : '留空用默认模型'}
+                onChange={(e) => setModelRouting((prev) => ({ ...prev, [p]: e.target.value }))}
+              />
+            </div>
+          ))}
+        </div>
+        <div className="text-xs text-zinc-600">
+          建议：摘要/检查用 glm-4.5-air 省 token，大纲/正文用 glm-5.3 保证质量。
+        </div>
+      </Card>
+
+      <Card className="space-y-4 p-5">
+        <div className="text-sm font-medium text-zinc-200">额度与缓存</div>
+        <div>
+          <Label>每 5 小时请求上限（0 = 不显示进度条）</Label>
+          <Input
+            type="number"
+            min={0}
+            value={quota5h}
+            onChange={(e) => setQuota5h(e.target.value)}
+            className="w-48"
+          />
+          <div className="mt-1.5 text-xs text-zinc-600">
+            GLM Coding Plan 为订阅制，官方接口不透传剩余额度；此处按你的档位限额配置，应用按本地
+            5 小时滚动窗口统计展示进度。准确额度以 open.bigmodel.cn 控制台为准。
+          </div>
+        </div>
+        <div className="flex items-center gap-2.5">
+          <input
+            id="prompt-cache"
+            type="checkbox"
+            checked={promptCache}
+            onChange={(e) => setPromptCache(e.target.checked)}
+            className="h-4 w-4 cursor-pointer accent-amber-600"
+          />
+          <label htmlFor="prompt-cache" className="cursor-pointer text-sm text-zinc-300">
+            对 system 指令启用 prompt caching
+          </label>
+        </div>
+        <div className="text-xs text-zinc-600">
+          开启后 system 块带 cache_control，重复注入设定/文风指令时命中缓存计价（用量明细中「缓存读」非零即生效）。
         </div>
       </Card>
 

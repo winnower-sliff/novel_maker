@@ -43,7 +43,11 @@ export async function chatStream(
     messages: params.messages,
     stream: true
   }
-  if (params.system) body.system = params.system
+  if (params.system) {
+    body.system = params.cacheSystem
+      ? [{ type: 'text', text: params.system, cache_control: { type: 'ephemeral' } }]
+      : params.system
+  }
   if (params.temperature !== undefined) body.temperature = params.temperature
 
   let res: Response
