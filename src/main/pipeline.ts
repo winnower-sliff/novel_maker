@@ -390,7 +390,7 @@ export function buildWorldbuildRequest(
     model: '',
     system,
     messages: [{ role: 'user', content: user }],
-    maxTokens: 8192,
+    maxTokens: 16384,
     temperature: 0.7,
     purpose: 'outline'
   }
@@ -448,6 +448,7 @@ export function previewWorldbuildResult(
   p: WorldbuildGenParams,
   text: string
 ): WorldbuildPreviewEntry[] {
+  if (!text.trim()) return []
   const parsed = parseWorldbuildEntries(text, p.categories)
   return normalizeWorldbuildParsed(p.projectId, parsed)
 }

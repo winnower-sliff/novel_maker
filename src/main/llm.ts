@@ -41,7 +41,8 @@ export async function chatStream(
     model: params.model,
     max_tokens: params.maxTokens ?? 4096,
     messages: params.messages,
-    stream: true
+    stream: true,
+    thinking: { type: 'disabled' }
   }
   if (params.tools?.length) {
     body.tools = params.tools

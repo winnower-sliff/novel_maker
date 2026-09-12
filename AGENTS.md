@@ -28,6 +28,7 @@
 11. **编辑器即时渲染方案已放弃**（2026-09）：vditor IR 试用后回退（wikilink `[[x]]` 无法在编辑态渲染、ir 模式 destroy 必崩、cdn 需复制 public 资源），编辑仍用 AiTextarea（textarea+选中 AI 改写），仅展示侧用 Markdown 组件渲染。若再尝试 WYSIWYG 需先解决自定义语法在编辑态的渲染（如 milkdown 自定义节点）。
 12. **electron-vite dev 不热重载 `src/shared/` 改动且 touch 不触发主进程 rebuild**：改 shared 下的共享模块后主进程仍跑旧代码（renderer 却 HMR 了，极易误判已生效），必须重启 dev 实例再验证；CDP 口被刚杀实例占用时（TIME_WAIT）新实例 bind 失败且无 9222 监听，直接换 `NM_REMOTE_DEBUG_PORT` 端口重启。
 13. **CDP evaluate 模拟 UI 的两个坑**：①直接调 `window.api.settings.save` 不触发 App 内部 refresh，`currentProject` 不会生效，save 后 `location.reload()` 再操作；②全局按文本找 button 会撞侧栏 nav（如「图谱」），用 `button:not(aside button)` 限定主内容区。
+14. **GLM Anthropic 兼容端点的 thinking 陷阱**：glm-4.6 会默认启用思考且思考 token 计入 `output_tokens`，但思考内容**不经过 text_delta**——长输出任务的 max_tokens 会被思考吃光，正文只收到极少字符甚至为空（表象：usage 显示 8192 tokens 但 parse 出空「未命名条目」）。修复：请求体统一带 `thinking: {type:'disabled'}`（llm.ts chatStream），worldbuild 生成 maxTokens 提至 16384；判断依据：outputTokens 远大于 text 长度即中招。
 
 ## 约定
 - API Key 仅存主进程（safeStorage），渲染进程只拿到掩码；LLM 调用全部走 IPC。

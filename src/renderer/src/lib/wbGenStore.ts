@@ -18,6 +18,7 @@ export interface WbGenTask {
   result: WorldbuildPreviewEntry[]
   error: string | null
   seen: boolean
+  stopReason?: string | null
 }
 
 export type WbGenParams = WorldbuildGenParams
@@ -98,7 +99,8 @@ export function startGen(params: WbGenParams): void {
       status: 'retrieving',
       result: [],
       error: null,
-      seen: false
+      seen: false,
+      stopReason: null
     }
   ]
   emitNow()
@@ -120,7 +122,7 @@ export function startGen(params: WbGenParams): void {
         pushToast('error', `「${params.title || params.brief.slice(0, 12)}」解析失败`)
         return
       }
-      patch(id, { status: 'done', result: d?.entries ?? [] })
+      patch(id, { status: 'done', result: d?.entries ?? [], stopReason: payload.stopReason ?? null })
       pushToast('success', '生成完成，请挑选条目入库')
     })
     .catch((err: unknown) => {

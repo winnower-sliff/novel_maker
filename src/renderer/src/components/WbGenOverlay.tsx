@@ -374,6 +374,11 @@ export function WbGenOverlay({ open, onClose, projectId, types, focus, onSaved }
           </div>
         ) : (
           <div className="space-y-2">
+            {task.stopReason === 'max_tokens' && (
+              <div className="rounded-md border border-amber-800/60 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+                输出因长度上限被截断，最后一个条目可能不完整，建议酌情挑选或缩小需求重新生成
+              </div>
+            )}
             <div className="flex items-center justify-between">
               <span className="text-xs text-zinc-500">
                 共 {task.result.length} 条，已选 {selected.size} 条
