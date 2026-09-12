@@ -8,10 +8,10 @@
 - Lint 暂无（后续可加 eslint）
 
 ## 架构
-- `src/main/` 主进程：`llm.ts`（Anthropic 兼容流式客户端，支持 tools/tool_use 流解析）、`agent.ts`（智能体 agentic loop：17 个工具绑定当前项目 CRUD，删除类与覆盖正文需 renderer 确认，maxTurns 24）、`agentSessions.ts`（agent 会话持久化到 `agent_sessions.json`）、`graph.ts`（全项目知识图谱构建：扫各板块+章节正文的 `[[]]` 生成节点/边/度数，节点携带 tags）、`settings.ts`（safeStorage 加密 API Key）、`usage.ts`（usage_log.jsonl 记账）、`db.ts`（node:sqlite 建库+迁移）、`store.ts`（项目/大纲/人物/世界观 CRUD + worldbuild_types 受控类型表，tag 与 type 命名互斥）、`skills.ts`（技能加载与 seed，按 frontmatter version 升级覆盖）、`builtin-skills.ts`（8 个内置技能模板）、`pipeline.ts`（各板块 prompt 构建：worldbuild 为两步生成——先小请求让 AI 从 type/tag 索引检索相关条目，再仅注入相关正文）、`ipc.ts`
+- `src/main/` 主进程：`llm.ts`（Anthropic 兼容流式客户端，支持 tools/tool_use 流解析）、`agent.ts`（智能体 agentic loop：17 个工具绑定当前项目 CRUD，删除类与覆盖正文需 renderer 确认，maxTurns 24）、`agentSessions.ts`（agent 会话持久化到 `agent_sessions.json`）、`graph.ts`（全项目知识图谱构建：扫各板块+章节正文的 `[[]]` 生成节点/边/度数，节点携带 tags）、`settings.ts`（safeStorage 加密 API Key）、`usage.ts`（usage_log.jsonl 记账）、`db.ts`（node:sqlite 建库+迁移）、`store.ts`（项目/大纲/人物/世界观 CRUD + worldbuild_types 受控类型表，tag 与 type 命名互斥）、`skills.ts`（技能加载与 seed，按 frontmatter version 升级覆盖）、`builtin-skills.ts`（8 个内置技能模板）、`pipeline.ts`（各板块 prompt 构建：worldbuild 为两步生成——先小请求让 AI 从 type/tag 索引检索相关条目，再仅注入相关正文；生成结果不落库，返回预览条目由 renderer 挑拣后经 worldbuildSaveBatch 落库）、`ipc.ts`
 - `src/shared/`：`types.ts` 共享类型、`tags.ts` tag 解析（`splitTags` 宽容分隔符、`splitHeadingHashtags` 剥离标题行尾 `#tag`）
 - `src/preload/index.ts` contextBridge 暴露 `window.api`（含 `api.agent`、`api.graph`）
-- `src/renderer/` React + Tailwind v4；页面在 `src/renderer/src/pages/`（`GraphPage.tsx` 为全局图谱页）；世界观条目 = 单 type + 多 tags（逗号分隔存储）；`components/RelationGraph.tsx` 为实时力导向图谱组件（rAF 模拟+拖拽扰动+度数大小+hover 高亮；`clusterTags` 开启时按 tag 频次 top12 设圆周锚点做聚类弹簧，节点按主 tag 着色，锚点渲染 `#tag` 分区标签，两页共用）；`components/Markdown.tsx` 为统一 markdown 展示组件（react-markdown+gfm，可选 `wiki` prop 渲染 `[[]]` 链接带 hover 预览）
+- `src/renderer/` React + Tailwind v4；页面在 `src/renderer/src/pages/`（`GraphPage.tsx` 为全局图谱页）；世界观条目 = 单 type + 多 tags（逗号分隔存储），AI 生成走 `components/WbGenOverlay.tsx` 弹窗（焦点跟随页面筛选、两步检索预览行、流式进度、生成结果勾选挑拣后批量入库，任务状态在 `lib/wbGenStore.ts` 供侧栏 badge 跨页提示）；`components/RelationGraph.tsx` 为实时力导向图谱组件（rAF 模拟+拖拽扰动+度数大小+hover 高亮；`clusterTags` 开启时按 tag 频次 top12 设圆周锚点做聚类弹簧，节点按主 tag 着色，锚点渲染 `#tag` 分区标签，两页共用）；`components/Markdown.tsx` 为统一 markdown 展示组件（react-markdown+gfm，可选 `wiki` prop 渲染 `[[]]` 链接带 hover 预览）
 - 用户数据在 Electron `userData` 目录：`settings.json`、`agent_sessions.json`、`usage_log.jsonl`、`data/novel.db`、`skills/*.md`
 
 ## 踩坑记录

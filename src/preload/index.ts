@@ -30,8 +30,17 @@ import type {
   UsageRecord,
   UsageStats,
   WorldbuildEntry,
-  WorldbuildInput
+  WorldbuildGenParams,
+  WorldbuildInput,
+  WorldbuildPreviewEntry
 } from '../shared/types'
+
+export interface WorldbuildRetrievalBrief {
+  types: string[]
+  tags: string[]
+  count: number
+  titles: string[]
+}
 
 export type DonePayload = Pick<
   ChatResult,
@@ -104,6 +113,13 @@ const api = {
       ipcRenderer.invoke('novel:worldbuildSave', input),
     worldbuildDelete: (id: string): Promise<void> =>
       ipcRenderer.invoke('novel:worldbuildDelete', id),
+    worldbuildRetrieve: (p: WorldbuildGenParams): Promise<WorldbuildRetrievalBrief | null> =>
+      ipcRenderer.invoke('novel:worldbuildRetrieve', p),
+    worldbuildSaveBatch: (
+      projectId: string,
+      entries: WorldbuildPreviewEntry[]
+    ): Promise<{ entryIds: string[]; createdTypes: string[] }> =>
+      ipcRenderer.invoke('novel:worldbuildSaveBatch', projectId, entries),
     worldbuildTypes: (projectId: string): Promise<string[]> =>
       ipcRenderer.invoke('novel:worldbuildTypes', projectId),
     worldbuildTypeCreate: (projectId: string, name: string): Promise<string[]> =>

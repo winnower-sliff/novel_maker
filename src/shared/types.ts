@@ -295,12 +295,26 @@ export type PipelineAction =
   | 'character'
   | 'worldbuild'
 
+export interface WorldbuildGenFocus {
+  tag?: string
+  type?: string
+}
+
 export interface WorldbuildGenParams {
   projectId: string
   categories: string[]
   title: string
   brief: string
   count?: number
+  focus?: WorldbuildGenFocus
+}
+
+export interface WorldbuildPreviewEntry {
+  category: string
+  title: string
+  tags: string[]
+  content: string
+  isNewType: boolean
 }
 
 export type ExportFormat = 'txt' | 'md' | 'docx'

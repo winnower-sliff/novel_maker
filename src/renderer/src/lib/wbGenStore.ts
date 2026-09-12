@@ -1,5 +1,5 @@
 import { useMemo, useSyncExternalStore } from 'react'
-import type { WorldbuildGenParams } from '@shared/types'
+import type { WorldbuildGenFocus, WorldbuildGenParams, WorldbuildPreviewEntry } from '@shared/types'
 import { runPipeline } from './ipc'
 import { pushToast } from './toastStore'
 
@@ -12,9 +12,10 @@ export interface WbGenTask {
   title: string
   brief: string
   count?: number
+  focus?: WorldbuildGenFocus
   output: string
   status: WbGenStatus
-  entryIds: string[]
+  result: WorldbuildPreviewEntry[]
   error: string | null
   seen: boolean
 }
@@ -92,9 +93,10 @@ export function startGen(params: WbGenParams): void {
       title: params.title,
       brief: params.brief,
       count: params.count,
+      focus: params.focus,
       output: '',
       status: 'retrieving',
-      entryIds: [],
+      result: [],
       error: null,
       seen: false
     }
@@ -112,15 +114,14 @@ export function startGen(params: WbGenParams): void {
     () => patch(id, { status: 'running' })
   )
     .then((payload) => {
-      const d = payload.data as { entryIds?: string[]; error?: string } | undefined
+      const d = payload.data as { entries?: WorldbuildPreviewEntry[]; error?: string } | undefined
       if (d?.error) {
-        patch(id, { status: 'error', error: `生成完成但保存失败：${d.error}` })
-        pushToast('error', `「${params.title || params.brief.slice(0, 12)}」保存失败`)
+        patch(id, { status: 'error', error: `生成完成但解析失败：${d.error}` })
+        pushToast('error', `「${params.title || params.brief.slice(0, 12)}」解析失败`)
         return
       }
-      patch(id, { status: 'done', entryIds: d?.entryIds ?? [] })
-      const n = d?.entryIds?.length ?? 0
-      pushToast('success', `已生成并保存 ${n} 个条目`)
+      patch(id, { status: 'done', result: d?.entries ?? [] })
+      pushToast('success', '生成完成，请挑选条目入库')
     })
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
@@ -139,8 +140,24 @@ export function retryTask(id: number): void {
     categories: t.categories,
     title: t.title,
     brief: t.brief,
-    count: t.count
+    count: t.count,
+    focus: t.focus
   })
+}
+
+export async function commitTaskSelection(
+  id: number,
+  selected: WorldbuildPreviewEntry[]
+): Promise<void> {
+  const t = tasks.find((x) => x.id === id)
+  if (!t) return
+  const { entryIds, createdTypes } = await window.api.novel.worldbuildSaveBatch(
+    t.projectId,
+    selected
+  )
+  dismissTask(id)
+  const typeNote = createdTypes.length > 0 ? `，新建类型：${createdTypes.join('、')}` : ''
+  pushToast('success', `已保存 ${entryIds.length} 个条目${typeNote}`)
 }
 
 export function dismissTask(id: number): void {
@@ -152,18 +169,11 @@ export function markSeen(): void {
   let changed = false
   const next: WbGenTask[] = []
   for (const t of tasks) {
-    if (isLive(t.status) || t.status === 'error') {
-      if (t.status === 'error' && !t.seen) {
-        next.push({ ...t, seen: true })
-        changed = true
-      } else {
-        next.push(t)
-      }
-    } else if (t.seen) {
-      changed = true
-    } else {
+    if (t.status === 'error' && !t.seen) {
       next.push({ ...t, seen: true })
       changed = true
+    } else {
+      next.push(t)
     }
   }
   if (changed) {

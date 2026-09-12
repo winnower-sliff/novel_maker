@@ -3,7 +3,8 @@ import type {
   ChatParams,
   OutlineGenParams,
   WorldbuildEntry,
-  WorldbuildGenParams
+  WorldbuildGenParams,
+  WorldbuildPreviewEntry
 } from '../shared/types'
 import { splitHeadingHashtags, splitTags } from '../shared/tags'
 import { buildChapterContext } from './context'
@@ -226,9 +227,7 @@ export interface WorldbuildRetrieval {
   types: string[]
   tags: string[]
   entries: WorldbuildEntry[]
-}
-
-export interface WorldbuildIndex {
+}export interface WorldbuildIndex {
   types: string[]
   tagCounts: Array<{ name: string; count: number }>
   entries: WorldbuildEntry[]
@@ -268,6 +267,8 @@ export function buildWorldbuildRetrieveRequest(p: WorldbuildGenParams): ChatPara
     .join('\n')
   const user = [
     `生成需求：${p.title.trim() ? `【${p.title.trim()}】` : ''}${p.brief}`,
+    p.focus?.tag && `用户当前聚焦标签：#${p.focus.tag}（优先考虑与该标签相关的类型与标签）`,
+    p.focus?.type && `用户当前聚焦类型：${p.focus.type}（优先考虑该类型）`,
     '',
     '现有类型清单：' + (typeLine.length > 0 ? typeLine.join('、') : '（暂无）'),
     `现有标签清单：${tagLine}`,
@@ -276,7 +277,9 @@ export function buildWorldbuildRetrieveRequest(p: WorldbuildGenParams): ChatPara
     '',
     '任务：从上述类型与标签中，选出与生成需求最相关、生成时需要参考原文以保持自洽的类型与标签（各最多 6 个，宁缺毋滥）。',
     '只输出 JSON，不要输出其他内容，格式：{"types":["…"],"tags":["…"]}'
-  ].join('\n')
+  ]
+    .filter((line) => line !== undefined)
+    .join('\n')
   return {
     model: '',
     messages: [{ role: 'user', content: user }],
@@ -348,7 +351,12 @@ export function buildWorldbuildRequest(
     p.count && p.count > 0 ? `正好 ${p.count} 个条目` : '根据需求规模自行决定，不设上限'
   const categoryLine = categories.length
     ? `- 条目类型：只能从「${categories.join('、')}」中选择，内容必须聚焦所选类型，禁止写入其他类型的设定`
-    : '- 条目类型：优先从提供的可用类型清单中选择'
+    : p.focus?.type
+      ? `- 条目类型：本组条目围绕用户聚焦的类型「${p.focus.type}」生成（若个别条目内容确实不属于该类型可另选更合适的类型）`
+      : '- 条目类型：优先从提供的可用类型清单中选择'
+  const focusLine = p.focus?.tag
+    ? `- 聚焦方向：本组条目围绕主题标签「#${p.focus.tag}」扩展，与该主题相关的新设定优先`
+    : null
   const titleLine = p.title.trim()
     ? `- 总主题：${p.title.trim()}（各条目标题由你围绕该主题拟定，禁止把全部内容挤进一个条目）`
     : '- 各条目标题由你根据生成需求拟定'
@@ -365,6 +373,7 @@ export function buildWorldbuildRequest(
   const user = [
     '请为世界观生成一组条目：',
     categoryLine,
+    focusLine,
     titleLine,
     `- 生成需求：${p.brief}`,
     `- 条目数量：${countLine}；当需求横跨多个方面时必须拆分为多个条目，每个条目只承载一个主题`,
@@ -374,7 +383,9 @@ export function buildWorldbuildRequest(
     '每个条目以一行「## [类型] 标题 #标签1 #标签2」开头，随后是该条目正文（markdown 要点式）。',
     '条目之间相互引用时，在正文中使用 [[条目标题]] 链接（例如总览条目引用各个具体条目，具体条目也回链总览）。',
     '不要输出总开场白、总结语或对格式本身的解释。'
-  ].join('\n')
+  ]
+    .filter((line) => line !== null)
+    .join('\n')
   return {
     model: '',
     system,
@@ -433,20 +444,49 @@ export function parseWorldbuildEntries(
   ]
 }
 
-export function applyWorldbuildResult(
+export function previewWorldbuildResult(
   p: WorldbuildGenParams,
   text: string
-): { entryIds: string[]; created: number } {
+): WorldbuildPreviewEntry[] {
   const parsed = parseWorldbuildEntries(text, p.categories)
-  const knownTypes = new Set(store.listWorldbuildTypes(p.projectId))
-  const entryIds: string[] = []
+  return normalizeWorldbuildParsed(p.projectId, parsed)
+}
+
+function normalizeWorldbuildParsed(
+  projectId: string,
+  parsed: ParsedWorldbuildEntry[]
+): WorldbuildPreviewEntry[] {
+  const knownTypes = new Set(store.listWorldbuildTypes(projectId))
   let newTypeBudget = 1
-  for (const e of parsed) {
+  return parsed.map((e) => {
+    const isNewType = !knownTypes.has(e.category)
+    if (isNewType && newTypeBudget > 0) {
+      knownTypes.add(e.category)
+      newTypeBudget--
+    }
+    const category = knownTypes.has(e.category) ? e.category : '其他'
+    const tags = splitTags(e.tags.join(','))
+      .filter((t) => !knownTypes.has(t))
+      .slice(0, 6)
+    return { category, title: e.title, tags, content: e.content, isNewType }
+  })
+}
+
+export function saveWorldbuildBatch(
+  projectId: string,
+  entries: WorldbuildPreviewEntry[]
+): { entryIds: string[]; createdTypes: string[] } {
+  const knownTypes = new Set(store.listWorldbuildTypes(projectId))
+  const entryIds: string[] = []
+  const createdTypes: string[] = []
+  let newTypeBudget = 1
+  for (const e of entries) {
     if (!knownTypes.has(e.category)) {
       if (newTypeBudget > 0) {
         try {
-          store.createWorldbuildType(p.projectId, e.category)
+          store.createWorldbuildType(projectId, e.category)
           knownTypes.add(e.category)
+          createdTypes.push(e.category)
           newTypeBudget--
         } catch {
           /* 重名等冲突时放弃新建 */
@@ -457,7 +497,7 @@ export function applyWorldbuildResult(
       .filter((t) => !knownTypes.has(t))
       .slice(0, 6)
     const saved = store.saveWorldbuild({
-      projectId: p.projectId,
+      projectId,
       category: knownTypes.has(e.category) ? e.category : '其他',
       title: e.title,
       tags: tags.join(','),
@@ -465,7 +505,7 @@ export function applyWorldbuildResult(
     })
     entryIds.push(saved.id)
   }
-  return { entryIds, created: entryIds.length }
+  return { entryIds, createdTypes }
 }
 
 export function applyOutlineResult(

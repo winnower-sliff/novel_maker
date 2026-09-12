@@ -30,7 +30,8 @@ import type {
   UsageStats,
   WorldbuildEntry,
   WorldbuildGenParams,
-  WorldbuildInput
+  WorldbuildInput,
+  WorldbuildPreviewEntry
 } from '../shared/types'
 import { cancelAgentConfirms, resolveAgentConfirm, runAgent } from './agent'
 import {
@@ -46,7 +47,6 @@ import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
 import {
   applyOutlineResult,
   applySummaryResult,
-  applyWorldbuildResult,
   buildChapterRequest,
   buildCharacterRequest,
   buildCheckRequest,
@@ -58,7 +58,9 @@ import {
   buildWorldbuildRetrieveRequest,
   guessCharacterName,
   parseCheckResult,
+  previewWorldbuildResult,
   resolveWorldbuildRetrieval,
+  saveWorldbuildBatch,
   type WorldbuildRetrieval
 } from './pipeline'
 import { getApiKey, getBaseUrl, getPromptCacheEnabled, loadSettingsView, saveSettings } from './settings'
@@ -348,10 +350,7 @@ export function registerIpc(): void {
         const retrieval = await runWorldbuildRetrieval(p)
         return startStream(e.sender, buildWorldbuildRequest(p, retrieval), {
           action,
-          afterDone: (r) => {
-            const { entryIds, created } = applyWorldbuildResult(p, r.text)
-            return { entryIds, created }
-          }
+          afterDone: (r) => ({ entries: previewWorldbuildResult(p, r.text) })
         })
       }
       throw new Error(`未知动作: ${action}`)
@@ -382,6 +381,32 @@ export function registerIpc(): void {
     (_e, input: WorldbuildInput & { id?: string }): WorldbuildEntry => store.saveWorldbuild(input)
   )
   ipcMain.handle('novel:worldbuildDelete', (_e, id: string): void => store.deleteWorldbuild(id))
+  ipcMain.handle(
+    'novel:worldbuildRetrieve',
+    async (_e, p: WorldbuildGenParams): Promise<{
+      types: string[]
+      tags: string[]
+      count: number
+      titles: string[]
+    } | null> => {
+      const retrieval = await runWorldbuildRetrieval(p)
+      if (!retrieval || retrieval.entries.length === 0) return null
+      return {
+        types: retrieval.types,
+        tags: retrieval.tags,
+        count: retrieval.entries.length,
+        titles: retrieval.entries.map((e) => e.title)
+      }
+    }
+  )
+  ipcMain.handle(
+    'novel:worldbuildSaveBatch',
+    (
+      _e,
+      projectId: string,
+      entries: WorldbuildPreviewEntry[]
+    ): { entryIds: string[]; createdTypes: string[] } => saveWorldbuildBatch(projectId, entries)
+  )
   ipcMain.handle('novel:worldbuildTypes', (_e, projectId: string): string[] =>
     store.listWorldbuildTypes(projectId)
   )
