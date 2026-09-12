@@ -1,10 +1,45 @@
-export interface ChatMessage {
-  role: 'user' | 'assistant'
-  content: string
+export interface TextBlock {
+  type: 'text'
+  text: string
 }
 
-export const PURPOSES = ['playground', 'outline', 'chapter', 'summary', 'polish', 'check'] as const
+export interface ToolUseBlock {
+  type: 'tool_use'
+  id: string
+  name: string
+  input: Record<string, unknown>
+}
+
+export interface ToolResultBlock {
+  type: 'tool_result'
+  tool_use_id: string
+  content: string
+  is_error?: boolean
+}
+
+export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
+
+export interface ChatMessage {
+  role: 'user' | 'assistant'
+  content: string | ContentBlock[]
+}
+
+export const PURPOSES = [
+  'playground',
+  'outline',
+  'chapter',
+  'summary',
+  'polish',
+  'check',
+  'agent'
+] as const
 export type Purpose = (typeof PURPOSES)[number]
+
+export interface ToolDef {
+  name: string
+  description: string
+  input_schema: Record<string, unknown>
+}
 
 export interface ChatParams {
   model: string
@@ -14,6 +49,7 @@ export interface ChatParams {
   temperature?: number
   purpose?: Purpose
   cacheSystem?: boolean
+  tools?: ToolDef[]
 }
 
 export interface UsageInfo {
@@ -30,6 +66,7 @@ export interface ChatResult {
   stopReason: string | null
   durationMs: number
   headers: Record<string, string>
+  toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>
 }
 
 export interface UsageRecord {
@@ -140,6 +177,7 @@ export interface WorldbuildEntry {
   projectId: string
   category: string
   title: string
+  tags: string
   content: string
   createdAt: number
   updatedAt: number
@@ -149,6 +187,7 @@ export interface WorldbuildInput {
   projectId: string
   category: string
   title: string
+  tags?: string
   content?: string
 }
 
@@ -256,6 +295,14 @@ export type PipelineAction =
   | 'character'
   | 'worldbuild'
 
+export interface WorldbuildGenParams {
+  projectId: string
+  categories: string[]
+  title: string
+  brief: string
+  count?: number
+}
+
 export type ExportFormat = 'txt' | 'md' | 'docx'
 
 export interface OutlineGenParams {
@@ -264,4 +311,75 @@ export interface OutlineGenParams {
   volume: number
   startNo: number
   count: number
+}
+
+export type GraphNodeKind = 'character' | 'worldbuild' | 'outline' | 'foreshadow'
+
+export interface ProjectGraphNode {
+  id: string
+  rawId: string
+  kind: GraphNodeKind
+  label: string
+  degree: number
+  tags?: string[]
+}
+
+export interface ProjectGraphEdge {
+  source: string
+  target: string
+}
+
+export interface ProjectGraph {
+  nodes: ProjectGraphNode[]
+  edges: ProjectGraphEdge[]
+}
+
+export type AgentToolState = 'running' | 'confirming' | 'ok' | 'error' | 'denied'
+
+export interface AgentToolCall {
+  id: string
+  name: string
+  input: Record<string, unknown>
+  state: AgentToolState
+  result?: string
+  dangerReason?: string
+}
+
+export type AgentTurn =
+  | { role: 'user'; text: string; ts: number }
+  | { role: 'assistant'; text: string; toolCalls: AgentToolCall[]; ts: number }
+
+export interface AgentSession {
+  id: string
+  projectId: string
+  title: string
+  createdAt: number
+  updatedAt: number
+  turns: AgentTurn[]
+}
+
+export interface AgentSessionBrief {
+  id: string
+  title: string
+  createdAt: number
+  updatedAt: number
+}
+
+export interface AgentDonePayload {
+  text: string
+  turns: number
+  requests: number
+  changed: boolean
+  denied: boolean
+  hitLimit: boolean
+  usage: UsageInfo
+  model: string
+  durationMs: number
+}
+
+export interface AgentToolDefView {
+  name: string
+  label: string
+  danger: boolean
+  read: boolean
 }

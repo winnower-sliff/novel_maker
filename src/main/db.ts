@@ -32,8 +32,16 @@ CREATE TABLE IF NOT EXISTS worldbuild (
   category TEXT DEFAULT '其他',
   title TEXT NOT NULL,
   content TEXT DEFAULT '',
+  tags TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS worldbuild_types (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  UNIQUE(project_id, name)
 );
 CREATE TABLE IF NOT EXISTS outlines (
   id TEXT PRIMARY KEY,
@@ -89,5 +97,13 @@ export function getDb(): DatabaseSync {
   db.exec('PRAGMA journal_mode = WAL;')
   db.exec('PRAGMA foreign_keys = ON;')
   db.exec(SCHEMA)
+  migrate(db)
   return db
+}
+
+function migrate(d: DatabaseSync): void {
+  const cols = d.prepare('PRAGMA table_info(worldbuild)').all() as Array<{ name: string }>
+  if (!cols.some((c) => c.name === 'tags')) {
+    d.exec('ALTER TABLE worldbuild ADD COLUMN tags TEXT DEFAULT \'\'')
+  }
 }

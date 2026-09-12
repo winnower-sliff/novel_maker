@@ -1,4 +1,5 @@
 import type { BuiltContext, ContextPart } from '../shared/types'
+import { splitTags } from '../shared/tags'
 import * as store from './store'
 
 const CHARS_PER_TOKEN = 1 / 0.75
@@ -23,7 +24,13 @@ function renderWorldbuildSlim(projectId: string): { text: string; detail: string
 function renderWorldbuildFull(projectId: string): { text: string; detail: string } {
   const entries = store.listWorldbuild(projectId)
   if (entries.length === 0) return { text: '', detail: '无' }
-  const text = entries.map((e) => `### [${e.category}] ${e.title}\n${e.content}`).join('\n\n')
+  const text = entries
+    .map((e) => {
+      const tags = splitTags(e.tags)
+      const tagSuffix = tags.length > 0 ? `（标签：${tags.join('、')}）` : ''
+      return `### [${e.category}] ${e.title}${tagSuffix}\n${e.content}`
+    })
+    .join('\n\n')
   return { text, detail: `${entries.length} 条（全文）` }
 }
 

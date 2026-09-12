@@ -15,6 +15,7 @@ import type {
   WorldbuildEntry,
   WorldbuildInput
 } from '../shared/types'
+import { splitTags } from '../shared/tags'
 import { getDb } from './db'
 
 type Row = Record<string, unknown>
@@ -55,6 +56,7 @@ function mapWorldbuild(r: Row): WorldbuildEntry {
     projectId: r.project_id as string,
     category: (r.category as string) ?? '其他',
     title: r.title as string,
+    tags: (r.tags as string) ?? '',
     content: (r.content as string) ?? '',
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number
@@ -151,19 +153,70 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
   const ts = now()
   if (input.id) {
     db.prepare(
-      'UPDATE worldbuild SET category = ?, title = ?, content = ?, updated_at = ? WHERE id = ?'
-    ).run(input.category, input.title, input.content ?? '', ts, input.id)
+      'UPDATE worldbuild SET category = ?, title = ?, tags = ?, content = ?, updated_at = ? WHERE id = ?'
+    ).run(input.category, input.title, input.tags ?? '', input.content ?? '', ts, input.id)
     return mapWorldbuild(db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(input.id) as Row)
   }
   const id = randomUUID()
   db.prepare(
-    'INSERT INTO worldbuild (id, project_id, category, title, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, input.projectId, input.category, input.title, input.content ?? '', ts, ts)
+    'INSERT INTO worldbuild (id, project_id, category, title, tags, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, input.projectId, input.category, input.title, input.tags ?? '', input.content ?? '', ts, ts)
   return mapWorldbuild(db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(id) as Row)
 }
 
 export function deleteWorldbuild(id: string): void {
   getDb().prepare('DELETE FROM worldbuild WHERE id = ?').run(id)
+}
+
+const DEFAULT_WORLDBUILD_TYPES = ['力量体系', '地理', '势力', '历史', '物品', '其他']
+
+export function listWorldbuildTypes(projectId: string): string[] {
+  const db = getDb()
+  const rows = db
+    .prepare('SELECT name FROM worldbuild_types WHERE project_id = ? ORDER BY rowid')
+    .all(projectId) as Array<{ name: string }>
+  if (rows.length > 0) return rows.map((r) => r.name)
+  const used = new Set(
+    (db
+      .prepare('SELECT DISTINCT category FROM worldbuild WHERE project_id = ?')
+      .all(projectId) as Array<{ category: string | null }>)
+      .map((r) => r.category ?? '')
+      .filter(Boolean)
+  )
+  const names = [...DEFAULT_WORLDBUILD_TYPES, ...used].filter(
+    (n, i, arr) => arr.indexOf(n) === i
+  )
+  const insert = db.prepare(
+    'INSERT INTO worldbuild_types (id, project_id, name, created_at) VALUES (?, ?, ?, ?)'
+  )
+  const ts = now()
+  for (const n of names) insert.run(randomUUID(), projectId, n, ts)
+  return names
+}
+
+export function createWorldbuildType(projectId: string, name: string): string {
+  const n = name.trim()
+  if (!n) throw new Error('类型名不能为空')
+  const db = getDb()
+  const dupType = db
+    .prepare('SELECT 1 FROM worldbuild_types WHERE project_id = ? AND name = ?')
+    .get(projectId, n)
+  if (dupType) throw new Error(`类型「${n}」已存在`)
+  const tagHit = listWorldbuild(projectId).find((e) => splitTags(e.tags).includes(n))
+  if (tagHit) throw new Error(`「${n}」已被条目《${tagHit.title}》用作标签，类型与标签不能重名`)
+  db.prepare(
+    'INSERT INTO worldbuild_types (id, project_id, name, created_at) VALUES (?, ?, ?, ?)'
+  ).run(randomUUID(), projectId, n, now())
+  return n
+}
+
+export function deleteWorldbuildType(projectId: string, name: string): void {
+  const db = getDb()
+  const used = db
+    .prepare('SELECT COUNT(*) AS c FROM worldbuild WHERE project_id = ? AND category = ?')
+    .get(projectId, name) as { c: number }
+  if (used.c > 0) throw new Error(`类型「${name}」下还有 ${used.c} 个条目，请先迁移它们`)
+  db.prepare('DELETE FROM worldbuild_types WHERE project_id = ? AND name = ?').run(projectId, name)
 }
 
 export function listOutlines(projectId: string): OutlineItem[] {

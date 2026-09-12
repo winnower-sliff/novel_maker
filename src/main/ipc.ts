@@ -1,11 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { ipcMain, type IpcMainInvokeEvent, type WebContents } from 'electron'
 import type {
+  AgentDonePayload,
+  AgentSession,
+  AgentSessionBrief,
   Chapter,
   ChapterBrief,
   ChapterSummary,
   Character,
   CharacterInput,
+  ChatMessage,
   ChatParams,
   ChatResult,
   Foreshadow,
@@ -16,6 +20,7 @@ import type {
   OutlineItem,
   PipelineAction,
   Project,
+  ProjectGraph,
   ProjectInput,
   SettingsPatch,
   SettingsView,
@@ -24,23 +29,37 @@ import type {
   UsageRecord,
   UsageStats,
   WorldbuildEntry,
+  WorldbuildGenParams,
   WorldbuildInput
 } from '../shared/types'
+import { cancelAgentConfirms, resolveAgentConfirm, runAgent } from './agent'
+import {
+  deleteAgentSession,
+  listAgentSessions,
+  loadAgentSession,
+  saveAgentSession
+} from './agentSessions'
 import { buildChapterContext } from './context'
 import { exportProject } from './export'
+import { buildProjectGraph } from './graph'
 import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
 import {
   applyOutlineResult,
   applySummaryResult,
+  applyWorldbuildResult,
   buildChapterRequest,
   buildCharacterRequest,
   buildCheckRequest,
   buildOutlineRequest,
   buildPolishRequest,
   buildSummaryRequest,
+  buildWorldbuildIndex,
   buildWorldbuildRequest,
+  buildWorldbuildRetrieveRequest,
   guessCharacterName,
-  parseCheckResult
+  parseCheckResult,
+  resolveWorldbuildRetrieval,
+  type WorldbuildRetrieval
 } from './pipeline'
 import { getApiKey, getBaseUrl, getPromptCacheEnabled, loadSettingsView, saveSettings } from './settings'
 import * as store from './store'
@@ -48,6 +67,45 @@ import { deleteSkill, getSkill, listSkills, saveSkill } from './skills'
 import { appendUsage, computeStats, listUsage } from './usage'
 
 const activeRequests = new Map<string, AbortController>()
+const activeAgentRuns = new Map<string, AbortController>()
+
+function startAgentRun(
+  e: IpcMainInvokeEvent,
+  params: { projectId: string; messages: ChatMessage[]; model?: string }
+): string {
+  const requestId = randomUUID()
+  const controller = new AbortController()
+  activeAgentRuns.set(requestId, controller)
+
+  void (async () => {
+    let payload: AgentDonePayload
+    try {
+      const s = await loadSettingsView()
+      const model = params.model?.trim() || s.modelRouting.agent || s.defaultModel
+      payload = await runAgent({
+        win: e.sender,
+        requestId,
+        projectId: params.projectId,
+        messages: params.messages,
+        model,
+        signal: controller.signal
+      })
+    } catch (err) {
+      if (!e.sender.isDestroyed()) {
+        const message = controller.signal.aborted
+          ? '已停止'
+          : ((err as Error)?.message ?? String(err))
+        e.sender.send('agent:error', requestId, message)
+      }
+      return
+    } finally {
+      activeAgentRuns.delete(requestId)
+    }
+    if (!e.sender.isDestroyed()) e.sender.send('agent:done', requestId, payload)
+  })()
+
+  return requestId
+}
 
 function startStream(
   win: WebContents,
@@ -128,6 +186,36 @@ function startStream(
   return requestId
 }
 
+async function runWorldbuildRetrieval(p: WorldbuildGenParams): Promise<WorldbuildRetrieval | undefined> {
+  const req = buildWorldbuildRetrieveRequest(p)
+  if (!req) return undefined
+  try {
+    const apiKey = await getApiKey()
+    if (!apiKey) return undefined
+    const baseUrl = await getBaseUrl()
+    const s = await loadSettingsView()
+    const params: ChatParams = { ...req }
+    if (!params.model) {
+      params.model = (params.purpose && s.modelRouting[params.purpose]) || s.defaultModel
+    }
+    const result = await chatStream(params, { apiKey, baseUrl }, () => {})
+    appendUsage({
+      ts: Date.now(),
+      model: result.model,
+      purpose: 'outline',
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      cacheReadTokens: result.usage.cacheReadTokens,
+      cacheCreationTokens: result.usage.cacheCreationTokens,
+      durationMs: result.durationMs,
+      ratelimit: pickRatelimitHeaders(result.headers)
+    })
+    return resolveWorldbuildRetrieval(p, buildWorldbuildIndex(p.projectId), result.text)
+  } catch {
+    return undefined
+  }
+}
+
 export function registerIpc(): void {
   ipcMain.handle('settings:get', (): Promise<SettingsView> => loadSettingsView())
   ipcMain.handle('settings:save', (_e, patch: SettingsPatch): Promise<SettingsView> =>
@@ -148,12 +236,33 @@ export function registerIpc(): void {
     activeRequests.get(requestId)?.abort()
   })
 
+  ipcMain.handle(
+    'agent:run',
+    (e: IpcMainInvokeEvent, params: { projectId: string; messages: ChatMessage[]; model?: string }): string =>
+      startAgentRun(e, params)
+  )
+  ipcMain.handle('agent:abort', (_e, requestId: string): void => {
+    activeAgentRuns.get(requestId)?.abort()
+    cancelAgentConfirms(requestId)
+  })
+  ipcMain.handle(
+    'agent:resolve',
+    (_e, requestId: string, confirmId: string, allow: boolean, always?: boolean): boolean =>
+      resolveAgentConfirm(requestId, confirmId, allow, !!always)
+  )
+  ipcMain.handle('agent:sessions', (_e, projectId?: string): AgentSessionBrief[] =>
+    listAgentSessions(projectId)
+  )
+  ipcMain.handle('agent:sessionLoad', (_e, id: string): AgentSession | null => loadAgentSession(id))
+  ipcMain.handle('agent:sessionSave', (_e, session: AgentSession): void => saveAgentSession(session))
+  ipcMain.handle('agent:sessionDelete', (_e, id: string): void => deleteAgentSession(id))
+
   ipcMain.handle('usage:list', (_e, limit?: number): UsageRecord[] => listUsage(limit ?? 200))
   ipcMain.handle('usage:stats', (): UsageStats => computeStats())
 
   ipcMain.handle(
     'pipeline:run',
-    (e: IpcMainInvokeEvent, action: PipelineAction, params: unknown): string => {
+    async (e: IpcMainInvokeEvent, action: PipelineAction, params: unknown): Promise<string> => {
       if (action === 'outline') {
         const p = params as OutlineGenParams
         return startStream(e.sender, buildOutlineRequest(p), {
@@ -235,17 +344,13 @@ export function registerIpc(): void {
         })
       }
       if (action === 'worldbuild') {
-        const p = params as { projectId: string; brief: string; category: string; title: string }
-        return startStream(e.sender, buildWorldbuildRequest(p.projectId, p.brief), {
+        const p = params as WorldbuildGenParams
+        const retrieval = await runWorldbuildRetrieval(p)
+        return startStream(e.sender, buildWorldbuildRequest(p, retrieval), {
           action,
           afterDone: (r) => {
-            const entry = store.saveWorldbuild({
-              projectId: p.projectId,
-              category: p.category,
-              title: p.title,
-              content: r.text
-            })
-            return { entryId: entry.id, title: entry.title }
+            const { entryIds, created } = applyWorldbuildResult(p, r.text)
+            return { entryIds, created }
           }
         })
       }
@@ -277,6 +382,23 @@ export function registerIpc(): void {
     (_e, input: WorldbuildInput & { id?: string }): WorldbuildEntry => store.saveWorldbuild(input)
   )
   ipcMain.handle('novel:worldbuildDelete', (_e, id: string): void => store.deleteWorldbuild(id))
+  ipcMain.handle('novel:worldbuildTypes', (_e, projectId: string): string[] =>
+    store.listWorldbuildTypes(projectId)
+  )
+  ipcMain.handle(
+    'novel:worldbuildTypeCreate',
+    (_e, projectId: string, name: string): string[] => {
+      store.createWorldbuildType(projectId, name)
+      return store.listWorldbuildTypes(projectId)
+    }
+  )
+  ipcMain.handle(
+    'novel:worldbuildTypeDelete',
+    (_e, projectId: string, name: string): string[] => {
+      store.deleteWorldbuildType(projectId, name)
+      return store.listWorldbuildTypes(projectId)
+    }
+  )
   ipcMain.handle('novel:outlines', (_e, projectId: string): OutlineItem[] =>
     store.listOutlines(projectId)
   )
@@ -320,6 +442,10 @@ export function registerIpc(): void {
       _e,
       opts: { projectId: string; format: 'txt' | 'md' | 'docx'; scope: 'all' | 'single'; outlineId?: string }
     ) => exportProject(opts)
+  )
+
+  ipcMain.handle('graph:project', (_e, projectId: string): ProjectGraph =>
+    buildProjectGraph(projectId)
   )
 
   ipcMain.handle('skills:list', (): SkillMeta[] => listSkills())
