@@ -52,9 +52,19 @@ export function Select({ className = '', ...props }: SelectHTMLAttributes<HTMLSe
   )
 }
 
-export function Card({ className = '', children }: { className?: string; children: ReactNode }) {
+export function Card({
+  className = '',
+  children,
+  id
+}: {
+  className?: string
+  children: ReactNode
+  id?: string
+}) {
   return (
-    <div className={`rounded-lg border border-zinc-800 bg-zinc-900/50 ${className}`}>{children}</div>
+    <div id={id} className={`rounded-lg border border-zinc-800 bg-zinc-900/50 ${className}`}>
+      {children}
+    </div>
   )
 }
 

@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import type { Project, SettingsView, UsageStats } from '@shared/types'
+import Agent from './pages/Agent'
 import Characters from './pages/Characters'
 import Foreshadows from './pages/Foreshadows'
+import GraphPage from './pages/GraphPage'
 import Outline from './pages/Outline'
 import Playground from './pages/Playground'
 import Projects from './pages/Projects'
@@ -10,19 +12,10 @@ import Skills from './pages/Skills'
 import Usage from './pages/Usage'
 import Worldbuild from './pages/Worldbuild'
 import Writing from './pages/Writing'
+import { Toaster } from './components/Toaster'
 import { fmtTokens } from './lib/format'
-
-type Page =
-  | 'projects'
-  | 'writing'
-  | 'outline'
-  | 'characters'
-  | 'worldbuild'
-  | 'foreshadows'
-  | 'playground'
-  | 'skills'
-  | 'usage'
-  | 'settings'
+import type { Navigate, Page } from './lib/nav'
+import { useWbGenNavBadge } from './lib/wbGenStore'
 
 interface NavItem {
   id: Page
@@ -30,31 +23,48 @@ interface NavItem {
   icon: ReactElement
 }
 
+const CREATIVE_PAGES: ReadonlySet<Page> = new Set([
+  'agent',
+  'graph',
+  'writing',
+  'outline',
+  'characters',
+  'worldbuild',
+  'foreshadows'
+])
+
 const GROUP_CREATIVE: NavItem[] = [
   {
-    id: 'projects',
-    label: '项目',
+    id: 'agent',
+    label: '智能体',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V7Z" />
+        <rect x="4" y="7" width="16" height="12" rx="3" />
+        <path d="M12 7V4M8 4h8" strokeLinecap="round" />
+        <circle cx="9" cy="13" r="1.4" fill="currentColor" stroke="none" />
+        <circle cx="15" cy="13" r="1.4" fill="currentColor" stroke="none" />
       </svg>
     )
   },
   {
-    id: 'writing',
-    label: '写作台',
+    id: 'graph',
+    label: '图谱',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <path d="m16.5 3.5 4 4L8 20l-5 1 1-5L16.5 3.5Z" strokeLinejoin="round" />
+        <circle cx="6" cy="6" r="2.4" />
+        <circle cx="18" cy="7" r="2.4" />
+        <circle cx="12" cy="17" r="2.4" />
+        <path d="M8.2 7 15.7 7M7 8.3l4 6.6M16.9 9.2l-3.6 5.6" strokeLinecap="round" />
       </svg>
     )
   },
   {
-    id: 'outline',
-    label: '大纲',
+    id: 'worldbuild',
+    label: '世界观',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" strokeLinecap="round" />
+        <circle cx="12" cy="12" r="9" />
+        <path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9Z" />
       </svg>
     )
   },
@@ -69,12 +79,20 @@ const GROUP_CREATIVE: NavItem[] = [
     )
   },
   {
-    id: 'worldbuild',
-    label: '世界观',
+    id: 'outline',
+    label: '大纲',
     icon: (
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
-        <circle cx="12" cy="12" r="9" />
-        <path d="M3 12h18M12 3c2.5 2.5 3.5 5.5 3.5 9s-1 6.5-3.5 9c-2.5-2.5-3.5-5.5-3.5-9s1-6.5 3.5-9Z" />
+        <path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" strokeLinecap="round" />
+      </svg>
+    )
+  },
+  {
+    id: 'writing',
+    label: '写作台',
+    icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" className="h-4 w-4">
+        <path d="m16.5 3.5 4 4L8 20l-5 1 1-5L16.5 3.5Z" strokeLinejoin="round" />
       </svg>
     )
   },
@@ -130,23 +148,31 @@ const GROUP_SYSTEM: NavItem[] = [
   }
 ]
 
+const WB_BADGE_DOT: Record<string, string> = {
+  running: 'bg-amber-500 animate-pulse',
+  done: 'bg-emerald-500',
+  error: 'bg-red-500',
+  mixed: 'bg-amber-400'
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>('projects')
+  const [writingFocus, setWritingFocus] = useState<string | null>(null)
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [cfg, setCfg] = useState<SettingsView | null>(null)
   const [currentProject, setCurrentProject] = useState<Project | null>(null)
+  const [projectsList, setProjectsList] = useState<Project[]>([])
+  const [menuOpen, setMenuOpen] = useState(false)
+  const wbBadge = useWbGenNavBadge()
 
   const refresh = useCallback(() => {
     void window.api.usage.stats().then(setStats)
     void window.api.settings.get().then((s) => {
       setCfg(s)
-      if (s.currentProjectId) {
-        void window.api.novel.projects().then((projects) => {
-          setCurrentProject(projects.find((p) => p.id === s.currentProjectId) ?? null)
-        })
-      } else {
-        setCurrentProject(null)
-      }
+      void window.api.novel.projects().then((projects) => {
+        setProjectsList(projects)
+        setCurrentProject(s.currentProjectId ? (projects.find((p) => p.id === s.currentProjectId) ?? null) : null)
+      })
     })
   }, [])
 
@@ -155,10 +181,12 @@ export default function App() {
     const timer = setInterval(refresh, 30_000)
     const offDone = window.api.llm.onDone(() => refresh())
     const offError = window.api.llm.onError(() => refresh())
+    const offAgentDone = window.api.agent.onDone(() => refresh())
     return () => {
       clearInterval(timer)
       offDone()
       offError()
+      offAgentDone()
     }
   }, [refresh])
 
@@ -167,6 +195,16 @@ export default function App() {
       void window.api.settings.save({ currentProjectId: id }).then(() => refresh())
     },
     [refresh]
+  )
+
+  const navigate = useCallback<Navigate>(
+    (target, focusOutlineId) => {
+      const blocked = cfg !== null && !cfg.currentProjectId && CREATIVE_PAGES.has(target)
+      const finalTarget = blocked ? 'projects' : target
+      setPage(finalTarget)
+      setWritingFocus(finalTarget === 'writing' ? (focusOutlineId ?? null) : null)
+    },
+    [cfg]
   )
 
   const quotaPct =
@@ -178,7 +216,7 @@ export default function App() {
     items.map((item) => (
       <button
         key={item.id}
-        onClick={() => setPage(item.id)}
+        onClick={() => navigate(item.id)}
         className={`flex w-full cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
           page === item.id
             ? 'bg-zinc-800 font-medium text-zinc-100'
@@ -187,11 +225,15 @@ export default function App() {
       >
         {item.icon}
         {item.label}
+        {item.id === 'worldbuild' && wbBadge && (
+          <span className={`ml-auto h-2 w-2 shrink-0 rounded-full ${WB_BADGE_DOT[wbBadge.tone]}`} />
+        )}
       </button>
     ))
 
   return (
     <div className="flex h-full flex-col">
+      <Toaster />
       <div className="flex min-h-0 flex-1">
         <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/80">
           <div className="flex items-center gap-2.5 px-4 py-4">
@@ -210,11 +252,68 @@ export default function App() {
               <div className="text-[10px] text-zinc-500">GLM 长篇创作</div>
             </div>
           </div>
-          <div className="mx-3 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-2">
-            <div className="text-[10px] text-zinc-500">当前项目</div>
-            <div className="truncate text-xs font-medium text-zinc-200">
-              {currentProject ? currentProject.title : '未选择'}
-            </div>
+          <div className="relative mx-3">
+            <button
+              onClick={() => setMenuOpen((v) => !v)}
+              className="w-full cursor-pointer rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-left transition-colors hover:border-zinc-700"
+            >
+              <div className="text-[10px] text-zinc-500">当前项目</div>
+              <div className="flex items-center gap-1">
+                <span className="truncate text-xs font-medium text-zinc-200">
+                  {currentProject ? currentProject.title : '选择或新建项目'}
+                </span>
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2"
+                  className={`ml-auto h-3 w-3 shrink-0 text-zinc-500 transition-transform ${menuOpen ? 'rotate-180' : ''}`}
+                >
+                  <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                </svg>
+              </div>
+            </button>
+            {menuOpen && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+                <div className="absolute left-0 right-0 z-50 mt-1 overflow-hidden rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+                  <div className="max-h-64 overflow-y-auto p-1">
+                    {projectsList.length === 0 && (
+                      <div className="px-2.5 py-2 text-xs text-zinc-600">还没有项目</div>
+                    )}
+                    {projectsList.map((p) => (
+                      <button
+                        key={p.id}
+                        onClick={() => {
+                          setMenuOpen(false)
+                          if (p.id !== currentProject?.id) switchProject(p.id)
+                          navigate('projects')
+                        }}
+                        className={`flex w-full cursor-pointer items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs transition-colors ${
+                          p.id === currentProject?.id
+                            ? 'bg-zinc-800 font-medium text-zinc-100'
+                            : 'text-zinc-300 hover:bg-zinc-800/60'
+                        }`}
+                      >
+                        <span className="truncate">{p.title}</span>
+                        {p.genre && <span className="ml-auto shrink-0 text-[10px] text-zinc-600">{p.genre}</span>}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="border-t border-zinc-800 p-1">
+                    <button
+                      onClick={() => {
+                        setMenuOpen(false)
+                        navigate('projects')
+                      }}
+                      className="flex w-full cursor-pointer items-center gap-2 rounded px-2.5 py-1.5 text-left text-xs text-zinc-400 transition-colors hover:bg-zinc-800/60 hover:text-zinc-200"
+                    >
+                      ＋ 新建项目…
+                    </button>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
           <nav className="mt-3 flex-1 space-y-4 overflow-y-auto px-2 pb-2">
             <div className="space-y-1">
@@ -234,13 +333,24 @@ export default function App() {
         </aside>
         <main className="flex-1 overflow-hidden">
           {page === 'projects' && (
-            <Projects currentProjectId={cfg?.currentProjectId ?? ''} onSwitch={switchProject} />
+            <Projects currentProjectId={cfg?.currentProjectId ?? ''} onSwitch={switchProject} onNavigate={navigate} />
           )}
-          {page === 'writing' && <Writing projectId={currentProject?.id ?? ''} />}
-          {page === 'outline' && <Outline projectId={currentProject?.id ?? ''} />}
-          {page === 'characters' && <Characters projectId={currentProject?.id ?? ''} />}
-          {page === 'worldbuild' && <Worldbuild projectId={currentProject?.id ?? ''} />}
-          {page === 'foreshadows' && <Foreshadows projectId={currentProject?.id ?? ''} />}
+          {page === 'agent' && <Agent projectId={currentProject?.id ?? ''} />}
+          {page === 'graph' && (
+            <GraphPage projectId={currentProject?.id ?? ''} onNavigate={navigate} />
+          )}
+          {page === 'writing' && (
+            <Writing
+              projectId={currentProject?.id ?? ''}
+              onNavigate={navigate}
+              focusOutlineId={writingFocus}
+              onFocusConsumed={() => setWritingFocus(null)}
+            />
+          )}
+          {page === 'outline' && <Outline projectId={currentProject?.id ?? ''} onNavigate={navigate} />}
+          {page === 'characters' && <Characters projectId={currentProject?.id ?? ''} onNavigate={navigate} />}
+          {page === 'worldbuild' && <Worldbuild projectId={currentProject?.id ?? ''} onNavigate={navigate} />}
+          {page === 'foreshadows' && <Foreshadows projectId={currentProject?.id ?? ''} onNavigate={navigate} />}
           {page === 'playground' && <Playground />}
           {page === 'skills' && <Skills />}
           {page === 'usage' && <Usage />}

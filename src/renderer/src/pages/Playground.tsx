@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { ModelProbeResult, SettingsView } from '@shared/types'
+import { Markdown } from '../components/Markdown'
 import { Badge, Button, Card, Label, Select, Textarea } from '../components/ui'
 import { fmtDuration, fmtTokens } from '../lib/format'
 import type { DonePayload } from '../lib/ipc'
@@ -135,7 +136,7 @@ export default function Playground() {
       <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
         <div className="flex-1 overflow-y-auto p-4">
           {output ? (
-            <div className="whitespace-pre-wrap text-sm leading-7 text-zinc-200">{output}</div>
+            <Markdown text={output} className="text-sm leading-7 text-zinc-200" />
           ) : (
             <div className="flex h-full items-center justify-center text-sm text-zinc-600">
               {running ? '生成中…' : '输入内容开始试写，或先到「设置」配置 API Key'}

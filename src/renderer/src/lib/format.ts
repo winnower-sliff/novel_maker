@@ -6,7 +6,8 @@ export const PURPOSE_LABELS: Record<string, string> = {
   chapter: '正文',
   summary: '摘要',
   polish: '润色',
-  check: '检查'
+  check: '检查',
+  agent: '智能体'
 }
 
 export function purposeLabel(p: Purpose | string): string {

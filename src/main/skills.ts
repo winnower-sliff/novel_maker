@@ -8,15 +8,23 @@ export function globalSkillsDir(): string {
   return join(app.getPath('userData'), 'skills')
 }
 
-function parseFrontmatter(raw: string): { name: string; description: string } {
+function parseFrontmatter(raw: string): { name: string; description: string; version: number } {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)
-  if (!match) return { name: '', description: '' }
+  if (!match) return { name: '', description: '', version: 0 }
   const meta: Record<string, string> = {}
   for (const line of match[1].split(/\r?\n/)) {
     const kv = /^([a-zA-Z_]+)\s*:\s*(.*)$/.exec(line.trim())
     if (kv) meta[kv[1].toLowerCase()] = kv[2].trim()
   }
-  return { name: meta.name ?? '', description: meta.description ?? '' }
+  return {
+    name: meta.name ?? '',
+    description: meta.description ?? '',
+    version: Number(meta.version) || 0
+  }
+}
+
+function builtinVersion(raw: string): number {
+  return parseFrontmatter(raw).version
 }
 
 export function listSkills(): SkillMeta[] {
@@ -64,9 +72,15 @@ export function deleteSkill(filename: string): void {
 
 function seedIfEmpty(): void {
   const dir = globalSkillsDir()
-  if (existsSync(dir) && readdirSync(dir).some((f) => f.endsWith('.md'))) return
   mkdirSync(dir, { recursive: true })
   for (const [filename, content] of Object.entries(BUILTIN_SKILLS)) {
-    writeFileSync(join(dir, filename), content, 'utf-8')
+    const path = join(dir, filename)
+    if (!existsSync(path)) {
+      writeFileSync(path, content, 'utf-8')
+      continue
+    }
+    if (builtinVersion(content) > parseFrontmatter(readFileSync(path, 'utf-8')).version) {
+      writeFileSync(path, content, 'utf-8')
+    }
   }
 }

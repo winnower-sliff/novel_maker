@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
+import type { Navigate } from '../lib/nav'
 
 const STATUS: Array<{ value: OutlineStatus; label: string; tone: 'default' | 'amber' | 'green' | 'red' }> = [
   { value: 'draft', label: '草稿', tone: 'default' },
@@ -21,7 +22,7 @@ interface EditState {
   status: OutlineStatus
 }
 
-export default function Outline({ projectId }: { projectId: string }) {
+export default function Outline({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
   const [items, setItems] = useState<OutlineItem[]>([])
   const [edit, setEdit] = useState<EditState | null>(null)
   const [genOpen, setGenOpen] = useState(false)
@@ -90,8 +91,9 @@ export default function Outline({ projectId }: { projectId: string }) {
 
   if (!projectId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-zinc-600">
-        请先在「项目」页打开一个项目
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
+        请先选择一个项目
+        <Button onClick={() => onNavigate('projects')}>去选择项目</Button>
       </div>
     )
   }
@@ -270,8 +272,8 @@ export default function Outline({ projectId }: { projectId: string }) {
       )}
 
       {volumes.length === 0 && (
-        <Card className="p-10 text-center text-sm text-zinc-600">
-          暂无大纲（M4 将支持 AI 一键生成，当前可手动录入）
+        <Card className="flex flex-col items-center gap-3 p-10 text-center text-sm text-zinc-600">
+          暂无大纲，可点右上角「AI 生成大纲」一键生成，或「新增章节」手动录入
         </Card>
       )}
 
@@ -297,6 +299,13 @@ export default function Outline({ projectId }: { projectId: string }) {
                     <div className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{it.synopsis}</div>
                   </div>
                   <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <Button
+                      variant="ghost"
+                      className="px-2 py-1"
+                      onClick={() => onNavigate('writing', it.id)}
+                    >
+                      去写作
+                    </Button>
                     <Button
                       variant="ghost"
                       className="px-2 py-1"

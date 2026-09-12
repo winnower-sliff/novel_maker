@@ -3,6 +3,7 @@ import type { ChapterBrief, ContextPart } from '@shared/types'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
 import { fmtDuration, fmtTokens } from '../lib/format'
 import { runPipeline, type DonePayload } from '../lib/ipc'
+import type { Navigate } from '../lib/nav'
 
 interface ChapterDoneData {
   chapterId?: string
@@ -44,7 +45,14 @@ const STATUS_BADGE: Record<string, { label: string; tone: 'default' | 'amber' | 
 
 type Busy = 'chapter' | 'summary' | 'polish' | 'check' | null
 
-export default function Writing({ projectId }: { projectId: string }) {
+interface Props {
+  projectId: string
+  onNavigate: Navigate
+  focusOutlineId: string | null
+  onFocusConsumed: () => void
+}
+
+export default function Writing({ projectId, onNavigate, focusOutlineId, onFocusConsumed }: Props) {
   const [briefs, setBriefs] = useState<ChapterBrief[]>([])
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [content, setContent] = useState('')
@@ -60,6 +68,7 @@ export default function Writing({ projectId }: { projectId: string }) {
   const [pauseEach, setPauseEach] = useState(true)
   const [batch, setBatch] = useState<BatchState | null>(null)
   const requestIdRef = useRef<string | null>(null)
+  const polishedRef = useRef(false)
   const batchStopRef = useRef(false)
   const batchAbortRef = useRef<string | null>(null)
   const resumeRef = useRef<string[] | null>(null)
@@ -76,6 +85,7 @@ export default function Writing({ projectId }: { projectId: string }) {
     setCtxPreview(null)
     setNotice('')
     setCheckResult(null)
+    polishedRef.current = false
     void window.api.novel.chapter(outlineId).then((c) => {
       setContent(c?.content ?? '')
       setDirty(false)
@@ -88,8 +98,15 @@ export default function Writing({ projectId }: { projectId: string }) {
     setContent('')
     setBatch(null)
     resumeRef.current = null
+    polishedRef.current = false
     loadBriefs()
   }, [loadBriefs])
+
+  useEffect(() => {
+    if (!focusOutlineId || briefs.length === 0) return
+    if (briefs.some((b) => b.id === focusOutlineId)) openChapter(focusOutlineId)
+    onFocusConsumed()
+  }, [focusOutlineId, briefs, openChapter, onFocusConsumed])
 
   useEffect(() => {
     const offDelta = window.api.llm.onDelta((id, text) => {
@@ -102,6 +119,7 @@ export default function Writing({ projectId }: { projectId: string }) {
       if (payload.action === 'chapter') {
         setBusy(null)
         setDirty(false)
+        polishedRef.current = false
         setNotice(
           d?.error
             ? `生成完成但保存失败：${d.error}`
@@ -112,7 +130,8 @@ export default function Writing({ projectId }: { projectId: string }) {
       } else if (payload.action === 'polish') {
         setBusy(null)
         setDirty(true)
-        setNotice('润色稿已生成，审阅后点「保存草稿」应用（将覆盖原稿）')
+        polishedRef.current = true
+        setNotice('润色稿已生成，审阅后点「保存草稿」应用（将覆盖原稿并标记为已润色）')
       }
     })
     const offError = window.api.llm.onError((id, message) => {
@@ -129,8 +148,9 @@ export default function Writing({ projectId }: { projectId: string }) {
 
   if (!projectId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-zinc-600">
-        请先在「项目」页打开一个项目
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
+        请先选择一个项目
+        <Button onClick={() => onNavigate('projects')}>去选择项目</Button>
       </div>
     )
   }
@@ -202,6 +222,24 @@ export default function Writing({ projectId }: { projectId: string }) {
     if (!selectedId) return
     void window.api.novel.saveChapter({ outlineId: selectedId, projectId, content }).then(() => {
       setDirty(false)
+      if (polishedRef.current && selected) {
+        polishedRef.current = false
+        void window.api.novel
+          .outlineSave({
+            id: selected.id,
+            projectId,
+            volume: selected.volume,
+            chapterNo: selected.chapterNo,
+            title: selected.title,
+            synopsis: selected.synopsis,
+            status: 'polished'
+          })
+          .then(() => {
+            setNotice('润色稿已保存（章节标记为已润色）')
+            loadBriefs()
+          })
+        return
+      }
       setNotice('草稿已保存')
       loadBriefs()
     })
@@ -371,7 +409,10 @@ export default function Writing({ projectId }: { projectId: string }) {
         <div className="flex-1 overflow-y-auto p-2">
           {volumes.length === 0 && (
             <div className="p-4 text-center text-xs leading-5 text-zinc-600">
-              暂无大纲，请先到「大纲」页生成或录入
+              暂无大纲
+              <Button variant="ghost" className="mt-2 px-2 py-1 text-xs" onClick={() => onNavigate('outline')}>
+                去大纲页生成
+              </Button>
             </div>
           )}
           {volumes.map((vol) => (

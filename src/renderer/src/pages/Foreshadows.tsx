@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Foreshadow } from '@shared/types'
 import { Badge, Button, Card, Input, Label } from '../components/ui'
+import type { Navigate } from '../lib/nav'
 
-export default function Foreshadows({ projectId }: { projectId: string }) {
+export default function Foreshadows({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
   const [list, setList] = useState<Foreshadow[]>([])
   const [content, setContent] = useState('')
   const [planted, setPlanted] = useState('')
@@ -19,8 +20,9 @@ export default function Foreshadows({ projectId }: { projectId: string }) {
 
   if (!projectId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-zinc-600">
-        请先在「项目」页打开一个项目
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
+        请先选择一个项目
+        <Button onClick={() => onNavigate('projects')}>去选择项目</Button>
       </div>
     )
   }
@@ -52,14 +54,23 @@ export default function Foreshadows({ projectId }: { projectId: string }) {
     }
   }
 
-  const renderGroup = (title: string, items: Foreshadow[], tone: 'amber' | 'green') => (
+  const renderGroup = (title: string, items: Foreshadow[], tone: 'amber' | 'green', emptyHint?: boolean) => (
     <Card className="min-h-0 flex-1 overflow-y-auto">
       <div className="sticky top-0 flex items-center gap-2 border-b border-zinc-800 bg-zinc-900 px-4 py-2.5">
         <span className="text-sm font-medium text-zinc-200">{title}</span>
         <Badge tone={tone}>{items.length}</Badge>
       </div>
       <div className="divide-y divide-zinc-800/60">
-        {items.length === 0 && <div className="p-6 text-center text-xs text-zinc-600">暂无</div>}
+        {items.length === 0 && (
+          <div className="flex flex-col items-center gap-2 p-6 text-center text-xs leading-5 text-zinc-600">
+            {emptyHint ? '暂无未回收伏笔——写作台定稿时 AI 会自动登记，也可在上方手动添加' : '暂无'}
+            {emptyHint && (
+              <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => onNavigate('writing')}>
+                去写作台定稿
+              </Button>
+            )}
+          </div>
+        )}
         {items.map((f) => (
           <div key={f.id} className="group flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800/30">
             <span className="min-w-0 flex-1 text-sm leading-6 text-zinc-300">{f.content}</span>
@@ -109,7 +120,7 @@ export default function Foreshadows({ projectId }: { projectId: string }) {
       </Card>
 
       <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
-        {renderGroup('未回收', open, 'amber')}
+        {renderGroup('未回收', open, 'amber', true)}
         {renderGroup('已回收', resolved, 'green')}
       </div>
     </div>

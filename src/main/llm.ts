@@ -43,6 +43,9 @@ export async function chatStream(
     messages: params.messages,
     stream: true
   }
+  if (params.tools?.length) {
+    body.tools = params.tools
+  }
   if (params.system) {
     body.system = params.cacheSystem
       ? [{ type: 'text', text: params.system, cache_control: { type: 'ephemeral' } }]
@@ -82,6 +85,8 @@ export async function chatStream(
   let text = ''
   let model = params.model
   let stopReason: string | null = null
+  const toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
+  const toolAcc = new Map<number, { id: string; name: string; json: string }>()
 
   const reader = res.body?.getReader()
   if (!reader) throw new LlmError('响应无内容流')
@@ -105,11 +110,33 @@ export async function chatStream(
         usage.cacheReadTokens = u.cache_read_input_tokens ?? 0
         usage.cacheCreationTokens = u.cache_creation_input_tokens ?? 0
       }
+    } else if (ev.type === 'content_block_start') {
+      const block = ev.content_block as { type?: string; id?: string; name?: string } | undefined
+      if (block?.type === 'tool_use' && block.id) {
+        toolAcc.set(ev.index as number, { id: block.id, name: block.name ?? '', json: '' })
+      }
     } else if (ev.type === 'content_block_delta') {
-      const delta = ev.delta as { type?: string; text?: string } | undefined
+      const delta = ev.delta as { type?: string; text?: string; partial_json?: string } | undefined
       if (delta?.type === 'text_delta' && delta.text) {
         text += delta.text
         onDelta(delta.text)
+      } else if (delta?.type === 'input_json_delta' && delta.partial_json) {
+        const acc = toolAcc.get(ev.index as number)
+        if (acc) acc.json += delta.partial_json
+      }
+    } else if (ev.type === 'content_block_stop') {
+      const acc = toolAcc.get(ev.index as number)
+      if (acc) {
+        let input: Record<string, unknown> = {}
+        if (acc.json.trim()) {
+          try {
+            input = JSON.parse(acc.json) as Record<string, unknown>
+          } catch {
+            input = { _raw: acc.json }
+          }
+        }
+        toolUses.push({ id: acc.id, name: acc.name, input })
+        toolAcc.delete(ev.index as number)
       }
     } else if (ev.type === 'message_delta') {
       const u = ev.usage as Record<string, number> | undefined
@@ -140,7 +167,7 @@ export async function chatStream(
     }
   }
 
-  return { text, usage, model, stopReason, durationMs: Date.now() - started, headers }
+  return { text, usage, model, stopReason, durationMs: Date.now() - started, headers, toolUses }
 }
 
 export async function probeModels(

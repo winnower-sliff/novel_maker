@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Character } from '@shared/types'
-import { Badge, Button, Card, Input, Label, Textarea } from '../components/ui'
+import { AiTextarea } from '../components/AiTextarea'
+import { Badge, Button, Card, Input, Label } from '../components/ui'
 import { runPipeline } from '../lib/ipc'
+import type { Navigate } from '../lib/nav'
 
 interface EditState {
   id?: string
@@ -13,7 +15,7 @@ interface EditState {
 
 const EMPTY: EditState = { name: '', role: '', tags: '', card: '' }
 
-export default function Characters({ projectId }: { projectId: string }) {
+export default function Characters({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
   const [list, setList] = useState<Character[]>([])
   const [edit, setEdit] = useState<EditState>(EMPTY)
   const [selectedId, setSelectedId] = useState<string | null>(null)
@@ -37,8 +39,9 @@ export default function Characters({ projectId }: { projectId: string }) {
 
   if (!projectId) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-zinc-600">
-        请先在「项目」页打开一个项目
+      <div className="flex h-full flex-col items-center justify-center gap-3 text-sm text-zinc-600">
+        请先选择一个项目
+        <Button onClick={() => onNavigate('projects')}>去选择项目</Button>
       </div>
     )
   }
@@ -179,12 +182,17 @@ export default function Characters({ projectId }: { projectId: string }) {
           </div>
         </div>
         <div className="mt-3 flex-1">
-          <Label>人物卡（markdown，M4 写作时自动注入相关人物）</Label>
-          <Textarea
-            className="h-[calc(100%-2rem)] min-h-72"
+          <Label>人物卡（markdown，M4 写作时自动注入相关人物；选中文字可用 AI 改写）</Label>
+          <AiTextarea
+            className="h-full min-h-72"
             value={edit.card}
-            onChange={(e) => setEdit({ ...edit, card: e.target.value })}
+            onChange={(v) => setEdit({ ...edit, card: v })}
             placeholder={'- 基本信息：…\n- 性格核心：…\n- 欲望与恐惧：…\n- 口癖与语言习惯：…'}
+            context={
+              edit.id
+                ? `这是人物「${edit.name || '未命名'}」（定位：${edit.role || '未填'}）的人物卡全文：\n${edit.card}`
+                : undefined
+            }
           />
         </div>
         <div className="mt-3 flex justify-end gap-2">

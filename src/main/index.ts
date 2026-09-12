@@ -4,6 +4,10 @@ import { getDb } from './db'
 import { registerIpc } from './ipc'
 import { listSkills } from './skills'
 
+if (process.env.NM_REMOTE_DEBUG_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.NM_REMOTE_DEBUG_PORT)
+}
+
 function createWindow(): void {
   const win = new BrowserWindow({
     width: 1280,
