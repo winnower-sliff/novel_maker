@@ -56,9 +56,11 @@ import {
   buildWorldbuildIndex,
   buildWorldbuildRequest,
   buildWorldbuildRetrieveRequest,
+  commitWorldbuildChunk,
   guessCharacterName,
   parseCheckResult,
   previewWorldbuildResult,
+  relinkWorldbuildEntries,
   resolveWorldbuildRetrieval,
   saveWorldbuildBatch,
   type WorldbuildRetrieval
@@ -109,10 +111,25 @@ function startAgentRun(
   return requestId
 }
 
+const CONTINUE_PROMPT =
+  '输出因长度限制被中断。请从中断处继续输出剩余条目：直接续写正文，不要重复已输出的任何内容，不要开场白或解释，保持完全相同的输出格式，直到全部条目输出完毕。'
+
+function longestOverlapLen(prev: string, next: string, window = 200): number {
+  const max = Math.min(window, prev.length, next.length)
+  for (let n = max; n > 0; n--) {
+    if (prev.endsWith(next.slice(0, n))) return n
+  }
+  return 0
+}
+
 function startStream(
   win: WebContents,
   rawParams: ChatParams,
-  opts?: { action?: PipelineAction; afterDone?: (result: ChatResult) => unknown }
+  opts?: {
+    action?: PipelineAction
+    afterDone?: (result: ChatResult) => unknown
+    continueOnMaxTokens?: number
+  }
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
@@ -132,42 +149,81 @@ function startStream(
       }
       if (promptCache && params.system) params.cacheSystem = true
 
-      const result = await chatStream(
-        params,
-        { apiKey, baseUrl },
-        (text) => {
-          if (!win.isDestroyed()) win.send('llm:delta', requestId, text)
-        },
-        controller.signal
-      )
+      const send = (text: string): void => {
+        if (!win.isDestroyed()) win.send('llm:delta', requestId, text)
+      }
 
-      appendUsage({
-        ts: Date.now(),
-        model: result.model,
-        purpose: params.purpose ?? 'playground',
-        inputTokens: result.usage.inputTokens,
-        outputTokens: result.usage.outputTokens,
-        cacheReadTokens: result.usage.cacheReadTokens,
-        cacheCreationTokens: result.usage.cacheCreationTokens,
-        durationMs: result.durationMs,
-        ratelimit: pickRatelimitHeaders(result.headers)
-      })
+      let fullText = ''
+      let result: ChatResult | null = null
+      let totalMs = 0
+      let round = 0
+      const maxRounds = opts?.continueOnMaxTokens ?? 0
 
+      for (;;) {
+        let pending = ''
+        let deduped = round === 0
+        const flush = (): void => {
+          if (!pending) return
+          if (!deduped) {
+            deduped = true
+            pending = pending.slice(longestOverlapLen(fullText, pending))
+          }
+          fullText += pending
+          send(pending)
+          pending = ''
+        }
+        const onDelta = (text: string): void => {
+          if (deduped) {
+            fullText += text
+            send(text)
+            return
+          }
+          pending += text
+          if (pending.length >= 200 || pending.includes('\n')) flush()
+        }
+
+        result = await chatStream(params, { apiKey, baseUrl }, onDelta, controller.signal)
+        flush()
+        totalMs += result.durationMs
+        appendUsage({
+          ts: Date.now(),
+          model: result.model,
+          purpose: params.purpose ?? 'playground',
+          inputTokens: result.usage.inputTokens,
+          outputTokens: result.usage.outputTokens,
+          cacheReadTokens: result.usage.cacheReadTokens,
+          cacheCreationTokens: result.usage.cacheCreationTokens,
+          durationMs: result.durationMs,
+          ratelimit: pickRatelimitHeaders(result.headers)
+        })
+
+        if (result.stopReason !== 'max_tokens' || round >= maxRounds || controller.signal.aborted) {
+          break
+        }
+        round++
+        params.messages = [
+          ...params.messages,
+          { role: 'assistant', content: fullText },
+          { role: 'user', content: CONTINUE_PROMPT }
+        ]
+      }
+
+      const final = result as ChatResult
       let data: unknown
       let dataError: string | undefined
       try {
-        data = opts?.afterDone?.(result)
+        data = opts?.afterDone?.({ ...final, text: fullText, durationMs: totalMs })
       } catch (err) {
         dataError = (err as Error)?.message ?? String(err)
       }
 
       if (!win.isDestroyed()) {
         win.send('llm:done', requestId, {
-          usage: result.usage,
-          model: result.model,
-          stopReason: result.stopReason,
-          durationMs: result.durationMs,
-          headers: result.headers,
+          usage: final.usage,
+          model: final.model,
+          stopReason: final.stopReason,
+          durationMs: totalMs,
+          headers: final.headers,
           action: opts?.action,
           data: dataError ? { error: dataError } : data
         })
@@ -350,7 +406,8 @@ export function registerIpc(): void {
         const retrieval = await runWorldbuildRetrieval(p)
         return startStream(e.sender, buildWorldbuildRequest(p, retrieval), {
           action,
-          afterDone: (r) => ({ entries: previewWorldbuildResult(p, r.text) })
+          afterDone: (r) => ({ entries: previewWorldbuildResult(p, r.text) }),
+          continueOnMaxTokens: 3
         })
       }
       throw new Error(`未知动作: ${action}`)
@@ -381,6 +438,26 @@ export function registerIpc(): void {
     (_e, input: WorldbuildInput & { id?: string }): WorldbuildEntry => store.saveWorldbuild(input)
   )
   ipcMain.handle('novel:worldbuildDelete', (_e, id: string): void => store.deleteWorldbuild(id))
+  ipcMain.handle(
+    'novel:worldbuildDeleteBatch',
+    (_e, projectId: string, ids: string[]): number => store.deleteWorldbuildBatch(projectId, ids)
+  )
+  ipcMain.handle(
+    'novel:worldbuildCommitChunk',
+    (
+      _e,
+      projectId: string,
+      rawText: string,
+      categories: string[],
+      opts: { allowNewType: boolean; taskEntryIds: string[] }
+    ): { entryIds: string[]; createdTypes: string[]; updatedIds: string[] } =>
+      commitWorldbuildChunk(projectId, rawText, categories, opts)
+  )
+  ipcMain.handle(
+    'novel:worldbuildRelink',
+    (_e, projectId: string, entryIds: string[]): number =>
+      relinkWorldbuildEntries(projectId, entryIds)
+  )
   ipcMain.handle(
     'novel:worldbuildRetrieve',
     async (_e, p: WorldbuildGenParams): Promise<{
@@ -423,6 +500,15 @@ export function registerIpc(): void {
       store.deleteWorldbuildType(projectId, name)
       return store.listWorldbuildTypes(projectId)
     }
+  )
+  ipcMain.handle(
+    'novel:worldbuildTypeReorder',
+    (
+      _e,
+      projectId: string,
+      name: string,
+      pos: store.WorldbuildTypePos
+    ): string[] => store.reorderWorldbuildType(projectId, name, pos)
   )
   ipcMain.handle('novel:outlines', (_e, projectId: string): OutlineItem[] =>
     store.listOutlines(projectId)

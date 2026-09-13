@@ -35,6 +35,7 @@ interface RelationGraphProps {
   edges: GraphEdgeData[]
   groupColors: Record<string, string>
   clusterTags?: boolean
+  showTagLabels?: boolean
   onNodeClick?: (id: string) => void
   onNodeDoubleClick?: (id: string) => void
 }
@@ -49,6 +50,8 @@ interface WikiNodeData extends Record<string, unknown> {
 interface TagLabelData extends Record<string, unknown> {
   label: string
   color: string
+  count?: number
+  ci?: number
 }
 
 const ITERATIONS = 300
@@ -62,9 +65,13 @@ const ALPHA_STOP = 0.02
 const COLLIDE_PAD = 16
 const COLLIDE_STRENGTH = 0.4
 const CENTER_PULL = 0.008
-const TAG_K = 0.02
-const TAG_CENTER_PULL_SCALE = 0.25
-const MAX_TAG_ANCHORS = 12
+const CLUSTER_CENTER_PULL_SCALE = 0.3
+const CLUSTER_MIN_COUNT = 2
+const MAX_CLUSTERS = 48
+const CLUSTER_PRIMARY_K = 0.045
+const CLUSTER_SECONDARY_K = 0.015
+const CLUSTER_REPEL = REPULSION * 40
+const NEUTRAL_COLOR = '#71717a'
 
 const TAG_PALETTE = [
   '#f59e0b',
@@ -95,25 +102,41 @@ interface SimPoint {
   y: number
   r: number
   deg: number
-  anchors: number[]
-}
-
-interface SimAnchor {
-  x: number
-  y: number
+  primary: number
+  members: number[]
 }
 
 function runIterations(
   pts: SimPoint[],
   links: Array<[number, number]>,
-  anchors: SimAnchor[],
+  clusterCount: number,
   iterations: number,
   alpha: number
 ): void {
   const count = pts.length
   if (count <= 1) return
-  const centerScale = anchors.length > 0 ? TAG_CENTER_PULL_SCALE : 1
+  const centerScale = clusterCount > 0 ? CLUSTER_CENTER_PULL_SCALE : 1
+  const membersOf: number[][] = Array.from({ length: clusterCount }, () => [])
+  pts.forEach((p, i) => {
+    for (const ci of p.members) membersOf[ci].push(i)
+  })
+  const cx = new Array<number>(clusterCount).fill(0)
+  const cy = new Array<number>(clusterCount).fill(0)
   for (let it = 0; it < iterations; it++) {
+    if (clusterCount > 0) {
+      for (let ci = 0; ci < clusterCount; ci++) {
+        const ms = membersOf[ci]
+        if (ms.length === 0) continue
+        let sx = 0
+        let sy = 0
+        for (const i of ms) {
+          sx += pts[i].x
+          sy += pts[i].y
+        }
+        cx[ci] = sx / ms.length
+        cy[ci] = sy / ms.length
+      }
+    }
     const fx = new Array(count).fill(0)
     const fy = new Array(count).fill(0)
     for (let i = 0; i < count; i++) {
@@ -158,25 +181,87 @@ function runIterations(
       fx[ti] -= fxStep
       fy[ti] -= fyStep
     }
-    for (let i = 0; i < count; i++) {
-      const aIdx = pts[i].anchors
-      if (aIdx.length > 0) {
-        const w = TAG_K / aIdx.length
-        for (const ai of aIdx) {
-          const dx = anchors[ai].x - pts[i].x
-          const dy = anchors[ai].y - pts[i].y
-          const d = Math.max(1, Math.sqrt(dx * dx + dy * dy))
-          const f = w * d * alpha
-          fx[i] += (dx / d) * f
-          fy[i] += (dy / d) * f
+    if (clusterCount > 1) {
+      for (let ci = 0; ci < clusterCount; ci++) {
+        const mi = membersOf[ci]
+        if (mi.length === 0) continue
+        for (let cj = ci + 1; cj < clusterCount; cj++) {
+          const mj = membersOf[cj]
+          if (mj.length === 0) continue
+          let dx = cx[cj] - cx[ci]
+          let dy = cy[cj] - cy[ci]
+          let d2 = dx * dx + dy * dy
+          if (d2 < 1) {
+            dx = 1
+            dy = 0
+            d2 = 1
+          }
+          const d = Math.sqrt(d2)
+          const f = (CLUSTER_REPEL / d2) * alpha
+          const ux = (dx / d) * f
+          const uy = (dy / d) * f
+          const shareI = 1 / mi.length
+          const shareJ = 1 / mj.length
+          for (const i of mi) {
+            fx[i] -= ux * shareI
+            fy[i] -= uy * shareI
+          }
+          for (const j of mj) {
+            fx[j] += ux * shareJ
+            fy[j] += uy * shareJ
+          }
         }
       }
-      fx[i] -= pts[i].x * CENTER_PULL * centerScale * alpha
-      fy[i] -= pts[i].y * CENTER_PULL * centerScale * alpha
-      pts[i].x += Math.max(-30, Math.min(30, fx[i] * DAMPING))
-      pts[i].y += Math.max(-30, Math.min(30, fy[i] * DAMPING))
+    }
+    for (let i = 0; i < count; i++) {
+      const p = pts[i]
+      for (const ci of p.members) {
+        const dx = cx[ci] - p.x
+        const dy = cy[ci] - p.y
+        const d = Math.max(1, Math.sqrt(dx * dx + dy * dy))
+        const f = (ci === p.primary ? CLUSTER_PRIMARY_K : CLUSTER_SECONDARY_K) * d * alpha
+        fx[i] += (dx / d) * f
+        fy[i] += (dy / d) * f
+      }
+      fx[i] -= p.x * CENTER_PULL * centerScale * alpha
+      fy[i] -= p.y * CENTER_PULL * centerScale * alpha
+      p.x += Math.max(-30, Math.min(30, fx[i] * DAMPING))
+      p.y += Math.max(-30, Math.min(30, fy[i] * DAMPING))
     }
   }
+}
+
+function clusterCentroids(
+  pts: SimPoint[],
+  clusterCount: number
+): Array<{ x: number; y: number; spread: number }> {
+  const out: Array<{ x: number; y: number; spread: number }> = []
+  for (let ci = 0; ci < clusterCount; ci++) {
+    let sx = 0
+    let sy = 0
+    let n = 0
+    for (const p of pts) {
+      if (p.members.includes(ci)) {
+        sx += p.x
+        sy += p.y
+        n++
+      }
+    }
+    if (n === 0) {
+      out.push({ x: 0, y: 0, spread: 0 })
+      continue
+    }
+    const mx = sx / n
+    const my = sy / n
+    let spread = 0
+    for (const p of pts) {
+      if (p.members.includes(ci)) {
+        spread = Math.max(spread, Math.hypot(p.x - mx, p.y - my))
+      }
+    }
+    out.push({ x: mx, y: my, spread })
+  }
+  return out
 }
 
 function refRadius(refCount: number): number {
@@ -297,10 +382,14 @@ function TagLabelNode({ data }: NodeProps<Node<TagLabelData>>) {
         fontSize: 13,
         fontWeight: 600,
         whiteSpace: 'nowrap',
-        pointerEvents: 'none'
+        cursor: 'pointer'
       }}
+      title="点击按此标签筛选"
     >
       # {data.label}
+      {data.count !== undefined && (
+        <span style={{ marginLeft: 6, fontWeight: 400, opacity: 0.7 }}>{data.count}</span>
+      )}
     </div>
   )
 }
@@ -323,6 +412,7 @@ export const RelationGraph = memo(function RelationGraph({
   edges,
   groupColors,
   clusterTags = false,
+  showTagLabels = true,
   onNodeClick,
   onNodeDoubleClick
 }: RelationGraphProps) {
@@ -370,23 +460,40 @@ export const RelationGraph = memo(function RelationGraph({
       }
     }
     const top = [...counts.entries()]
+      .filter(([, c]) => c >= CLUSTER_MIN_COUNT)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, MAX_TAG_ANCHORS)
-      .map(([name]) => name)
+      .slice(0, MAX_CLUSTERS)
     if (top.length === 0) return null
-    const ringR = Math.max(300, Math.min(700, 70 * Math.sqrt(nodes.length)))
-    const anchors: SimAnchor[] = top.map((_, i) => {
-      const angle = (i / top.length) * Math.PI * 2 - Math.PI / 2
-      return { x: Math.cos(angle) * ringR, y: Math.sin(angle) * ringR }
-    })
-    const anchorIdx = new Map(top.map((t, i) => [t, i]))
-    return { tags: top, anchors, anchorIdx }
+    const tagIdx = new Map(top.map(([t], i) => [t, i]))
+    const primaries = new Map<string, number>()
+    const memberLists = new Map<string, number[]>()
+    for (const n of nodes) {
+      const hits: Array<{ ci: number; count: number }> = []
+      const seen = new Set<number>()
+      for (const t of n.tags ?? []) {
+        const ci = tagIdx.get(t.trim())
+        if (ci !== undefined && !seen.has(ci)) {
+          seen.add(ci)
+          hits.push({ ci, count: top[ci][1] })
+        }
+      }
+      hits.sort((a, b) => b.count - a.count)
+      primaries.set(n.id, hits.length > 0 ? hits[0].ci : -1)
+      memberLists.set(n.id, hits.map((h) => h.ci))
+    }
+    return {
+      tags: top.map(([t]) => t),
+      counts: top.map(([, c]) => c),
+      primaries,
+      memberLists
+    }
   }, [clusterTags, nodes])
 
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState<Node<WikiNodeData | TagLabelData>>([])
   const [hoverId, setHoverId] = useState<string | null>(null)
   const simRef = useRef<SimPoint[]>([])
   const clusterRef = useRef(cluster)
+  const showTagLabelsRef = useRef(showTagLabels)
   const alphaRef = useRef(0)
   const rafRef = useRef(0)
   const nodesRef = useRef(nodes)
@@ -394,15 +501,24 @@ export const RelationGraph = memo(function RelationGraph({
   nodesRef.current = nodes
   linksRef.current = links
   clusterRef.current = cluster
+  showTagLabelsRef.current = showTagLabels
 
   const applySimToNodes = useCallback((): void => {
     const sim = simRef.current
     if (sim.length === 0) return
+    const clusterCount = clusterRef.current?.tags.length ?? 0
+    const cents = clusterCount > 0 ? clusterCentroids(sim, clusterCount) : null
     const byId = new Map(sim.map((p) => [p.id, p]))
     setFlowNodes((cur) =>
       cur.map((n) => {
         const p = byId.get(n.id)
-        return p ? { ...n, position: { x: p.x, y: p.y } } : n
+        if (p) return { ...n, position: { x: p.x, y: p.y } }
+        if (cents && n.id.startsWith('tag:')) {
+          const ci = (n.data as TagLabelData).ci
+          const c = ci !== undefined ? cents[ci] : undefined
+          if (c) return { ...n, position: { x: c.x, y: c.y - c.spread - 24 } }
+        }
+        return n
       })
     )
   }, [setFlowNodes])
@@ -414,7 +530,7 @@ export const RelationGraph = memo(function RelationGraph({
       applySimToNodes()
       return
     }
-    runIterations(simRef.current, linksRef.current, clusterRef.current?.anchors ?? [], 1, alpha)
+    runIterations(simRef.current, linksRef.current, clusterRef.current?.tags.length ?? 0, 1, alpha)
     alphaRef.current = alpha * ALPHA_DECAY
     applySimToNodes()
     rafRef.current = requestAnimationFrame(tick)
@@ -428,45 +544,62 @@ export const RelationGraph = memo(function RelationGraph({
     const prev = simRef.current
     const prevById = new Map(prev.map((p) => [p.id, p]))
     const keepPrev = prev.length > 0 && !cluster
-    const anchors = cluster?.anchors ?? []
-    const anchorIdx = cluster?.anchorIdx
+    const primaries = cluster?.primaries
+    const memberLists = cluster?.memberLists
+    const clusterCount = cluster?.tags.length ?? 0
+    const groups = new Map<number, number[]>()
+    nodes.forEach((n, i) => {
+      const pi = primaries?.get(n.id) ?? -1
+      if (pi >= 0) {
+        const g = groups.get(pi)
+        if (g) g.push(i)
+        else groups.set(pi, [i])
+      }
+    })
+    const ringR = Math.max(320, Math.min(800, 70 * Math.sqrt(nodes.length)))
+    const groupList = [...groups.values()]
+    const seats = new Array<[number, number] | null>(nodes.length).fill(null)
+    groupList.forEach((idxs, gi) => {
+      const angle = (gi / Math.max(1, groupList.length)) * Math.PI * 2 - Math.PI / 2
+      const gx = Math.cos(angle) * ringR
+      const gy = Math.sin(angle) * ringR
+      idxs.forEach((ni, m) => {
+        const r = 26 * Math.sqrt(m + 1)
+        const t = m * 2.399963
+        seats[ni] = [gx + Math.cos(t) * r, gy + Math.sin(t) * r]
+      })
+    })
     const pts: SimPoint[] = nodes.map((n, i) => {
       const deg = adjacency.get(n.id)?.size ?? 0
       const r = refRadius(refCount.get(n.id) ?? 0)
-      const myAnchors: number[] = []
-      if (anchorIdx) {
-        for (const t of n.tags ?? []) {
-          const ai = anchorIdx.get(t.trim())
-          if (ai !== undefined && !myAnchors.includes(ai)) myAnchors.push(ai)
-        }
-      }
+      const primary = primaries?.get(n.id) ?? -1
+      const members = memberLists?.get(n.id) ?? []
       const old = keepPrev ? prevById.get(n.id) : undefined
-      if (old) return { id: n.id, x: old.x, y: old.y, r, deg, anchors: myAnchors }
-      if (myAnchors.length > 0) {
-        const a = anchors[myAnchors[0]]
-        return {
-          id: n.id,
-          x: a.x + ((i * 53) % 160) - 80,
-          y: a.y + ((i * 91) % 160) - 80,
-          r,
-          deg,
-          anchors: myAnchors
-        }
-      }
+      if (old) return { id: n.id, x: old.x, y: old.y, r, deg, primary, members }
+      const s = seats[i]
+      if (s) return { id: n.id, x: s[0], y: s[1], r, deg, primary, members }
       const angle = (i / Math.max(1, nodes.length)) * Math.PI * 2
       const radius = 60 + ((i * 37) % 240)
-      return { id: n.id, x: Math.cos(angle) * radius, y: Math.sin(angle) * radius, r, deg, anchors: myAnchors }
+      return {
+        id: n.id,
+        x: Math.cos(angle) * radius,
+        y: Math.sin(angle) * radius,
+        r,
+        deg,
+        primary,
+        members
+      }
     })
     simRef.current = pts
-    runIterations(pts, links, anchors, ITERATIONS, 1)
+    runIterations(pts, links, clusterCount, ITERATIONS, 1)
     alphaRef.current = 0
     const byId = new Map(pts.map((p) => [p.id, p]))
     const dotNodes = nodes.map((n) => {
-      const tags = (n.tags ?? []).map((t) => t.trim()).filter(Boolean)
+      const primary = cluster?.primaries.get(n.id) ?? -1
       const color = cluster
-        ? tags.length > 0
-          ? tagColor(tags[0])
-          : (groupColors[n.group] ?? '#a1a1aa')
+        ? primary >= 0
+          ? tagColor(cluster.tags[primary])
+          : NEUTRAL_COLOR
         : (groupColors[n.group] ?? '#a1a1aa')
       return {
         id: n.id,
@@ -480,19 +613,19 @@ export const RelationGraph = memo(function RelationGraph({
         }
       }
     })
+    const cents = cluster ? clusterCentroids(pts, clusterCount) : []
     const clusterTagsList = cluster?.tags ?? []
-    const clusterAnchorIdx = cluster?.anchorIdx
-    const clusterAnchors = cluster?.anchors ?? []
-    const tagLabelNodes = clusterTagsList.map((t) => {
-      const ai = clusterAnchorIdx?.get(t)
-      const anchor = ai !== undefined ? clusterAnchors[ai] : { x: 0, y: 0 }
+    const clusterCounts = cluster?.counts ?? []
+    const tagLabelNodes = clusterTagsList.map((t, ci) => {
+      const c = cents[ci] ?? { x: 0, y: 0, spread: 0 }
       return {
         id: `tag:${t}`,
         type: 'tagLabel' as const,
-        position: { x: anchor.x, y: anchor.y },
+        position: { x: c.x, y: c.y - c.spread - 24 },
         draggable: false,
         selectable: false,
-        data: { label: t, color: tagColor(t) }
+        hidden: !showTagLabelsRef.current,
+        data: { label: t, color: tagColor(t), count: clusterCounts[ci], ci }
       }
     })
     setFlowNodes([...tagLabelNodes, ...dotNodes] as Node<WikiNodeData | TagLabelData>[])
@@ -501,6 +634,12 @@ export const RelationGraph = memo(function RelationGraph({
       rafRef.current = 0
     }
   }, [nodes, links, groupColors, cluster, adjacency, refCount, setFlowNodes])
+
+  useEffect(() => {
+    setFlowNodes((cur) =>
+      cur.map((n) => (n.id.startsWith('tag:') ? { ...n, hidden: !showTagLabels } : n))
+    )
+  }, [showTagLabels, setFlowNodes])
 
   useEffect(() => {
     setFlowNodes((cur) =>

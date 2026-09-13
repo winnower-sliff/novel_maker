@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS worldbuild_types (
   id TEXT PRIMARY KEY,
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  priority REAL NOT NULL DEFAULT 100,
   created_at INTEGER NOT NULL,
   UNIQUE(project_id, name)
 );
@@ -105,5 +106,12 @@ function migrate(d: DatabaseSync): void {
   const cols = d.prepare('PRAGMA table_info(worldbuild)').all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === 'tags')) {
     d.exec('ALTER TABLE worldbuild ADD COLUMN tags TEXT DEFAULT \'\'')
+  }
+  const typeCols = d.prepare('PRAGMA table_info(worldbuild_types)').all() as Array<{ name: string }>
+  if (!typeCols.some((c) => c.name === 'priority')) {
+    d.exec('ALTER TABLE worldbuild_types ADD COLUMN priority REAL NOT NULL DEFAULT 100')
+    d.exec(
+      "UPDATE worldbuild_types SET priority = CASE name WHEN '地理' THEN 10 WHEN '势力' THEN 20 WHEN '历史' THEN 30 WHEN '力量体系' THEN 40 WHEN '物品' THEN 50 WHEN '其他' THEN 10000 ELSE 100 END"
+    )
   }
 }

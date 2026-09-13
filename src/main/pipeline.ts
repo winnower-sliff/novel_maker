@@ -267,8 +267,10 @@ export function buildWorldbuildRetrieveRequest(p: WorldbuildGenParams): ChatPara
     .join('\n')
   const user = [
     `生成需求：${p.title.trim() ? `【${p.title.trim()}】` : ''}${p.brief}`,
-    p.focus?.tag && `用户当前聚焦标签：#${p.focus.tag}（优先考虑与该标签相关的类型与标签）`,
-    p.focus?.type && `用户当前聚焦类型：${p.focus.type}（优先考虑该类型）`,
+    p.tags && p.tags.length > 0 &&
+      `用户指定主题标签：${p.tags.map((t) => `#${t}`).join('、')}（优先考虑与这些主题相关的类型与标签）`,
+    p.categories.filter(Boolean).length > 0 &&
+      `用户限定类型：${p.categories.filter(Boolean).join('、')}（优先考虑这些类型下的条目）`,
     '',
     '现有类型清单：' + (typeLine.length > 0 ? typeLine.join('、') : '（暂无）'),
     `现有标签清单：${tagLine}`,
@@ -348,14 +350,15 @@ export function buildWorldbuildRequest(
       : ''
   const categories = p.categories.filter((c) => c.trim())
   const countLine =
-    p.count && p.count > 0 ? `正好 ${p.count} 个条目` : '根据需求规模自行决定，不设上限'
+    p.count && p.count > 0
+      ? `正好 ${p.count} 个条目`
+      : '宏大构建：不少于 50 个条目（建议 50-80 个），像百科全书一样从多个维度铺开世界规模'
   const categoryLine = categories.length
     ? `- 条目类型：只能从「${categories.join('、')}」中选择，内容必须聚焦所选类型，禁止写入其他类型的设定`
-    : p.focus?.type
-      ? `- 条目类型：本组条目围绕用户聚焦的类型「${p.focus.type}」生成（若个别条目内容确实不属于该类型可另选更合适的类型）`
-      : '- 条目类型：优先从提供的可用类型清单中选择'
-  const focusLine = p.focus?.tag
-    ? `- 聚焦方向：本组条目围绕主题标签「#${p.focus.tag}」扩展，与该主题相关的新设定优先`
+    : '- 条目类型：优先从提供的可用类型清单中选择'
+  const focusTags = (p.tags ?? []).filter((t) => t.trim())
+  const focusLine = focusTags.length
+    ? `- 聚焦方向：本组条目围绕主题标签「${focusTags.map((t) => `#${t}`).join('」「')}」扩展，与这些主题相关的新设定优先`
     : null
   const titleLine = p.title.trim()
     ? `- 总主题：${p.title.trim()}（各条目标题由你围绕该主题拟定，禁止把全部内容挤进一个条目）`
@@ -377,6 +380,9 @@ export function buildWorldbuildRequest(
     titleLine,
     `- 生成需求：${p.brief}`,
     `- 条目数量：${countLine}；当需求横跨多个方面时必须拆分为多个条目，每个条目只承载一个主题`,
+    '- 条目篇幅：正文保持简短，每条 2-4 个要点、共约 50-150 字，信息密度优先，禁止长篇大论',
+    '- 交叉链接：动笔前先规划好本批次全部条目的标题清单，再逐条输出；每个条目正文至少包含 2 个 [[条目标题]] 链接（指向本批次其他条目或已有条目），总览/格局类条目需引用其下全部分区条目，让整组条目织成密集网络',
+    '- 标签即链接：当条目使用了与其他条目标题相同的主题词作标签（如 #矮人 对应「矮人」条目）时，正文必须包含 [[矮人]] 链接；标签管归类、链接管关联，不可互相替代',
     `- 标签数量：每条目 2-6 个标签，写在该条目标题行尾`,
     '',
     '输出格式（严格遵守，除此之外不要输出任何内容）：',
@@ -390,7 +396,7 @@ export function buildWorldbuildRequest(
     model: '',
     system,
     messages: [{ role: 'user', content: user }],
-    maxTokens: 16384,
+    maxTokens: 65536,
     temperature: 0.7,
     purpose: 'outline'
   }
@@ -453,13 +459,53 @@ export function previewWorldbuildResult(
   return normalizeWorldbuildParsed(p.projectId, parsed)
 }
 
+function hasWikiLink(content: string, title: string): boolean {
+  const escaped = title.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  return new RegExp(`\\[\\[\\s*${escaped}\\s*\\]\\]`).test(content)
+}
+
+function linkMissingTags(
+  entries: WorldbuildPreviewEntry[],
+  existingTitles: Set<string>
+): void {
+  const linkableTitles = new Set([
+    ...existingTitles,
+    ...entries.map((e) => e.title.trim())
+  ])
+  for (const e of entries) {
+    const selfTitle = e.title.trim()
+    const missing = [
+      ...new Set(
+        e.tags
+          .map((t) => t.trim())
+          .filter(
+            (t) =>
+              t &&
+              t !== selfTitle &&
+              linkableTitles.has(t) &&
+              !hasWikiLink(e.content, t)
+          )
+      )
+    ]
+    if (missing.length > 0) {
+      e.content += `${e.content ? '\n\n' : ''}关联：${missing.map((t) => `[[${t}]]`).join('、')}`
+    }
+  }
+}
+
 function normalizeWorldbuildParsed(
   projectId: string,
-  parsed: ParsedWorldbuildEntry[]
+  parsed: ParsedWorldbuildEntry[],
+  opts?: { newTypeBudget?: number }
 ): WorldbuildPreviewEntry[] {
   const knownTypes = new Set(store.listWorldbuildTypes(projectId))
-  let newTypeBudget = 1
-  return parsed.map((e) => {
+  const seenTitles = new Set<string>()
+  let newTypeBudget = opts?.newTypeBudget ?? 1
+  const out: WorldbuildPreviewEntry[] = []
+  for (const e of parsed) {
+    const titleKey = e.title.trim()
+    if (seenTitles.has(titleKey)) continue
+    seenTitles.add(titleKey)
     const isNewType = !knownTypes.has(e.category)
     if (isNewType && newTypeBudget > 0) {
       knownTypes.add(e.category)
@@ -469,8 +515,10 @@ function normalizeWorldbuildParsed(
     const tags = splitTags(e.tags.join(','))
       .filter((t) => !knownTypes.has(t))
       .slice(0, 6)
-    return { category, title: e.title, tags, content: e.content, isNewType }
-  })
+    out.push({ category, title: e.title, tags, content: e.content, isNewType })
+  }
+  linkMissingTags(out, new Set(store.listWorldbuild(projectId).map((e) => e.title.trim())))
+  return out
 }
 
 export function saveWorldbuildBatch(
@@ -507,6 +555,95 @@ export function saveWorldbuildBatch(
     entryIds.push(saved.id)
   }
   return { entryIds, createdTypes }
+}
+
+export function commitWorldbuildChunk(
+  projectId: string,
+  rawText: string,
+  categories: string[],
+  opts: { allowNewType: boolean; taskEntryIds: string[] }
+): { entryIds: string[]; createdTypes: string[]; updatedIds: string[] } {
+  const existing = store.listWorldbuild(projectId)
+  const taskIds = new Set(opts.taskEntryIds)
+  const existingByTitle = new Map<string, WorldbuildEntry>()
+  for (const e of existing) {
+    const key = e.title.trim()
+    if (key && !existingByTitle.has(key)) existingByTitle.set(key, e)
+  }
+  const parsed = parseWorldbuildEntries(rawText, categories).filter(
+    (e) => e.title.trim() && e.title.trim() !== '未命名条目' && e.content.trim()
+  )
+  const normalized = normalizeWorldbuildParsed(projectId, parsed, {
+    newTypeBudget: opts.allowNewType ? 1 : 0
+  })
+  const toInsert: WorldbuildPreviewEntry[] = []
+  const updates: Array<{ id: string; entry: WorldbuildPreviewEntry }> = []
+  const claimedTitles = new Set<string>()
+  for (const e of normalized) {
+    const key = e.title.trim()
+    if (claimedTitles.has(key)) continue
+    claimedTitles.add(key)
+    const hit = existingByTitle.get(key)
+    if (hit) {
+      if (taskIds.has(hit.id)) updates.push({ id: hit.id, entry: e })
+      continue
+    }
+    toInsert.push(e)
+  }
+  const entryIds: string[] = []
+  const updatedIds: string[] = []
+  for (const { id, entry } of updates) {
+    store.saveWorldbuild({
+      id,
+      projectId,
+      category: entry.category,
+      title: entry.title,
+      tags: entry.tags.join(','),
+      content: entry.content
+    })
+    updatedIds.push(id)
+    entryIds.push(id)
+  }
+  let createdTypes: string[] = []
+  if (toInsert.length > 0) {
+    const r = saveWorldbuildBatch(projectId, toInsert)
+    entryIds.push(...r.entryIds)
+    createdTypes = r.createdTypes
+  }
+  return { entryIds, createdTypes, updatedIds }
+}
+
+export function relinkWorldbuildEntries(projectId: string, entryIds: string[]): number {
+  const idSet = new Set(entryIds)
+  const entries = store.listWorldbuild(projectId).filter((e) => idSet.has(e.id))
+  if (entries.length === 0) return 0
+  const allTitles = new Set(
+    store.listWorldbuild(projectId).map((e) => e.title.trim()).filter(Boolean)
+  )
+  const conv = entries.map((e) => ({
+    category: e.category,
+    title: e.title,
+    tags: splitTags(e.tags),
+    content: e.content,
+    isNewType: false
+  }))
+  const before = conv.map((e) => e.content)
+  linkMissingTags(conv, allTitles)
+  let updated = 0
+  conv.forEach((e, i) => {
+    if (e.content !== before[i]) {
+      store.saveWorldbuild({
+        id: entries[i].id,
+        projectId,
+        category: e.category,
+        title: e.title,
+        tags: e.tags.join(','),
+        content: e.content
+      })
+      updated++
+    }
+  })
+  return updated
 }
 
 export function applyOutlineResult(

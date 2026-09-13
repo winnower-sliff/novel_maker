@@ -15,7 +15,13 @@ import { OverlayCard } from '../components/OverlayCard'
 import { RelationGraph, type GraphEdgeData, type GraphNodeData } from '../components/RelationGraph'
 import { WbGenOverlay } from '../components/WbGenOverlay'
 import { Button, Card, Input, Label, Select } from '../components/ui'
-import { markSeen, useWbGenTasks } from '../lib/wbGenStore'
+import {
+  markEntrySeen,
+  useNewEntryIds,
+  useWbLiveEntries,
+  useWbSavedSeq,
+  type WbLiveSection
+} from '../lib/wbGenStore'
 import { pushToast } from '../lib/toastStore'
 import type { Navigate } from '../lib/nav'
 import { extractLinkNames } from '../lib/wikiLink'
@@ -47,6 +53,8 @@ const EMPTY: EditState = { category: '', title: '', tags: '', content: '' }
 interface EntryCardProps {
   entry: WorldbuildEntry
   highlighted: boolean
+  isNew?: boolean
+  selection?: { selected: boolean; onToggle: () => void }
   onOpen: (entry: WorldbuildEntry) => void
   onTagClick: (tag: string) => void
   resolveLink: (name: string) => { category?: string; preview: string } | null
@@ -56,26 +64,49 @@ interface EntryCardProps {
 const EntryCard = memo(function EntryCard({
   entry,
   highlighted,
+  isNew,
+  selection,
   onOpen,
   onTagClick,
   resolveLink,
   onOpenLink
 }: EntryCardProps) {
   const tags = splitTags(entry.tags)
+  const activate = (): void => {
+    if (selection) selection.onToggle()
+    else onOpen(entry)
+  }
   return (
     <div
       id={`wb-${entry.id}`}
       role="button"
       tabIndex={0}
-      onClick={() => onOpen(entry)}
+      onClick={activate}
       onKeyDown={(e: KeyboardEvent<HTMLDivElement>) => {
-        if (e.key === 'Enter') onOpen(entry)
+        if (e.key === 'Enter') activate()
       }}
-      className={`cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 outline-none transition-[border-color,box-shadow] hover:border-zinc-600 focus-visible:border-amber-600 ${
-        highlighted ? 'ring-2 ring-amber-500' : ''
-      }`}
+      className={`relative cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900/50 p-4 outline-none transition-[border-color,box-shadow] hover:border-zinc-600 focus-visible:border-amber-600 ${
+        selection?.selected ? 'border-amber-600 bg-amber-950/20' : ''
+      } ${highlighted ? 'ring-2 ring-amber-500' : ''}`}
     >
-      <div className="flex flex-wrap items-center gap-1.5">
+      {isNew && (
+        <span
+          className="absolute right-3 top-3 h-2 w-2 rounded-full bg-emerald-400"
+          title="新生成，打开后不再提示"
+        />
+      )}
+      <div className="flex flex-wrap items-center gap-1.5 pr-6">
+        {selection && (
+          <span
+            className={`inline-flex h-4 w-4 shrink-0 items-center justify-center rounded border text-[10px] font-bold ${
+              selection.selected
+                ? 'border-amber-600 bg-amber-600 text-zinc-950'
+                : 'border-zinc-600 text-transparent'
+            }`}
+          >
+            ✓
+          </span>
+        )}
         <span
           className="rounded px-1.5 py-0.5 text-[10px]"
           style={{ background: `${typeColor(entry.category)}22`, color: typeColor(entry.category) }}
@@ -107,15 +138,51 @@ const EntryCard = memo(function EntryCard({
   )
 })
 
+function LiveCard({ section }: { section: WbLiveSection }) {
+  return (
+    <div className="relative cursor-default rounded-lg border border-dashed border-amber-800/50 bg-zinc-900/50 p-4">
+      <span
+        className={`absolute right-3 top-3 h-2 w-2 rounded-full ${
+          section.active ? 'animate-pulse bg-amber-400' : 'bg-amber-500/70'
+        }`}
+        title="生成中"
+      />
+      <div className="flex flex-wrap items-center gap-1.5 pr-6">
+        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
+          {section.category ?? '生成中'}
+        </span>
+        <span className="truncate text-sm font-medium text-zinc-200">
+          {section.title || '…'}
+        </span>
+        {section.tags.map((t) => (
+          <span
+            key={t}
+            className="rounded-full border border-amber-800/60 px-1.5 py-0.5 text-[10px] text-amber-300/90"
+          >
+            # {t}
+          </span>
+        ))}
+      </div>
+      <pre className="mt-2 max-h-[7.5rem] overflow-hidden whitespace-pre-wrap font-mono text-[11px] leading-4 text-zinc-400">
+        {section.content || '…'}
+      </pre>
+    </div>
+  )
+}
+
+const TAG_PREVIEW_LIMIT = 20
+
 export default function Worldbuild({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
   const [entries, setEntries] = useState<WorldbuildEntry[]>([])
   const [characters, setCharacters] = useState<Character[]>([])
   const [types, setTypes] = useState<string[]>([])
   const [filter, setFilter] = useState('全部')
   const [tagFilter, setTagFilter] = useState<string | null>(null)
+  const [tagExpanded, setTagExpanded] = useState(false)
   const [view, setView] = useState<'list' | 'graph'>('list')
   const [graphScope, setGraphScope] = useState<'wb' | 'all'>('wb')
   const [clusterTags, setClusterTags] = useState(false)
+  const [showTagLabels, setShowTagLabels] = useState(true)
   const autoClusterRef = useRef(false)
   const [typeAdding, setTypeAdding] = useState(false)
   const [typeDraft, setTypeDraft] = useState('')
@@ -124,9 +191,15 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
   const [editOpen, setEditOpen] = useState(false)
   const [genOpen, setGenOpen] = useState(false)
   const [highlightIds, setHighlightIds] = useState<string[]>([])
+  const [selectMode, setSelectMode] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [actionOpen, setActionOpen] = useState(false)
+  const actionMenuRef = useRef<HTMLDivElement>(null)
   const editInitialRef = useRef<EditState>(EMPTY)
 
-  const genTasks = useWbGenTasks(projectId)
+  const liveEntries = useWbLiveEntries(projectId)
+  const newEntryIdList = useNewEntryIds(projectId)
+  const savedSeq = useWbSavedSeq()
 
   const load = useCallback((): void => {
     if (!projectId) return
@@ -141,16 +214,30 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     setTypes([])
     setFilter('全部')
     setTagFilter(null)
+    setTagExpanded(false)
     autoClusterRef.current = false
     setClusterTags(false)
+    setShowTagLabels(true)
     setEdit(EMPTY)
     setEditOpen(false)
+    setSelectMode(false)
+    setSelectedIds(new Set())
+    setActionOpen(false)
     load()
   }, [load])
 
   useEffect(() => {
-    if (genTasks.length > 0) markSeen()
-  }, [genTasks])
+    if (savedSeq > 0) load()
+  }, [savedSeq, load])
+
+  useEffect(() => {
+    if (!actionOpen) return
+    const onPointerDown = (ev: MouseEvent): void => {
+      if (!actionMenuRef.current?.contains(ev.target as Node)) setActionOpen(false)
+    }
+    document.addEventListener('pointerdown', onPointerDown)
+    return () => document.removeEventListener('pointerdown', onPointerDown)
+  }, [actionOpen])
 
   useEffect(() => {
     if (!entries.length || autoClusterRef.current) return
@@ -169,6 +256,17 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count || a.name.localeCompare(b.name))
   }, [entries])
+
+  const collapsedTagSet = useMemo(
+    () =>
+      new Set(
+        tagCounts
+          .filter((t) => t.count >= 2)
+          .slice(0, TAG_PREVIEW_LIMIT)
+          .map((t) => t.name)
+      ),
+    [tagCounts]
+  )
 
   const titleIndex = useMemo(() => {
     const map = new Map<
@@ -261,6 +359,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
 
   const startEdit = useCallback(
     (e: WorldbuildEntry): void => {
+      markEntrySeen(e.id)
       const next: EditState = {
         id: e.id,
         category: e.category,
@@ -301,6 +400,48 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
         <Button onClick={() => onNavigate('projects')}>去选择项目</Button>
       </div>
     )
+  }
+
+  const toggleSelect = (id: string): void => {
+    setSelectedIds((cur) => {
+      const next = new Set(cur)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  const allFilteredSelected =
+    filtered.length > 0 && filtered.every((e) => selectedIds.has(e.id))
+
+  const toggleSelectAll = (): void => {
+    setSelectedIds((cur) => {
+      const next = new Set(cur)
+      if (allFilteredSelected) filtered.forEach((e) => next.delete(e.id))
+      else filtered.forEach((e) => next.add(e.id))
+      return next
+    })
+  }
+
+  const exitSelect = (): void => {
+    setSelectMode(false)
+    setSelectedIds(new Set())
+  }
+
+  const removeSelected = (): void => {
+    if (selectedIds.size === 0) return
+    if (!window.confirm(`确定删除选中的 ${selectedIds.size} 个条目？此操作不可恢复。`)) return
+    const ids = [...selectedIds]
+    void window.api.novel
+      .worldbuildDeleteBatch(projectId, ids)
+      .then((n) => {
+        pushToast('success', `已删除 ${n} 个条目`)
+        exitSelect()
+        load()
+      })
+      .catch((err: unknown) => {
+        pushToast('error', err instanceof Error ? err.message : String(err))
+      })
   }
 
   const save = (): void => {
@@ -392,11 +533,11 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
   return (
     <div className="flex h-full flex-col gap-3 p-4">
       <div className="flex items-center gap-2">
-        <h1 className="text-lg font-semibold text-zinc-100">世界观</h1>
-        <div className="ml-4 flex flex-wrap items-center gap-1.5">
+        <h1 className="shrink-0 text-lg font-semibold text-zinc-100">世界观</h1>
+        <div className="ml-2 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-1 [scrollbar-color:#3f3f46_transparent] [scrollbar-width:thin]">
           <button
             onClick={() => setFilter('全部')}
-            className={`cursor-pointer rounded-full px-3 py-1 text-xs transition-colors ${
+            className={`shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs transition-colors ${
               filter === '全部'
                 ? 'bg-amber-600 font-medium text-zinc-950'
                 : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
@@ -405,7 +546,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
             全部
           </button>
           {types.map((c) => (
-            <span key={c} className="group/type relative inline-flex">
+            <span key={c} className="group/type relative inline-flex shrink-0">
               <button
                 onClick={() => setFilter(c)}
                 className={`cursor-pointer rounded-full px-3 py-1 text-xs transition-colors ${
@@ -441,19 +582,19 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
               }}
               onBlur={submitTypeDraft}
               placeholder="新类型名，回车确认"
-              className="w-28 rounded-full border border-amber-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-200 placeholder-zinc-600 outline-none"
+              className="w-28 shrink-0 rounded-full border border-amber-700 bg-zinc-900 px-3 py-1 text-xs text-zinc-200 placeholder-zinc-600 outline-none"
             />
           ) : (
             <button
               onClick={() => setTypeAdding(true)}
-              className="cursor-pointer rounded-full border border-dashed border-zinc-700 px-3 py-1 text-xs text-zinc-500 transition-colors hover:border-amber-700 hover:text-amber-400"
+              className="shrink-0 cursor-pointer rounded-full border border-dashed border-zinc-700 px-3 py-1 text-xs text-zinc-500 transition-colors hover:border-amber-700 hover:text-amber-400"
               title="新增类型"
             >
               + 类型
             </button>
           )}
         </div>
-        <div className="ml-auto flex items-center gap-2">
+        <div className="ml-auto flex shrink-0 items-center gap-2">
           {view === 'graph' && (
             <>
               <div className="flex overflow-hidden rounded-md border border-zinc-700 text-xs">
@@ -484,6 +625,19 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
               >
                 标签聚类
               </button>
+              {clusterTags && (
+                <button
+                  onClick={() => setShowTagLabels((v) => !v)}
+                  className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
+                    showTagLabels
+                      ? 'border-amber-700 bg-amber-900/40 text-amber-300'
+                      : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'
+                  }`}
+                  title="显示/隐藏跟随簇的 #tag 分区标签"
+                >
+                  分区标签
+                </button>
+              )}
             </>
           )}
           <div className="flex overflow-hidden rounded-md border border-zinc-700 text-xs">
@@ -504,12 +658,65 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
               </button>
             ))}
           </div>
-          <Button variant="ghost" onClick={() => { setGenOpen((v) => !v) }}>
-            AI 生成
-          </Button>
-          <Button onClick={openNew}>
-            新增条目
-          </Button>
+          {view === 'list' &&
+            (selectMode ? (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={toggleSelectAll}
+                  className="cursor-pointer rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-400 transition-colors hover:text-zinc-200"
+                >
+                  {allFilteredSelected ? '取消全选' : '全选当前筛选'}
+                </button>
+                <span className="text-xs text-zinc-500">已选 {selectedIds.size}</span>
+                <Button variant="danger" onClick={removeSelected} disabled={selectedIds.size === 0}>
+                  删除选中 {selectedIds.size}
+                </Button>
+                <Button variant="ghost" onClick={exitSelect}>
+                  退出
+                </Button>
+              </div>
+            ) : (
+              <div className="relative" ref={actionMenuRef}>
+                <Button onClick={() => setActionOpen((v) => !v)}>
+                  条目
+                  <span className={`ml-1 text-[10px] transition-transform ${actionOpen ? 'rotate-180' : ''}`}>▾</span>
+                </Button>
+                {actionOpen && (
+                  <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-md border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/40">
+                    <button
+                      onClick={() => {
+                        setActionOpen(false)
+                        setGenOpen(true)
+                      }}
+                      className="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-zinc-200 transition-colors hover:bg-zinc-800"
+                    >
+                      AI 生成…
+                    </button>
+                    <button
+                      onClick={() => {
+                        setActionOpen(false)
+                        setSelectMode(true)
+                        setSelectedIds(new Set())
+                      }}
+                      disabled={entries.length === 0}
+                      className="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-zinc-200 transition-colors hover:bg-zinc-800 disabled:cursor-not-allowed disabled:text-zinc-600 disabled:hover:bg-transparent"
+                    >
+                      批量删除…
+                    </button>
+                    <div className="my-1 border-t border-zinc-800" />
+                    <button
+                      onClick={() => {
+                        setActionOpen(false)
+                        openNew()
+                      }}
+                      className="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-zinc-200 transition-colors hover:bg-zinc-800"
+                    >
+                      手动新增
+                    </button>
+                  </div>
+                )}
+              </div>
+            ))}
         </div>
       </div>
 
@@ -525,7 +732,10 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
             </button>
           )}
           {tagCounts
-            .filter((t) => t.name !== tagFilter)
+            .filter(
+              (t) =>
+                t.name !== tagFilter && (tagExpanded || collapsedTagSet.has(t.name))
+            )
             .map((t) => (
               <button
                 key={t.name}
@@ -536,6 +746,23 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                 <span className="ml-1 text-[10px] text-zinc-600">{t.count}</span>
               </button>
             ))}
+          {!tagExpanded && tagCounts.length > collapsedTagSet.size && (
+            <button
+              onClick={() => setTagExpanded(true)}
+              className="cursor-pointer rounded-full border border-dashed border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-500 transition-colors hover:border-amber-700 hover:text-amber-400"
+              title="展开全部标签（含仅单条目使用的）"
+            >
+              +{tagCounts.length - collapsedTagSet.size} 更多
+            </button>
+          )}
+          {tagExpanded && (
+            <button
+              onClick={() => setTagExpanded(false)}
+              className="cursor-pointer rounded-full border border-dashed border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-500 transition-colors hover:border-amber-700 hover:text-amber-400"
+            >
+              收起
+            </button>
+          )}
         </div>
       )}
 
@@ -545,8 +772,9 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           onClose={() => setGenOpen(false)}
           projectId={projectId}
           types={types}
-          focus={{ tag: tagFilter ?? undefined, type: filter !== '全部' ? filter : undefined }}
-          onSaved={load}
+          initialTypes={filter !== '全部' ? [filter] : []}
+          initialTags={tagFilter ? [tagFilter] : []}
+          tagOptions={tagCounts}
         />
       )}
 
@@ -634,6 +862,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
             edges={graph.edges}
             groupColors={GROUP_COLORS}
             clusterTags={clusterTags}
+            showTagLabels={showTagLabels}
             onNodeClick={(id) => {
               if (id.startsWith('char:')) {
                 const c = characters.find((x) => x.id === id.slice(5))
@@ -650,7 +879,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
         </div>
       ) : (
         <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(300px,1fr))] content-start gap-3 overflow-y-auto pb-2">
-          {filtered.length === 0 && (
+          {filtered.length === 0 && liveEntries.length === 0 && (
             <Card className="col-span-full p-10 text-center text-sm text-zinc-600">
               {filter === '全部' && tagFilter === null
                 ? '暂无条目，点右上角「AI 生成」或「新增条目」开始建设世界观'
@@ -659,11 +888,20 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                   : `「${filter}」类型下暂无条目`}
             </Card>
           )}
+          {liveEntries.map((s, i) => (
+            <LiveCard key={`live-${s.taskId}-${i}`} section={s} />
+          ))}
           {filtered.map((e) => (
             <EntryCard
               key={e.id}
               entry={e}
               highlighted={highlightIds.includes(e.id)}
+              isNew={newEntryIdList.includes(e.id)}
+              selection={
+                selectMode
+                  ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
+                  : undefined
+              }
               onOpen={startEdit}
               onTagClick={(t) => setTagFilter((cur) => (cur === t ? null : t))}
               resolveLink={resolveLink}

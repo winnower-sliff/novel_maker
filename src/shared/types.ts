@@ -295,18 +295,13 @@ export type PipelineAction =
   | 'character'
   | 'worldbuild'
 
-export interface WorldbuildGenFocus {
-  tag?: string
-  type?: string
-}
-
 export interface WorldbuildGenParams {
   projectId: string
   categories: string[]
   title: string
   brief: string
   count?: number
-  focus?: WorldbuildGenFocus
+  tags?: string[]
 }
 
 export interface WorldbuildPreviewEntry {

@@ -168,14 +168,58 @@ export function deleteWorldbuild(id: string): void {
   getDb().prepare('DELETE FROM worldbuild WHERE id = ?').run(id)
 }
 
+export function deleteWorldbuildBatch(projectId: string, ids: string[]): number {
+  const db = getDb()
+  const del = db.prepare('DELETE FROM worldbuild WHERE project_id = ? AND id = ?')
+  db.exec('BEGIN')
+  try {
+    let n = 0
+    for (const id of ids) n += Number(del.run(projectId, id).changes)
+    db.exec('COMMIT')
+    return n
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
 const DEFAULT_WORLDBUILD_TYPES = ['力量体系', '地理', '势力', '历史', '物品', '其他']
+
+const TYPE_PRIORITY_PRESET: Record<string, number> = {
+  地理: 10,
+  势力: 20,
+  历史: 30,
+  力量体系: 40,
+  物品: 50,
+  其他: 10000
+}
+
+const TYPE_DEFAULT_PRIORITY = 100
+const TYPE_MAX_PRIORITY = 9990
+
+function typePriority(name: string): number {
+  return TYPE_PRIORITY_PRESET[name] ?? TYPE_DEFAULT_PRIORITY
+}
+
+interface TypeRow {
+  name: string
+  priority: number
+}
+
+function sortTypeRows(rows: TypeRow[]): TypeRow[] {
+  return rows.sort((a, b) => a.priority - b.priority || a.name.localeCompare(b.name, 'zh'))
+}
 
 export function listWorldbuildTypes(projectId: string): string[] {
   const db = getDb()
   const rows = db
-    .prepare('SELECT name FROM worldbuild_types WHERE project_id = ? ORDER BY rowid')
-    .all(projectId) as Array<{ name: string }>
-  if (rows.length > 0) return rows.map((r) => r.name)
+    .prepare('SELECT name, priority FROM worldbuild_types WHERE project_id = ?')
+    .all(projectId) as Array<{ name: string; priority: number }>
+  if (rows.length > 0) {
+    return sortTypeRows(rows.map((r) => ({ name: r.name, priority: Number(r.priority) }))).map(
+      (r) => r.name
+    )
+  }
   const used = new Set(
     (db
       .prepare('SELECT DISTINCT category FROM worldbuild WHERE project_id = ?')
@@ -187,11 +231,13 @@ export function listWorldbuildTypes(projectId: string): string[] {
     (n, i, arr) => arr.indexOf(n) === i
   )
   const insert = db.prepare(
-    'INSERT INTO worldbuild_types (id, project_id, name, created_at) VALUES (?, ?, ?, ?)'
+    'INSERT INTO worldbuild_types (id, project_id, name, priority, created_at) VALUES (?, ?, ?, ?, ?)'
   )
   const ts = now()
-  for (const n of names) insert.run(randomUUID(), projectId, n, ts)
-  return names
+  for (const n of names) insert.run(randomUUID(), projectId, n, typePriority(n), ts)
+  return sortTypeRows(names.map((name) => ({ name, priority: typePriority(name) }))).map(
+    (r) => r.name
+  )
 }
 
 export function createWorldbuildType(projectId: string, name: string): string {
@@ -205,9 +251,60 @@ export function createWorldbuildType(projectId: string, name: string): string {
   const tagHit = listWorldbuild(projectId).find((e) => splitTags(e.tags).includes(n))
   if (tagHit) throw new Error(`「${n}」已被条目《${tagHit.title}》用作标签，类型与标签不能重名`)
   db.prepare(
-    'INSERT INTO worldbuild_types (id, project_id, name, created_at) VALUES (?, ?, ?, ?)'
-  ).run(randomUUID(), projectId, n, now())
+    'INSERT INTO worldbuild_types (id, project_id, name, priority, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(randomUUID(), projectId, n, typePriority(n), now())
   return n
+}
+
+export interface WorldbuildTypePos {
+  before?: string
+  after?: string
+  first?: boolean
+  last?: boolean
+}
+
+export function reorderWorldbuildType(
+  projectId: string,
+  name: string,
+  pos: WorldbuildTypePos
+): string[] {
+  if (name === '其他') throw new Error('「其他」恒为最后，无需调整')
+  const db = getDb()
+  const rows = db
+    .prepare('SELECT name, priority FROM worldbuild_types WHERE project_id = ?')
+    .all(projectId) as Array<{ name: string; priority: number }>
+  const list = sortTypeRows(rows.map((r) => ({ name: r.name, priority: Number(r.priority) })))
+  if (!list.some((r) => r.name === name)) throw new Error(`类型「${name}」不存在`)
+  const others = list.filter((r) => r.name !== name)
+  if (others.length === 0) return list.map((r) => r.name)
+  const ways = [pos.before, pos.after, pos.first, pos.last].filter(Boolean).length
+  if (ways !== 1) throw new Error('before / after / first / last 必须恰好提供一个')
+  let priority: number
+  if (pos.first) {
+    priority = others[0].priority - 10
+  } else if (pos.last) {
+    priority = Math.min(TYPE_MAX_PRIORITY, Math.max(...others.map((r) => r.priority)) + 10)
+  } else if (pos.before) {
+    const t = others.find((r) => r.name === pos.before)
+    if (!t) throw new Error(`类型「${pos.before}」不存在`)
+    const idx = others.indexOf(t)
+    const prev = others[idx - 1]?.priority ?? t.priority - 20
+    priority = (prev + t.priority) / 2
+  } else {
+    const t = others.find((r) => r.name === pos.after)
+    if (!t) throw new Error(`类型「${pos.after}」不存在`)
+    if (t.priority >= TYPE_MAX_PRIORITY) throw new Error('「其他」恒为最后，不能插到其后')
+    const idx = others.indexOf(t)
+    const next = others[idx + 1]?.priority ?? t.priority + 20
+    priority = (t.priority + next) / 2
+  }
+  priority = Math.min(TYPE_MAX_PRIORITY, priority)
+  db.prepare('UPDATE worldbuild_types SET priority = ? WHERE project_id = ? AND name = ?').run(
+    priority,
+    projectId,
+    name
+  )
+  return listWorldbuildTypes(projectId)
 }
 
 export function deleteWorldbuildType(projectId: string, name: string): void {

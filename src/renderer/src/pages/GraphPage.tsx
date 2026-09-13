@@ -39,6 +39,7 @@ export default function GraphPage({
   const [focus, setFocus] = useState<FocusState | null>(null)
   const [relayoutKey, setRelayoutKey] = useState(0)
   const [clusterTags, setClusterTags] = useState(false)
+  const [showTagLabels, setShowTagLabels] = useState(true)
   const autoClusterRef = useRef(false)
 
   const load = useCallback((): void => {
@@ -216,6 +217,19 @@ export default function GraphPage({
         >
           标签聚类
         </button>
+        {clusterTags && (
+          <button
+            onClick={() => setShowTagLabels((v) => !v)}
+            className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
+              showTagLabels
+                ? 'border-amber-700 bg-amber-900/40 text-amber-300'
+                : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'
+            }`}
+            title="显示/隐藏跟随簇的 #tag 分区标签"
+          >
+            分区标签
+          </button>
+        )}
         <Button variant="ghost" onClick={() => setRelayoutKey((v) => v + 1)}>
           重新布局
         </Button>
@@ -257,6 +271,7 @@ export default function GraphPage({
           edges={rgEdges}
           groupColors={KIND_COLORS}
           clusterTags={clusterTags}
+          showTagLabels={showTagLabels}
           onNodeClick={handleNodeClick}
           onNodeDoubleClick={handleNodeDoubleClick}
         />
@@ -264,7 +279,7 @@ export default function GraphPage({
 
       <div className="text-[11px] text-zinc-600">
         单击节点跳转对应板块 · 双击节点进入局部图谱 · 拖动节点看关联晃动 · 圆越大 = 被引用越多（核心条目/MOC）·
-        相连的主题会自动聚成集群 · 「标签聚类」开启时同标签条目/人物按分区聚拢并按主标签着色 ·
+        「标签聚类」开启时高频标签（≥2 条目）的条目/人物自动聚拢并按主标签着色、灰点不属任何高频标签簇 ·
         连线来自各板块文本与章节正文中的 [[链接]]
       </div>
     </div>

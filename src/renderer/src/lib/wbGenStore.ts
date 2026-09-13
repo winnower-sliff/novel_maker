@@ -1,9 +1,10 @@
 import { useMemo, useSyncExternalStore } from 'react'
-import type { WorldbuildGenFocus, WorldbuildGenParams, WorldbuildPreviewEntry } from '@shared/types'
+import type { WorldbuildGenParams } from '@shared/types'
+import { splitHeadingHashtags } from '@shared/tags'
 import { runPipeline } from './ipc'
 import { pushToast } from './toastStore'
 
-export type WbGenStatus = 'retrieving' | 'running' | 'done' | 'error'
+export type WbGenStatus = 'retrieving' | 'running'
 
 export interface WbGenTask {
   id: number
@@ -12,25 +13,88 @@ export interface WbGenTask {
   title: string
   brief: string
   count?: number
-  focus?: WorldbuildGenFocus
+  tags: string[]
   output: string
   status: WbGenStatus
-  result: WorldbuildPreviewEntry[]
-  error: string | null
-  seen: boolean
-  stopReason?: string | null
+  committedCount: number
+  entryIds: string[]
+  createdTypes: string[]
+  allowNewType: boolean
+}
+
+export interface WbLiveSection {
+  taskId: number
+  category: string | null
+  title: string
+  tags: string[]
+  content: string
+  active: boolean
 }
 
 export type WbGenParams = WorldbuildGenParams
 
 export interface WbNavBadge {
-  tone: 'running' | 'done' | 'error' | 'mixed'
+  tone: 'running' | 'done'
   pulse: boolean
+}
+
+const SECTION_HEADING = /^#{1,3}\s*(?:\[([^\]]*)\]\s*)?(.+?)\s*$/
+
+interface RawSection {
+  category: string | null
+  title: string
+  tags: string[]
+  content: string
+  raw: string
+}
+
+function splitSections(output: string): RawSection[] {
+  const sections: RawSection[] = []
+  let current: Omit<RawSection, 'raw'> & { rawHeading: string } | null = null
+  for (const line of output.split(/\r?\n/)) {
+    const m = SECTION_HEADING.exec(line)
+    if (m && (m[1] || current)) {
+      if (current) {
+        sections.push({
+          category: current.category,
+          title: current.title,
+          tags: current.tags,
+          content: current.content,
+          raw: `${current.rawHeading}\n${current.content}`
+        })
+      }
+      const { title, tags } = splitHeadingHashtags(m[2])
+      current = { category: m[1]?.trim() || null, title, tags, content: '', rawHeading: line }
+    } else if (current) {
+      current.content += (current.content ? '\n' : '') + line
+    }
+  }
+  if (current) {
+    sections.push({
+      category: current.category,
+      title: current.title,
+      tags: current.tags,
+      content: current.content,
+      raw: `${current.rawHeading}\n${current.content}`
+    })
+  }
+  return sections
 }
 
 let tasks: WbGenTask[] = []
 let nextId = 1
+let savedSeq = 0
+let newIdsVersion = 0
+const newEntryIds = new Map<string, string>()
 const listeners = new Set<() => void>()
+const commitChains = new Map<number, Promise<unknown>>()
+
+interface ScanState {
+  scanned: number
+  lineBuf: string
+}
+const scanStates = new Map<number, ScanState>()
+const HEADING_LIKE_RE = /^#{1,3}\s/
 
 function emit(): void {
   listeners.forEach((l) => l())
@@ -70,15 +134,86 @@ function patch(id: number, p: Partial<WbGenTask>, throttled = false): void {
   else emitNow()
 }
 
-function isLive(s: WbGenStatus): boolean {
-  return s === 'running' || s === 'retrieving'
+function removeTask(id: number): void {
+  tasks = tasks.filter((t) => t.id !== id)
+  commitChains.delete(id)
+  scanStates.delete(id)
+  emitNow()
+}
+
+function scanForHeadings(id: number, output: string): void {
+  let st = scanStates.get(id)
+  if (!st) {
+    st = { scanned: 0, lineBuf: '' }
+    scanStates.set(id, st)
+  }
+  if (st.scanned > output.length) {
+    st.scanned = 0
+    st.lineBuf = ''
+  }
+  const chunk = st.lineBuf + output.slice(st.scanned)
+  st.scanned = output.length
+  const lines = chunk.split('\n')
+  st.lineBuf = lines.pop() ?? ''
+  let sawHeading = false
+  for (const line of lines) {
+    if (HEADING_LIKE_RE.test(line)) sawHeading = true
+  }
+  if (!sawHeading) return
+  const cur = tasks.find((t) => t.id === id)
+  if (!cur) return
+  void commitReadySections(id, splitSections(cur.output).length - 1)
+}
+
+async function commitReadySections(id: number, completeCount: number): Promise<void> {
+  const task = tasks.find((t) => t.id === id)
+  if (!task || completeCount <= task.committedCount) return
+  const from = task.committedCount
+  const sections = splitSections(task.output)
+  if (completeCount > sections.length) completeCount = sections.length
+  if (completeCount <= from) return
+  const rawChunk = sections.slice(from, completeCount).map((s) => s.raw).join('\n\n')
+  const prev = commitChains.get(id) ?? Promise.resolve()
+  const p = prev.then(() =>
+    window.api.novel.worldbuildCommitChunk(task.projectId, rawChunk, task.categories, {
+      allowNewType: task.allowNewType,
+      taskEntryIds: task.entryIds
+    })
+  )
+  commitChains.set(id, p)
+  try {
+    const r = await p
+    const cur = tasks.find((t) => t.id === id)
+    if (!cur) return
+    for (const eid of r.entryIds) newEntryIds.set(eid, cur.projectId)
+    newIdsVersion++
+    savedSeq++
+    patch(
+      id,
+      {
+        committedCount: Math.max(cur.committedCount, completeCount),
+        entryIds: [...cur.entryIds, ...r.entryIds],
+        createdTypes: [...cur.createdTypes, ...r.createdTypes],
+        allowNewType: cur.allowNewType && r.createdTypes.length === 0
+      },
+      true
+    )
+    emitNow()
+  } catch (err) {
+    const cur = tasks.find((t) => t.id === id)
+    if (!cur) return
+    patch(id, { committedCount: Math.max(cur.committedCount, completeCount) }, true)
+    pushToast(
+      'error',
+      `条目入库失败，已跳过该批：${err instanceof Error ? err.message : String(err)}`
+    )
+  }
 }
 
 export function startGen(params: WbGenParams): void {
   const key = params.categories.join(',')
   const dup = tasks.some(
     (t) =>
-      isLive(t.status) &&
       t.projectId === params.projectId &&
       t.categories.join(',') === key &&
       t.title === params.title
@@ -94,92 +229,73 @@ export function startGen(params: WbGenParams): void {
       title: params.title,
       brief: params.brief,
       count: params.count,
-      focus: params.focus,
+      tags: params.tags ?? [],
       output: '',
       status: 'retrieving',
-      result: [],
-      error: null,
-      seen: false,
-      stopReason: null
+      committedCount: 0,
+      entryIds: [],
+      createdTypes: [],
+      allowNewType: true
     }
   ]
   emitNow()
+  const briefPreview = params.brief.trim().slice(0, 30)
+  pushToast(
+    'success',
+    `已开始生成：${briefPreview}${params.brief.trim().length > 30 ? '…' : ''}（可在条目列表查看进度）`
+  )
   runPipeline(
     'worldbuild',
     params,
     (text) => {
       const cur = tasks.find((t) => t.id === id)
-      if (cur && isLive(cur.status)) {
-        patch(id, { status: 'running', output: (cur.output + text).slice(-8000) }, true)
+      if (cur) {
+        const output = cur.output + text
+        patch(id, { status: 'running', output }, true)
+        scanForHeadings(id, output)
       }
     },
     () => patch(id, { status: 'running' })
   )
-    .then((payload) => {
-      const d = payload.data as { entries?: WorldbuildPreviewEntry[]; error?: string } | undefined
-      if (d?.error) {
-        patch(id, { status: 'error', error: `生成完成但解析失败：${d.error}` })
-        pushToast('error', `「${params.title || params.brief.slice(0, 12)}」解析失败`)
-        return
+    .then(async (payload) => {
+      const task = tasks.find((t) => t.id === id)
+      if (!task) return
+      const sections = splitSections(task.output)
+      const truncated = payload.stopReason === 'max_tokens'
+      const finalCount = truncated ? Math.max(0, sections.length - 1) : sections.length
+      await commitReadySections(id, finalCount)
+      const done = tasks.find((t) => t.id === id)
+      if (!done) return
+      if (done.entryIds.length > 0) {
+        try {
+          await window.api.novel.worldbuildRelink(done.projectId, done.entryIds)
+        } catch {
+          /* 补链失败不阻塞收尾 */
+        }
+        const typeNote =
+          done.createdTypes.length > 0 ? `，新建类型：${done.createdTypes.join('、')}` : ''
+        const truncNote = truncated ? '（输出被截断，已丢弃最后 1 个不完整条目）' : ''
+        pushToast('success', `已生成入库 ${done.entryIds.length} 个条目${typeNote}${truncNote}`)
+      } else {
+        pushToast('error', '未解析到有效条目，可重试或调整需求')
       }
-      patch(id, { status: 'done', result: d?.entries ?? [], stopReason: payload.stopReason ?? null })
-      pushToast('success', '生成完成，请挑选条目入库')
+      removeTask(id)
     })
     .catch((err: unknown) => {
       const msg = err instanceof Error ? err.message : String(err)
-      patch(id, { status: 'error', error: msg })
-      pushToast('error', `生成失败：${msg}`)
+      pushToast('error', `生成失败：${msg}（已入库的条目会保留）`)
+      removeTask(id)
     })
 }
 
-export function retryTask(id: number): void {
-  const t = tasks.find((x) => x.id === id)
-  if (!t || isLive(t.status)) return
-  tasks = tasks.filter((x) => x.id !== id)
-  emitNow()
-  startGen({
-    projectId: t.projectId,
-    categories: t.categories,
-    title: t.title,
-    brief: t.brief,
-    count: t.count,
-    focus: t.focus
-  })
-}
-
-export async function commitTaskSelection(
-  id: number,
-  selected: WorldbuildPreviewEntry[]
-): Promise<void> {
-  const t = tasks.find((x) => x.id === id)
-  if (!t) return
-  const { entryIds, createdTypes } = await window.api.novel.worldbuildSaveBatch(
-    t.projectId,
-    selected
-  )
-  dismissTask(id)
-  const typeNote = createdTypes.length > 0 ? `，新建类型：${createdTypes.join('、')}` : ''
-  pushToast('success', `已保存 ${entryIds.length} 个条目${typeNote}`)
-}
-
-export function dismissTask(id: number): void {
-  tasks = tasks.filter((t) => t.id !== id)
-  emitNow()
-}
-
-export function markSeen(): void {
+export function markEntrySeen(ids: string | string[]): void {
+  const list = Array.isArray(ids) ? ids : [ids]
   let changed = false
-  const next: WbGenTask[] = []
-  for (const t of tasks) {
-    if (t.status === 'error' && !t.seen) {
-      next.push({ ...t, seen: true })
-      changed = true
-    } else {
-      next.push(t)
-    }
+  for (const id of list) {
+    if (newEntryIds.delete(id)) changed = true
   }
   if (changed) {
-    tasks = next
+    newIdsVersion++
     emitNow()
   }
 }
@@ -189,19 +305,50 @@ export function useWbGenTasks(projectId: string): WbGenTask[] {
   return useMemo(() => all.filter((t) => t.projectId === projectId), [all, projectId])
 }
 
+export function useWbLiveEntries(projectId: string): WbLiveSection[] {
+  const all = useSyncExternalStore(subscribe, () => tasks)
+  return useMemo(() => {
+    const out: WbLiveSection[] = []
+    for (const t of all) {
+      if (t.projectId !== projectId) continue
+      const sections = splitSections(t.output)
+      sections.forEach((s, i) => {
+        if (i < t.committedCount) return
+        out.push({
+          taskId: t.id,
+          category: s.category,
+          title: s.title,
+          tags: s.tags,
+          content: s.content,
+          active: t.status === 'running' && i === sections.length - 1
+        })
+      })
+    }
+    return out
+  }, [all, projectId])
+}
+
+export function useNewEntryIds(projectId: string): string[] {
+  const version = useSyncExternalStore(subscribe, () => newIdsVersion)
+  return useMemo(
+    () =>
+      [...newEntryIds.entries()]
+        .filter(([, pid]) => pid === projectId)
+        .map(([id]) => id),
+    [version, projectId]
+  )
+}
+
+export function useWbSavedSeq(): number {
+  return useSyncExternalStore(subscribe, () => savedSeq)
+}
+
 const BADGE_RUNNING: WbNavBadge = { tone: 'running', pulse: true }
 const BADGE_DONE: WbNavBadge = { tone: 'done', pulse: false }
-const BADGE_ERROR: WbNavBadge = { tone: 'error', pulse: false }
-const BADGE_MIXED: WbNavBadge = { tone: 'mixed', pulse: false }
 
 function aggregateBadge(): WbNavBadge | null {
-  if (tasks.some((t) => isLive(t.status))) return BADGE_RUNNING
-  const relevant = tasks.filter((t) => !t.seen)
-  const done = relevant.some((t) => t.status === 'done')
-  const error = relevant.some((t) => t.status === 'error')
-  if (done && error) return BADGE_MIXED
-  if (done) return BADGE_DONE
-  if (error) return BADGE_ERROR
+  if (tasks.length > 0) return BADGE_RUNNING
+  if (newEntryIds.size > 0) return BADGE_DONE
   return null
 }
 

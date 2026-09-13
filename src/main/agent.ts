@@ -42,6 +42,10 @@ function optN(desc: string): Record<string, unknown> {
   return { type: 'number', description: `${desc}（可选）` }
 }
 
+function optB(desc: string): Record<string, unknown> {
+  return { type: 'boolean', description: `${desc}（可选）` }
+}
+
 function reqStr(input: ToolInput, key: string): string {
   const v = input[key]
   if (typeof v !== 'string' || !v.trim()) throw new Error(`参数 ${key} 缺失或为空`)
@@ -229,6 +233,33 @@ const TOOLS: AgentTool[] = [
       if (!e) throw new Error('未找到该词条')
       store.deleteWorldbuild(e.id)
       return { ok: true, deleted: e.title }
+    }
+  },
+  {
+    def: {
+      name: 'reorder_worldbuild_type',
+      description:
+        '调整世界观类型在筛选栏中的显示顺序。类型按优先级展示（内置顺序：地理、势力、历史、力量体系、物品在前，「其他」恒最后；新建类型默认排在「其他」之前；同优先级按拼音序）。新建类型后可调用本工具把它插到语义相邻的类型旁；before/after/first/last 恰好提供一个',
+      input_schema: schema(
+        {
+          name: s('要调整位置的类型名'),
+          before: optS('移到该类型之前'),
+          after: optS('移到该类型之后（不能是「其他」）'),
+          first: optB('移到最前'),
+          last: optB('移到最后（「其他」之前）')
+        },
+        ['name']
+      )
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const order = store.reorderWorldbuildType(projectId, reqStr(input, 'name'), {
+        before: optStr(input, 'before'),
+        after: optStr(input, 'after'),
+        first: input.first === true,
+        last: input.last === true
+      })
+      return { ok: true, order }
     }
   },
   {

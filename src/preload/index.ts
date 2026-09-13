@@ -113,6 +113,17 @@ const api = {
       ipcRenderer.invoke('novel:worldbuildSave', input),
     worldbuildDelete: (id: string): Promise<void> =>
       ipcRenderer.invoke('novel:worldbuildDelete', id),
+    worldbuildDeleteBatch: (projectId: string, ids: string[]): Promise<number> =>
+      ipcRenderer.invoke('novel:worldbuildDeleteBatch', projectId, ids),
+    worldbuildCommitChunk: (
+      projectId: string,
+      rawText: string,
+      categories: string[],
+      opts: { allowNewType: boolean; taskEntryIds: string[] }
+    ): Promise<{ entryIds: string[]; createdTypes: string[]; updatedIds: string[] }> =>
+      ipcRenderer.invoke('novel:worldbuildCommitChunk', projectId, rawText, categories, opts),
+    worldbuildRelink: (projectId: string, entryIds: string[]): Promise<number> =>
+      ipcRenderer.invoke('novel:worldbuildRelink', projectId, entryIds),
     worldbuildRetrieve: (p: WorldbuildGenParams): Promise<WorldbuildRetrievalBrief | null> =>
       ipcRenderer.invoke('novel:worldbuildRetrieve', p),
     worldbuildSaveBatch: (
@@ -126,6 +137,11 @@ const api = {
       ipcRenderer.invoke('novel:worldbuildTypeCreate', projectId, name),
     worldbuildTypeDelete: (projectId: string, name: string): Promise<string[]> =>
       ipcRenderer.invoke('novel:worldbuildTypeDelete', projectId, name),
+    worldbuildTypeReorder: (
+      projectId: string,
+      name: string,
+      pos: { before?: string; after?: string; first?: boolean; last?: boolean }
+    ): Promise<string[]> => ipcRenderer.invoke('novel:worldbuildTypeReorder', projectId, name, pos),
     outlines: (projectId: string): Promise<OutlineItem[]> =>
       ipcRenderer.invoke('novel:outlines', projectId),
     outlineSave: (input: OutlineInput & { id?: string }): Promise<OutlineItem> =>
