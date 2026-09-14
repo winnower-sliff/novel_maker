@@ -425,17 +425,18 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     setEditOpen(true)
   }, [types])
 
+  const editDirty =
+    editOpen &&
+    (edit.title !== editInitialRef.current.title ||
+      edit.content !== editInitialRef.current.content ||
+      edit.category !== editInitialRef.current.category ||
+      edit.tags !== editInitialRef.current.tags)
+
   const closeEdit = useCallback((): void => {
-    const dirty =
-      editOpen &&
-      (edit.title !== editInitialRef.current.title ||
-        edit.content !== editInitialRef.current.content ||
-        edit.category !== editInitialRef.current.category ||
-        edit.tags !== editInitialRef.current.tags)
-    if (dirty && !window.confirm('有未保存的修改，确定放弃并关闭？')) return
+    if (editDirty && !window.confirm('有未保存的修改，确定放弃并关闭？')) return
     setEditOpen(false)
     setEdit(EMPTY)
-  }, [editOpen, edit.title, edit.content, edit.category, edit.tags])
+  }, [editDirty])
 
   if (!projectId) {
     return (
@@ -526,6 +527,12 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           doSave('其他')
         })
     }
+  }
+
+  const saveOnEnter = (e: KeyboardEvent<HTMLInputElement>): void => {
+    if (e.key !== 'Enter' || e.nativeEvent.isComposing) return
+    e.preventDefault()
+    save()
   }
 
   const removeCurrent = (): void => {
@@ -912,6 +919,9 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
         title={edit.id ? '编辑条目' : '新增条目'}
         footer={
           <>
+            {editDirty && (
+              <span className="mr-auto text-xs text-amber-400">● 未保存（回车即存）</span>
+            )}
             {edit.id && (
               <Button variant="danger" onClick={removeCurrent}>
                 删除
@@ -950,12 +960,17 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
               <Input
                 value={edit.tags}
                 onChange={(e) => setEdit({ ...edit, tags: e.target.value })}
+                onKeyDown={saveOnEnter}
                 placeholder="精灵,森林,魔法"
               />
             </div>
             <div className="col-span-6">
               <Label>标题 *</Label>
-              <Input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
+              <Input
+                value={edit.title}
+                onChange={(e) => setEdit({ ...edit, title: e.target.value })}
+                onKeyDown={saveOnEnter}
+              />
             </div>
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
