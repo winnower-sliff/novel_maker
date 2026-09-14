@@ -4,9 +4,11 @@ export const TOOL_LABELS: Record<string, string> = {
   get_project: '项目·读取',
   update_project: '项目·修改',
   list_characters: '人物·列表',
+  get_character: '人物·读取',
   save_character: '人物·保存',
   delete_character: '人物·删除',
   list_worldbuild: '世界观·列表',
+  get_worldbuild: '世界观·读取',
   save_worldbuild: '世界观·保存',
   delete_worldbuild: '世界观·删除',
   list_outlines: '大纲·列表',
@@ -42,19 +44,28 @@ export function toolSummary(call: AgentToolCall): string {
     case 'update_project':
       return `更新项目信息${str(i, 'title') ? `：${str(i, 'title')}` : ''}`
     case 'list_characters':
-      return '查看人物列表'
+      return `查看人物列表${str(i, 'detail') === 'full' ? '（全文）' : ''}`
+    case 'get_character':
+      return `读取人物卡详情（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
     case 'save_character':
       return `${str(i, 'id') ? '修改人物' : '新建人物'}：${str(i, 'name') || '(未命名)'}`
     case 'delete_character':
       return `删除人物（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
-    case 'list_worldbuild':
-      return '查看世界观词条'
+    case 'list_worldbuild': {
+      const cat = str(i, 'category')
+      const parts = [cat, str(i, 'detail') === 'full' ? '全文' : ''].filter(Boolean)
+      return `查看世界观词条${parts.length ? `（${parts.join('·')}）` : ''}`
+    }
+    case 'get_worldbuild':
+      return `读取词条详情（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
     case 'save_worldbuild':
       return `${str(i, 'id') ? '修改词条' : '新建词条'}：[${str(i, 'category') || '?'}] ${str(i, 'title') || '(无标题)'}`
     case 'delete_worldbuild':
       return `删除世界观词条（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
-    case 'list_outlines':
-      return '查看大纲列表'
+    case 'list_outlines': {
+      const v = num(i, 'volume')
+      return `查看大纲列表${v ? `（第${v}卷）` : ''}`
+    }
     case 'save_outline': {
       const no = num(i, 'chapterNo')
       return `${str(i, 'id') ? '修改' : '新建'}大纲${no ? `：第${no}章` : ''} ${str(i, 'title') || ''}`.trim()

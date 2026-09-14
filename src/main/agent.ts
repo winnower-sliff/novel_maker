@@ -8,7 +8,9 @@ import { appendUsage } from './usage'
 
 const MAX_TURNS = 24
 const MAX_CHAPTER_CHARS = 8000
-const MAX_RESULT_CHARS = 6000
+const MAX_RESULT_CHARS = 30000
+const BRIEF_CHARS = 200
+const FULL_PAGE_DEFAULT = 20
 
 export const AGENT_MAX_TOKENS = 8192
 
@@ -73,6 +75,10 @@ function clip(text: string, max: number): { text: string; truncated: boolean } {
   return { text: `${text.slice(0, max)}\n…[已截断，原文共 ${text.length} 字]`, truncated: true }
 }
 
+function briefOf(text: string): string {
+  return text.replace(/\s+/g, ' ').trim().slice(0, BRIEF_CHARS)
+}
+
 function getOutlineOwned(outlineId: string, projectId: string): OutlineItem {
   const outline = store.getOutline(outlineId)
   if (!outline || outline.projectId !== projectId) throw new Error(`大纲条目 ${outlineId} 不存在`)
@@ -116,18 +122,52 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'list_characters',
-      description: '列出当前项目全部人物卡（含 id、姓名、定位、标签与人物卡正文）',
-      input_schema: schema({}, [])
+      description:
+        '列出人物卡。默认摘要模式：每条含 id、姓名、定位、标签、卡面摘要（前 200 字）与总字数；detail=full 返回卡面全文（每条截断 3000 字）。可选 offset/limit 分页（summary 默认全部、full 默认每页 20 条）。做全局检查类任务时应分批读取直至 hasMore=false',
+      input_schema: schema(
+        {
+          detail: optS('summary（默认，摘要）/ full（全文）'),
+          offset: optN('分页起始下标，默认 0'),
+          limit: optN('每页条数：summary 默认全部，full 默认 20')
+        },
+        []
+      )
     },
     danger: false,
-    handler: (_input, projectId) =>
-      store.listCharacters(projectId).map((c) => ({
-        id: c.id,
-        name: c.name,
-        role: c.role,
-        tags: c.tags,
-        card: clip(c.card, 3000).text
-      }))
+    handler: (input, projectId) => {
+      const all = store.listCharacters(projectId)
+      const full = (optStr(input, 'detail') ?? 'summary') === 'full'
+      const offset = optNum(input, 'offset') ?? 0
+      const limit = optNum(input, 'limit') ?? (full ? FULL_PAGE_DEFAULT : all.length)
+      const page = all.slice(offset, offset + limit)
+      return {
+        total: all.length,
+        returned: page.length,
+        hasMore: offset + page.length < all.length,
+        items: page.map((c) => ({
+          id: c.id,
+          name: c.name,
+          role: c.role,
+          tags: c.tags,
+          ...(full
+            ? { card: clip(c.card, 3000).text }
+            : { brief: briefOf(c.card), cardChars: c.card.length })
+        }))
+      }
+    }
+  },
+  {
+    def: {
+      name: 'get_character',
+      description: '按 id 读取单张人物卡全文（修改前取原文用）',
+      input_schema: schema({ id: s('人物 id') }, ['id'])
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const c = store.listCharacters(projectId).find((x) => x.id === reqStr(input, 'id'))
+      if (!c) throw new Error('未找到该人物')
+      return { id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card }
+    }
   },
   {
     def: {
@@ -168,18 +208,58 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'list_worldbuild',
-      description: '列出当前项目全部世界观词条（含 id、类型、标题、标签与内容）',
-      input_schema: schema({}, [])
+      description:
+        '列出世界观词条。默认摘要模式：返回各类型条数分布（byCategory）与每条的 id、类型、标题、标签、内容摘要（前 200 字）及总字数；detail=full 返回内容全文（每条截断 3000 字）。可选 category 按类型过滤、offset/limit 分页（summary 默认全部、full 默认每页 20 条）。做全局检查类任务时应分批读取直至 hasMore=false',
+      input_schema: schema(
+        {
+          category: optS('按类型精确过滤（如 力量体系）'),
+          detail: optS('summary（默认，摘要）/ full（全文）'),
+          offset: optN('分页起始下标，默认 0'),
+          limit: optN('每页条数：summary 默认全部，full 默认 20')
+        },
+        []
+      )
     },
     danger: false,
-    handler: (_input, projectId) =>
-      store.listWorldbuild(projectId).map((e) => ({
-        id: e.id,
-        category: e.category,
-        title: e.title,
-        tags: e.tags,
-        content: clip(e.content, 3000).text
-      }))
+    handler: (input, projectId) => {
+      const all = store.listWorldbuild(projectId)
+      const byCategory: Record<string, number> = {}
+      for (const e of all) byCategory[e.category] = (byCategory[e.category] ?? 0) + 1
+      const category = optStr(input, 'category')
+      const filtered = category ? all.filter((e) => e.category === category) : all
+      const full = (optStr(input, 'detail') ?? 'summary') === 'full'
+      const offset = optNum(input, 'offset') ?? 0
+      const limit = optNum(input, 'limit') ?? (full ? FULL_PAGE_DEFAULT : filtered.length)
+      const page = filtered.slice(offset, offset + limit)
+      return {
+        total: filtered.length,
+        returned: page.length,
+        hasMore: offset + page.length < filtered.length,
+        byCategory,
+        items: page.map((e) => ({
+          id: e.id,
+          category: e.category,
+          title: e.title,
+          tags: e.tags,
+          ...(full
+            ? { content: clip(e.content, 3000).text }
+            : { brief: briefOf(e.content), contentChars: e.content.length })
+        }))
+      }
+    }
+  },
+  {
+    def: {
+      name: 'get_worldbuild',
+      description: '按 id 读取单条世界观词条全文（修改前取原文用）',
+      input_schema: schema({ id: s('词条 id') }, ['id'])
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const e = store.listWorldbuild(projectId).find((x) => x.id === reqStr(input, 'id'))
+      if (!e) throw new Error('未找到该词条')
+      return { id: e.id, category: e.category, title: e.title, tags: e.tags, content: e.content }
+    }
   },
   {
     def: {
@@ -265,19 +345,35 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'list_outlines',
-      description: '列出当前项目全部大纲条目（含 id、卷号、章号、标题、梗概、状态）',
-      input_schema: schema({}, [])
+      description:
+        '列出大纲条目（id、卷号、章号、标题、梗概、状态），按卷号与章号排序。可选 volume 按卷过滤、offset/limit 分页（默认全部）。做全局检查类任务时应分批读取直至 hasMore=false',
+      input_schema: schema(
+        { volume: optN('按卷号过滤'), offset: optN('分页起始下标，默认 0'), limit: optN('每页条数，默认全部') },
+        []
+      )
     },
     danger: false,
-    handler: (_input, projectId) =>
-      store.listOutlines(projectId).map((o) => ({
-        id: o.id,
-        volume: o.volume,
-        chapterNo: o.chapterNo,
-        title: o.title,
-        synopsis: o.synopsis,
-        status: o.status
-      }))
+    handler: (input, projectId) => {
+      const all = store.listOutlines(projectId)
+      const volume = optNum(input, 'volume')
+      const filtered = volume === undefined ? all : all.filter((o) => o.volume === volume)
+      const offset = optNum(input, 'offset') ?? 0
+      const limit = optNum(input, 'limit') ?? filtered.length
+      const page = filtered.slice(offset, offset + limit)
+      return {
+        total: filtered.length,
+        returned: page.length,
+        hasMore: offset + page.length < filtered.length,
+        items: page.map((o) => ({
+          id: o.id,
+          volume: o.volume,
+          chapterNo: o.chapterNo,
+          title: o.title,
+          synopsis: o.synopsis,
+          status: o.status
+        }))
+      }
+    }
   },
   {
     def: {
@@ -454,7 +550,9 @@ const TOOL_MAP = new Map(TOOLS.map((t) => [t.def.name, t]))
 const READ_TOOLS = new Set([
   'get_project',
   'list_characters',
+  'get_character',
   'list_worldbuild',
+  'get_worldbuild',
   'list_outlines',
   'list_chapter_briefs',
   'get_chapter',
@@ -510,7 +608,8 @@ function buildSystemPrompt(projectId: string): string {
     '3. 新建条目时不传 id；修改时必须传 id',
     '4. 每完成一个任务，用简短中文总结做了什么；不要输出与任务无关的内容',
     '5. 若某操作被用户拒绝，不要重试同一操作，改为说明原因并询问下一步建议',
-    '6. 用户要求模糊时（如"优化一下大纲"），先读取现状再决定改法，必要时先说明你的计划'
+    '6. 用户要求模糊时（如"优化一下大纲"），先读取现状再决定改法，必要时先说明你的计划',
+    '7. 全局性任务（矛盾检查、一致性审校、批量统计或修改）必须覆盖全部相关条目：先看 total/hasMore/byCategory 规划分批，逐批读取直至 hasMore=false，再下结论并在结论中说明覆盖范围；结果被截断时改用 category/volume 过滤、offset/limit 分页或 detail=summary 重试，禁止基于不完整数据下最终结论'
   ].join('\n')
 }
 
@@ -518,7 +617,10 @@ function serializeResult(data: unknown): string {
   let text: string
   if (typeof data === 'string') text = data
   else text = JSON.stringify(data, null, 0)
-  return clip(text, MAX_RESULT_CHARS).text
+  const c = clip(text, MAX_RESULT_CHARS)
+  return c.truncated
+    ? `${c.text}\n[结果过大被截断：请改用 category/volume 过滤、offset/limit 分页、detail=summary 或按 id 逐条读取后重试，勿基于截断数据下全局结论]`
+    : c.text
 }
 
 export async function runAgent(opts: {
