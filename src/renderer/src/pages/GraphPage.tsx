@@ -65,6 +65,7 @@ export default function GraphPage({
   const [relayoutKey, setRelayoutKey] = useState(0)
   const [clusterTags, setClusterTags] = useState(false)
   const [showTagLabels, setShowTagLabels] = useState(true)
+  const [density, setDensity] = useState(1)
   const autoClusterRef = useRef(false)
 
   const load = useCallback((): void => {
@@ -342,6 +343,21 @@ export default function GraphPage({
         >
           标签聚类
         </button>
+        <label
+          className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-400"
+          title="调节节点间距疏密，实时重排"
+        >
+          疏密
+          <input
+            type="range"
+            min={0.4}
+            max={1.6}
+            step={0.1}
+            value={density}
+            onChange={(e) => setDensity(+e.target.value)}
+            className="w-24 accent-amber-600"
+          />
+        </label>
         {clusterTags && (
           <button
             onClick={() => setShowTagLabels((v) => !v)}
@@ -398,6 +414,7 @@ export default function GraphPage({
             groupColors={KIND_COLORS}
             clusterTags={clusterTags}
             showTagLabels={showTagLabels}
+            density={density}
             onNodeClick={handleNodeClick}
             onNodeDoubleClick={handleNodeDoubleClick}
             activeId={activeId}

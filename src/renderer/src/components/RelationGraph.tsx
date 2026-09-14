@@ -37,6 +37,7 @@ interface RelationGraphProps {
   groupColors: Record<string, string>
   clusterTags?: boolean
   showTagLabels?: boolean
+  density?: number
   onNodeClick?: (id: string) => void
   onNodeDoubleClick?: (id: string) => void
   activeId?: string | null
@@ -60,22 +61,34 @@ interface TagLabelData extends Record<string, unknown> {
   hl?: boolean
 }
 
-const ITERATIONS = 300
-const REPULSION = 80000
-const SPRING_LENGTH = 130
-const SPRING_K = 0.06
+const ITERATIONS = 450
 const DAMPING = 0.85
 const DRAG_ALPHA = 0.35
 const ALPHA_DECAY = 0.96
 const ALPHA_STOP = 0.02
-const COLLIDE_PAD = 16
-const COLLIDE_STRENGTH = 0.4
-const CENTER_PULL = 0.008
-const CLUSTER_CENTER_PULL_SCALE = 0.3
+const COLLIDE_STRENGTH = 0.6
+const COLLIDE_PASSES = 2
+const LABEL_COLLIDE_H = 34
 const CLUSTER_MIN_COUNT = 3
-const CLUSTER_PRIMARY_K = 0.045
-const CLUSTER_SECONDARY_K = 0.015
-const CLUSTER_REPEL = REPULSION * 40
+
+const GAP_HARD_BASE = 50
+const GAP_SOFT_BASE = 130
+const SPRING_LENGTH_BASE = 200
+const CLUSTER_GAP_BASE = 260
+const CLUSTER_RING_CELL = 110
+const CLUSTER_RING_BASE = 16
+const CANVAS_CELL = 110
+const CANVAS_R_MIN = 800
+
+const SOFT_REPULSE_K = 36
+const LONG_REPULSION = 120000
+const SPRING_K = 0.06
+const CANVAS_PULL_K = 0.02
+const CLUSTER_REPEL_K = 1.0
+const CLUSTER_K_MAX = 0.9
+const CLUSTER_SECONDARY_RATIO = 1 / 3
+const CLUSTER_PULL_IN_RATIO = 0.35
+
 const NEUTRAL_COLOR = '#71717a'
 
 const TAG_PALETTE = [
@@ -106,9 +119,52 @@ interface SimPoint {
   x: number
   y: number
   r: number
+  cr: number
+  cOff: number
   deg: number
   primary: number
   members: number[]
+}
+
+function collideBody(r: number): { cr: number; cOff: number } {
+  if (r < 24) return { cr: r + LABEL_COLLIDE_H / 2, cOff: LABEL_COLLIDE_H / 2 }
+  return { cr: r, cOff: 0 }
+}
+
+function resolveCollisions(pts: SimPoint[], gapHard: number): void {
+  const count = pts.length
+  for (let pass = 0; pass < COLLIDE_PASSES; pass++) {
+    for (let i = 0; i < count; i++) {
+      const a = pts[i]
+      const ax = a.x
+      const ay = a.y + a.cOff
+      for (let j = i + 1; j < count; j++) {
+        const b = pts[j]
+        let dx = b.x - ax
+        let dy = b.y + b.cOff - ay
+        const minDist = a.cr + b.cr + gapHard
+        let d2 = dx * dx + dy * dy
+        if (d2 >= minDist * minDist) continue
+        let d = Math.sqrt(d2)
+        if (d < 0.01) {
+          const ang = (i * 2.399963 + j * 0.618) % (Math.PI * 2)
+          dx = Math.cos(ang)
+          dy = Math.sin(ang)
+          d = 0.01
+        }
+        const corr = (minDist - d) * COLLIDE_STRENGTH
+        const ux = dx / d
+        const uy = dy / d
+        const ma = a.cr * a.cr
+        const mb = b.cr * b.cr
+        const total = ma + mb
+        a.x -= ux * corr * (mb / total)
+        a.y -= uy * corr * (mb / total)
+        b.x += ux * corr * (ma / total)
+        b.y += uy * corr * (ma / total)
+      }
+    }
+  }
 }
 
 function runIterations(
@@ -116,18 +172,31 @@ function runIterations(
   links: Array<[number, number]>,
   clusterCount: number,
   iterations: number,
-  alpha: number
+  alpha: number,
+  density: number
 ): void {
   const count = pts.length
   if (count <= 1) return
-  const centerScale = clusterCount > 0 ? CLUSTER_CENTER_PULL_SCALE : 1
+  const gapSoft = GAP_SOFT_BASE * density
+  const springLen = SPRING_LENGTH_BASE * density
+  const clusterGap = CLUSTER_GAP_BASE * density
+  const gapHard = GAP_HARD_BASE * density
+  const canvasR = Math.max(CANVAS_R_MIN, Math.sqrt(count) * CANVAS_CELL * density)
   const membersOf: number[][] = Array.from({ length: clusterCount }, () => [])
   pts.forEach((p, i) => {
     for (const ci of p.members) membersOf[ci].push(i)
   })
+  const ringR = new Array<number>(clusterCount)
+  const clusterK = new Array<number>(clusterCount)
+  for (let ci = 0; ci < clusterCount; ci++) {
+    const n = membersOf[ci].length
+    ringR[ci] = CLUSTER_RING_BASE + Math.sqrt(n) * CLUSTER_RING_CELL * density
+    clusterK[ci] = n > 0 ? CLUSTER_K_MAX * Math.sqrt(2 / n) : 0
+  }
   const cx = new Array<number>(clusterCount).fill(0)
   const cy = new Array<number>(clusterCount).fill(0)
   for (let it = 0; it < iterations; it++) {
+    const a = alpha * Math.pow(ALPHA_DECAY, it)
     if (clusterCount > 0) {
       for (let ci = 0; ci < clusterCount; ci++) {
         const ms = membersOf[ci]
@@ -157,28 +226,23 @@ function runIterations(
         const d = Math.sqrt(d2)
         const ux = dx / d
         const uy = dy / d
-        const f = (REPULSION / d2) * alpha
+        const soft = pts[i].cr + pts[j].cr + gapSoft
+        let f = LONG_REPULSION / d2
+        if (d < soft) f += SOFT_REPULSE_K * (1 - d / soft)
+        f *= a
         fx[i] += f * ux
         fy[i] += f * uy
         fx[j] -= f * ux
         fy[j] -= f * uy
-        const minDist = pts[i].r + pts[j].r + COLLIDE_PAD
-        if (d < minDist) {
-          const push = (minDist - d) * COLLIDE_STRENGTH
-          fx[i] += push * ux
-          fy[i] += push * uy
-          fx[j] -= push * ux
-          fy[j] -= push * uy
-        }
       }
     }
     for (const [si, ti] of links) {
       const dx = pts[ti].x - pts[si].x
       const dy = pts[ti].y - pts[si].y
       const d = Math.max(1, Math.sqrt(dx * dx + dy * dy))
-      const rest = SPRING_LENGTH + pts[si].r + pts[ti].r
+      const rest = springLen + pts[si].cr + pts[ti].cr
       const hub = 1 + Math.min(1.5, (pts[si].deg + pts[ti].deg) / 10)
-      const f = SPRING_K * hub * (d - rest) * alpha
+      const f = SPRING_K * hub * (d - rest) * a
       const fxStep = (dx / d) * f
       const fyStep = (dy / d) * f
       fx[si] += fxStep
@@ -202,7 +266,7 @@ function runIterations(
             d2 = 1
           }
           const d = Math.sqrt(d2)
-          const f = (CLUSTER_REPEL / d2) * alpha
+          const f = CLUSTER_REPEL_K * Math.max(0, ringR[ci] + ringR[cj] + clusterGap - d) * a
           const ux = (dx / d) * f
           const uy = (dy / d) * f
           const shareI = 1 / mi.length
@@ -223,16 +287,26 @@ function runIterations(
       for (const ci of p.members) {
         const dx = cx[ci] - p.x
         const dy = cy[ci] - p.y
-        const d = Math.max(1, Math.sqrt(dx * dx + dy * dy))
-        const f = (ci === p.primary ? CLUSTER_PRIMARY_K : CLUSTER_SECONDARY_K) * d * alpha
-        fx[i] += (dx / d) * f
-        fy[i] += (dy / d) * f
+        const d = Math.sqrt(dx * dx + dy * dy)
+        if (d < 1) continue
+        const k = ci === p.primary ? clusterK[ci] : clusterK[ci] * CLUSTER_SECONDARY_RATIO
+        const f =
+          d > ringR[ci]
+            ? k * ringR[ci] * CLUSTER_PULL_IN_RATIO + k * (d - ringR[ci])
+            : k * d * CLUSTER_PULL_IN_RATIO
+        fx[i] += (dx / d) * f * a
+        fy[i] += (dy / d) * f * a
       }
-      fx[i] -= p.x * CENTER_PULL * centerScale * alpha
-      fy[i] -= p.y * CENTER_PULL * centerScale * alpha
+      const pr = Math.sqrt(p.x * p.x + p.y * p.y)
+      if (pr > canvasR) {
+        const f = (pr - canvasR) * CANVAS_PULL_K * a
+        fx[i] -= (p.x / pr) * f
+        fy[i] -= (p.y / pr) * f
+      }
       p.x += Math.max(-30, Math.min(30, fx[i] * DAMPING))
       p.y += Math.max(-30, Math.min(30, fy[i] * DAMPING))
     }
+    resolveCollisions(pts, gapHard)
   }
 }
 
@@ -401,6 +475,7 @@ export const RelationGraph = memo(function RelationGraph({
   groupColors,
   clusterTags = false,
   showTagLabels = true,
+  density = 1,
   onNodeClick,
   onNodeDoubleClick,
   activeId = null,
@@ -487,6 +562,8 @@ export const RelationGraph = memo(function RelationGraph({
   const simRef = useRef<SimPoint[]>([])
   const clusterRef = useRef(cluster)
   const showTagLabelsRef = useRef(showTagLabels)
+  const densityRef = useRef(density)
+  const prevDensityRef = useRef(density)
   const alphaRef = useRef(0)
   const rafRef = useRef(0)
   const nodesRef = useRef(nodes)
@@ -498,6 +575,7 @@ export const RelationGraph = memo(function RelationGraph({
   linksRef.current = links
   clusterRef.current = cluster
   showTagLabelsRef.current = showTagLabels
+  densityRef.current = density
   flowNodesRef.current = flowNodes
 
   const applySimToNodes = useCallback((): void => {
@@ -527,7 +605,7 @@ export const RelationGraph = memo(function RelationGraph({
       applySimToNodes()
       return
     }
-    runIterations(simRef.current, linksRef.current, clusterRef.current?.tags.length ?? 0, 1, alpha)
+    runIterations(simRef.current, linksRef.current, clusterRef.current?.tags.length ?? 0, 1, alpha, densityRef.current)
     alphaRef.current = alpha * ALPHA_DECAY
     applySimToNodes()
     rafRef.current = requestAnimationFrame(tick)
@@ -540,7 +618,9 @@ export const RelationGraph = memo(function RelationGraph({
   useEffect(() => {
     const prev = simRef.current
     const prevById = new Map(prev.map((p) => [p.id, p]))
-    const keepPrev = prev.length > 0 && !cluster
+    const forcesChanged = prevDensityRef.current !== density
+    prevDensityRef.current = density
+    const keepPrev = prev.length > 0 && (!cluster || forcesChanged)
     const primaries = cluster?.primaries
     const memberLists = cluster?.memberLists
     const clusterCount = cluster?.tags.length ?? 0
@@ -553,7 +633,7 @@ export const RelationGraph = memo(function RelationGraph({
         else groups.set(pi, [i])
       }
     })
-    const ringR = Math.max(320, Math.min(800, 70 * Math.sqrt(nodes.length)))
+    const ringR = Math.max(320, Math.min(1600, 110 * Math.sqrt(nodes.length) * density))
     const groupList = [...groups.values()]
     const seats = new Array<[number, number] | null>(nodes.length).fill(null)
     groupList.forEach((idxs, gi) => {
@@ -569,12 +649,13 @@ export const RelationGraph = memo(function RelationGraph({
     const pts: SimPoint[] = nodes.map((n, i) => {
       const deg = adjacency.get(n.id)?.size ?? 0
       const r = refRadius(refCount.get(n.id) ?? 0)
+      const { cr, cOff } = collideBody(r)
       const primary = primaries?.get(n.id) ?? -1
       const members = memberLists?.get(n.id) ?? []
       const old = keepPrev ? prevById.get(n.id) : undefined
-      if (old) return { id: n.id, x: old.x, y: old.y, r, deg, primary, members }
+      if (old) return { id: n.id, x: old.x, y: old.y, r, cr, cOff, deg, primary, members }
       const s = seats[i]
-      if (s) return { id: n.id, x: s[0], y: s[1], r, deg, primary, members }
+      if (s) return { id: n.id, x: s[0], y: s[1], r, cr, cOff, deg, primary, members }
       const angle = (i / Math.max(1, nodes.length)) * Math.PI * 2
       const radius = 60 + ((i * 37) % 240)
       return {
@@ -582,13 +663,15 @@ export const RelationGraph = memo(function RelationGraph({
         x: Math.cos(angle) * radius,
         y: Math.sin(angle) * radius,
         r,
+        cr,
+        cOff,
         deg,
         primary,
         members
       }
     })
     simRef.current = pts
-    runIterations(pts, links, clusterCount, ITERATIONS, 1)
+    runIterations(pts, links, clusterCount, ITERATIONS, 1, density)
     alphaRef.current = 0
     const byId = new Map(pts.map((p) => [p.id, p]))
     const dotNodes = nodes.map((n) => {
@@ -632,7 +715,7 @@ export const RelationGraph = memo(function RelationGraph({
       if (rafRef.current !== 0) cancelAnimationFrame(rafRef.current)
       rafRef.current = 0
     }
-  }, [nodes, links, groupColors, cluster, adjacency, refCount, setFlowNodes])
+  }, [nodes, links, groupColors, cluster, adjacency, refCount, density, setFlowNodes])
 
   useEffect(() => {
     setFlowNodes((cur) =>
