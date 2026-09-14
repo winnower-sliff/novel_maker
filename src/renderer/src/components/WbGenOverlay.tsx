@@ -26,6 +26,7 @@ export function WbGenOverlay({
   const [countInput, setCountInput] = useState('')
   const [limitTypes, setLimitTypes] = useState<string[]>([])
   const [focusTags, setFocusTags] = useState<string[]>([])
+  const [allowUpdate, setAllowUpdate] = useState(false)
   const [retrieval, setRetrieval] = useState<{
     status: 'loading' | 'none' | 'done'
     count?: number
@@ -37,6 +38,7 @@ export function WbGenOverlay({
     if (!open) return
     setLimitTypes(initialTypes)
     setFocusTags(initialTags)
+    setAllowUpdate(false)
     setRetrieval(null)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
@@ -86,7 +88,8 @@ export function WbGenOverlay({
       title: '',
       brief: text,
       count: Number.isFinite(count) && count >= 1 ? Math.floor(count) : undefined,
-      tags: focusTags.length > 0 ? focusTags : undefined
+      tags: focusTags.length > 0 ? focusTags : undefined,
+      allowUpdate: allowUpdate || undefined
     })
     onClose()
   }
@@ -186,6 +189,20 @@ export function WbGenOverlay({
           />
           <span className="text-zinc-600">留空则默认宏大构建（50+ 条，每条简短）</span>
         </div>
+        <label className="flex cursor-pointer items-start gap-2 text-xs">
+          <input
+            type="checkbox"
+            checked={allowUpdate}
+            onChange={(e) => setAllowUpdate(e.target.checked)}
+            className="mt-0.5 h-3.5 w-3.5 shrink-0 cursor-pointer accent-amber-600"
+          />
+          <span className="text-zinc-400">
+            允许修订已有条目
+            <span className="ml-1 text-zinc-600">
+              （AI 发现矛盾或需补充时，会输出相关已有条目的修订版并直接覆盖入库，修订条目以橙点标识）
+            </span>
+          </span>
+        </label>
         {retrieval?.status === 'done' ? (
           <div className="rounded-md border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-500">
             生成时将参考 {retrieval.count} 条相关条目

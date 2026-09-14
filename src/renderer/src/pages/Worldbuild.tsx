@@ -1,4 +1,5 @@
 import {
+  Fragment,
   memo,
   useCallback,
   useEffect,
@@ -18,6 +19,7 @@ import { Button, Card, Input, Label, Select } from '../components/ui'
 import {
   markEntrySeen,
   useNewEntryIds,
+  useRevisedEntryIds,
   useWbLiveEntries,
   useWbSavedSeq,
   type WbLiveSection
@@ -54,6 +56,7 @@ interface EntryCardProps {
   entry: WorldbuildEntry
   highlighted: boolean
   isNew?: boolean
+  isRevised?: boolean
   selection?: { selected: boolean; onToggle: () => void }
   onOpen: (entry: WorldbuildEntry) => void
   onTagClick: (tag: string) => void
@@ -65,6 +68,7 @@ const EntryCard = memo(function EntryCard({
   entry,
   highlighted,
   isNew,
+  isRevised,
   selection,
   onOpen,
   onTagClick,
@@ -93,6 +97,12 @@ const EntryCard = memo(function EntryCard({
         <span
           className="absolute right-3 top-3 h-2 w-2 rounded-full bg-emerald-400"
           title="新生成，打开后不再提示"
+        />
+      )}
+      {!isNew && isRevised && (
+        <span
+          className="absolute right-3 top-3 h-2 w-2 rounded-full bg-amber-500"
+          title="AI 生成时被修订，打开后不再提示"
         />
       )}
       <div className="flex flex-wrap items-center gap-1.5 pr-6">
@@ -199,6 +209,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
 
   const liveEntries = useWbLiveEntries(projectId)
   const newEntryIdList = useNewEntryIds(projectId)
+  const revisedEntryIdList = useRevisedEntryIds(projectId)
   const savedSeq = useWbSavedSeq()
 
   const load = useCallback((): void => {
@@ -356,6 +367,21 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
       }),
     [entries, filter, tagFilter]
   )
+
+  const grouped = useMemo(() => {
+    if (filter !== '全部') return null
+    const byCat = new Map<string, WorldbuildEntry[]>()
+    for (const e of filtered) {
+      const list = byCat.get(e.category)
+      if (list) list.push(e)
+      else byCat.set(e.category, [e])
+    }
+    const order = [...types]
+    for (const c of byCat.keys()) if (!order.includes(c)) order.push(c)
+    return order
+      .map((category) => ({ category, items: byCat.get(category) ?? [] }))
+      .filter((g) => g.items.length > 0)
+  }, [filter, filtered, types])
 
   const startEdit = useCallback(
     (e: WorldbuildEntry): void => {
@@ -891,23 +917,58 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           {liveEntries.map((s, i) => (
             <LiveCard key={`live-${s.taskId}-${i}`} section={s} />
           ))}
-          {filtered.map((e) => (
-            <EntryCard
-              key={e.id}
-              entry={e}
-              highlighted={highlightIds.includes(e.id)}
-              isNew={newEntryIdList.includes(e.id)}
-              selection={
-                selectMode
-                  ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
-                  : undefined
-              }
-              onOpen={startEdit}
-              onTagClick={(t) => setTagFilter((cur) => (cur === t ? null : t))}
-              resolveLink={resolveLink}
-              onOpenLink={openByName}
-            />
-          ))}
+          {grouped
+            ? grouped.map((g) => (
+                <Fragment key={g.category}>
+                  <div className="col-span-full mt-1 flex items-center gap-2 first:mt-0">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-full"
+                      style={{ background: typeColor(g.category) }}
+                    />
+                    <span className="text-xs font-medium" style={{ color: typeColor(g.category) }}>
+                      {g.category}
+                    </span>
+                    <span className="text-[10px] text-zinc-600">{g.items.length}</span>
+                    <span className="h-px flex-1 bg-zinc-800" />
+                  </div>
+                  {g.items.map((e) => (
+                    <EntryCard
+                      key={e.id}
+                      entry={e}
+                      highlighted={highlightIds.includes(e.id)}
+                      isNew={newEntryIdList.includes(e.id)}
+                      isRevised={revisedEntryIdList.includes(e.id)}
+                      selection={
+                        selectMode
+                          ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
+                          : undefined
+                      }
+                      onOpen={startEdit}
+                      onTagClick={(t) => setTagFilter((cur) => (cur === t ? null : t))}
+                      resolveLink={resolveLink}
+                      onOpenLink={openByName}
+                    />
+                  ))}
+                </Fragment>
+              ))
+            : filtered.map((e) => (
+                <EntryCard
+                  key={e.id}
+                  entry={e}
+                  highlighted={highlightIds.includes(e.id)}
+                  isNew={newEntryIdList.includes(e.id)}
+                  isRevised={revisedEntryIdList.includes(e.id)}
+                  selection={
+                    selectMode
+                      ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
+                      : undefined
+                  }
+                  onOpen={startEdit}
+                  onTagClick={(t) => setTagFilter((cur) => (cur === t ? null : t))}
+                  resolveLink={resolveLink}
+                  onOpenLink={openByName}
+                />
+              ))}
         </div>
       )}
     </div>

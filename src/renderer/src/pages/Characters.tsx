@@ -4,6 +4,7 @@ import { AiTextarea } from '../components/AiTextarea'
 import { Badge, Button, Card, Input, Label } from '../components/ui'
 import { runPipeline } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
+import { pushToast } from '../lib/toastStore'
 
 interface EditState {
   id?: string
@@ -22,8 +23,10 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
   const [genOpen, setGenOpen] = useState(false)
   const [genBrief, setGenBrief] = useState('')
   const [genName, setGenName] = useState('')
+  const [genAllowUpdate, setGenAllowUpdate] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [genOutput, setGenOutput] = useState('')
+  const [revisedIds, setRevisedIds] = useState<string[]>([])
 
   const load = useCallback((): void => {
     if (!projectId) return
@@ -63,12 +66,29 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
     setGenOutput('')
     void runPipeline(
       'character',
-      { projectId, brief: genBrief.trim(), name: genName.trim() },
+      {
+        projectId,
+        brief: genBrief.trim(),
+        name: genName.trim(),
+        allowUpdate: genAllowUpdate || undefined
+      },
       (text) => setGenOutput((prev) => (prev + text).slice(-1500))
     )
       .then((payload) => {
-        const d = payload.data as { characterId?: string; name?: string; error?: string }
+        const d = payload.data as {
+          characterId?: string
+          name?: string
+          revised?: Array<{ id: string; name: string }>
+          error?: string
+        }
         if (d?.error) window.alert(`生成完成但保存失败：${d.error}`)
+        if (d?.revised && d.revised.length > 0) {
+          pushToast(
+            'success',
+            `已同步修订 ${d.revised.length} 个人物：${d.revised.map((x) => x.name).join('、')}（列表中橙点标识）`
+          )
+          setRevisedIds((cur) => [...new Set([...cur, ...d.revised!.map((x) => x.id)])])
+        }
         setGenerating(false)
         setGenOpen(false)
         setGenBrief('')
@@ -111,12 +131,19 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
               onClick={() => {
                 setSelectedId(c.id)
                 setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card })
+                setRevisedIds((cur) => cur.filter((x) => x !== c.id))
               }}
               className={`mb-1 w-full cursor-pointer rounded-md px-3 py-2 text-left transition-colors ${
                 selectedId === c.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
               }`}
             >
               <div className="flex items-center gap-2">
+                {revisedIds.includes(c.id) && (
+                  <span
+                    className="h-2 w-2 shrink-0 rounded-full bg-amber-500"
+                    title="AI 生成时被修订，点开后不再提示"
+                  />
+                )}
                 <span className="truncate text-sm text-zinc-200">{c.name}</span>
                 {c.role && <Badge>{c.role}</Badge>}
               </div>
@@ -157,7 +184,16 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
               <Button onClick={generate} disabled={!genBrief.trim() || generating}>
                 生成并保存
               </Button>
-              <span className="text-xs text-zinc-600">生成结果自动保存为新人物卡</span>
+              <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-400">
+                <input
+                  type="checkbox"
+                  checked={genAllowUpdate}
+                  onChange={(e) => setGenAllowUpdate(e.target.checked)}
+                  disabled={generating}
+                  className="h-3.5 w-3.5 cursor-pointer accent-amber-600"
+                />
+                允许修订已有人物（AI 视新人物带来的关系变化，顺带修订已有人物卡并直接覆盖）
+              </label>
             </div>
             {generating && (
               <pre className="max-h-28 overflow-hidden rounded bg-zinc-950 p-2 font-mono text-[10px] leading-4 text-zinc-600">

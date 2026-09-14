@@ -18,8 +18,10 @@ export interface WbGenTask {
   status: WbGenStatus
   committedCount: number
   entryIds: string[]
+  revisedIds: string[]
   createdTypes: string[]
   allowNewType: boolean
+  allowUpdate: boolean
 }
 
 export interface WbLiveSection {
@@ -85,7 +87,9 @@ let tasks: WbGenTask[] = []
 let nextId = 1
 let savedSeq = 0
 let newIdsVersion = 0
+let revisedIdsVersion = 0
 const newEntryIds = new Map<string, string>()
+const revisedEntryIds = new Map<string, string>()
 const listeners = new Set<() => void>()
 const commitChains = new Map<number, Promise<unknown>>()
 
@@ -177,7 +181,8 @@ async function commitReadySections(id: number, completeCount: number): Promise<v
   const p = prev.then(() =>
     window.api.novel.worldbuildCommitChunk(task.projectId, rawChunk, task.categories, {
       allowNewType: task.allowNewType,
-      taskEntryIds: task.entryIds
+      taskEntryIds: task.entryIds,
+      allowUpdate: task.allowUpdate
     })
   )
   commitChains.set(id, p)
@@ -185,14 +190,20 @@ async function commitReadySections(id: number, completeCount: number): Promise<v
     const r = await p
     const cur = tasks.find((t) => t.id === id)
     if (!cur) return
-    for (const eid of r.entryIds) newEntryIds.set(eid, cur.projectId)
+    const revisedSet = new Set(r.revisedIds)
+    for (const eid of r.entryIds) {
+      if (!revisedSet.has(eid)) newEntryIds.set(eid, cur.projectId)
+    }
+    for (const eid of r.revisedIds) revisedEntryIds.set(eid, cur.projectId)
     newIdsVersion++
+    revisedIdsVersion++
     savedSeq++
     patch(
       id,
       {
         committedCount: Math.max(cur.committedCount, completeCount),
         entryIds: [...cur.entryIds, ...r.entryIds],
+        revisedIds: [...cur.revisedIds, ...r.revisedIds],
         createdTypes: [...cur.createdTypes, ...r.createdTypes],
         allowNewType: cur.allowNewType && r.createdTypes.length === 0
       },
@@ -234,8 +245,10 @@ export function startGen(params: WbGenParams): void {
       status: 'retrieving',
       committedCount: 0,
       entryIds: [],
+      revisedIds: [],
       createdTypes: [],
-      allowNewType: true
+      allowNewType: true,
+      allowUpdate: params.allowUpdate === true
     }
   ]
   emitNow()
@@ -275,7 +288,12 @@ export function startGen(params: WbGenParams): void {
         const typeNote =
           done.createdTypes.length > 0 ? `，新建类型：${done.createdTypes.join('、')}` : ''
         const truncNote = truncated ? '（输出被截断，已丢弃最后 1 个不完整条目）' : ''
-        pushToast('success', `已生成入库 ${done.entryIds.length} 个条目${typeNote}${truncNote}`)
+        const reviseNote =
+          done.revisedIds.length > 0 ? `，修订已有条目 ${done.revisedIds.length} 个（橙点）` : ''
+        pushToast(
+          'success',
+          `已生成入库 ${done.entryIds.length - done.revisedIds.length} 个条目${reviseNote}${typeNote}${truncNote}`
+        )
       } else {
         pushToast('error', '未解析到有效条目，可重试或调整需求')
       }
@@ -293,9 +311,11 @@ export function markEntrySeen(ids: string | string[]): void {
   let changed = false
   for (const id of list) {
     if (newEntryIds.delete(id)) changed = true
+    if (revisedEntryIds.delete(id)) changed = true
   }
   if (changed) {
     newIdsVersion++
+    revisedIdsVersion++
     emitNow()
   }
 }
@@ -339,6 +359,17 @@ export function useNewEntryIds(projectId: string): string[] {
   )
 }
 
+export function useRevisedEntryIds(projectId: string): string[] {
+  const version = useSyncExternalStore(subscribe, () => revisedIdsVersion)
+  return useMemo(
+    () =>
+      [...revisedEntryIds.entries()]
+        .filter(([, pid]) => pid === projectId)
+        .map(([id]) => id),
+    [version, projectId]
+  )
+}
+
 export function useWbSavedSeq(): number {
   return useSyncExternalStore(subscribe, () => savedSeq)
 }
@@ -348,7 +379,7 @@ const BADGE_DONE: WbNavBadge = { tone: 'done', pulse: false }
 
 function aggregateBadge(): WbNavBadge | null {
   if (tasks.length > 0) return BADGE_RUNNING
-  if (newEntryIds.size > 0) return BADGE_DONE
+  if (newEntryIds.size > 0 || revisedEntryIds.size > 0) return BADGE_DONE
   return null
 }
 

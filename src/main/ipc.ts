@@ -8,6 +8,7 @@ import type {
   ChapterBrief,
   ChapterSummary,
   Character,
+  CharacterGenParams,
   CharacterInput,
   ChatMessage,
   ChatParams,
@@ -58,6 +59,7 @@ import {
   buildWorldbuildRetrieveRequest,
   commitWorldbuildChunk,
   guessCharacterName,
+  parseCharacterCards,
   parseCheckResult,
   previewWorldbuildResult,
   relinkWorldbuildEntries,
@@ -391,13 +393,36 @@ export function registerIpc(): void {
         })
       }
       if (action === 'character') {
-        const p = params as { projectId: string; brief: string; name?: string }
-        return startStream(e.sender, buildCharacterRequest(p.projectId, p.brief), {
+        const p = params as CharacterGenParams
+        return startStream(e.sender, buildCharacterRequest(p.projectId, p.brief, p.allowUpdate === true), {
           action,
           afterDone: (r) => {
-            const name = guessCharacterName(r.text, p.name ?? '')
-            const character = store.saveCharacter({ projectId: p.projectId, name, card: r.text })
-            return { characterId: character.id, name: character.name }
+            const parsed = parseCharacterCards(r.text)
+            let characterId: string | undefined
+            let name = ''
+            if (parsed.main) {
+              name = guessCharacterName(parsed.main, p.name ?? '')
+              const character = store.saveCharacter({ projectId: p.projectId, name, card: parsed.main })
+              characterId = character.id
+            }
+            const revised: Array<{ id: string; name: string }> = []
+            if (parsed.revisions.length > 0) {
+              const existing = store.listCharacters(p.projectId)
+              for (const rev of parsed.revisions) {
+                const hit = existing.find((c) => c.name.trim() === rev.name)
+                if (!hit || !rev.card.trim()) continue
+                store.saveCharacter({
+                  id: hit.id,
+                  projectId: p.projectId,
+                  name: hit.name,
+                  role: hit.role,
+                  tags: hit.tags,
+                  card: rev.card
+                })
+                revised.push({ id: hit.id, name: hit.name })
+              }
+            }
+            return { characterId, name, revised }
           }
         })
       }
@@ -449,8 +474,8 @@ export function registerIpc(): void {
       projectId: string,
       rawText: string,
       categories: string[],
-      opts: { allowNewType: boolean; taskEntryIds: string[] }
-    ): { entryIds: string[]; createdTypes: string[]; updatedIds: string[] } =>
+      opts: { allowNewType: boolean; taskEntryIds: string[]; allowUpdate?: boolean }
+    ): { entryIds: string[]; createdTypes: string[]; updatedIds: string[]; revisedIds: string[] } =>
       commitWorldbuildChunk(projectId, rawText, categories, opts)
   )
   ipcMain.handle(

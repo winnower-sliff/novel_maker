@@ -302,6 +302,7 @@ export interface WorldbuildGenParams {
   brief: string
   count?: number
   tags?: string[]
+  allowUpdate?: boolean
 }
 
 export interface WorldbuildPreviewEntry {
@@ -314,12 +315,20 @@ export interface WorldbuildPreviewEntry {
 
 export type ExportFormat = 'txt' | 'md' | 'docx'
 
+export interface CharacterGenParams {
+  projectId: string
+  brief: string
+  name?: string
+  allowUpdate?: boolean
+}
+
 export interface OutlineGenParams {
   projectId: string
   idea: string
   volume: number
   startNo: number
   count: number
+  allowUpdate?: boolean
 }
 
 export type GraphNodeKind = 'character' | 'worldbuild' | 'outline' | 'foreshadow'

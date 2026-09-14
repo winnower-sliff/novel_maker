@@ -119,8 +119,8 @@ const api = {
       projectId: string,
       rawText: string,
       categories: string[],
-      opts: { allowNewType: boolean; taskEntryIds: string[] }
-    ): Promise<{ entryIds: string[]; createdTypes: string[]; updatedIds: string[] }> =>
+      opts: { allowNewType: boolean; taskEntryIds: string[]; allowUpdate?: boolean }
+    ): Promise<{ entryIds: string[]; createdTypes: string[]; updatedIds: string[]; revisedIds: string[] }> =>
       ipcRenderer.invoke('novel:worldbuildCommitChunk', projectId, rawText, categories, opts),
     worldbuildRelink: (projectId: string, entryIds: string[]): Promise<number> =>
       ipcRenderer.invoke('novel:worldbuildRelink', projectId, entryIds),

@@ -30,6 +30,7 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
   const [volume, setVolume] = useState('1')
   const [startNo, setStartNo] = useState('1')
   const [count, setCount] = useState('30')
+  const [allowUpdate, setAllowUpdate] = useState(false)
   const [generating, setGenerating] = useState(false)
   const [genOutput, setGenOutput] = useState('')
   const [genNotice, setGenNotice] = useState('')
@@ -53,10 +54,21 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
     const offDone = window.api.llm.onDone((id, payload) => {
       if (id !== genRequestId.current) return
       setGenerating(false)
-      const d = payload.data as { created?: number; skipped?: number; parsed?: boolean; error?: string }
+      const d = payload.data as {
+        created?: number
+        updated?: number
+        skipped?: number
+        parsed?: boolean
+        error?: string
+      }
       if (d?.error) setGenNotice(`解析失败：${d.error}`)
       else if (!d?.parsed) setGenNotice('输出未解析出有效 JSON，请调整创意后重试')
-      else setGenNotice(`已导入 ${d.created} 章${d.skipped ? `（跳过已存在 ${d.skipped} 章）` : ''}`)
+      else {
+        const parts = [`已导入 ${d.created} 章`]
+        if (d.updated) parts.push(`更新 ${d.updated} 章`)
+        if (d.skipped) parts.push(`跳过已存在 ${d.skipped} 章`)
+        setGenNotice(parts.join('，'))
+      }
       load()
       void window.api.novel.outlines(projectId).then(setItems)
     })
@@ -173,6 +185,16 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
               <Input type="number" value={count} onChange={(e) => setCount(e.target.value)} disabled={generating} />
             </div>
           </div>
+          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-400">
+            <input
+              type="checkbox"
+              checked={allowUpdate}
+              onChange={(e) => setAllowUpdate(e.target.checked)}
+              disabled={generating}
+              className="h-3.5 w-3.5 cursor-pointer accent-amber-600"
+            />
+            更新已存在章节（当前卷已有大纲会作为上下文；结果中同卷同章号的章节将覆盖更新其梗概，状态保留）
+          </label>
           <div className="flex items-center gap-3">
             <Button
               disabled={generating || !idea.trim()}
@@ -186,7 +208,8 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
                     idea: idea.trim(),
                     volume: parseInt(volume, 10) || 1,
                     startNo: parseInt(startNo, 10) || 1,
-                    count: Math.min(60, Math.max(1, parseInt(count, 10) || 30))
+                    count: Math.min(60, Math.max(1, parseInt(count, 10) || 30)),
+                    allowUpdate: allowUpdate || undefined
                   })
                   .then((id) => {
                     genRequestId.current = id
