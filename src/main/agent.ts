@@ -172,7 +172,8 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'save_character',
-      description: '新建或修改人物卡。传 id 表示修改既有人物；不传 id 表示新建。修改时应先 list_characters 取原文再改',
+      description:
+        '新建或修改人物卡。传 id 表示修改既有人物；不传 id 表示新建。tags 为标签（逗号分隔，2-4 个；新建时建议提供，修改时省略则保留原标签；优先复用已有标签，没有合适的就新建可被多个人物共享的主题标签）。修改时应先 list_characters 取原文再改',
       input_schema: schema(
         { id: optS('要修改的人物 id（新建时省略）'), name: s('姓名'), role: optS('定位，如 主角/反派/配角'), tags: optS('标签'), card: optS('人物卡正文（markdown）') },
         ['name']
@@ -265,7 +266,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_worldbuild',
       description:
-        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个，优先复用现有标签，不轻易新建，且不得与类型重名）',
+        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）',
       input_schema: schema(
         {
           id: optS('要修改的词条 id（新建时省略）'),
@@ -615,7 +616,8 @@ function buildSystemPrompt(projectId: string): string {
     '4. 每完成一个任务，用简短中文总结做了什么；不要输出与任务无关的内容',
     '5. 若某操作被用户拒绝，不要重试同一操作，改为说明原因并询问下一步建议',
     '6. 用户要求模糊时（如"优化一下大纲"），先读取现状再决定改法，必要时先说明你的计划',
-    '7. 全局性任务（矛盾检查、一致性审校、批量统计或修改）必须覆盖全部相关条目：先看 total/hasMore/byCategory 规划分批，逐批读取直至 hasMore=false，再下结论并在结论中说明覆盖范围；结果被截断时改用 category/volume 过滤、offset/limit 分页或 detail=summary 重试，禁止基于不完整数据下最终结论'
+    '7. 全局性任务（矛盾检查、一致性审校、批量统计或修改）必须覆盖全部相关条目：先看 total/hasMore/byCategory 规划分批，逐批读取直至 hasMore=false，再下结论并在结论中说明覆盖范围；结果被截断时改用 category/volume 过滤、offset/limit 分页或 detail=summary 重试，禁止基于不完整数据下最终结论',
+    '8. 写入世界观词条或人物卡时遵循标签纪律：每条至少 2 个标签，优先复用现有标签，没有合适的就新建可被多条共享的上位主题标签（体系名/时代名/事件名/族群名等），禁止无标签条目或让标签留空'
   ].join('\n')
 }
 

@@ -210,10 +210,19 @@ export function buildCharacterRequest(
   const chars = allowUpdate
     ? characters.map((c) => `### ${c.name}（${c.role || '未定位'}）\n${c.card.slice(0, 800)}`).join('\n\n')
     : characters.map((c) => `- ${c.name}（${c.role || '未定位'}）`).join('\n')
+  const tagCounts = new Map<string, number>()
+  for (const c of characters) {
+    for (const t of splitTags(c.tags)) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1)
+  }
+  const tagLine =
+    tagCounts.size > 0
+      ? `【已有标签（必须优先复用；新建标签须是可被多个人物共享的主题词）】\n${[...tagCounts.entries()].map(([name, count]) => `${name}(${count})`).join('、')}`
+      : ''
   const system = [
     skillBody('character-smith'),
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
     wb && `【世界观条目】\n${wb}`,
+    tagLine,
     chars &&
       (allowUpdate
         ? `【已有人物（新人物的定位与关系须与他们咬合不矛盾。若有人物需要因新人物/新设定调整定位、关系或履历，可按输出格式约定追加修订卡；只能修订上面列出的人物）】\n${chars}`
@@ -221,16 +230,22 @@ export function buildCharacterRequest(
   ]
     .filter(Boolean)
     .join('\n\n')
-  const user = allowUpdate
-    ? [
-        brief,
-        '',
-        '输出格式（严格遵守）：',
-        '- 首先输出新人物的完整人物卡，以「## 人物名」标题行开头（自由 markdown 要点式）；',
-        '- 若上面列出的已有人物中有人需要调整（如与新人物建立师徒/敌对关系、阵营变动、履历补写），在主卡之后追加修订卡：标题行写「## [修订] 原人物名」（须与原人物名逐字一致），正文为修订后的完整人物卡（保留原有有效信息，只调整需要变化的部分）；',
-        '- 没有需要修订的人物时不要输出任何修订卡，也不要输出总结或解释。'
-      ].join('\n')
-    : brief
+  const user = [
+    brief,
+    '',
+    ...(allowUpdate
+      ? [
+          '输出格式（严格遵守）：',
+          '- 首先输出新人物的完整人物卡，以「## 人物名 #标签1 #标签2」标题行开头（行尾必须带 2-4 个 #标签），正文为自由 markdown 要点式；',
+          '- 若上面列出的已有人物中有人需要调整（如与新人物建立师徒/敌对关系、阵营变动、履历补写），在主卡之后追加修订卡：标题行写「## [修订] 原人物名 #标签1 #标签2」（原人物名须逐字一致；没有新标签时标题行可只写原人物名，表示沿用原标签），正文为修订后的完整人物卡（保留原有有效信息，只调整需要变化的部分）；',
+          '- 没有需要修订的人物时不要输出任何修订卡，也不要输出总结或解释。'
+        ]
+      : [
+          '输出格式（严格遵守）：',
+          '- 每个人物以「## 人物名 #标签1 #标签2」标题行开头（行尾必须带 2-4 个 #标签），正文为自由 markdown 要点式人物卡；',
+          '- 不要输出总开场白、总结语或对格式本身的解释。'
+        ])
+  ].join('\n')
   return {
     model: '',
     system,
@@ -244,8 +259,8 @@ export function buildCharacterRequest(
 export function guessCharacterName(card: string, fallback: string): string {
   const heading = /^#{1,3}\s*(.+)$/m.exec(card)
   if (heading) {
-    const raw = heading[1].trim()
-    const name = raw.replace(/[（(【].*$/, '').trim()
+    const { title } = splitHeadingHashtags(heading[1])
+    const name = title.replace(/[（(【].*$/, '').trim()
     if (name) return name.slice(0, 20)
   }
   return fallback || '新人物'
@@ -253,25 +268,36 @@ export function guessCharacterName(card: string, fallback: string): string {
 
 export interface ParsedCharacterRevision {
   name: string
+  tags: string[]
   card: string
 }
 
 const REVISE_HEADING = /^#{1,3}\s*\[修订\]\s*(.+?)\s*$/
 
-export function parseCharacterCards(text: string): { main: string; revisions: ParsedCharacterRevision[] } {
+function stripNameDecorations(raw: string): string {
+  return raw.replace(/[（(【].*$/, '').trim().slice(0, 20)
+}
+
+export function parseCharacterCards(text: string): {
+  main: string
+  mainTags: string[]
+  revisions: ParsedCharacterRevision[]
+} {
   const mainLines: string[] = []
   const revisions: ParsedCharacterRevision[] = []
-  let current: { name: string; body: string[] } | null = null
+  let current: { name: string; tags: string[]; body: string[] } | null = null
   for (const line of text.split(/\r?\n/)) {
     const m = REVISE_HEADING.exec(line)
     if (m) {
       if (current) {
         revisions.push({
           name: current.name,
+          tags: current.tags,
           card: `## ${current.name}\n${current.body.join('\n').replace(/^\n+|\n+$/g, '')}`
         })
       }
-      current = { name: m[1].replace(/[（(【].*$/, '').trim().slice(0, 20), body: [] }
+      const { title, tags } = splitHeadingHashtags(m[1])
+      current = { name: stripNameDecorations(title), tags, body: [] }
     } else if (current) {
       current.body.push(line)
     } else {
@@ -281,10 +307,19 @@ export function parseCharacterCards(text: string): { main: string; revisions: Pa
   if (current) {
     revisions.push({
       name: current.name,
+      tags: current.tags,
       card: `## ${current.name}\n${current.body.join('\n').replace(/^\n+|\n+$/g, '')}`
     })
   }
-  return { main: mainLines.join('\n').replace(/^\n+|\n+$/g, ''), revisions }
+  let main = mainLines.join('\n').replace(/^\n+|\n+$/g, '')
+  let mainTags: string[] = []
+  const mainHeading = /^(#{1,3})\s*(?!\[修订\])(.+?)\s*$/m.exec(main)
+  if (mainHeading) {
+    const { title, tags } = splitHeadingHashtags(mainHeading[2])
+    mainTags = tags
+    if (tags.length > 0) main = main.replace(mainHeading[0], `${mainHeading[1]} ${title}`)
+  }
+  return { main, mainTags, revisions }
 }
 
 export interface WorldbuildRetrieval {
@@ -449,7 +484,7 @@ export function buildWorldbuildRequest(
     '- 条目篇幅：正文保持简短，每条 2-4 个要点、共约 50-150 字，信息密度优先，禁止长篇大论',
     '- 交叉链接：动笔前先规划好本批次全部条目的标题清单，再逐条输出；每个条目正文至少包含 2 个 [[条目标题]] 链接（指向本批次其他条目或已有条目），总览/格局类条目需引用其下全部分区条目，让整组条目织成密集网络',
     '- 标签即链接：当条目使用了与其他条目标题相同的主题词作标签（如 #矮人 对应「矮人」条目）时，正文必须包含 [[矮人]] 链接；标签管归类、链接管关联，不可互相替代',
-    `- 标签数量：每条目 2-6 个标签，写在该条目标题行尾`,
+    '- 标签（必填）：每个条目标题行尾必须带 2-6 个 #标签，禁止无标签条目；优先复用现有标签，找不到合适的就新建可被多个条目共享的上位主题标签（体系名/时代名/事件名/族群名/地域名/组织类别等）',
     '',
     '输出格式（严格遵守，除此之外不要输出任何内容）：',
     '每个条目以一行「## [类型] 标题 #标签1 #标签2」开头，随后是该条目正文（markdown 要点式）。',

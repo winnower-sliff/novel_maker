@@ -402,7 +402,12 @@ export function registerIpc(): void {
             let name = ''
             if (parsed.main) {
               name = guessCharacterName(parsed.main, p.name ?? '')
-              const character = store.saveCharacter({ projectId: p.projectId, name, card: parsed.main })
+              const character = store.saveCharacter({
+                projectId: p.projectId,
+                name,
+                tags: parsed.mainTags.join(','),
+                card: parsed.main
+              })
               characterId = character.id
             }
             const revised: Array<{ id: string; name: string }> = []
@@ -416,7 +421,7 @@ export function registerIpc(): void {
                   projectId: p.projectId,
                   name: hit.name,
                   role: hit.role,
-                  tags: hit.tags,
+                  tags: rev.tags.length > 0 ? rev.tags.join(',') : hit.tags,
                   card: rev.card
                 })
                 revised.push({ id: hit.id, name: hit.name })
