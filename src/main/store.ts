@@ -125,9 +125,17 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
   const db = getDb()
   const ts = now()
   if (input.id) {
+    const cur = mapCharacter(db.prepare('SELECT * FROM characters WHERE id = ?').get(input.id) as Row)
     db.prepare(
       'UPDATE characters SET name = ?, role = ?, tags = ?, card = ?, updated_at = ? WHERE id = ?'
-    ).run(input.name, input.role ?? '', input.tags ?? '', input.card ?? '', ts, input.id)
+    ).run(
+      input.name,
+      input.role ?? cur.role,
+      input.tags ?? cur.tags,
+      input.card ?? cur.card,
+      ts,
+      input.id
+    )
     return mapCharacter(db.prepare('SELECT * FROM characters WHERE id = ?').get(input.id) as Row)
   }
   const id = randomUUID()
@@ -152,9 +160,19 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
   const db = getDb()
   const ts = now()
   if (input.id) {
+    const cur = mapWorldbuild(
+      db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(input.id) as Row
+    )
     db.prepare(
       'UPDATE worldbuild SET category = ?, title = ?, tags = ?, content = ?, updated_at = ? WHERE id = ?'
-    ).run(input.category, input.title, input.tags ?? '', input.content ?? '', ts, input.id)
+    ).run(
+      input.category,
+      input.title,
+      input.tags ?? cur.tags,
+      input.content ?? cur.content,
+      ts,
+      input.id
+    )
     return mapWorldbuild(db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(input.id) as Row)
   }
   const id = randomUUID()

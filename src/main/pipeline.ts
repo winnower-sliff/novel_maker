@@ -671,7 +671,7 @@ export function commitWorldbuildChunk(
       projectId,
       category: entry.category,
       title: entry.title,
-      tags: entry.tags.join(','),
+      tags: entry.tags.length > 0 ? entry.tags.join(',') : undefined,
       content: entry.content
     })
     if (revised) revisedIds.push(id)

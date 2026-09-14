@@ -288,14 +288,20 @@ const TOOLS: AgentTool[] = [
           /* 与现有类型/标签冲突时保持原值，由 saveWorldbuild 兜底 */
         }
       }
-      const rawTags = optStr(input, 'tags') ?? ''
-      const tags = splitTags(rawTags).filter((t) => !knownTypes.has(t) && t !== category).slice(0, 6)
+      const rawTags = optStr(input, 'tags')
+      const tags =
+        rawTags === undefined
+          ? undefined
+          : splitTags(rawTags)
+              .filter((t) => !knownTypes.has(t) && t !== category)
+              .slice(0, 6)
+              .join(',')
       const saved = store.saveWorldbuild({
         id: optStr(input, 'id'),
         projectId,
         category,
         title: reqStr(input, 'title'),
-        tags: tags.join(','),
+        tags: tags || undefined,
         content: optStr(input, 'content')
       })
       return { ok: true, id: saved.id, title: saved.title, created: !optStr(input, 'id') }
