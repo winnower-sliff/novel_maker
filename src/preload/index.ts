@@ -15,6 +15,7 @@ import type {
   ChatResult,
   Foreshadow,
   ForeshadowInput,
+  ModelProbeOptions,
   ModelProbeResult,
   OutlineGenParams,
   OutlineInput,
@@ -67,8 +68,8 @@ const api = {
     save: (patch: SettingsPatch): Promise<SettingsView> => ipcRenderer.invoke('settings:save', patch)
   },
   models: {
-    probe: (apiKeyOverride?: string): Promise<ModelProbeResult> =>
-      ipcRenderer.invoke('models:probe', apiKeyOverride)
+    probe: (opts?: ModelProbeOptions): Promise<ModelProbeResult> =>
+      ipcRenderer.invoke('models:probe', opts)
   },
   llm: {
     chat: (params: ChatParams): Promise<string> => ipcRenderer.invoke('llm:chat', params),

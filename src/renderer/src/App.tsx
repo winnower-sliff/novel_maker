@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type ReactElement } from 'react'
 import type { Project, SettingsView, UsageStats } from '@shared/types'
+import { providerPreset } from '@shared/providers'
 import Agent from './pages/Agent'
 import Characters from './pages/Characters'
 import Foreshadows from './pages/Foreshadows'
@@ -253,7 +254,9 @@ export default function App() {
             </svg>
             <div>
               <div className="text-sm font-semibold text-zinc-100">Novel Maker</div>
-              <div className="text-[10px] text-zinc-500">GLM 长篇创作</div>
+              <div className="text-[10px] text-zinc-500">
+                {cfg ? `${providerPreset(cfg.provider).label} 长篇创作` : '长篇创作'}
+              </div>
             </div>
           </div>
           <div className="relative mx-3">

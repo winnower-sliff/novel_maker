@@ -2,7 +2,7 @@ import type { WebContents } from 'electron'
 import type { AgentDonePayload, ChatMessage, ContentBlock, OutlineItem, ToolDef, UsageInfo } from '../shared/types'
 import { splitTags } from '../shared/tags'
 import { chatStream, pickRatelimitHeaders } from './llm'
-import { getApiKey, getBaseUrl, getPromptCacheEnabled } from './settings'
+import { getLlmAuth } from './settings'
 import * as store from './store'
 import { appendUsage } from './usage'
 
@@ -644,10 +644,8 @@ export async function runAgent(opts: {
     if (!win.isDestroyed()) win.send(channel, requestId, ...args)
   }
 
-  const apiKey = await getApiKey()
-  if (!apiKey) throw new Error('未配置 API Key，请先在设置中填写')
-  const baseUrl = await getBaseUrl()
-  const promptCache = await getPromptCacheEnabled()
+  const auth = await getLlmAuth()
+  if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
   const system = buildSystemPrompt(projectId)
 
   const runState: RunState = { confirms: new Map(), alwaysAllowed: new Set() }
@@ -681,9 +679,9 @@ export async function runAgent(opts: {
           tools,
           maxTokens: AGENT_MAX_TOKENS,
           purpose: 'agent',
-          cacheSystem: promptCache
+          cacheSystem: auth.promptCache
         },
-        { apiKey, baseUrl },
+        { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
         (text) => send('agent:delta', text),
         signal
       )

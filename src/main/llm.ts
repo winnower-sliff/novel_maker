@@ -1,8 +1,7 @@
 import type { ChatParams, ChatResult, ModelProbeResult, UsageInfo } from '../shared/types'
+import { providerPreset, type ProviderId } from '../shared/providers'
 
 const ANTHROPIC_VERSION = '2023-06-01'
-
-export const BUILTIN_MODELS = ['glm-5.3', 'glm-4.6', 'glm-4.5-air', 'glm-4.5']
 
 export class LlmError extends Error {
   status?: number
@@ -171,22 +170,66 @@ export async function chatStream(
   return { text, usage, model, stopReason, durationMs: Date.now() - started, headers, toolUses }
 }
 
-export async function probeModels(
-  auth: { apiKey: string; baseUrl: string }
-): Promise<ModelProbeResult> {
+async function listModelIds(
+  url: string,
+  headers: Record<string, string>
+): Promise<string[] | null> {
   try {
-    const res = await fetch(`${normalizeBase(auth.baseUrl)}/v1/models`, {
-      headers: authHeaders(auth.apiKey)
-    })
-    if (res.ok) {
-      const j = (await res.json()) as { data?: Array<{ id?: string }> }
-      const ids = (j.data ?? []).map((m) => m.id).filter((id): id is string => !!id)
-      if (ids.length > 0) return { source: 'endpoint', models: ids }
-    }
+    const res = await fetch(url, { headers })
+    if (!res.ok) return null
+    const j = (await res.json()) as { data?: Array<{ id?: string }> }
+    const ids = (j.data ?? []).map((m) => m.id).filter((id): id is string => !!id)
+    return ids.length > 0 ? ids : null
   } catch {
-    /* fall back to builtin list */
+    return null
   }
-  return { source: 'builtin', models: [...BUILTIN_MODELS] }
+}
+
+async function listOllamaTags(baseUrl: string): Promise<string[] | null> {
+  try {
+    const res = await fetch(`${baseUrl}/api/tags`)
+    if (!res.ok) return null
+    const j = (await res.json()) as { models?: Array<{ model?: string; name?: string }> }
+    const ids = (j.models ?? [])
+      .map((m) => m.model ?? m.name)
+      .filter((id): id is string => !!id)
+    return ids.length > 0 ? ids : null
+  } catch {
+    return null
+  }
+}
+
+export async function probeModels(auth: {
+  provider: ProviderId
+  apiKey: string
+  baseUrl: string
+}): Promise<ModelProbeResult> {
+  const base = normalizeBase(auth.baseUrl)
+  const builtin = (): ModelProbeResult => ({
+    source: 'builtin',
+    models: [...providerPreset(auth.provider).builtinModels]
+  })
+
+  if (auth.provider === 'ollama') {
+    const viaOpenai = await listModelIds(`${base}/v1/models`, {})
+    if (viaOpenai) return { source: 'endpoint', models: viaOpenai }
+    const viaTags = await listOllamaTags(base)
+    if (viaTags) return { source: 'endpoint', models: viaTags }
+    return builtin()
+  }
+
+  if (auth.provider === 'deepseek') {
+    const root = base.replace(/\/anthropic$/i, '')
+    const ids = await listModelIds(`${root}/models`, {
+      authorization: `Bearer ${auth.apiKey}`
+    })
+    if (ids) return { source: 'endpoint', models: ids }
+    return builtin()
+  }
+
+  const ids = await listModelIds(`${base}/v1/models`, authHeaders(auth.apiKey))
+  if (ids) return { source: 'endpoint', models: ids }
+  return builtin()
 }
 
 export function pickRatelimitHeaders(headers: Record<string, string>): Record<string, string> {

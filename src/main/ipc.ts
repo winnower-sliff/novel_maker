@@ -15,6 +15,7 @@ import type {
   ChatResult,
   Foreshadow,
   ForeshadowInput,
+  ModelProbeOptions,
   ModelProbeResult,
   OutlineGenParams,
   OutlineInput,
@@ -45,6 +46,7 @@ import { buildChapterContext } from './context'
 import { exportProject } from './export'
 import { buildProjectGraph } from './graph'
 import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
+import { providerPreset } from '../shared/providers'
 import {
   applyOutlineResult,
   applySummaryResult,
@@ -67,7 +69,7 @@ import {
   saveWorldbuildBatch,
   type WorldbuildRetrieval
 } from './pipeline'
-import { getApiKey, getBaseUrl, getPromptCacheEnabled, loadSettingsView, saveSettings } from './settings'
+import { getApiKeyFor, getLlmAuth, loadSettingsView, saveSettings } from './settings'
 import * as store from './store'
 import { deleteSkill, getSkill, listSkills, saveSkill } from './skills'
 import { appendUsage, computeStats, listUsage } from './usage'
@@ -139,17 +141,15 @@ function startStream(
 
   void (async () => {
     try {
-      const apiKey = await getApiKey()
-      if (!apiKey) throw new Error('未配置 API Key，请先在设置中填写')
-      const baseUrl = await getBaseUrl()
-      const promptCache = await getPromptCacheEnabled()
+      const auth = await getLlmAuth()
+      if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
       const params: ChatParams = { ...rawParams }
       if (!params.model) {
         const s = await loadSettingsView()
         params.model =
           (params.purpose && s.modelRouting[params.purpose]) || s.defaultModel
       }
-      if (promptCache && params.system) params.cacheSystem = true
+      if (auth.promptCache && params.system) params.cacheSystem = true
 
       const send = (text: string): void => {
         if (!win.isDestroyed()) win.send('llm:delta', requestId, text)
@@ -184,7 +184,7 @@ function startStream(
           if (pending.length >= 200 || pending.includes('\n')) flush()
         }
 
-        result = await chatStream(params, { apiKey, baseUrl }, onDelta, controller.signal)
+        result = await chatStream(params, { apiKey: auth.apiKey, baseUrl: auth.baseUrl }, onDelta, controller.signal)
         flush()
         totalMs += result.durationMs
         appendUsage({
@@ -250,15 +250,14 @@ async function runWorldbuildRetrieval(p: WorldbuildGenParams): Promise<Worldbuil
   const req = buildWorldbuildRetrieveRequest(p)
   if (!req) return undefined
   try {
-    const apiKey = await getApiKey()
-    if (!apiKey) return undefined
-    const baseUrl = await getBaseUrl()
+    const auth = await getLlmAuth()
+    if (!auth.apiKey && auth.needsKey) return undefined
     const s = await loadSettingsView()
     const params: ChatParams = { ...req }
     if (!params.model) {
       params.model = (params.purpose && s.modelRouting[params.purpose]) || s.defaultModel
     }
-    const result = await chatStream(params, { apiKey, baseUrl }, () => {})
+    const result = await chatStream(params, { apiKey: auth.apiKey, baseUrl: auth.baseUrl }, () => {})
     appendUsage({
       ts: Date.now(),
       model: result.model,
@@ -282,11 +281,18 @@ export function registerIpc(): void {
     saveSettings(patch)
   )
 
-  ipcMain.handle('models:probe', async (_e, apiKeyOverride?: string): Promise<ModelProbeResult> => {
-    const apiKey = apiKeyOverride?.trim() || (await getApiKey())
-    if (!apiKey) throw new Error('未配置 API Key')
-    return probeModels({ apiKey, baseUrl: await getBaseUrl() })
-  })
+  ipcMain.handle(
+    'models:probe',
+    async (_e, opts?: ModelProbeOptions): Promise<ModelProbeResult> => {
+      const view = await loadSettingsView()
+      const provider = opts?.provider ?? view.provider
+      const providerView = view.profiles[provider]
+      const apiKey = opts?.apiKey?.trim() || (await getApiKeyFor(provider))
+      const baseUrl = opts?.baseUrl?.trim() || providerView.baseUrl
+      if (!apiKey && providerPreset(provider).needsKey) throw new Error('未配置 API Key')
+      return probeModels({ provider, apiKey, baseUrl })
+    }
+  )
 
   ipcMain.handle('llm:chat', (e: IpcMainInvokeEvent, params: ChatParams): string =>
     startStream(e.sender, params)

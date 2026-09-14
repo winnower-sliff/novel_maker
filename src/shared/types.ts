@@ -1,3 +1,5 @@
+import type { ProviderId } from './providers'
+
 export interface TextBlock {
   type: 'text'
   text: string
@@ -83,7 +85,18 @@ export interface UsageRecord {
 
 export type ModelRouting = Partial<Record<Purpose, string>>
 
+export interface ProviderProfile {
+  baseUrl: string
+  defaultModel: string
+  customModels: string
+  modelRouting: ModelRouting
+  promptCache: boolean
+}
+
 export interface SettingsView {
+  provider: ProviderId
+  profiles: Record<ProviderId, ProviderProfile>
+  configuredProviders: ProviderId[]
   hasApiKey: boolean
   apiKeyMasked: string
   baseUrl: string
@@ -96,6 +109,7 @@ export interface SettingsView {
 }
 
 export interface SettingsPatch {
+  provider?: ProviderId
   apiKey?: string
   baseUrl?: string
   defaultModel?: string
@@ -104,6 +118,12 @@ export interface SettingsPatch {
   quota5hPrompts?: number
   promptCache?: boolean
   currentProjectId?: string
+}
+
+export interface ModelProbeOptions {
+  provider?: ProviderId
+  apiKey?: string
+  baseUrl?: string
 }
 
 export interface ModelProbeResult {
