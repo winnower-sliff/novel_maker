@@ -52,6 +52,8 @@ interface TagLabelData extends Record<string, unknown> {
   color: string
   count?: number
   ci?: number
+  dim?: boolean
+  hl?: boolean
 }
 
 const ITERATIONS = 300
@@ -66,8 +68,7 @@ const COLLIDE_PAD = 16
 const COLLIDE_STRENGTH = 0.4
 const CENTER_PULL = 0.008
 const CLUSTER_CENTER_PULL_SCALE = 0.3
-const CLUSTER_MIN_COUNT = 2
-const MAX_CLUSTERS = 48
+const CLUSTER_MIN_COUNT = 3
 const CLUSTER_PRIMARY_K = 0.045
 const CLUSTER_SECONDARY_K = 0.015
 const CLUSTER_REPEL = REPULSION * 40
@@ -231,11 +232,8 @@ function runIterations(
   }
 }
 
-function clusterCentroids(
-  pts: SimPoint[],
-  clusterCount: number
-): Array<{ x: number; y: number; spread: number }> {
-  const out: Array<{ x: number; y: number; spread: number }> = []
+function clusterCentroids(pts: SimPoint[], clusterCount: number): Array<{ x: number; y: number }> {
+  const out: Array<{ x: number; y: number }> = []
   for (let ci = 0; ci < clusterCount; ci++) {
     let sx = 0
     let sy = 0
@@ -247,19 +245,7 @@ function clusterCentroids(
         n++
       }
     }
-    if (n === 0) {
-      out.push({ x: 0, y: 0, spread: 0 })
-      continue
-    }
-    const mx = sx / n
-    const my = sy / n
-    let spread = 0
-    for (const p of pts) {
-      if (p.members.includes(ci)) {
-        spread = Math.max(spread, Math.hypot(p.x - mx, p.y - my))
-      }
-    }
-    out.push({ x: mx, y: my, spread })
+    out.push(n === 0 ? { x: 0, y: 0 } : { x: sx / n, y: sy / n })
   }
   return out
 }
@@ -299,8 +285,8 @@ function DotNode({ data }: NodeProps<Node<WikiNodeData>>) {
         transition: 'opacity 0.2s'
       }}
     >
-      <Handle type="target" position={Position.Left} style={CENTER_HANDLE_STYLE} isConnectable={false} />
-      <Handle type="source" position={Position.Right} style={CENTER_HANDLE_STYLE} isConnectable={false} />
+      <Handle type="target" position={Position.Left} className="center-handle" style={CENTER_HANDLE_STYLE} isConnectable={false} />
+      <Handle type="source" position={Position.Right} className="center-handle" style={CENTER_HANDLE_STYLE} isConnectable={false} />
       <div
         style={{
           width: '100%',
@@ -370,26 +356,24 @@ function DotNode({ data }: NodeProps<Node<WikiNodeData>>) {
 const nodeTypes = { dot: DotNode, tagLabel: TagLabelNode }
 
 function TagLabelNode({ data }: NodeProps<Node<TagLabelData>>) {
+  const fontSize = Math.min(44, 18 + Math.sqrt(data.count ?? 3) * 6)
   return (
     <div
       style={{
         transform: 'translate(-50%, -50%)',
-        padding: '2px 10px',
-        borderRadius: 999,
-        border: `1px solid ${data.color}66`,
-        background: 'rgba(9, 9, 11, 0.55)',
         color: data.color,
-        fontSize: 13,
-        fontWeight: 600,
+        fontSize,
+        fontWeight: 700,
+        letterSpacing: '0.05em',
         whiteSpace: 'nowrap',
-        cursor: 'pointer'
+        opacity: data.dim ? 0.05 : data.hl ? 0.5 : 0.22,
+        transition: 'opacity 0.2s',
+        cursor: 'pointer',
+        userSelect: 'none'
       }}
-      title="点击按此标签筛选"
+      title={data.count !== undefined ? `#${data.label} · ${data.count} 条 · 点击筛选` : '点击按此标签筛选'}
     >
       # {data.label}
-      {data.count !== undefined && (
-        <span style={{ marginLeft: 6, fontWeight: 400, opacity: 0.7 }}>{data.count}</span>
-      )}
     </div>
   )
 }
@@ -462,11 +446,11 @@ export const RelationGraph = memo(function RelationGraph({
     const top = [...counts.entries()]
       .filter(([, c]) => c >= CLUSTER_MIN_COUNT)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, MAX_CLUSTERS)
     if (top.length === 0) return null
     const tagIdx = new Map(top.map(([t], i) => [t, i]))
     const primaries = new Map<string, number>()
     const memberLists = new Map<string, number[]>()
+    const membersByCluster: Array<Set<string>> = top.map(() => new Set<string>())
     for (const n of nodes) {
       const hits: Array<{ ci: number; count: number }> = []
       const seen = new Set<number>()
@@ -480,12 +464,14 @@ export const RelationGraph = memo(function RelationGraph({
       hits.sort((a, b) => b.count - a.count)
       primaries.set(n.id, hits.length > 0 ? hits[0].ci : -1)
       memberLists.set(n.id, hits.map((h) => h.ci))
+      for (const h of hits) membersByCluster[h.ci].add(n.id)
     }
     return {
       tags: top.map(([t]) => t),
       counts: top.map(([, c]) => c),
       primaries,
-      memberLists
+      memberLists,
+      membersByCluster
     }
   }, [clusterTags, nodes])
 
@@ -516,7 +502,7 @@ export const RelationGraph = memo(function RelationGraph({
         if (cents && n.id.startsWith('tag:')) {
           const ci = (n.data as TagLabelData).ci
           const c = ci !== undefined ? cents[ci] : undefined
-          if (c) return { ...n, position: { x: c.x, y: c.y - c.spread - 24 } }
+          if (c) return { ...n, position: { x: c.x, y: c.y } }
         }
         return n
       })
@@ -605,6 +591,7 @@ export const RelationGraph = memo(function RelationGraph({
         id: n.id,
         type: 'dot' as const,
         position: byId.get(n.id) ?? { x: 0, y: 0 },
+        zIndex: 1,
         data: {
           label: n.label,
           color,
@@ -617,15 +604,16 @@ export const RelationGraph = memo(function RelationGraph({
     const clusterTagsList = cluster?.tags ?? []
     const clusterCounts = cluster?.counts ?? []
     const tagLabelNodes = clusterTagsList.map((t, ci) => {
-      const c = cents[ci] ?? { x: 0, y: 0, spread: 0 }
+      const c = cents[ci] ?? { x: 0, y: 0 }
       return {
         id: `tag:${t}`,
         type: 'tagLabel' as const,
-        position: { x: c.x, y: c.y - c.spread - 24 },
+        position: { x: c.x, y: c.y },
         draggable: false,
         selectable: false,
+        zIndex: 0,
         hidden: !showTagLabelsRef.current,
-        data: { label: t, color: tagColor(t), count: clusterCounts[ci], ci }
+        data: { label: t, color: tagColor(t), count: clusterCounts[ci], ci, dim: false }
       }
     })
     setFlowNodes([...tagLabelNodes, ...dotNodes] as Node<WikiNodeData | TagLabelData>[])
@@ -643,15 +631,33 @@ export const RelationGraph = memo(function RelationGraph({
 
   useEffect(() => {
     setFlowNodes((cur) =>
-      cur.map((n) => ({
-        ...n,
-        data: {
-          ...n.data,
-          dim: hoverId !== null && n.id !== hoverId && !(adjacency.get(hoverId)?.has(n.id) ?? false)
+      cur.map((n) => {
+        if (n.id.startsWith('tag:')) {
+          const data = n.data as TagLabelData
+          let dim = false
+          let hl = false
+          if (hoverId === null) {
+            dim = false
+          } else if (hoverId === n.id) {
+            hl = true
+          } else if (hoverId.startsWith('tag:')) {
+            dim = true
+          } else {
+            dim = !(cluster?.memberLists.get(hoverId) ?? []).includes(data.ci ?? -1)
+            hl = !dim
+          }
+          return { ...n, data: { ...data, dim, hl } }
         }
-      }))
+        let dim: boolean
+        if (hoverId === null || n.id === hoverId) dim = false
+        else if (hoverId.startsWith('tag:')) {
+          const ci = cluster?.tags.indexOf(hoverId.slice(4)) ?? -1
+          dim = !(cluster?.membersByCluster[ci]?.has(n.id) ?? false)
+        } else dim = !(adjacency.get(hoverId)?.has(n.id) ?? false)
+        return { ...n, data: { ...(n.data as WikiNodeData), dim } }
+      })
     )
-  }, [hoverId, adjacency, setFlowNodes])
+  }, [hoverId, adjacency, cluster, setFlowNodes])
 
   const rfEdges = useMemo(
     () =>
@@ -659,7 +665,7 @@ export const RelationGraph = memo(function RelationGraph({
         const sid = nodesRef.current[si]?.id
         const tid = nodesRef.current[ti]?.id
         if (!sid || !tid) return []
-        const hot = hoverId !== null && (sid === hoverId || tid === hoverId)
+        const hot = hoverId !== null && !hoverId.startsWith('tag:') && (sid === hoverId || tid === hoverId)
         return [
           {
             id: `e${i}`,

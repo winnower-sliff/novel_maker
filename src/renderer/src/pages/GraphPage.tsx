@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import type { GraphNodeKind, ProjectGraph } from '@shared/types'
+import type { Character, GraphNodeKind, ProjectGraph, WorldbuildEntry } from '@shared/types'
+import { splitTags } from '@shared/tags'
+import { Markdown } from '../components/Markdown'
+import { OverlayCard } from '../components/OverlayCard'
 import { RelationGraph, type GraphEdgeData, type GraphNodeData } from '../components/RelationGraph'
 import { Button } from '../components/ui'
 import type { Navigate } from '../lib/nav'
@@ -18,12 +21,27 @@ const KIND_COLORS: Record<GraphNodeKind, string> = {
   foreshadow: '#c084fc'
 }
 
+const WB_TYPE_COLORS: Record<string, string> = {
+  力量体系: '#f59e0b',
+  地理: '#10b981',
+  势力: '#ef4444',
+  历史: '#8b5cf6',
+  物品: '#06b6d4',
+  其他: '#a1a1aa',
+  人物: '#ec4899'
+}
+
 const ALL_KINDS: GraphNodeKind[] = ['character', 'worldbuild', 'outline', 'foreshadow']
 
 interface FocusState {
   id: string
   depth: number
 }
+
+type Preview =
+  | { type: 'wb'; entry: WorldbuildEntry }
+  | { type: 'char'; char: Character }
+  | null
 
 export default function GraphPage({
   projectId,
@@ -33,6 +51,9 @@ export default function GraphPage({
   onNavigate: Navigate
 }) {
   const [graph, setGraph] = useState<ProjectGraph | null>(null)
+  const [entries, setEntries] = useState<WorldbuildEntry[]>([])
+  const [characters, setCharacters] = useState<Character[]>([])
+  const [preview, setPreview] = useState<Preview>(null)
   const [kinds, setKinds] = useState<Set<GraphNodeKind>>(new Set(ALL_KINDS))
   const [query, setQuery] = useState('')
   const [hideIsolated, setHideIsolated] = useState(false)
@@ -45,6 +66,8 @@ export default function GraphPage({
   const load = useCallback((): void => {
     if (!projectId) return
     void window.api.graph.project(projectId).then(setGraph)
+    void window.api.novel.worldbuild(projectId).then(setEntries)
+    void window.api.novel.characters(projectId).then(setCharacters)
   }, [projectId])
 
   useEffect(() => {
@@ -133,16 +156,53 @@ export default function GraphPage({
     return map
   }, [graph])
 
+  const titleIndex = useMemo(() => {
+    const map = new Map<
+      string,
+      { type: 'entry'; entry: WorldbuildEntry } | { type: 'char'; char: Character }
+    >()
+    for (const e of entries) if (!map.has(e.title)) map.set(e.title, { type: 'entry', entry: e })
+    for (const c of characters) if (!map.has(c.name)) map.set(c.name, { type: 'char', char: c })
+    return map
+  }, [entries, characters])
+
+  const resolveLink = useCallback(
+    (name: string): { category?: string; preview: string } | null => {
+      const hit = titleIndex.get(name)
+      if (!hit) return null
+      if (hit.type === 'entry') {
+        return { category: hit.entry.category, preview: hit.entry.content }
+      }
+      return { category: '人物', preview: hit.char.card }
+    },
+    [titleIndex]
+  )
+
+  const openByName = useCallback(
+    (name: string): void => {
+      const hit = titleIndex.get(name)
+      if (!hit) return
+      setPreview(hit.type === 'entry' ? { type: 'wb', entry: hit.entry } : { type: 'char', char: hit.char })
+    },
+    [titleIndex]
+  )
+
   const handleNodeClick = useCallback(
     (id: string): void => {
       const n = nodeById.get(id)
       if (!n) return
-      if (n.kind === 'character') onNavigate('characters')
-      else if (n.kind === 'worldbuild') onNavigate('worldbuild')
-      else if (n.kind === 'outline') onNavigate('writing', n.rawId)
+      if (n.kind === 'character') {
+        const c = characters.find((x) => x.id === n.rawId)
+        if (c) setPreview({ type: 'char', char: c })
+        else onNavigate('characters')
+      } else if (n.kind === 'worldbuild') {
+        const e = entries.find((x) => x.id === n.rawId)
+        if (e) setPreview({ type: 'wb', entry: e })
+        else onNavigate('worldbuild')
+      } else if (n.kind === 'outline') onNavigate('writing', n.rawId)
       else onNavigate('foreshadows')
     },
-    [nodeById, onNavigate]
+    [nodeById, characters, entries, onNavigate]
   )
 
   const handleNodeDoubleClick = useCallback((id: string): void => {
@@ -277,9 +337,56 @@ export default function GraphPage({
         />
       </div>
 
+      <OverlayCard
+        open={preview !== null}
+        onClose={() => setPreview(null)}
+        title={
+          preview?.type === 'wb' ? preview.entry.title : preview ? `人物 · ${preview.char.name}` : ''
+        }
+      >
+        {preview?.type === 'wb' && (
+          <div className="max-h-[70vh] overflow-y-auto">
+            <div className="mb-3 flex flex-wrap items-center gap-1.5">
+              <span
+                className="rounded px-1.5 py-0.5 text-[10px]"
+                style={{
+                  background: `${WB_TYPE_COLORS[preview.entry.category] ?? '#a1a1aa'}22`,
+                  color: WB_TYPE_COLORS[preview.entry.category] ?? '#a1a1aa'
+                }}
+              >
+                {preview.entry.category}
+              </span>
+              {splitTags(preview.entry.tags).map((t) => (
+                <span
+                  key={t}
+                  className="rounded-full border border-amber-800/60 px-1.5 py-0.5 text-[10px] text-amber-300/90"
+                >
+                  # {t}
+                </span>
+              ))}
+            </div>
+            <div className="text-sm leading-6 text-zinc-300">
+              <Markdown
+                text={preview.entry.content}
+                wiki={{ resolve: resolveLink, onOpen: openByName }}
+              />
+            </div>
+          </div>
+        )}
+        {preview?.type === 'char' && (
+          <div className="max-h-[70vh] overflow-y-auto text-sm leading-6 text-zinc-300">
+            <Markdown
+              text={preview.char.card}
+              wiki={{ resolve: resolveLink, onOpen: openByName }}
+            />
+          </div>
+        )}
+      </OverlayCard>
+
       <div className="text-[11px] text-zinc-600">
-        单击节点跳转对应板块 · 双击节点进入局部图谱 · 拖动节点看关联晃动 · 圆越大 = 被引用越多（核心条目/MOC）·
-        「标签聚类」开启时高频标签（≥2 条目）的条目/人物自动聚拢并按主标签着色、灰点不属任何高频标签簇 ·
+        单击世界观/人物节点就地预览 · 大纲/伏笔节点跳转对应板块 · 双击节点进入局部图谱 ·
+        拖动节点看关联晃动 · 圆越大 = 被引用越多（核心条目/MOC）·
+        「标签聚类」开启时高频标签（≥3 条目）的条目/人物自动聚拢并按主标签着色、灰点不属任何高频标签簇 ·
         连线来自各板块文本与章节正文中的 [[链接]]
       </div>
     </div>

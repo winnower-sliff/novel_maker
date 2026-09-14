@@ -17,7 +17,6 @@ export interface WikiLinkHandlers {
 const WIKI_LINK_RE = /\[\[([^\[\]]+?)\]\]/g
 const WIKI_URL_PREFIX = 'wiki:'
 const HOVER_DELAY_MS = 500
-const PREVIEW_CHARS = 200
 
 const remarkWikiLinks: Plugin<[], Root> = () => (tree) => {
   const walk = (parent: Parent): void => {
@@ -119,7 +118,7 @@ const WikiLink = memo(function WikiLink({
     >
       {children}
       {hover && (
-        <span
+        <div
           className="fixed z-50 block w-72 rounded-lg border border-zinc-700 bg-zinc-900/95 p-3 text-left shadow-xl"
           style={{
             left: Math.min(hover.x, Math.max(8, window.innerWidth - 300)),
@@ -127,17 +126,18 @@ const WikiLink = memo(function WikiLink({
           }}
           onMouseLeave={clearHover}
         >
-          <span className="mb-1 flex items-center gap-2">
+          <div className="mb-1 flex items-center gap-2">
             <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
               {hover.target.category ?? '条目'}
             </span>
             <span className="text-xs font-medium text-zinc-200">{name}</span>
-          </span>
-          <span className="block max-h-40 overflow-y-auto text-[11px] leading-4 text-zinc-400">
-            {hover.target.preview.slice(0, PREVIEW_CHARS)}
-            {hover.target.preview.length > PREVIEW_CHARS ? '…' : ''}
-          </span>
-        </span>
+          </div>
+          <Markdown
+            text={hover.target.preview}
+            className="max-h-40 overflow-y-auto text-[11px] leading-4 text-zinc-400"
+            wiki={{ resolve, onOpen }}
+          />
+        </div>
       )}
     </span>
   )

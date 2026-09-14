@@ -26,3 +26,17 @@ body {
 ::-webkit-scrollbar-track {
   @apply bg-transparent;
 }
+
+/* 图谱 DotNode 的隐藏圆心 Handle：覆盖 xyflow 默认定位，保证边端点精确落在节点中心 */
+.react-flow__handle.center-handle {
+  left: 50% !important;
+  top: 50% !important;
+  right: auto !important;
+  bottom: auto !important;
+  width: 0 !important;
+  min-width: 0 !important;
+  height: 0 !important;
+  min-height: 0 !important;
+  transform: none !important;
+  border: none !important;
+}
