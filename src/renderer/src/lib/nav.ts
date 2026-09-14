@@ -12,4 +12,4 @@ export type Page =
   | 'usage'
   | 'settings'
 
-export type Navigate = (page: Page, focusOutlineId?: string) => void
+export type Navigate = (page: Page, focusOutlineId?: string, graphNodeId?: string) => void

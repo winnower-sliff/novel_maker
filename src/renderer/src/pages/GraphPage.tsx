@@ -1,8 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Character, GraphNodeKind, ProjectGraph, WorldbuildEntry } from '@shared/types'
-import { splitTags } from '@shared/tags'
-import { Markdown } from '../components/Markdown'
-import { OverlayCard } from '../components/OverlayCard'
+import { PreviewPanel } from '../components/PreviewPanel'
 import { RelationGraph, type GraphEdgeData, type GraphNodeData } from '../components/RelationGraph'
 import { Button } from '../components/ui'
 import type { Navigate } from '../lib/nav'
@@ -45,15 +43,21 @@ type Preview =
 
 export default function GraphPage({
   projectId,
-  onNavigate
+  onNavigate,
+  focusNodeId,
+  onFocusConsumed
 }: {
   projectId: string
   onNavigate: Navigate
+  focusNodeId?: string | null
+  onFocusConsumed?: () => void
 }) {
   const [graph, setGraph] = useState<ProjectGraph | null>(null)
   const [entries, setEntries] = useState<WorldbuildEntry[]>([])
   const [characters, setCharacters] = useState<Character[]>([])
   const [preview, setPreview] = useState<Preview>(null)
+  const [activeId, setActiveId] = useState<string | null>(null)
+  const [centerSignal, setCenterSignal] = useState(0)
   const [kinds, setKinds] = useState<Set<GraphNodeKind>>(new Set(ALL_KINDS))
   const [query, setQuery] = useState('')
   const [hideIsolated, setHideIsolated] = useState(false)
@@ -178,13 +182,40 @@ export default function GraphPage({
     [titleIndex]
   )
 
+  const syncGraphHighlight = useCallback(
+    (nodeId: string): void => {
+      const node = graph?.nodes.find((n) => n.id === nodeId)
+      if (!node) return
+      if (!view.nodes.some((n) => n.id === nodeId)) {
+        setKinds((prev) => {
+          if (prev.has(node.kind)) return prev
+          const next = new Set(prev)
+          next.add(node.kind)
+          return next
+        })
+        setQuery((q) => (q ? '' : q))
+        setHideIsolated(false)
+        setFocus(null)
+      }
+      setActiveId(nodeId)
+      setCenterSignal((v) => v + 1)
+    },
+    [graph, view]
+  )
+
   const openByName = useCallback(
     (name: string): void => {
       const hit = titleIndex.get(name)
       if (!hit) return
-      setPreview(hit.type === 'entry' ? { type: 'wb', entry: hit.entry } : { type: 'char', char: hit.char })
+      if (hit.type === 'entry') {
+        setPreview({ type: 'wb', entry: hit.entry })
+        syncGraphHighlight(`wb:${hit.entry.id}`)
+      } else {
+        setPreview({ type: 'char', char: hit.char })
+        syncGraphHighlight(`char:${hit.char.id}`)
+      }
     },
-    [titleIndex]
+    [titleIndex, syncGraphHighlight]
   )
 
   const handleNodeClick = useCallback(
@@ -204,6 +235,40 @@ export default function GraphPage({
     },
     [nodeById, characters, entries, onNavigate]
   )
+
+  const handleActiveIdChange = useCallback((id: string | null): void => {
+    setActiveId(id)
+    if (id === null) setPreview(null)
+  }, [])
+
+  useEffect(() => {
+    if (!focusNodeId || !graph) return
+    const node = graph.nodes.find((n) => n.id === focusNodeId)
+    if (!node) {
+      onFocusConsumed?.()
+      return
+    }
+    if (node.kind === 'worldbuild') {
+      const e = entries.find((x) => x.id === node.rawId)
+      if (!e) return
+      setPreview({ type: 'wb', entry: e })
+    } else if (node.kind === 'character') {
+      const c = characters.find((x) => x.id === node.rawId)
+      if (!c) return
+      setPreview({ type: 'char', char: c })
+    }
+    setKinds((prev) => {
+      if (prev.has(node.kind)) return prev
+      const next = new Set(prev)
+      next.add(node.kind)
+      return next
+    })
+    setQuery((q) => (q ? '' : q))
+    setHideIsolated(false)
+    setActiveId(node.id)
+    setCenterSignal((v) => v + 1)
+    onFocusConsumed?.()
+  }, [focusNodeId, graph, entries, characters, onFocusConsumed])
 
   const handleNodeDoubleClick = useCallback((id: string): void => {
     setFocus((cur) => (cur?.id === id ? null : { id, depth: 1 }))
@@ -324,68 +389,50 @@ export default function GraphPage({
         </div>
       </div>
 
-      <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/50">
-        <RelationGraph
-          key={relayoutKey}
-          nodes={rgNodes}
-          edges={rgEdges}
-          groupColors={KIND_COLORS}
-          clusterTags={clusterTags}
-          showTagLabels={showTagLabels}
-          onNodeClick={handleNodeClick}
-          onNodeDoubleClick={handleNodeDoubleClick}
-        />
-      </div>
-
-      <OverlayCard
-        open={preview !== null}
-        onClose={() => setPreview(null)}
-        title={
-          preview?.type === 'wb' ? preview.entry.title : preview ? `人物 · ${preview.char.name}` : ''
-        }
-      >
+      <div className="flex min-h-0 flex-1 gap-3">
+        <div className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/50">
+          <RelationGraph
+            key={relayoutKey}
+            nodes={rgNodes}
+            edges={rgEdges}
+            groupColors={KIND_COLORS}
+            clusterTags={clusterTags}
+            showTagLabels={showTagLabels}
+            onNodeClick={handleNodeClick}
+            onNodeDoubleClick={handleNodeDoubleClick}
+            activeId={activeId}
+            onActiveIdChange={handleActiveIdChange}
+            centerSignal={centerSignal}
+          />
+        </div>
         {preview?.type === 'wb' && (
-          <div className="max-h-[70vh] overflow-y-auto">
-            <div className="mb-3 flex flex-wrap items-center gap-1.5">
-              <span
-                className="rounded px-1.5 py-0.5 text-[10px]"
-                style={{
-                  background: `${WB_TYPE_COLORS[preview.entry.category] ?? '#a1a1aa'}22`,
-                  color: WB_TYPE_COLORS[preview.entry.category] ?? '#a1a1aa'
-                }}
-              >
-                {preview.entry.category}
-              </span>
-              {splitTags(preview.entry.tags).map((t) => (
-                <span
-                  key={t}
-                  className="rounded-full border border-amber-800/60 px-1.5 py-0.5 text-[10px] text-amber-300/90"
-                >
-                  # {t}
-                </span>
-              ))}
-            </div>
-            <div className="text-sm leading-6 text-zinc-300">
-              <Markdown
-                text={preview.entry.content}
-                wiki={{ resolve: resolveLink, onOpen: openByName }}
-              />
-            </div>
-          </div>
+          <PreviewPanel
+            title={preview.entry.title}
+            badge={{
+              label: preview.entry.category,
+              color: WB_TYPE_COLORS[preview.entry.category] ?? '#a1a1aa'
+            }}
+            tags={preview.entry.tags}
+            text={preview.entry.content}
+            wiki={{ resolve: resolveLink, onOpen: openByName }}
+            onClose={() => setPreview(null)}
+          />
         )}
         {preview?.type === 'char' && (
-          <div className="max-h-[70vh] overflow-y-auto text-sm leading-6 text-zinc-300">
-            <Markdown
-              text={preview.char.card}
-              wiki={{ resolve: resolveLink, onOpen: openByName }}
-            />
-          </div>
+          <PreviewPanel
+            title={preview.char.name}
+            badge={{ label: '人物', color: KIND_COLORS.character }}
+            tags={preview.char.tags}
+            text={preview.char.card}
+            wiki={{ resolve: resolveLink, onOpen: openByName }}
+            onClose={() => setPreview(null)}
+          />
         )}
-      </OverlayCard>
+      </div>
 
       <div className="text-[11px] text-zinc-600">
-        单击世界观/人物节点就地预览 · 大纲/伏笔节点跳转对应板块 · 双击节点进入局部图谱 ·
-        拖动节点看关联晃动 · 圆越大 = 被引用越多（核心条目/MOC）·
+        单击节点高亮关联并右侧预览（再次单击或点空白取消）· 大纲/伏笔节点跳转对应板块 ·
+        双击节点进入局部图谱 · 拖动节点看关联晃动 · 圆越大 = 被引用越多（核心条目/MOC）·
         「标签聚类」开启时高频标签（≥3 条目）的条目/人物自动聚拢并按主标签着色、灰点不属任何高频标签簇 ·
         连线来自各板块文本与章节正文中的 [[链接]]
       </div>

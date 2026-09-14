@@ -13,6 +13,7 @@ import { splitTags } from '@shared/tags'
 import { AiTextarea } from '../components/AiTextarea'
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
+import { PreviewPanel } from '../components/PreviewPanel'
 import { RelationGraph, type GraphEdgeData, type GraphNodeData } from '../components/RelationGraph'
 import { WbGenOverlay } from '../components/WbGenOverlay'
 import { Button, Card, Input, Label, Select } from '../components/ui'
@@ -51,6 +52,11 @@ interface EditState {
 }
 
 const EMPTY: EditState = { category: '', title: '', tags: '', content: '' }
+
+type Preview =
+  | { type: 'entry'; entry: WorldbuildEntry }
+  | { type: 'char'; char: Character }
+  | null
 
 interface EntryCardProps {
   entry: WorldbuildEntry
@@ -196,7 +202,9 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
   const autoClusterRef = useRef(false)
   const [typeAdding, setTypeAdding] = useState(false)
   const [typeDraft, setTypeDraft] = useState('')
-  const [charPreview, setCharPreview] = useState<Character | null>(null)
+  const [preview, setPreview] = useState<Preview>(null)
+  const [graphActiveId, setGraphActiveId] = useState<string | null>(null)
+  const [centerSignal, setCenterSignal] = useState(0)
   const [edit, setEdit] = useState<EditState>(EMPTY)
   const [editOpen, setEditOpen] = useState(false)
   const [genOpen, setGenOpen] = useState(false)
@@ -231,6 +239,8 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     setShowTagLabels(true)
     setEdit(EMPTY)
     setEditOpen(false)
+    setPreview(null)
+    setGraphActiveId(null)
     setSelectMode(false)
     setSelectedIds(new Set())
     setActionOpen(false)
@@ -301,31 +311,34 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     [titleIndex]
   )
 
+  const openPreview = useCallback((entry: WorldbuildEntry): void => {
+    markEntrySeen(entry.id)
+    setPreview({ type: 'entry', entry })
+    setGraphActiveId(entry.id)
+    setCenterSignal((v) => v + 1)
+  }, [])
+
+  const openCharPreview = useCallback(
+    (char: Character): void => {
+      setPreview({ type: 'char', char })
+      if (graphScope === 'all') {
+        setGraphActiveId(`char:${char.id}`)
+        setCenterSignal((v) => v + 1)
+      } else {
+        setGraphActiveId(null)
+      }
+    },
+    [graphScope]
+  )
+
   const openByName = useCallback(
     (name: string): void => {
       const hit = titleIndex.get(name)
       if (!hit) return
-      if (hit.type === 'entry') {
-        setEdit({
-          id: hit.entry.id,
-          category: hit.entry.category,
-          title: hit.entry.title,
-          tags: hit.entry.tags,
-          content: hit.entry.content
-        })
-        editInitialRef.current = {
-          id: hit.entry.id,
-          category: hit.entry.category,
-          title: hit.entry.title,
-          tags: hit.entry.tags,
-          content: hit.entry.content
-        }
-        setEditOpen(true)
-      } else {
-        setCharPreview(hit.char)
-      }
+      if (hit.type === 'entry') openPreview(hit.entry)
+      else openCharPreview(hit.char)
     },
-    [titleIndex]
+    [titleIndex, openPreview, openCharPreview]
   )
 
   const graph = useMemo(() => {
@@ -383,21 +396,25 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
       .filter((g) => g.items.length > 0)
   }, [filter, filtered, types])
 
-  const startEdit = useCallback(
-    (e: WorldbuildEntry): void => {
-      markEntrySeen(e.id)
-      const next: EditState = {
-        id: e.id,
-        category: e.category,
-        title: e.title,
-        tags: e.tags,
-        content: e.content
-      }
-      setEdit(next)
-      editInitialRef.current = next
-      setEditOpen(true)
+  const startEdit = useCallback((e: WorldbuildEntry): void => {
+    const next: EditState = {
+      id: e.id,
+      category: e.category,
+      title: e.title,
+      tags: e.tags,
+      content: e.content
+    }
+    setEdit(next)
+    editInitialRef.current = next
+    setEditOpen(true)
+  }, [])
+
+  const editFromPreview = useCallback(
+    (entry: WorldbuildEntry): void => {
+      setPreview(null)
+      startEdit(entry)
     },
-    []
+    [startEdit]
   )
 
   const openNew = useCallback((): void => {
@@ -555,6 +572,75 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
         pushToast('error', err instanceof Error ? err.message : String(err))
       })
   }
+
+  const entryGrid = (
+    <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(300px,1fr))] content-start gap-3 overflow-y-auto pb-2">
+      {filtered.length === 0 && liveEntries.length === 0 && (
+        <Card className="col-span-full p-10 text-center text-sm text-zinc-600">
+          {filter === '全部' && tagFilter === null
+            ? '暂无条目，点右上角「AI 生成」或「新增条目」开始建设世界观'
+            : tagFilter !== null
+              ? `「#${tagFilter}」标签下暂无条目`
+              : `「${filter}」类型下暂无条目`}
+        </Card>
+      )}
+      {liveEntries.map((s, i) => (
+        <LiveCard key={`live-${s.taskId}-${i}`} section={s} />
+      ))}
+      {grouped
+        ? grouped.map((g) => (
+            <Fragment key={g.category}>
+              <div className="col-span-full mt-1 flex items-center gap-2 first:mt-0">
+                <span
+                  className="h-2 w-2 shrink-0 rounded-full"
+                  style={{ background: typeColor(g.category) }}
+                />
+                <span className="text-xs font-medium" style={{ color: typeColor(g.category) }}>
+                  {g.category}
+                </span>
+                <span className="text-[10px] text-zinc-600">{g.items.length}</span>
+                <span className="h-px flex-1 bg-zinc-800" />
+              </div>
+              {g.items.map((e) => (
+                <EntryCard
+                  key={e.id}
+                  entry={e}
+                  highlighted={highlightIds.includes(e.id)}
+                  isNew={newEntryIdList.includes(e.id)}
+                  isRevised={revisedEntryIdList.includes(e.id)}
+                  selection={
+                    selectMode
+                      ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
+                      : undefined
+                  }
+                  onOpen={openPreview}
+                  onTagClick={(t) => setTagFilter((cur) => (cur === t ? null : t))}
+                  resolveLink={resolveLink}
+                  onOpenLink={openByName}
+                />
+              ))}
+            </Fragment>
+          ))
+        : filtered.map((e) => (
+            <EntryCard
+              key={e.id}
+              entry={e}
+              highlighted={highlightIds.includes(e.id)}
+              isNew={newEntryIdList.includes(e.id)}
+              isRevised={revisedEntryIdList.includes(e.id)}
+              selection={
+                selectMode
+                  ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
+                  : undefined
+              }
+              onOpen={openPreview}
+              onTagClick={(t) => setTagFilter((cur) => (cur === t ? null : t))}
+              resolveLink={resolveLink}
+              onOpenLink={openByName}
+            />
+          ))}
+    </div>
+  )
 
   return (
     <div className="flex h-full flex-col gap-3 p-4">
@@ -873,103 +959,83 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
         </div>
       </OverlayCard>
 
-      <OverlayCard open={charPreview !== null} onClose={() => setCharPreview(null)} title={charPreview ? `人物 · ${charPreview.name}` : ''}>
-        {charPreview && (
-          <div className="max-h-[60vh] overflow-y-auto text-sm leading-6 text-zinc-300">
-            <Markdown text={charPreview.card} wiki={{ resolve: resolveLink, onOpen: openByName }} />
+      {view === 'graph' || preview !== null ? (
+        <div className="flex min-h-0 flex-1 gap-3">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {view === 'graph' ? (
+              <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-zinc-800">
+                <RelationGraph
+                  nodes={graph.nodes}
+                  edges={graph.edges}
+                  groupColors={GROUP_COLORS}
+                  clusterTags={clusterTags}
+                  showTagLabels={showTagLabels}
+                  activeId={graphActiveId}
+                  centerSignal={centerSignal}
+                  onActiveIdChange={(id) => {
+                    setGraphActiveId(id)
+                    if (id === null) setPreview(null)
+                  }}
+                  onNodeClick={(id) => {
+                    if (id.startsWith('char:')) {
+                      const c = characters.find((x) => x.id === id.slice(5))
+                      if (c) openCharPreview(c)
+                    } else if (id.startsWith('tag:')) {
+                      setTagFilter(id.slice(4) || null)
+                      setView('list')
+                    } else {
+                      const e = entries.find((x) => x.id === id)
+                      if (e) openPreview(e)
+                    }
+                  }}
+                />
+              </div>
+            ) : (
+              entryGrid
+            )}
           </div>
-        )}
-      </OverlayCard>
-
-      {view === 'graph' ? (
-        <div className="min-h-0 flex-1 overflow-hidden rounded-lg border border-zinc-800">
-          <RelationGraph
-            nodes={graph.nodes}
-            edges={graph.edges}
-            groupColors={GROUP_COLORS}
-            clusterTags={clusterTags}
-            showTagLabels={showTagLabels}
-            onNodeClick={(id) => {
-              if (id.startsWith('char:')) {
-                const c = characters.find((x) => x.id === id.slice(5))
-                if (c) setCharPreview(c)
-              } else if (id.startsWith('tag:')) {
-                setTagFilter(id.slice(4) || null)
-                setView('list')
-              } else {
-                const e = entries.find((x) => x.id === id)
-                if (e) startEdit(e)
+          {preview?.type === 'entry' && (
+            <PreviewPanel
+              title={preview.entry.title}
+              badge={{ label: preview.entry.category, color: typeColor(preview.entry.category) }}
+              tags={preview.entry.tags}
+              text={preview.entry.content}
+              wiki={{ resolve: resolveLink, onOpen: openByName }}
+              onClose={() => setPreview(null)}
+              footer={
+                <>
+                  <Button
+                    variant="ghost"
+                    onClick={() => onNavigate('graph', undefined, `wb:${preview.entry.id}`)}
+                  >
+                    去图谱
+                  </Button>
+                  <Button onClick={() => editFromPreview(preview.entry)}>编辑</Button>
+                </>
               }
-            }}
-          />
+            />
+          )}
+          {preview?.type === 'char' && (
+            <PreviewPanel
+              title={preview.char.name}
+              badge={{ label: '人物', color: typeColor('人物') }}
+              tags={preview.char.tags}
+              text={preview.char.card}
+              wiki={{ resolve: resolveLink, onOpen: openByName }}
+              onClose={() => setPreview(null)}
+              footer={
+                <Button
+                  variant="ghost"
+                  onClick={() => onNavigate('graph', undefined, `char:${preview.char.id}`)}
+                >
+                  去图谱
+                </Button>
+              }
+            />
+          )}
         </div>
       ) : (
-        <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(300px,1fr))] content-start gap-3 overflow-y-auto pb-2">
-          {filtered.length === 0 && liveEntries.length === 0 && (
-            <Card className="col-span-full p-10 text-center text-sm text-zinc-600">
-              {filter === '全部' && tagFilter === null
-                ? '暂无条目，点右上角「AI 生成」或「新增条目」开始建设世界观'
-                : tagFilter !== null
-                  ? `「#${tagFilter}」标签下暂无条目`
-                  : `「${filter}」类型下暂无条目`}
-            </Card>
-          )}
-          {liveEntries.map((s, i) => (
-            <LiveCard key={`live-${s.taskId}-${i}`} section={s} />
-          ))}
-          {grouped
-            ? grouped.map((g) => (
-                <Fragment key={g.category}>
-                  <div className="col-span-full mt-1 flex items-center gap-2 first:mt-0">
-                    <span
-                      className="h-2 w-2 shrink-0 rounded-full"
-                      style={{ background: typeColor(g.category) }}
-                    />
-                    <span className="text-xs font-medium" style={{ color: typeColor(g.category) }}>
-                      {g.category}
-                    </span>
-                    <span className="text-[10px] text-zinc-600">{g.items.length}</span>
-                    <span className="h-px flex-1 bg-zinc-800" />
-                  </div>
-                  {g.items.map((e) => (
-                    <EntryCard
-                      key={e.id}
-                      entry={e}
-                      highlighted={highlightIds.includes(e.id)}
-                      isNew={newEntryIdList.includes(e.id)}
-                      isRevised={revisedEntryIdList.includes(e.id)}
-                      selection={
-                        selectMode
-                          ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
-                          : undefined
-                      }
-                      onOpen={startEdit}
-                      onTagClick={(t) => setTagFilter((cur) => (cur === t ? null : t))}
-                      resolveLink={resolveLink}
-                      onOpenLink={openByName}
-                    />
-                  ))}
-                </Fragment>
-              ))
-            : filtered.map((e) => (
-                <EntryCard
-                  key={e.id}
-                  entry={e}
-                  highlighted={highlightIds.includes(e.id)}
-                  isNew={newEntryIdList.includes(e.id)}
-                  isRevised={revisedEntryIdList.includes(e.id)}
-                  selection={
-                    selectMode
-                      ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
-                      : undefined
-                  }
-                  onOpen={startEdit}
-                  onTagClick={(t) => setTagFilter((cur) => (cur === t ? null : t))}
-                  resolveLink={resolveLink}
-                  onOpenLink={openByName}
-                />
-              ))}
-        </div>
+        entryGrid
       )}
     </div>
   )

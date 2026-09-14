@@ -158,6 +158,7 @@ const WB_BADGE_DOT: Record<string, string> = {
 export default function App() {
   const [page, setPage] = useState<Page>('projects')
   const [writingFocus, setWritingFocus] = useState<string | null>(null)
+  const [graphFocus, setGraphFocus] = useState<string | null>(null)
   const [stats, setStats] = useState<UsageStats | null>(null)
   const [cfg, setCfg] = useState<SettingsView | null>(null)
   const [currentProject, setCurrentProject] = useState<Project | null>(null)
@@ -198,14 +199,17 @@ export default function App() {
   )
 
   const navigate = useCallback<Navigate>(
-    (target, focusOutlineId) => {
+    (target, focusOutlineId, graphNodeId) => {
       const blocked = cfg !== null && !cfg.currentProjectId && CREATIVE_PAGES.has(target)
       const finalTarget = blocked ? 'projects' : target
       setPage(finalTarget)
       setWritingFocus(finalTarget === 'writing' ? (focusOutlineId ?? null) : null)
+      setGraphFocus(finalTarget === 'graph' ? (graphNodeId ?? null) : null)
     },
     [cfg]
   )
+
+  const clearGraphFocus = useCallback((): void => setGraphFocus(null), [])
 
   const quotaPct =
     cfg && cfg.quota5hPrompts > 0
@@ -337,7 +341,12 @@ export default function App() {
           )}
           {page === 'agent' && <Agent projectId={currentProject?.id ?? ''} />}
           {page === 'graph' && (
-            <GraphPage projectId={currentProject?.id ?? ''} onNavigate={navigate} />
+            <GraphPage
+              projectId={currentProject?.id ?? ''}
+              onNavigate={navigate}
+              focusNodeId={graphFocus}
+              onFocusConsumed={clearGraphFocus}
+            />
           )}
           {page === 'writing' && (
             <Writing

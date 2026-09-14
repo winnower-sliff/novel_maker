@@ -13,7 +13,8 @@ import {
   type Node,
   type NodeMouseHandler,
   type NodeProps,
-  type OnNodeDrag
+  type OnNodeDrag,
+  type ReactFlowInstance
 } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
 
@@ -38,6 +39,9 @@ interface RelationGraphProps {
   showTagLabels?: boolean
   onNodeClick?: (id: string) => void
   onNodeDoubleClick?: (id: string) => void
+  activeId?: string | null
+  onActiveIdChange?: (id: string | null) => void
+  centerSignal?: number
 }
 
 interface WikiNodeData extends Record<string, unknown> {
@@ -398,7 +402,10 @@ export const RelationGraph = memo(function RelationGraph({
   clusterTags = false,
   showTagLabels = true,
   onNodeClick,
-  onNodeDoubleClick
+  onNodeDoubleClick,
+  activeId = null,
+  onActiveIdChange,
+  centerSignal = 0
 }: RelationGraphProps) {
   const { links, adjacency, refCount } = useMemo(() => {
     const index = new Map(nodes.map((n, i) => [n.id, i]))
@@ -476,7 +483,7 @@ export const RelationGraph = memo(function RelationGraph({
   }, [clusterTags, nodes])
 
   const [flowNodes, setFlowNodes, onNodesChange] = useNodesState<Node<WikiNodeData | TagLabelData>>([])
-  const [hoverId, setHoverId] = useState<string | null>(null)
+  const [tagHover, setTagHover] = useState<string | null>(null)
   const simRef = useRef<SimPoint[]>([])
   const clusterRef = useRef(cluster)
   const showTagLabelsRef = useRef(showTagLabels)
@@ -484,10 +491,14 @@ export const RelationGraph = memo(function RelationGraph({
   const rafRef = useRef(0)
   const nodesRef = useRef(nodes)
   const linksRef = useRef(links)
+  const rfInstanceRef = useRef<ReactFlowInstance<Node<WikiNodeData | TagLabelData>> | null>(null)
+  const centeredSignalRef = useRef(-1)
+  const flowNodesRef = useRef(flowNodes)
   nodesRef.current = nodes
   linksRef.current = links
   clusterRef.current = cluster
   showTagLabelsRef.current = showTagLabels
+  flowNodesRef.current = flowNodes
 
   const applySimToNodes = useCallback((): void => {
     const sim = simRef.current
@@ -630,34 +641,35 @@ export const RelationGraph = memo(function RelationGraph({
   }, [showTagLabels, setFlowNodes])
 
   useEffect(() => {
+    const hl = activeId ?? tagHover
     setFlowNodes((cur) =>
       cur.map((n) => {
         if (n.id.startsWith('tag:')) {
           const data = n.data as TagLabelData
           let dim = false
-          let hl = false
-          if (hoverId === null) {
+          let hlt = false
+          if (hl === null) {
             dim = false
-          } else if (hoverId === n.id) {
-            hl = true
-          } else if (hoverId.startsWith('tag:')) {
+          } else if (hl === n.id) {
+            hlt = true
+          } else if (hl.startsWith('tag:')) {
             dim = true
           } else {
-            dim = !(cluster?.memberLists.get(hoverId) ?? []).includes(data.ci ?? -1)
-            hl = !dim
+            dim = !(cluster?.memberLists.get(hl) ?? []).includes(data.ci ?? -1)
+            hlt = !dim
           }
-          return { ...n, data: { ...data, dim, hl } }
+          return { ...n, data: { ...data, dim, hl: hlt } }
         }
         let dim: boolean
-        if (hoverId === null || n.id === hoverId) dim = false
-        else if (hoverId.startsWith('tag:')) {
-          const ci = cluster?.tags.indexOf(hoverId.slice(4)) ?? -1
+        if (hl === null || n.id === hl) dim = false
+        else if (hl.startsWith('tag:')) {
+          const ci = cluster?.tags.indexOf(hl.slice(4)) ?? -1
           dim = !(cluster?.membersByCluster[ci]?.has(n.id) ?? false)
-        } else dim = !(adjacency.get(hoverId)?.has(n.id) ?? false)
+        } else dim = !(adjacency.get(hl)?.has(n.id) ?? false)
         return { ...n, data: { ...(n.data as WikiNodeData), dim } }
       })
     )
-  }, [hoverId, adjacency, cluster, setFlowNodes])
+  }, [activeId, tagHover, adjacency, cluster, setFlowNodes])
 
   const rfEdges = useMemo(
     () =>
@@ -665,7 +677,8 @@ export const RelationGraph = memo(function RelationGraph({
         const sid = nodesRef.current[si]?.id
         const tid = nodesRef.current[ti]?.id
         if (!sid || !tid) return []
-        const hot = hoverId !== null && !hoverId.startsWith('tag:') && (sid === hoverId || tid === hoverId)
+        const hl = activeId ?? tagHover
+        const hot = hl !== null && !hl.startsWith('tag:') && (sid === hl || tid === hl)
         return [
           {
             id: `e${i}`,
@@ -675,16 +688,41 @@ export const RelationGraph = memo(function RelationGraph({
             style: hot
               ? { stroke: '#f59e0b', strokeWidth: 2 }
               : {
-                  stroke: hoverId !== null ? 'rgba(161, 161, 170, 0.08)' : 'rgba(161, 161, 170, 0.35)',
+                  stroke: hl !== null ? 'rgba(161, 161, 170, 0.08)' : 'rgba(161, 161, 170, 0.35)',
                   strokeWidth: 1.2
                 }
           }
         ]
       }),
-    [links, hoverId]
+    [links, activeId, tagHover]
   )
 
-  const handleClick: NodeMouseHandler = (_e, node) => onNodeClick?.(node.id)
+  useEffect(() => {
+    if (!centerSignal || centerSignal === centeredSignalRef.current) return
+    if (!activeId || !rfInstanceRef.current) return
+    const node = flowNodesRef.current.find((n) => n.id === activeId)
+    if (!node) return
+    centeredSignalRef.current = centerSignal
+    const r = (node.data as WikiNodeData).radius
+    rfInstanceRef.current.setCenter(node.position.x + r, node.position.y + r, {
+      zoom: Math.max(rfInstanceRef.current.getZoom(), 0.75),
+      duration: 500
+    })
+  }, [centerSignal, activeId, flowNodes])
+
+  const handleClick: NodeMouseHandler = (_e, node) => {
+    if (node.id.startsWith('tag:')) {
+      onNodeClick?.(node.id)
+      return
+    }
+    const next = activeId === node.id ? null : node.id
+    onActiveIdChange?.(next)
+    if (next !== null) onNodeClick?.(node.id)
+  }
+
+  const handlePaneClick = useCallback((): void => {
+    onActiveIdChange?.(null)
+  }, [onActiveIdChange])
 
   const handleDoubleClick: NodeMouseHandler = (_e, node) => onNodeDoubleClick?.(node.id)
 
@@ -726,8 +764,14 @@ export const RelationGraph = memo(function RelationGraph({
       onNodeDoubleClick={handleDoubleClick}
       onNodeDrag={handleDrag}
       onNodeDragStop={handleDragStop}
-      onNodeMouseEnter={(_e, node) => setHoverId(node.id)}
-      onNodeMouseLeave={() => setHoverId(null)}
+      onPaneClick={handlePaneClick}
+      onNodeMouseEnter={(_e, node) => {
+        if (node.id.startsWith('tag:') && activeId === null) setTagHover(node.id)
+      }}
+      onNodeMouseLeave={() => setTagHover(null)}
+      onInit={(inst) => {
+        rfInstanceRef.current = inst
+      }}
       fitView
       minZoom={0.15}
       maxZoom={2}
