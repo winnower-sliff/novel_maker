@@ -299,7 +299,7 @@ export default function GraphPage({
   }
 
   return (
-    <div className="flex h-full flex-col gap-3 p-4">
+    <div className="flex h-full flex-col gap-3 p-3 md:p-4">
       <div className="flex flex-wrap items-center gap-2">
         {ALL_KINDS.map((k) => (
           <button
@@ -405,8 +405,8 @@ export default function GraphPage({
         </div>
       </div>
 
-      <div className="flex min-h-0 flex-1 gap-3">
-        <div className="min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/50">
+      <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
+        <div className="min-h-[45vh] min-w-0 flex-1 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/50 md:min-h-0">
           <RelationGraph
             key={relayoutKey}
             nodes={rgNodes}

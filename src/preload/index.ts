@@ -24,6 +24,8 @@ import type {
   Project,
   ProjectGraph,
   ProjectInput,
+  ServerConfigPatch,
+  ServerStatus,
   SettingsPatch,
   SettingsView,
   SkillFile,
@@ -66,6 +68,11 @@ const api = {
   settings: {
     get: (): Promise<SettingsView> => ipcRenderer.invoke('settings:get'),
     save: (patch: SettingsPatch): Promise<SettingsView> => ipcRenderer.invoke('settings:save', patch)
+  },
+  server: {
+    status: (): Promise<ServerStatus> => ipcRenderer.invoke('server:status'),
+    config: (patch: ServerConfigPatch): Promise<ServerStatus> =>
+      ipcRenderer.invoke('server:config', patch)
   },
   models: {
     probe: (opts?: ModelProbeOptions): Promise<ModelProbeResult> =>

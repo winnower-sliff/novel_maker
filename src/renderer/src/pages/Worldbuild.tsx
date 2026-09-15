@@ -582,7 +582,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
   }
 
   const entryGrid = (
-    <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(300px,1fr))] content-start gap-3 overflow-y-auto pb-2">
+    <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(240px,1fr))] content-start gap-3 overflow-y-auto pb-2">
       {filtered.length === 0 && liveEntries.length === 0 && (
         <Card className="col-span-full p-10 text-center text-sm text-zinc-600">
           {filter === '全部' && tagFilter === null
@@ -651,7 +651,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
   )
 
   return (
-    <div className="flex h-full flex-col gap-3 p-4">
+    <div className="flex h-full flex-col gap-3 p-3 md:p-4">
       <div className="flex items-center gap-2">
         <h1 className="shrink-0 text-lg font-semibold text-zinc-100">世界观</h1>
         <div className="ml-2 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-1 [scrollbar-color:#3f3f46_transparent] [scrollbar-width:thin]">
@@ -937,8 +937,8 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
         }
       >
         <div className="flex h-full flex-col gap-3">
-          <div className="grid grid-cols-12 gap-3">
-            <div className="col-span-3">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-12">
+            <div className="col-span-1 sm:col-span-3">
               <Label>类型（单选）</Label>
               <Select
                 value={edit.category}
@@ -955,7 +955,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                 )}
               </Select>
             </div>
-            <div className="col-span-3">
+            <div className="col-span-1 sm:col-span-3">
               <Label>标签（逗号分隔）</Label>
               <Input
                 value={edit.tags}
@@ -964,7 +964,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                 placeholder="精灵,森林,魔法"
               />
             </div>
-            <div className="col-span-6">
+            <div className="col-span-2 sm:col-span-6">
               <Label>标题 *</Label>
               <Input
                 value={edit.title}

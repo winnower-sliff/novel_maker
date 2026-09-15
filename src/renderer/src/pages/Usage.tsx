@@ -79,8 +79,8 @@ export default function Usage() {
     : ''
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
-      <div className="grid grid-cols-3 gap-3">
+    <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 md:p-4">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         <Card className="col-span-1 p-4">
           <div className="text-xs text-zinc-500">近 5 小时滚动窗口（{windowEndText} 到期）</div>
           <div className="mt-2 flex items-baseline gap-2">
@@ -104,7 +104,7 @@ export default function Usage() {
             </span>
           </div>
         </Card>
-        <Card className="col-span-2 p-4">
+        <Card className="p-4 sm:col-span-2">
           <div className="mb-2 text-xs text-zinc-500">近 14 天用量（上：输入 amber / 下：输出 sky）</div>
           <div className="flex h-24 items-end gap-1.5">
             {(stats?.byDay ?? []).map((d) => {
@@ -132,7 +132,7 @@ export default function Usage() {
         </Card>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <GroupTable
           title="按模型"
           rows={(stats?.byModel ?? []).map((g) => ({ ...g, key: g.key }))}

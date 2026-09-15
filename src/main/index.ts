@@ -2,6 +2,7 @@ import { join } from 'node:path'
 import { app, BrowserWindow, shell } from 'electron'
 import { getDb } from './db'
 import { registerIpc } from './ipc'
+import { startServer, stopServer } from './server'
 import { listSkills } from './skills'
 
 if (process.env.NM_REMOTE_DEBUG_PORT) {
@@ -43,11 +44,16 @@ app.whenReady().then(() => {
   getDb()
   listSkills()
   registerIpc()
+  void startServer()
   createWindow()
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })
+})
+
+app.on('will-quit', () => {
+  void stopServer()
 })
 
 app.on('window-all-closed', () => {

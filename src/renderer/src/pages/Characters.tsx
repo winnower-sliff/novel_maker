@@ -109,8 +109,8 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
   }
 
   return (
-    <div className="flex h-full gap-3 p-4">
-      <Card className="flex w-64 shrink-0 flex-col">
+    <div className="flex h-full flex-col gap-3 p-3 md:flex-row md:p-4">
+      <Card className="flex max-h-44 shrink-0 flex-col md:max-h-none md:w-64">
         <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2.5">
           <span className="text-sm font-medium text-zinc-200">人物（{list.length}）</span>
           <Button
@@ -165,12 +165,12 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
 
         {genOpen && (
           <div className="mb-4 space-y-2.5 rounded-md border border-zinc-800 bg-zinc-900 p-3">
-            <div className="grid grid-cols-4 gap-3">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
               <div>
                 <Label>预备名（可空，AI 会从输出推断）</Label>
                 <Input value={genName} onChange={(e) => setGenName(e.target.value)} disabled={generating} />
               </div>
-              <div className="col-span-3">
+              <div className="md:col-span-3">
                 <Label>人物需求（定位、性格方向、与主线的关联）</Label>
                 <Input
                   value={genBrief}
@@ -203,7 +203,7 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
           </div>
         )}
 
-        <div className="grid grid-cols-3 gap-3">
+        <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
             <Label>姓名 *</Label>
             <Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} placeholder="例：韩立" />

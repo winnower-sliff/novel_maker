@@ -1,6 +1,6 @@
-import type { WebContents } from 'electron'
 import type { AgentDonePayload, ChatMessage, ContentBlock, OutlineItem, ToolDef, UsageInfo } from '../shared/types'
 import { splitTags } from '../shared/tags'
+import type { EventSink } from './eventSink'
 import { chatStream, pickRatelimitHeaders } from './llm'
 import { getLlmAuth } from './settings'
 import * as store from './store'
@@ -632,16 +632,16 @@ function serializeResult(data: unknown): string {
 }
 
 export async function runAgent(opts: {
-  win: WebContents
+  sink: EventSink
   requestId: string
   projectId: string
   messages: ChatMessage[]
   model: string
   signal: AbortSignal
 }): Promise<AgentDonePayload> {
-  const { win, requestId, projectId, signal } = opts
+  const { sink, requestId, projectId, signal } = opts
   const send = (channel: string, ...args: unknown[]): void => {
-    if (!win.isDestroyed()) win.send(channel, requestId, ...args)
+    if (!sink.isClosed()) sink.send(channel, requestId, ...args)
   }
 
   const auth = await getLlmAuth()

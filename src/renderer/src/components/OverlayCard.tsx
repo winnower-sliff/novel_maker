@@ -29,7 +29,7 @@ export function OverlayCard({
   if (!open) return null
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-6">
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6">
       <div className="absolute inset-0 bg-black/60" onClick={onClose} />
       <div
         className={`relative flex max-h-[85vh] w-full ${widthClass} flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl`}

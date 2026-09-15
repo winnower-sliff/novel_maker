@@ -120,6 +120,30 @@ export interface SettingsPatch {
   currentProjectId?: string
 }
 
+export interface ServerConfig {
+  enabled: boolean
+  port: number
+  passwordHash: string
+  passwordSalt: string
+}
+
+export interface ServerStatus {
+  enabled: boolean
+  running: boolean
+  port: number
+  url: string | null
+  lanReachable: boolean
+  hasPassword: boolean
+  clients: number
+  error: string | null
+}
+
+export interface ServerConfigPatch {
+  enabled?: boolean
+  port?: number
+  password?: string | null
+}
+
 export interface ModelProbeOptions {
   provider?: ProviderId
   apiKey?: string

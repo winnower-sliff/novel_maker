@@ -24,7 +24,7 @@ export function PreviewPanel({ title, badge, tags, text, wiki, onClose, footer }
   const tagList = splitTags(tags ?? '')
 
   return (
-    <div className="flex w-96 shrink-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60">
+    <div className="flex max-h-[50vh] w-full shrink-0 flex-col overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/60 md:max-h-none md:w-96">
       <div className="flex items-start justify-between gap-2 border-b border-zinc-800 px-4 py-3">
         <div className="flex min-w-0 flex-wrap items-center gap-1.5">
           {badge && (

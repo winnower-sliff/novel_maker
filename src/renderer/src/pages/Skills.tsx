@@ -57,8 +57,8 @@ export default function Skills() {
   }
 
   return (
-    <div className="flex h-full gap-3 p-4">
-      <Card className="flex w-72 shrink-0 flex-col">
+    <div className="flex h-full flex-col gap-3 p-3 md:flex-row md:p-4">
+      <Card className="flex max-h-40 shrink-0 flex-col md:max-h-none md:w-72">
         <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2.5">
           <span className="text-sm font-medium text-zinc-200">技能（{list.length}）</span>
           <Button className="px-2 py-1 text-xs" onClick={create}>

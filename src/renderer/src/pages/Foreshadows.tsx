@@ -97,29 +97,29 @@ export default function Foreshadows({ projectId, onNavigate }: { projectId: stri
   )
 
   return (
-    <div className="flex h-full flex-col gap-3 p-4">
-      <div className="flex items-center gap-3">
+    <div className="flex h-full flex-col gap-3 p-3 md:p-4">
+      <div className="flex flex-wrap items-center gap-3">
         <h1 className="text-lg font-semibold text-zinc-100">伏笔台账</h1>
         <span className="text-xs text-zinc-600">章节定稿时由 AI 摘要自动登记/回收，也可手动维护</span>
       </div>
 
-      <Card className="grid grid-cols-12 items-end gap-3 p-4">
-        <div className="col-span-7">
+      <Card className="grid grid-cols-1 items-end gap-3 p-3 sm:grid-cols-12 md:p-4">
+        <div className="sm:col-span-7">
           <Label>伏笔内容</Label>
           <Input value={content} onChange={(e) => setContent(e.target.value)} placeholder="例：师父留下的玉佩内藏残魂" />
         </div>
-        <div className="col-span-3">
+        <div className="sm:col-span-3">
           <Label>埋设于</Label>
           <Input value={planted} onChange={(e) => setPlanted(e.target.value)} placeholder="第3章" />
         </div>
-        <div className="col-span-2">
+        <div className="sm:col-span-2">
           <Button className="w-full" onClick={add} disabled={!content.trim()}>
             添加
           </Button>
         </div>
       </Card>
 
-      <div className="grid min-h-0 flex-1 grid-cols-2 gap-3">
+      <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 md:grid-cols-2">
         {renderGroup('未回收', open, 'amber', true)}
         {renderGroup('已回收', resolved, 'green')}
       </div>

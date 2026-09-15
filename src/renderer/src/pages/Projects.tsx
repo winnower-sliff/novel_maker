@@ -116,8 +116,8 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
   }
 
   const newProjectForm = (buttonLabel: string): ReactNode => (
-    <Card className="space-y-4 p-5">
-      <div className="grid grid-cols-2 gap-4">
+    <Card className="space-y-4 p-4 md:p-5">
+      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <Label>书名 *</Label>
           <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：凡人修仙传" />
@@ -134,7 +134,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
           value={targetWords}
           onChange={(e) => setTargetWords(e.target.value)}
           placeholder="例：2000000"
-          className="w-48"
+          className="w-full sm:w-48"
         />
       </div>
       <div>
@@ -230,8 +230,8 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
   )
 
   return (
-    <div className="mx-auto max-w-3xl space-y-4 overflow-y-auto p-6">
-      <div className="flex items-center justify-between">
+    <div className="mx-auto max-w-3xl space-y-4 overflow-y-auto p-3 md:p-6">
+      <div className="flex flex-wrap items-center justify-between gap-2">
         <h1 className="text-lg font-semibold text-zinc-100">
           项目 · {projects.find((p) => p.id === currentProjectId)?.title ?? ''}
         </h1>
@@ -241,9 +241,9 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
       {creating && newProjectForm('创建并打开')}
 
       {editForm && (
-        <Card className="space-y-4 p-5">
+        <Card className="space-y-4 p-4 md:p-5">
           <div className="text-sm font-medium text-zinc-200">编辑项目</div>
-          <div className="grid grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
             <div>
               <Label>书名 *</Label>
               <Input
@@ -265,7 +265,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
               type="number"
               value={editForm.targetWords}
               onChange={(e) => setEditForm({ ...editForm, targetWords: e.target.value })}
-              className="w-48"
+              className="w-full sm:w-48"
             />
           </div>
           <div>
@@ -293,7 +293,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
             <span className="text-sm font-medium text-zinc-200">创作路线</span>
             <span className="text-xs text-zinc-600">建议按 1→4 顺序推进</span>
           </div>
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             {renderStep(
               '1',
               '世界观',

@@ -165,6 +165,7 @@ export default function App() {
   const [currentProject, setCurrentProject] = useState<Project | null>(null)
   const [projectsList, setProjectsList] = useState<Project[]>([])
   const [menuOpen, setMenuOpen] = useState(false)
+  const [navOpen, setNavOpen] = useState(false)
   const wbBadge = useWbGenNavBadge()
 
   const refresh = useCallback(() => {
@@ -201,6 +202,7 @@ export default function App() {
 
   const navigate = useCallback<Navigate>(
     (target, focusOutlineId, graphNodeId) => {
+      setNavOpen(false)
       const blocked = cfg !== null && !cfg.currentProjectId && CREATIVE_PAGES.has(target)
       const finalTarget = blocked ? 'projects' : target
       setPage(finalTarget)
@@ -239,8 +241,48 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <Toaster />
-      <div className="flex min-h-0 flex-1">
-        <aside className="flex w-52 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900/80">
+      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900/95 px-3 md:hidden">
+        <button
+          onClick={() => setNavOpen(true)}
+          aria-label="打开导航"
+          className="flex h-9 w-9 cursor-pointer items-center justify-center rounded-md text-zinc-300 hover:bg-zinc-800"
+        >
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-5 w-5">
+            <path d="M4 6h16M4 12h16M4 18h16" strokeLinecap="round" />
+          </svg>
+        </button>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          className="h-5 w-5 shrink-0 text-amber-500"
+        >
+          <path d="M12 6.5C10.5 5 8.5 4.5 4.5 4.5v13c4 0 6 .5 7.5 2 1.5-1.5 3.5-2 7.5-2v-13c-4 0-6 .5-7.5 2Z" />
+          <path d="M12 6.5v13" />
+        </svg>
+        <span className="truncate text-sm font-medium text-zinc-100">
+          {currentProject ? currentProject.title : 'Novel Maker'}
+        </span>
+        <button
+          onClick={() => navigate('projects')}
+          className="ml-auto shrink-0 cursor-pointer rounded-md px-2.5 py-1.5 text-xs text-zinc-400 hover:bg-zinc-800 hover:text-zinc-200"
+        >
+          项目
+        </button>
+      </header>
+      <div className="relative flex min-h-0 flex-1">
+        {navOpen && (
+          <div
+            className="fixed inset-0 z-40 bg-black/60 md:hidden"
+            onClick={() => setNavOpen(false)}
+          />
+        )}
+        <aside
+          className={`fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 transition-transform duration-200 md:static md:z-auto md:w-52 md:translate-x-0 ${
+            navOpen ? 'translate-x-0' : '-translate-x-full'
+          }`}
+        >
           <div className="flex items-center gap-2.5 px-4 py-4">
             <svg
               viewBox="0 0 24 24"
@@ -252,12 +294,21 @@ export default function App() {
               <path d="M12 6.5C10.5 5 8.5 4.5 4.5 4.5v13c4 0 6 .5 7.5 2 1.5-1.5 3.5-2 7.5-2v-13c-4 0-6 .5-7.5 2Z" />
               <path d="M12 6.5v13" />
             </svg>
-            <div>
+            <div className="min-w-0">
               <div className="text-sm font-semibold text-zinc-100">Novel Maker</div>
               <div className="text-[10px] text-zinc-500">
                 {cfg ? `${providerPreset(cfg.provider).label} 长篇创作` : '长篇创作'}
               </div>
             </div>
+            <button
+              onClick={() => setNavOpen(false)}
+              aria-label="关闭导航"
+              className="ml-auto flex h-8 w-8 shrink-0 cursor-pointer items-center justify-center rounded-md text-zinc-400 hover:bg-zinc-800 md:hidden"
+            >
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="h-4 w-4">
+                <path d="M6 6l12 12M18 6 6 18" strokeLinecap="round" />
+              </svg>
+            </button>
           </div>
           <div className="relative mx-3">
             <button
@@ -370,7 +421,7 @@ export default function App() {
         </main>
       </div>
       <footer
-        className="flex h-8 shrink-0 cursor-pointer items-center gap-4 border-t border-zinc-800 bg-zinc-900/80 px-4 text-[11px] text-zinc-500 hover:text-zinc-300"
+        className="hidden h-8 shrink-0 cursor-pointer items-center gap-4 overflow-x-auto border-t border-zinc-800 bg-zinc-900/80 px-4 text-[11px] text-zinc-500 hover:text-zinc-300 md:flex"
         onClick={() => setPage('usage')}
       >
         <span>

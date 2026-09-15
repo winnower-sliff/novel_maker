@@ -1,5 +1,3 @@
-import { writeFile } from 'node:fs/promises'
-import { dialog } from 'electron'
 import { Document, HeadingLevel, Packer, Paragraph } from 'docx'
 import type { ExportFormat } from '../shared/types'
 import * as store from './store'
@@ -11,7 +9,20 @@ interface ExportOptions {
   outlineId?: string
 }
 
-export async function exportProject(opts: ExportOptions): Promise<{ path: string; words: number }> {
+export interface BuiltExport {
+  filename: string
+  mime: string
+  data: Buffer
+  words: number
+}
+
+const MIME: Record<ExportFormat, string> = {
+  txt: 'text/plain; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+}
+
+export async function buildExport(opts: ExportOptions): Promise<BuiltExport> {
   const project = store.listProjects().find((p) => p.id === opts.projectId)
   if (!project) throw new Error('项目不存在')
   const outlines = store.listOutlines(opts.projectId)
@@ -24,18 +35,14 @@ export async function exportProject(opts: ExportOptions): Promise<{ path: string
 
   const words = entries.reduce((a, x) => a + (x.chapter?.wordCount ?? 0), 0)
   const suffix = opts.scope === 'single' ? `-第${entries[0].outline.chapterNo}章` : ''
-  const { canceled, filePath } = await dialog.showSaveDialog({
-    title: '导出',
-    defaultPath: `${project.title}${suffix}.${opts.format}`,
-    filters: [{ name: opts.format.toUpperCase(), extensions: [opts.format] }]
-  })
-  if (canceled || !filePath) throw new Error('已取消导出')
+  const filename = `${project.title}${suffix}.${opts.format}`
 
+  let data: Buffer
   if (opts.format === 'txt') {
     const text = entries
       .map((x) => `第${x.outline.chapterNo}章 ${x.outline.title}\n\n${x.chapter?.content ?? ''}`)
       .join('\n\n\n')
-    await writeFile(filePath, text, 'utf-8')
+    data = Buffer.from(text, 'utf-8')
   } else if (opts.format === 'md') {
     const md = [
       `# ${project.title}`,
@@ -47,7 +54,7 @@ export async function exportProject(opts: ExportOptions): Promise<{ path: string
         ''
       ])
     ].join('\n')
-    await writeFile(filePath, md, 'utf-8')
+    data = Buffer.from(md, 'utf-8')
   } else {
     const doc = new Document({
       sections: [
@@ -67,8 +74,7 @@ export async function exportProject(opts: ExportOptions): Promise<{ path: string
         }
       ]
     })
-    const buf = await Packer.toBuffer(doc)
-    await writeFile(filePath, buf)
+    data = await Packer.toBuffer(doc)
   }
-  return { path: filePath, words }
+  return { filename, mime: MIME[opts.format], data, words }
 }

@@ -1,7 +1,14 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
-import type { ModelRouting, ProviderProfile, SettingsPatch, SettingsView } from '../shared/types'
+import type {
+  ModelRouting,
+  ProviderProfile,
+  ServerConfig,
+  SettingsPatch,
+  SettingsView
+} from '../shared/types'
 import { PROVIDER_IDS, isProviderId, providerPreset, type ProviderId } from '../shared/providers'
 
 interface KeyPair {
@@ -15,6 +22,7 @@ interface StoredSettings {
   apiKeys: Partial<Record<ProviderId, KeyPair>>
   quota5hPrompts: number
   currentProjectId: string
+  server: ServerConfig
 }
 
 interface LegacySettings {
@@ -57,16 +65,38 @@ function uniqProviders(ids: ProviderId[]): ProviderId[] {
   return [...new Set(ids)]
 }
 
+const DEFAULT_SERVER_PORT = 3910
+
+export function defaultServerConfig(): ServerConfig {
+  return { enabled: true, port: DEFAULT_SERVER_PORT, passwordHash: '', passwordSalt: '' }
+}
+
+function normalizeServer(raw?: Partial<ServerConfig>): ServerConfig {
+  const d = defaultServerConfig()
+  const port = Number(raw?.port)
+  return {
+    enabled: raw?.enabled !== undefined ? !!raw.enabled : d.enabled,
+    port: Number.isFinite(port) && port >= 1 && port <= 65535 ? Math.floor(port) : d.port,
+    passwordHash: typeof raw?.passwordHash === 'string' ? raw.passwordHash : '',
+    passwordSalt: typeof raw?.passwordSalt === 'string' ? raw.passwordSalt : ''
+  }
+}
+
+function emptyStored(): StoredSettings {
+  return {
+    provider: 'glm',
+    profiles: {},
+    apiKeys: {},
+    quota5hPrompts: 0,
+    currentProjectId: '',
+    server: defaultServerConfig()
+  }
+}
+
 function readStored(): StoredSettings {
   const file = settingsFile()
   if (!existsSync(file)) {
-    return {
-      provider: 'glm',
-      profiles: {},
-      apiKeys: {},
-      quota5hPrompts: 0,
-      currentProjectId: ''
-    }
+    return emptyStored()
   }
   let raw: (Partial<StoredSettings> & LegacySettings) | null = null
   try {
@@ -75,13 +105,7 @@ function readStored(): StoredSettings {
     raw = null
   }
   if (!raw) {
-    return {
-      provider: 'glm',
-      profiles: {},
-      apiKeys: {},
-      quota5hPrompts: 0,
-      currentProjectId: ''
-    }
+    return emptyStored()
   }
 
   const provider = isProviderId(raw.provider) ? raw.provider : 'glm'
@@ -108,8 +132,55 @@ function readStored(): StoredSettings {
     profiles,
     apiKeys,
     quota5hPrompts: Math.max(0, Math.floor(raw.quota5hPrompts ?? 0) || 0),
-    currentProjectId: raw.currentProjectId ?? ''
+    currentProjectId: raw.currentProjectId ?? '',
+    server: normalizeServer(raw.server)
   }
+}
+
+function writeStored(stored: StoredSettings): void {
+  writeFileSync(settingsFile(), JSON.stringify(stored, null, 2), 'utf-8')
+}
+
+export function hashPassword(password: string): { salt: string; hash: string } {
+  const salt = randomBytes(16).toString('hex')
+  const hash = scryptSync(password, salt, 64).toString('hex')
+  return { salt, hash }
+}
+
+export function verifyPassword(password: string, salt: string, hash: string): boolean {
+  if (!salt || !hash) return false
+  const calculated = scryptSync(password, salt, 64)
+  const expected = Buffer.from(hash, 'hex')
+  return calculated.length === expected.length && timingSafeEqual(calculated, expected)
+}
+
+export function loadServerConfig(): ServerConfig {
+  return readStored().server
+}
+
+export function saveServerConfig(patch: {
+  enabled?: boolean
+  port?: number
+  password?: string | null
+}): ServerConfig {
+  const stored = readStored()
+  const server: ServerConfig = { ...stored.server }
+  if (patch.enabled !== undefined) server.enabled = !!patch.enabled
+  if (patch.port !== undefined && Number.isFinite(patch.port)) {
+    server.port = Math.min(65535, Math.max(1, Math.floor(patch.port)))
+  }
+  if (patch.password !== undefined) {
+    if (patch.password) {
+      const { salt, hash } = hashPassword(patch.password)
+      server.passwordSalt = salt
+      server.passwordHash = hash
+    } else {
+      server.passwordSalt = ''
+      server.passwordHash = ''
+    }
+  }
+  writeStored({ ...stored, server })
+  return server
 }
 
 function decodeKey(pair?: KeyPair): string {
@@ -207,13 +278,14 @@ export async function saveSettings(patch: SettingsPatch): Promise<SettingsView> 
       patch.quota5hPrompts !== undefined
         ? Math.max(0, Math.floor(patch.quota5hPrompts) || 0)
         : stored.quota5hPrompts,
-    currentProjectId: patch.currentProjectId ?? stored.currentProjectId
+    currentProjectId: patch.currentProjectId ?? stored.currentProjectId,
+    server: stored.server
   }
   if (patch.apiKey !== undefined) {
     const trimmed = patch.apiKey.trim()
     if (trimmed) next.apiKeys[provider] = encodeKey(trimmed)
     else delete next.apiKeys[provider]
   }
-  writeFileSync(settingsFile(), JSON.stringify(next, null, 2), 'utf-8')
+  writeStored(next)
   return loadSettingsView()
 }

@@ -351,9 +351,9 @@ export default function Agent({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col gap-3 p-4">
-      <div className="flex items-center gap-3">
-        <div className="w-56">
+    <div className="flex h-full flex-col gap-3 p-3 md:p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="w-full sm:w-56">
           <div className="mb-1.5 text-xs font-medium text-zinc-400">会话</div>
           <div className="flex gap-1.5">
             <Select
@@ -376,7 +376,7 @@ export default function Agent({ projectId }: { projectId: string }) {
             )}
           </div>
         </div>
-        <div className="w-56">
+        <div className="w-full sm:w-56">
           <div className="mb-1.5 text-xs font-medium text-zinc-400">模型</div>
           <Select
             value={model}

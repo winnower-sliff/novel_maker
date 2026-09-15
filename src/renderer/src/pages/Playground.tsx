@@ -97,9 +97,9 @@ export default function Playground() {
   }
 
   return (
-    <div className="flex h-full flex-col gap-3 p-4">
-      <div className="flex items-center gap-3">
-        <div className="w-64">
+    <div className="flex h-full flex-col gap-3 p-3 md:p-4">
+      <div className="flex flex-wrap items-center gap-3">
+        <div className="w-full sm:w-64">
           <Label>模型</Label>
           <Select
             value={model}

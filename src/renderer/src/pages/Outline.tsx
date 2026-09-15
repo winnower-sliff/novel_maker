@@ -129,9 +129,9 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
   }
 
   return (
-    <div className="flex h-full flex-col gap-3 overflow-y-auto p-4">
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-3">
+    <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 md:p-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center gap-3">
           <h1 className="text-lg font-semibold text-zinc-100">大纲</h1>
           <span className="text-xs text-zinc-500">
             共 {items.length} 章
@@ -171,7 +171,7 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
               disabled={generating}
             />
           </div>
-          <div className="grid grid-cols-3 gap-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
               <Label>卷号</Label>
               <Input type="number" value={volume} onChange={(e) => setVolume(e.target.value)} disabled={generating} />
@@ -243,12 +243,12 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
       )}
 
       {edit && (
-        <Card className="grid grid-cols-12 gap-3 p-4">
-          <div className="col-span-2">
+        <Card className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-12 md:p-4">
+          <div className="col-span-1 sm:col-span-2">
             <Label>卷</Label>
             <Input type="number" value={edit.volume} onChange={(e) => setEdit({ ...edit, volume: e.target.value })} />
           </div>
-          <div className="col-span-2">
+          <div className="col-span-1 sm:col-span-2">
             <Label>章号 *</Label>
             <Input
               type="number"
@@ -256,11 +256,11 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
               onChange={(e) => setEdit({ ...edit, chapterNo: e.target.value })}
             />
           </div>
-          <div className="col-span-4">
+          <div className="col-span-2 sm:col-span-4">
             <Label>章节名</Label>
             <Input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
           </div>
-          <div className="col-span-3">
+          <div className="col-span-2 sm:col-span-3">
             <Label>状态</Label>
             <Select
               value={edit.status}
@@ -274,7 +274,7 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
               ))}
             </Select>
           </div>
-          <div className="col-span-12">
+          <div className="col-span-2 sm:col-span-12">
             <Label>梗概</Label>
             <Textarea
               rows={3}
@@ -283,7 +283,7 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
               placeholder="本章目标 / 关键冲突 / 结尾钩子"
             />
           </div>
-          <div className="col-span-12 flex justify-end gap-2">
+          <div className="col-span-2 flex justify-end gap-2 sm:col-span-12">
             <Button variant="ghost" onClick={() => setEdit(null)}>
               取消
             </Button>
