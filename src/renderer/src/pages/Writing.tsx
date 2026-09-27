@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { ChapterBrief, ContextPart } from '@shared/types'
+import type { ChapterBrief, ContextPart, ReviewResult } from '@shared/types'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
+import { DiffView } from '../components/DiffView'
 import { fmtDuration, fmtTokens } from '../lib/format'
 import { runPipeline, type DonePayload } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
@@ -16,6 +17,12 @@ interface ChapterDoneData {
 interface SummaryDoneData {
   planted?: number
   resolved?: number
+  parsed?: boolean
+  error?: string
+}
+
+interface StateSyncDoneData {
+  updated?: Array<{ id: string; name: string }>
   parsed?: boolean
   error?: string
 }
@@ -43,7 +50,7 @@ const STATUS_BADGE: Record<string, { label: string; tone: 'default' | 'amber' | 
   polished: { label: '已润色', tone: 'green' }
 }
 
-type Busy = 'chapter' | 'summary' | 'polish' | 'check' | null
+type Busy = 'chapter' | 'summary' | 'polish' | 'expand' | 'check' | 'review' | 'stateSync' | null
 
 interface Props {
   projectId: string
@@ -62,12 +69,17 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const [lastUsage, setLastUsage] = useState<DonePayload | null>(null)
   const [ctxPreview, setCtxPreview] = useState<ContextPart[] | null>(null)
   const [checkResult, setCheckResult] = useState<{ issues: CheckIssue[]; parsed: boolean } | null>(null)
+  const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null)
+  const [candidate, setCandidate] = useState<{ kind: 'polish' | 'expand'; text: string } | null>(null)
+  const [wordTarget, setWordTarget] = useState('2700')
+  const candidateRef = useRef('')
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchFrom, setBatchFrom] = useState('')
   const [batchTo, setBatchTo] = useState('')
   const [pauseEach, setPauseEach] = useState(true)
   const [batch, setBatch] = useState<BatchState | null>(null)
   const requestIdRef = useRef<string | null>(null)
+  const streamTargetRef = useRef<'editor' | 'candidate'>('editor')
   const polishedRef = useRef(false)
   const batchStopRef = useRef(false)
   const batchAbortRef = useRef<string | null>(null)
@@ -85,6 +97,9 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     setCtxPreview(null)
     setNotice('')
     setCheckResult(null)
+    setReviewResult(null)
+    setCandidate(null)
+    candidateRef.current = ''
     polishedRef.current = false
     void window.api.novel.chapter(outlineId).then((c) => {
       setContent(c?.content ?? '')
@@ -110,7 +125,13 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
 
   useEffect(() => {
     const offDelta = window.api.llm.onDelta((id, text) => {
-      if (id === requestIdRef.current) setContent((prev) => prev + text)
+      if (id !== requestIdRef.current) return
+      if (streamTargetRef.current === 'candidate') {
+        candidateRef.current += text
+        setCandidate((prev) => (prev ? { ...prev, text: prev.text + text } : null))
+      } else {
+        setContent((prev) => prev + text)
+      }
     })
     const offDone = window.api.llm.onDone((id, payload) => {
       if (id !== requestIdRef.current) return
@@ -127,11 +148,14 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         )
         setCtxPreview(d?.contextParts ?? null)
         loadBriefs()
-      } else if (payload.action === 'polish') {
+      } else if (payload.action === 'polish' || payload.action === 'expand') {
         setBusy(null)
-        setDirty(true)
-        polishedRef.current = true
-        setNotice('润色稿已生成，审阅后点「保存草稿」应用（将覆盖原稿并标记为已润色）')
+        setCandidate({ kind: payload.action, text: candidateRef.current })
+        setNotice(
+          payload.action === 'polish'
+            ? '润色稿已生成：在下方 diff 视图逐块取舍后应用（不会直接覆盖原稿）'
+            : '扩写稿已生成：在下方 diff 视图逐块取舍后应用（不会直接覆盖原稿）'
+        )
       }
     })
     const offError = window.api.llm.onError((id, message) => {
@@ -139,10 +163,14 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
       setBusy(null)
       setNotice(`出错：${message}`)
     })
+    const offNotice = window.api.llm.onNotice((_id, message) => {
+      setNotice(message)
+    })
     return () => {
       offDelta()
       offDone()
       offError()
+      offNotice()
     }
   }, [loadBriefs])
 
@@ -155,15 +183,25 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     )
   }
 
-  const startStreamToEditor = (action: 'chapter' | 'polish'): void => {
+  const startStream = (
+    action: 'chapter' | 'polish' | 'expand',
+    params?: Record<string, unknown>
+  ): void => {
     if (!selectedId || busy || batch?.running) return
-    setContent('')
+    if (action === 'chapter') {
+      setContent('')
+    } else {
+      candidateRef.current = ''
+      setCandidate(null)
+    }
+    streamTargetRef.current = action === 'chapter' ? 'editor' : 'candidate'
     setNotice('')
     setCtxPreview(null)
     setCheckResult(null)
+    setReviewResult(null)
     setBusy(action)
     void window.api.pipeline
-      .run(action, { outlineId: selectedId })
+      .run(action, { outlineId: selectedId, ...params })
       .then((id) => {
         requestIdRef.current = id
       })
@@ -180,13 +218,66 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
       !window.confirm('该章已有正文，重新生成将覆盖编辑器内容（原稿仍可放弃保存）。继续？')
     )
       return
-    startStreamToEditor('chapter')
+    startStream('chapter', { wordTarget: parseInt(wordTarget, 10) || undefined })
   }
 
   const polish = (): void => {
     if (!selected?.hasDraft) return
-    if (!window.confirm('润色将生成新稿覆盖编辑器（原稿审阅前不会保存替换）。继续？')) return
-    startStreamToEditor('polish')
+    startStream('polish')
+  }
+
+  const expand = (): void => {
+    if (!selected?.hasDraft || !selectedId) return
+    const current = content.replace(/\s/g, '').length
+    const target = window.prompt('扩写目标字数', String(Math.max(current + 1500, 3500)))
+    if (!target) return
+    const n = parseInt(target, 10)
+    if (!Number.isFinite(n) || n <= current) {
+      setNotice('目标字数需大于当前字数')
+      return
+    }
+    startStream('expand', { targetWords: n })
+  }
+
+  const applyCandidate = (text: string): void => {
+    setContent(text)
+    setDirty(true)
+    if (candidate?.kind === 'polish') polishedRef.current = true
+    setCandidate(null)
+    candidateRef.current = ''
+    setNotice('已应用修订（未保存，点「保存」落盘）')
+  }
+
+  const review = async (): Promise<void> => {
+    if (!selectedId || busy || batch?.running) return
+    if (dirty) {
+      setNotice('先保存草稿再评审（评审的是已保存正文）')
+      return
+    }
+    if (!selected?.hasDraft) return
+    setBusy('review')
+    setNotice('七维评审中…')
+    try {
+      const payload = await runPipeline('review', { outlineId: selectedId })
+      const d = payload.data as ReviewResult & { error?: string }
+      if (d?.error) setNotice(`评审失败：${d.error}`)
+      else {
+        setReviewResult(d ?? null)
+        const total = (d?.scores ?? []).reduce((a, s) => a + s.score, 0)
+        setNotice(
+          d?.parsed
+            ? `评审完成：${d.verdict === 'pass' ? '通过' : d.verdict === 'polish' ? '建议打磨' : '建议重写'}${
+                d.scores.length > 0 ? ` · 总分 ${total}/${d.scores.length * 10}` : ''
+              }`
+            : '评审完成但输出未解析为结构化结果'
+        )
+      }
+      setLastUsage(payload)
+    } catch (err) {
+      setNotice(`出错：${(err as Error).message}`)
+    } finally {
+      setBusy(null)
+    }
   }
 
   const check = async (): Promise<void> => {
@@ -277,15 +368,27 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         const payload = await runPipeline('summary', { outlineId: selectedId, finalize: true })
         const d = payload.data as SummaryDoneData
         setLastUsage(payload)
-        setNotice(
-          d?.error
-            ? `定稿完成，但摘要失败：${d.error}`
-            : d?.parsed
-              ? `已定稿并生成摘要${d.planted ? ` · 新登记伏笔 ${d.planted} 条` : ''}${
-                  d.resolved ? ` · 回收伏笔 ${d.resolved} 条` : ''
-                }`
-              : '已定稿，但摘要解析失败（可重试）'
-        )
+        let msg = d?.error
+          ? `定稿完成，但摘要失败：${d.error}`
+          : d?.parsed
+            ? `已定稿并生成摘要${d.planted ? ` · 新登记伏笔 ${d.planted} 条` : ''}${
+                d.resolved ? ` · 回收伏笔 ${d.resolved} 条` : ''
+              }`
+            : '已定稿，但摘要解析失败（可重试）'
+        if (!d?.error && d?.parsed) {
+          setBusy('stateSync')
+          setNotice('摘要完成，同步人物动态状态…')
+          try {
+            const sync = await runPipeline('stateSync', { outlineId: selectedId })
+            const sd = sync.data as StateSyncDoneData
+            if (sd?.parsed && sd.updated && sd.updated.length > 0) {
+              msg += ` · 已同步 ${sd.updated.length} 个人物状态（${sd.updated.map((u) => u.name).join('、')}）`
+            }
+          } catch {
+            /* 状态同步失败不阻断定稿 */
+          }
+        }
+        setNotice(msg)
         loadBriefs()
       } catch (err) {
         setNotice(`出错：${(err as Error).message}`)
@@ -480,14 +583,31 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   中断
                 </Button>
                 <span className="mx-1 w-px bg-zinc-700" />
+                <Select
+                  value={wordTarget}
+                  onChange={(e) => setWordTarget(e.target.value)}
+                  className="w-20 py-1 text-xs"
+                  title="生成字数目标"
+                >
+                  <option value="2000">2千</option>
+                  <option value="2700">2.7千</option>
+                  <option value="3500">3.5千</option>
+                  <option value="4500">4.5千</option>
+                </Select>
                 <Button onClick={generateDraft} disabled={busyAny}>
                   {busy === 'chapter' ? '生成中…' : selected.hasDraft ? '重新生成' : 'AI 初稿'}
                 </Button>
                 <Button variant="ghost" onClick={polish} disabled={busyAny || !selected.hasDraft}>
                   {busy === 'polish' ? '润色中…' : '润色'}
                 </Button>
+                <Button variant="ghost" onClick={expand} disabled={busyAny || !selected.hasDraft}>
+                  {busy === 'expand' ? '扩写中…' : '扩写'}
+                </Button>
                 <Button variant="ghost" onClick={() => void check()} disabled={busyAny || !selected.hasDraft}>
                   {busy === 'check' ? '检查中…' : '检查'}
+                </Button>
+                <Button variant="ghost" onClick={() => void review()} disabled={busyAny || !selected.hasDraft}>
+                  {busy === 'review' ? '评审中…' : '评审'}
                 </Button>
                 <Button
                   onClick={finalize}
@@ -611,6 +731,52 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               readOnly={busy !== null}
               placeholder={busy === 'chapter' ? '正在生成初稿…' : busy === 'polish' ? '正在润色…' : '点「AI 初稿」生成本章，或直接手写'}
             />
+
+            {candidate && busy === null && (
+              <div className="mt-2">
+                <DiffView
+                  oldText={content}
+                  newText={candidate.text}
+                  title={candidate.kind === 'polish' ? '润色修订（逐块取舍）' : '扩写修订（逐块取舍）'}
+                  onApply={applyCandidate}
+                  onDiscard={() => {
+                    setCandidate(null)
+                    candidateRef.current = ''
+                    setNotice('已放弃修订稿')
+                  }}
+                />
+              </div>
+            )}
+
+            {reviewResult && (
+              <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 p-2">
+                <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-zinc-300">
+                  七维评审
+                  <Badge tone={reviewResult.verdict === 'pass' ? 'green' : reviewResult.verdict === 'polish' ? 'amber' : 'red'}>
+                    {reviewResult.verdict === 'pass' ? '通过' : reviewResult.verdict === 'polish' ? '建议打磨' : '建议重写'}
+                  </Badge>
+                </div>
+                {reviewResult.scores.map((s, i) => (
+                  <div key={i} className="mb-1.5 border-l-2 border-zinc-700 pl-2 text-xs leading-5">
+                    <span className="mr-2 inline-flex items-center gap-1.5">
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">{s.dim}</span>
+                      <span
+                        className={
+                          s.score >= 8 ? 'text-emerald-400' : s.score >= 6 ? 'text-amber-400' : 'text-red-400'
+                        }
+                      >
+                        {s.score}/10
+                      </span>
+                    </span>
+                    <span className="text-zinc-400">{s.comment}</span>
+                    {s.quote && <div className="text-zinc-600">原文：{s.quote}</div>}
+                  </div>
+                ))}
+                {reviewResult.summary && (
+                  <div className="mt-1 text-xs text-zinc-400">总评：{reviewResult.summary}</div>
+                )}
+              </div>
+            )}
 
             {checkResult && (
               <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 p-2">
