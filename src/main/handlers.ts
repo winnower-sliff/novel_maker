@@ -41,7 +41,7 @@ import {
   loadAgentSession,
   saveAgentSession
 } from './agentSessions'
-import { LONG_CHAPTER_THRESHOLD, runLongChapter } from './chapterRunner'
+import { LONG_CHAPTER_THRESHOLD, runChapterCandidates, runLongChapter } from './chapterRunner'
 import { buildChapterContext } from './context'
 import type { EventSink } from './eventSink'
 import { buildProjectGraph } from './graph'
@@ -338,6 +338,81 @@ function startLongChapterStream(
   return requestId
 }
 
+/** 多候选选优：生成 N 个候选、程序打分、返回全部候选并落库最优 */
+function startChapterCandidatesStream(
+  sink: EventSink,
+  projectId: string,
+  outlineId: string,
+  wordTarget: number,
+  candidates: number
+): string {
+  const requestId = randomUUID()
+  const controller = new AbortController()
+  activeRequests.set(requestId, controller)
+
+  void (async () => {
+    try {
+      const started = Date.now()
+      const result = await runChapterCandidates({
+        sink,
+        requestId,
+        projectId,
+        outlineId,
+        wordTarget,
+        candidates,
+        signal: controller.signal
+      })
+      if (result.candidates.length === 0) throw new Error('候选生成失败')
+      const winner = result.candidates[result.winnerIndex]
+      const clean = stripHtmlComments(winner.text)
+      const chapter = store.saveChapter({
+        outlineId,
+        projectId,
+        content: clean,
+        status: 'draft'
+      })
+      enqueueEmbedding(projectId, 'summary', outlineId, clean.slice(0, 1200))
+      if (!sink.isClosed()) {
+        sink.send('llm:done', requestId, {
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          model: '',
+          stopReason: 'end_turn',
+          durationMs: Date.now() - started,
+          headers: {},
+          action: 'chapter' as PipelineAction,
+          data: {
+            chapterId: chapter.id,
+            wordCount: chapter.wordCount,
+            candidateMode: true,
+            winnerIndex: result.winnerIndex,
+            candidates: result.candidates.map((c) => ({
+              text: c.text,
+              score: c.score,
+              wordCount: c.wordCount,
+              issues: c.lint.issues.length,
+              pass: c.lint.pass
+            })),
+            lint: winner.lint
+          }
+        })
+      }
+    } catch (err) {
+      if (!sink.isClosed()) {
+        const message = controller.signal.aborted
+          ? '已停止'
+          : err instanceof LlmError
+            ? `[${err.status ?? '网络'}] ${err.message}`
+            : ((err as Error)?.message ?? String(err))
+        sink.send('llm:error', requestId, message)
+      }
+    } finally {
+      activeRequests.delete(requestId)
+    }
+  })()
+
+  return requestId
+}
+
 async function runWorldbuildRetrieval(p: WorldbuildGenParams): Promise<WorldbuildRetrieval | undefined> {  const req = buildWorldbuildRetrieveRequest(p)
   if (!req) return undefined
   try {
@@ -418,9 +493,22 @@ export const sharedHandlers: Record<string, Handler> = {
       })
     }
     if (action === 'chapter') {
-      const { outlineId, wordTarget } = params as { outlineId: string; wordTarget?: number }
+      const { outlineId, wordTarget, candidates } = params as {
+        outlineId: string
+        wordTarget?: number
+        candidates?: number
+      }
       const outline = store.getOutline(outlineId)
       if (!outline) throw new Error('章节不存在')
+      if (candidates && candidates >= 2) {
+        return startChapterCandidatesStream(
+          ctx.sink,
+          outline.projectId,
+          outlineId,
+          wordTarget ?? 2700,
+          candidates
+        )
+      }
       if (wordTarget && wordTarget >= LONG_CHAPTER_THRESHOLD) {
         return startLongChapterStream(ctx.sink, outline.projectId, outlineId, wordTarget)
       }

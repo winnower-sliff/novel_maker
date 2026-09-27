@@ -4,6 +4,7 @@ import type {
   OutlineGenParams,
   OutlineItem,
   ReviewResult,
+  ReviewScore,
   WorldbuildEntry,
   WorldbuildGenParams,
   WorldbuildPreviewEntry
@@ -225,18 +226,42 @@ export async function buildReviewRequest(projectId: string, outlineId: string): 
   }
 }
 
+const REVIEW_DIMS = ['设定一致性', '角色行为', '节奏', '叙事连贯', '伏笔', '钩子', '审美品质'] as const
+
 export function parseReviewResult(text: string): { result: ReviewResult; raw: string } {
   const obj = extractJsonObject(text)
   if (!obj) return { result: { verdict: 'polish', scores: [], summary: '', parsed: false }, raw: text }
-  const verdict = obj.verdict === 'rewrite' || obj.verdict === 'pass' ? obj.verdict : 'polish'
-  const scores = Array.isArray(obj.scores)
-    ? (obj.scores as Array<Record<string, unknown>>).map((s) => ({
-        dim: String(s.dim ?? ''),
-        score: Number(s.score) || 0,
-        quote: String(s.quote ?? ''),
-        comment: String(s.comment ?? '')
-      }))
-    : []
+  const rawProblems = Array.isArray(obj.problems) ? (obj.problems as Array<Record<string, unknown>>) : []
+  // 只认证据：无原文引证的问题丢弃
+  const problems = rawProblems
+    .map((p) => ({
+      dim: String(p.dim ?? '').trim(),
+      severity: p.severity === 'major' ? 'major' : 'minor',
+      quote: String(p.quote ?? '').trim(),
+      issue: String(p.issue ?? '').trim()
+    }))
+    .filter((p) => p.quote && p.issue)
+  // 程序算分：每维 10 分起扣，major -3 / minor -1，下限 0
+  const scores: ReviewScore[] = REVIEW_DIMS.map((dim) => {
+    const mine = problems.filter((p) => p.dim === dim || (p.dim && dim.includes(p.dim)) || (p.dim && p.dim.includes(dim)))
+    const penalty = mine.reduce((a, p) => a + (p.severity === 'major' ? 3 : 1), 0)
+    const score = Math.max(0, 10 - penalty)
+    const first = mine[0]
+    return {
+      dim,
+      score,
+      quote: first?.quote ?? '',
+      comment: mine.length === 0 ? '未见带引证的问题' : mine.map((p) => p.issue).join('；')
+    }
+  })
+  const total = scores.reduce((a, s) => a + s.score, 0)
+  const anyLow = scores.some((s) => s.score <= 4)
+  const hookOrAestheticLow = scores.some((s) => (s.dim === '钩子' || s.dim === '审美品质') && s.score <= 6)
+  const verdict: ReviewResult['verdict'] = anyLow
+    ? 'rewrite'
+    : total < 50 || hookOrAestheticLow
+      ? 'polish'
+      : 'pass'
   return {
     result: { verdict, scores, summary: String(obj.summary ?? ''), parsed: true },
     raw: text

@@ -88,6 +88,12 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null)
   const [candidate, setCandidate] = useState<{ kind: 'polish' | 'expand'; text: string } | null>(null)
   const [wordTarget, setWordTarget] = useState('2700')
+  const [candidateCount, setCandidateCount] = useState('0')
+  const [candidateSet, setCandidateSet] = useState<{
+    list: Array<{ text: string; score: number; wordCount: number; issues: number; pass: boolean }>
+    winnerIndex: number
+    selectedIndex: number
+  } | null>(null)
   const candidateRef = useRef('')
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchFrom, setBatchFrom] = useState('')
@@ -116,6 +122,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     setLintReport(null)
     setReviewResult(null)
     setCandidate(null)
+    setCandidateSet(null)
     candidateRef.current = ''
     polishedRef.current = false
     void window.api.novel.chapter(outlineId).then((c) => {
@@ -160,12 +167,25 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         polishedRef.current = false
         const lint = (payload.data as { lint?: LintReport }).lint ?? null
         setLintReport(lint)
+        const cand = (payload.data as {
+          candidateMode?: boolean
+          winnerIndex?: number
+          candidates?: Array<{ text: string; score: number; wordCount: number; issues: number; pass: boolean }>
+        })
+        if (cand.candidateMode && cand.candidates && cand.candidates.length > 0) {
+          const wi = cand.winnerIndex ?? 0
+          setCandidateSet({ list: cand.candidates, winnerIndex: wi, selectedIndex: wi })
+          setContent(cand.candidates[wi].text)
+          setDirty(false)
+        }
         setNotice(
           d?.error
             ? `生成完成但保存失败：${d.error}`
-            : `初稿完成：${d?.wordCount ?? 0} 字 · 上下文约 ${fmtTokens(d?.contextTokens ?? 0)} tokens${
-                lint && !lint.pass ? ` · 硬闸 ${lint.issues.length} 项待处理` : ''
-              }`
+            : cand.candidateMode
+              ? `已生成 ${cand.candidates?.length ?? 0} 个候选，最优第 ${(cand.winnerIndex ?? 0) + 1} 个（已存入编辑器，可在对比卡中切换）`
+              : `初稿完成：${d?.wordCount ?? 0} 字 · 上下文约 ${fmtTokens(d?.contextTokens ?? 0)} tokens${
+                  lint && !lint.pass ? ` · 硬闸 ${lint.issues.length} 项待处理` : ''
+                }`
         )
         setCtxPreview(d?.contextParts ?? null)
         loadBriefs()
@@ -219,7 +239,9 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     setNotice('')
     setCtxPreview(null)
     setCheckResult(null)
+    setLintReport(null)
     setReviewResult(null)
+    if (action === 'chapter') setCandidateSet(null)
     setBusy(action)
     void window.api.pipeline
       .run(action, { outlineId: selectedId, ...params })
@@ -239,7 +261,10 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
       !window.confirm('该章已有正文，重新生成将覆盖编辑器内容（原稿仍可放弃保存）。继续？')
     )
       return
-    startStream('chapter', { wordTarget: parseInt(wordTarget, 10) || undefined })
+    startStream('chapter', {
+      wordTarget: parseInt(wordTarget, 10) || undefined,
+      candidates: parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined
+    })
   }
 
   const polish = (): void => {
@@ -630,6 +655,16 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   <option value="3500">3.5千</option>
                   <option value="4500">4.5千</option>
                 </Select>
+                <Select
+                  value={candidateCount}
+                  onChange={(e) => setCandidateCount(e.target.value)}
+                  className="w-24 py-1 text-xs"
+                  title="多候选选优（成本 × N）"
+                >
+                  <option value="0">单稿</option>
+                  <option value="2">候选×2</option>
+                  <option value="3">候选×3</option>
+                </Select>
                 <Button onClick={generateDraft} disabled={busyAny}>
                   {busy === 'chapter' ? '生成中…' : selected.hasDraft ? '重新生成' : 'AI 初稿'}
                 </Button>
@@ -784,6 +819,38 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                     setNotice('已放弃修订稿')
                   }}
                 />
+              </div>
+            )}
+
+            {candidateSet && (
+              <div className="mt-2 flex flex-wrap items-center gap-2 rounded-md border border-amber-900/50 bg-amber-950/20 p-2 text-xs">
+                <span className="text-amber-300">候选对比（程序打分：硬闸分−字数偏差）：</span>
+                {candidateSet.list.map((c, i) => (
+                  <button
+                    key={i}
+                    onClick={() => {
+                      setCandidateSet({ ...candidateSet, selectedIndex: i })
+                      setContent(c.text)
+                      setDirty(true)
+                    }}
+                    className={`cursor-pointer rounded border px-2 py-0.5 ${
+                      candidateSet.selectedIndex === i
+                        ? 'border-amber-600 bg-amber-900/50 text-amber-200'
+                        : 'border-zinc-700 text-zinc-400 hover:text-zinc-200'
+                    }`}
+                    title={`${c.text.slice(0, 60)}…`}
+                  >
+                    候选{i + 1} · {c.score}分 · {c.wordCount}字
+                    {i === candidateSet.winnerIndex ? ' · 最优' : ''}
+                    {!c.pass ? ` · 硬闸${c.issues}项` : ''}
+                  </button>
+                ))}
+                <button
+                  className="ml-auto cursor-pointer text-zinc-500 hover:text-zinc-300"
+                  onClick={() => setCandidateSet(null)}
+                >
+                  关闭对比
+                </button>
               </div>
             )}
 

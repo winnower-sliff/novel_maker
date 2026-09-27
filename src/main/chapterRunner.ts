@@ -2,7 +2,8 @@ import type { BuiltContext, ChatParams } from '../shared/types'
 import type { EventSink } from './eventSink'
 import { buildChapterContext } from './context'
 import { chatStream, pickRatelimitHeaders } from './llm'
-import { extractJsonArray, skillBody } from './pipeline'
+import { lintChapterReport, type LintReport } from './lint'
+import { buildChapterRequest, extractJsonArray, skillBody } from './pipeline'
 import { resolveRequestAuth } from './settings'
 import * as store from './store'
 import { appendUsage } from './usage'
@@ -197,3 +198,71 @@ export function resolveChapterForLong(outlineId: string): { outlineId: string; p
   if (!outline) throw new Error('章节不存在')
   return { outlineId: outline.id, projectId: outline.projectId }
 }
+
+export interface CandidateResult {
+  text: string
+  score: number
+  wordCount: number
+  lint: LintReport
+}
+
+/**
+ * 多候选选优：同一章生成 N 个候选（温度递变制造多样性），
+ * 程序判据打分（硬闸 lint 分 + 字数贴合度），挑最优；候选全部返回供用户切换。
+ */
+export async function runChapterCandidates(opts: {
+  sink: EventSink
+  requestId: string
+  projectId: string
+  outlineId: string
+  wordTarget: number
+  candidates: number
+  signal: AbortSignal
+}): Promise<{ candidates: CandidateResult[]; winnerIndex: number }> {
+  const { sink, requestId, signal } = opts
+  const notice = (text: string): void => {
+    if (!sink.isClosed()) sink.send('llm:notice', requestId, text)
+  }
+  const built = await buildChapterRequest(opts.projectId, opts.outlineId, opts.wordTarget)
+  const auth = await resolveRequestAuth('chapter')
+  const n = Math.min(3, Math.max(2, opts.candidates))
+  const out: CandidateResult[] = []
+  for (let i = 0; i < n; i++) {
+    if (signal.aborted) break
+    notice(`候选 ${i + 1}/${n} 生成中…`)
+    const temperature = Math.min(1, 0.8 + i * 0.12)
+    const res = await chatStream(
+      {
+        ...built.params,
+        model: auth.model,
+        temperature,
+        cacheSystem: auth.promptCache && !!built.params.system
+      },
+      { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+      () => {},
+      signal
+    )
+    appendUsage({
+      ts: Date.now(),
+      model: res.model,
+      purpose: 'chapter',
+      inputTokens: res.usage.inputTokens,
+      outputTokens: res.usage.outputTokens,
+      cacheReadTokens: res.usage.cacheReadTokens,
+      cacheCreationTokens: res.usage.cacheCreationTokens,
+      durationMs: res.durationMs,
+      ratelimit: pickRatelimitHeaders(res.headers)
+    })
+    const text = res.text.trim()
+    const lint = lintChapterReport(opts.outlineId, text)
+    const deviation = opts.wordTarget > 0 ? Math.abs(lint.wordCount / opts.wordTarget - 1) : 0
+    const score = Math.max(0, lint.score - Math.round(Math.min(30, deviation * 40)))
+    out.push({ text, score, wordCount: lint.wordCount, lint })
+  }
+  let winnerIndex = 0
+  out.forEach((c, i) => {
+    if (c.score > out[winnerIndex].score) winnerIndex = i
+  })
+  return { candidates: out, winnerIndex }
+}
+
