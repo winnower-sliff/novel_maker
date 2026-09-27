@@ -82,43 +82,63 @@ async function pickWorldbuildSubgraph(
   }
 
   const mentionSet = new Set<string>()
+  const mentionHits = new Map<string, number>()
   for (const e of entries) {
-    const t = e.title.trim()
-    if (!t || t.length < 2) continue
-    if (
-      seeds.prevChapterContent.includes(t) ||
-      seeds.currentSynopsis.includes(t) ||
-      seeds.nextSynopsis.includes(t)
-    ) {
+    const candidates = [e.title.trim(), ...splitTags(e.keys)]
+    let hits = 0
+    for (const t of candidates) {
+      if (!t || t.length < 2) continue
+      if (
+        seeds.prevChapterContent.includes(t) ||
+        seeds.currentSynopsis.includes(t) ||
+        seeds.nextSynopsis.includes(t)
+      ) {
+        hits++
+      }
+    }
+    if (hits > 0) {
       mentionSet.add(e.id)
+      mentionHits.set(e.id, hits)
     }
   }
 
-  const semanticIds = new Set<string>()
+  const semanticScore = new Map<string, number>()
   for (const hit of await semanticSearch(projectId, seeds.query, ['worldbuild'], 8)) {
-    semanticIds.add(hit.refId)
+    semanticScore.set(hit.refId, hit.score)
   }
 
-  const selected = new Set<string>([...mentionSet, ...semanticIds])
+  const degree = new Map<string, number>()
+  for (const [, set] of neighbors) {
+    for (const n of set) degree.set(n, (degree.get(n) ?? 0) + 1)
+  }
+
+  const selected = new Set<string>([...mentionSet, ...semanticScore.keys()])
   for (const id of [...selected]) {
     for (const n of neighbors.get(id) ?? []) selected.add(n)
   }
   if (selected.size === 0) return { text: '', detail: `${entries.length} 条（未命中相关条目）` }
 
+  // 融合重排：提及次数(权重最高) + 语义相似度 + 图度数(弱加分)
+  const fused = [...selected].map((id) => {
+    const mention = mentionHits.get(id) ?? 0
+    const sem = semanticScore.get(id) ?? 0
+    const deg = Math.min(4, degree.get(id) ?? 0) * 0.02
+    const score = mention * 0.6 + sem * 0.35 + deg
+    return { id, score }
+  })
+  fused.sort((a, b) => b.score - a.score)
+
   const picked: WorldbuildEntry[] = []
+  const usedIds = new Set<string>()
   let used = 0
-  const order = [
-    ...[...mentionSet].map((id) => ({ id, rank: 0 })),
-    ...[...semanticIds].filter((id) => !mentionSet.has(id)).map((id) => ({ id, rank: 1 })),
-    ...[...selected].filter((id) => !mentionSet.has(id) && !semanticIds.has(id)).map((id) => ({ id, rank: 2 }))
-  ].sort((a, b) => a.rank - b.rank)
   const byId = new Map(entries.map((e) => [e.id, e]))
-  for (const { id } of order) {
+  for (const { id } of fused) {
     const e = byId.get(id)
     if (!e) continue
     const cost = Math.min(WB_CLIP, e.content.length)
     if (used + cost > WB_FULL_BUDGET) continue
     picked.push(e)
+    usedIds.add(id)
     used += cost
   }
   if (picked.length === 0) return { text: '', detail: `${entries.length} 条（预算内未注入）` }
@@ -131,7 +151,7 @@ async function pickWorldbuildSubgraph(
     })
     .join('\n\n')
   const restTitles = entries
-    .filter((e) => !picked.includes(e))
+    .filter((e) => !usedIds.has(e.id))
     .map((e) => `- [${e.category}] ${e.title}`)
     .join('\n')
   const text = [
@@ -171,6 +191,7 @@ function renderRecentSummaries(projectId: string, beforeOutlineId: string): { te
   const prev = outlines.slice(Math.max(0, idx - RECENT_SUMMARIES), idx)
   const blocks: string[] = []
   let used = 0
+  let ledger: string[] = []
   for (const o of [...prev].reverse()) {
     const chapter = store.getChapterByOutline(o.id)
     if (!chapter) continue
@@ -187,6 +208,9 @@ function renderRecentSummaries(projectId: string, beforeOutlineId: string): { te
         .filter(Boolean)
         .join('\n')
     )
+    if (ledger.length === 0 && s.ledger.length > 0) {
+      ledger = s.ledger.map((l) => `${l.name}=${l.value}`)
+    }
     used++
   }
   if (blocks.length === 0) {
@@ -207,7 +231,8 @@ function renderRecentSummaries(projectId: string, beforeOutlineId: string): { te
     }
     return { text: '', detail: '无', count: 0 }
   }
-  return { text: blocks.join('\n\n'), detail: `最近 ${used} 章摘要`, count: used }
+  const text = ledger.length > 0 ? `${blocks.join('\n\n')}\n\n【硬账台账（上一章末，数字必须衔接）】\n${ledger.join('；')}` : blocks.join('\n\n')
+  return { text, detail: `最近 ${used} 章摘要${ledger.length > 0 ? '（含硬账）' : ''}`, count: used }
 }
 
 function renderVolumeSummaries(projectId: string, currentVolume: number): { text: string; detail: string } {

@@ -242,6 +242,7 @@ const TOOLS: AgentTool[] = [
           category: e.category,
           title: e.title,
           tags: e.tags,
+          keys: e.keys,
           ...(full
             ? { content: clip(e.content, 3000).text }
             : { brief: briefOf(e.content), contentChars: e.content.length })
@@ -259,20 +260,21 @@ const TOOLS: AgentTool[] = [
     handler: (input, projectId) => {
       const e = store.listWorldbuild(projectId).find((x) => x.id === reqStr(input, 'id'))
       if (!e) throw new Error('未找到该词条')
-      return { id: e.id, category: e.category, title: e.title, tags: e.tags, content: e.content }
+      return { id: e.id, category: e.category, title: e.title, tags: e.tags, keys: e.keys, content: e.content }
     }
   },
   {
     def: {
       name: 'save_worldbuild',
       description:
-        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）',
+        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）；keys 为检索别名（逗号分隔，同一概念的其他叫法/简称/别称，供写作上下文按名命中，如「青云宗,青云,青宗」）',
       input_schema: schema(
         {
           id: optS('要修改的词条 id（新建时省略）'),
           category: s('类型，优先复用现有类型'),
           title: s('标题'),
           tags: optS('标签，逗号分隔（如：精灵,森林,魔法）'),
+          keys: optS('检索别名，逗号分隔（同一概念的其他叫法）'),
           content: optS('正文内容')
         },
         ['category', 'title']
@@ -303,6 +305,7 @@ const TOOLS: AgentTool[] = [
         category,
         title: reqStr(input, 'title'),
         tags: tags || undefined,
+        keys: optStr(input, 'keys'),
         content: optStr(input, 'content')
       })
       return { ok: true, id: saved.id, title: saved.title, created: !optStr(input, 'id') }

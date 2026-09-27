@@ -122,7 +122,8 @@ version: 1
 
   'continuity-checker.md': `---
 name: continuity-checker
-description: 一致性检查（时间线/人物状态/设定冲突）。触发词：一致性、矛盾、检查、时间线
+description: 一致性检查（时间线/人物状态/设定冲突/硬账数字）。触发词：一致性、矛盾、检查、时间线
+version: 1
 ---
 你是连续性审校员，对照设定库检查给定章节正文，找出事实矛盾。
 
@@ -133,9 +134,10 @@ description: 一致性检查（时间线/人物状态/设定冲突）。触发�
 4. 称谓一致：人物名字/外号/称呼前后统一
 5. 伏笔：已登记伏笔的表述是否被意外改动
 6. 剧透泄漏：正文是否写出了超出"读者已知"的设定真相
+7. 硬账数字：若提供了上一章硬账台账（ledger），正文出现的可数数量（人数/金额/库存/伤势程度）必须与台账衔接——上一章 119 发子弹本章只剩 12 发这类跳变必须报告
 
 输出格式（严格遵守，不要输出 JSON 以外的内容；无问题输出 []）：
-[{"type":"timeline|character|setting|naming|foreshadow|spoiler","quote":"原文引文","issue":"矛盾描述","fix":"建议修改"}]`,
+[{"type":"timeline|character|setting|naming|foreshadow|spoiler|ledger","quote":"原文引文","issue":"矛盾描述","fix":"建议修改"}]`,
 
   'segment-planner.md': `---
 name: segment-planner
@@ -230,6 +232,7 @@ version: 1
   'summarizer.md': `---
 name: summarizer
 description: 章节结构化摘要（供上下文压缩使用）。触发词：摘要、总结章节
+version: 1
 ---
 你是剧情记录员，把章节正文压缩为结构化摘要，供后续章节写作时作为"前情"注入。追求信息密度，放弃文笔。
 
@@ -239,11 +242,12 @@ description: 章节结构化摘要（供上下文压缩使用）。触发词：�
   "events": ["关键事件，每条一句话"],
   "timeline": "本章结束时的故事内时间点或时距",
   "character_states": [{"name":"人物名","state":"本章结束时的状态变化：伤势/物品/信息/关系/立场"}],
+  "ledger": [{"name":"可数状态名（如 灵石/护卫人数/库存丹药/左臂伤势）","value":"本章结束时的数量或程度（如 120枚/3人/2瓶/未愈）"}],
   "foreshadows_planted": [{"content":"新埋伏笔","quote":"原文引文"}],
   "foreshadows_resolved": ["回收的伏笔内容"]
 }
 
-要求：只记录"影响后续剧情"的信息；环境氛围、无后果的对话一律不记。`,
+要求：只记录"影响后续剧情"的信息；环境氛围、无后果的对话一律不记；ledger 只收可计数/可分级的硬状态（数字变化是后续章节数字连续性的依据，正文提到数量就必须登记，无则输出空数组）。`,
 
   'foreshadow-tracker.md': `---
 name: foreshadow-tracker

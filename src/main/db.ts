@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS worldbuild (
   title TEXT NOT NULL,
   content TEXT DEFAULT '',
   tags TEXT DEFAULT '',
+  keys TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -129,6 +130,9 @@ function migrate(d: DatabaseSync): void {
   const cols = d.prepare('PRAGMA table_info(worldbuild)').all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === 'tags')) {
     d.exec('ALTER TABLE worldbuild ADD COLUMN tags TEXT DEFAULT \'\'')
+  }
+  if (!cols.some((c) => c.name === 'keys')) {
+    d.exec("ALTER TABLE worldbuild ADD COLUMN keys TEXT DEFAULT ''")
   }
   const typeCols = d.prepare('PRAGMA table_info(worldbuild_types)').all() as Array<{ name: string }>
   if (!typeCols.some((c) => c.name === 'priority')) {

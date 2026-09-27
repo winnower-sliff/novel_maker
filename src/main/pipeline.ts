@@ -1074,6 +1074,12 @@ export function applySummaryResult(
           state: String(cs.state ?? '')
         }))
       : [],
+    ledger: Array.isArray(obj.ledger)
+      ? (obj.ledger as Array<Record<string, unknown>>).map((l) => ({
+          name: String(l.name ?? ''),
+          value: String(l.value ?? '')
+        })).filter((l) => l.name)
+      : [],
     foreshadowsPlanted: Array.isArray(obj.foreshadows_planted)
       ? (obj.foreshadows_planted as Array<Record<string, unknown>>).map((f) => ({
           content: String(f.content ?? ''),

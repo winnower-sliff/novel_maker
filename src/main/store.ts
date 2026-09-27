@@ -59,6 +59,7 @@ function mapWorldbuild(r: Row): WorldbuildEntry {
     category: (r.category as string) ?? '其他',
     title: r.title as string,
     tags: (r.tags as string) ?? '',
+    keys: (r.keys as string) ?? '',
     content: (r.content as string) ?? '',
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number
@@ -199,11 +200,12 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
       propagateWikiRenames(db, input.projectId, cur.title, input.title)
     }
     db.prepare(
-      'UPDATE worldbuild SET category = ?, title = ?, tags = ?, content = ?, updated_at = ? WHERE id = ?'
+      'UPDATE worldbuild SET category = ?, title = ?, tags = ?, keys = ?, content = ?, updated_at = ? WHERE id = ?'
     ).run(
       input.category,
       input.title,
       input.tags ?? cur.tags,
+      input.keys ?? cur.keys,
       input.content ?? cur.content,
       ts,
       input.id
@@ -212,8 +214,8 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
   }
   const id = randomUUID()
   db.prepare(
-    'INSERT INTO worldbuild (id, project_id, category, title, tags, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, input.projectId, input.category, input.title, input.tags ?? '', input.content ?? '', ts, ts)
+    'INSERT INTO worldbuild (id, project_id, category, title, tags, keys, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(id, input.projectId, input.category, input.title, input.tags ?? '', input.keys ?? '', input.content ?? '', ts, ts)
   return mapWorldbuild(db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(id) as Row)
 }
 
@@ -568,7 +570,7 @@ export function listForeshadows(projectId: string): Foreshadow[] {
   return getDb()
     .prepare('SELECT * FROM foreshadows WHERE project_id = ? ORDER BY created_at DESC')
     .all(projectId)
-    .map((r) => mapForeshadow(r as ForeshadowRow))
+    .map((r) => mapForeshadow(r as unknown as ForeshadowRow))
 }
 
 export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foreshadow {

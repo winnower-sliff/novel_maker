@@ -201,6 +201,10 @@ const api = {
     project: (projectId: string, query: string, limit?: number): Promise<SearchHit[]> =>
       ipcRenderer.invoke('search:project', projectId, query, limit)
   },
+  lint: {
+    run: (outlineId: string, text?: string): Promise<unknown> =>
+      ipcRenderer.invoke('lint:run', outlineId, text)
+  },
   pipeline: {
     run: (action: PipelineAction, params: unknown): Promise<string> =>
       ipcRenderer.invoke('pipeline:run', action, params)

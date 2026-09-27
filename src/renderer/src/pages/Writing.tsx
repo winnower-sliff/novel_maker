@@ -34,6 +34,21 @@ interface CheckIssue {
   fix: string
 }
 
+interface LintIssue {
+  rule: string
+  level: 'major' | 'minor'
+  quote: string
+  advice: string
+}
+
+interface LintReport {
+  issues: LintIssue[]
+  score: number
+  pass: boolean
+  wordCount: number
+  targetWords: number | null
+}
+
 interface BatchState {
   running: boolean
   paused: boolean
@@ -69,6 +84,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const [lastUsage, setLastUsage] = useState<DonePayload | null>(null)
   const [ctxPreview, setCtxPreview] = useState<ContextPart[] | null>(null)
   const [checkResult, setCheckResult] = useState<{ issues: CheckIssue[]; parsed: boolean } | null>(null)
+  const [lintReport, setLintReport] = useState<LintReport | null>(null)
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null)
   const [candidate, setCandidate] = useState<{ kind: 'polish' | 'expand'; text: string } | null>(null)
   const [wordTarget, setWordTarget] = useState('2700')
@@ -97,6 +113,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     setCtxPreview(null)
     setNotice('')
     setCheckResult(null)
+    setLintReport(null)
     setReviewResult(null)
     setCandidate(null)
     candidateRef.current = ''
@@ -141,10 +158,14 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         setBusy(null)
         setDirty(false)
         polishedRef.current = false
+        const lint = (payload.data as { lint?: LintReport }).lint ?? null
+        setLintReport(lint)
         setNotice(
           d?.error
             ? `生成完成但保存失败：${d.error}`
-            : `初稿完成：${d?.wordCount ?? 0} 字 · 上下文约 ${fmtTokens(d?.contextTokens ?? 0)} tokens`
+            : `初稿完成：${d?.wordCount ?? 0} 字 · 上下文约 ${fmtTokens(d?.contextTokens ?? 0)} tokens${
+                lint && !lint.pass ? ` · 硬闸 ${lint.issues.length} 项待处理` : ''
+              }`
         )
         setCtxPreview(d?.contextParts ?? null)
         loadBriefs()
@@ -246,6 +267,21 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     setCandidate(null)
     candidateRef.current = ''
     setNotice('已应用修订（未保存，点「保存」落盘）')
+  }
+
+  const runLint = async (): Promise<void> => {
+    if (!selectedId) return
+    try {
+      const r = (await window.api.lint.run(selectedId, content)) as LintReport
+      setLintReport(r)
+      setNotice(
+        r.pass
+          ? `硬闸通过（${r.wordCount} 字）`
+          : `硬闸发现 ${r.issues.length} 项问题（本地零成本检查）`
+      )
+    } catch (err) {
+      setNotice(`硬闸检查失败：${(err as Error).message}`)
+    }
   }
 
   const review = async (): Promise<void> => {
@@ -606,6 +642,9 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 <Button variant="ghost" onClick={() => void check()} disabled={busyAny || !selected.hasDraft}>
                   {busy === 'check' ? '检查中…' : '检查'}
                 </Button>
+                <Button variant="ghost" onClick={() => void runLint()} disabled={busyAny || !content.trim()}>
+                  硬闸
+                </Button>
                 <Button variant="ghost" onClick={() => void review()} disabled={busyAny || !selected.hasDraft}>
                   {busy === 'review' ? '评审中…' : '评审'}
                 </Button>
@@ -745,6 +784,43 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                     setNotice('已放弃修订稿')
                   }}
                 />
+              </div>
+            )}
+
+            {lintReport && (
+              <div className="mt-2 max-h-40 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 p-2">
+                <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-zinc-300">
+                  硬闸检查（本地零成本）
+                  <Badge tone={lintReport.pass ? 'green' : 'red'}>
+                    {lintReport.pass ? '通过' : `${lintReport.issues.length} 项`}
+                  </Badge>
+                  <span className="text-zinc-500">
+                    {lintReport.wordCount} 字
+                    {lintReport.targetWords ? ` / 目标 ${lintReport.targetWords}` : ''}
+                  </span>
+                  <button
+                    className="ml-auto cursor-pointer text-zinc-500 hover:text-zinc-300"
+                    onClick={() => setLintReport(null)}
+                  >
+                    关闭
+                  </button>
+                </div>
+                {lintReport.issues.length === 0 && (
+                  <div className="text-xs text-emerald-400">接缝、穿帮词、重复段、字数均正常</div>
+                )}
+                {lintReport.issues.map((iss, i) => (
+                  <div key={i} className="mb-1.5 border-l-2 border-zinc-700 pl-2 text-xs leading-5">
+                    <span
+                      className={`mr-2 rounded px-1.5 py-0.5 text-[10px] ${
+                        iss.level === 'major' ? 'bg-red-900/50 text-red-300' : 'bg-zinc-800 text-zinc-400'
+                      }`}
+                    >
+                      {iss.rule}
+                    </span>
+                    <span className="text-zinc-400">{iss.advice}</span>
+                    {iss.quote && <div className="text-zinc-600">原文：{iss.quote}</div>}
+                  </div>
+                ))}
               </div>
             )}
 

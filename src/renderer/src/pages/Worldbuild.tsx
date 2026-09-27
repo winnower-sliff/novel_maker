@@ -48,10 +48,11 @@ interface EditState {
   category: string
   title: string
   tags: string
+  keys: string
   content: string
 }
 
-const EMPTY: EditState = { category: '', title: '', tags: '', content: '' }
+const EMPTY: EditState = { category: '', title: '', tags: '', keys: '', content: '' }
 
 type Preview =
   | { type: 'entry'; entry: WorldbuildEntry }
@@ -403,6 +404,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
       category: e.category,
       title: e.title,
       tags: e.tags,
+      keys: e.keys,
       content: e.content
     }
     setEdit(next)
@@ -430,7 +432,8 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     (edit.title !== editInitialRef.current.title ||
       edit.content !== editInitialRef.current.content ||
       edit.category !== editInitialRef.current.category ||
-      edit.tags !== editInitialRef.current.tags)
+      edit.tags !== editInitialRef.current.tags ||
+      edit.keys !== editInitialRef.current.keys)
 
   const closeEdit = useCallback((): void => {
     if (editDirty && !window.confirm('有未保存的修改，确定放弃并关闭？')) return
@@ -504,6 +507,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           category: cat,
           title: edit.title.trim(),
           tags: tags.join(','),
+          keys: splitTags(edit.keys).join(','),
           content: edit.content
         })
         .then(() => {
@@ -962,6 +966,15 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                 onChange={(e) => setEdit({ ...edit, tags: e.target.value })}
                 onKeyDown={saveOnEnter}
                 placeholder="精灵,森林,魔法"
+              />
+            </div>
+            <div className="col-span-2 sm:col-span-6">
+              <Label>检索别名（逗号分隔，同一概念的其他叫法，写作时按名命中）</Label>
+              <Input
+                value={edit.keys}
+                onChange={(e) => setEdit({ ...edit, keys: e.target.value })}
+                onKeyDown={saveOnEnter}
+                placeholder="青云宗,青云,青宗"
               />
             </div>
             <div className="col-span-2 sm:col-span-6">

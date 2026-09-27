@@ -177,6 +177,9 @@ function installWebBridge(): void {
     search: {
       project: (projectId, query, limit) => rpc('search:project', [projectId, query, limit])
     },
+    lint: {
+      run: (outlineId, text) => rpc('lint:run', [outlineId, text])
+    },
     pipeline: {
       run: (action, params) => rpc('pipeline:run', [action, params])
     },

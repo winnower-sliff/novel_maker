@@ -231,6 +231,7 @@ export interface WorldbuildEntry {
   category: string
   title: string
   tags: string
+  keys: string
   content: string
   createdAt: number
   updatedAt: number
@@ -241,6 +242,7 @@ export interface WorldbuildInput {
   category: string
   title: string
   tags?: string
+  keys?: string
   content?: string
 }
 
@@ -305,6 +307,11 @@ export interface ChapterBrief extends OutlineItem {
   chapterStatus: string
 }
 
+export interface LedgerEntry {
+  name: string
+  value: string
+}
+
 export interface ChapterSummary {
   id: string
   chapterId: string
@@ -312,6 +319,7 @@ export interface ChapterSummary {
   events: string[]
   timeline: string
   characterStates: Array<{ name: string; state: string }>
+  ledger: LedgerEntry[]
   foreshadowsPlanted: Array<{ content: string; quote?: string }>
   foreshadowsResolved: string[]
   createdAt: number

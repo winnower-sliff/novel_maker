@@ -591,7 +591,7 @@ export const sharedHandlers: Record<string, Handler> = {
     store.listWorldbuild(projectId),
   'novel:worldbuildSave': (_ctx, input: WorldbuildInput & { id?: string }): WorldbuildEntry => {
     const saved = store.saveWorldbuild(input)
-    enqueueEmbedding(saved.projectId, 'worldbuild', saved.id, `${saved.title} ${saved.tags} ${saved.content}`)
+    enqueueEmbedding(saved.projectId, 'worldbuild', saved.id, `${saved.title} ${saved.keys} ${saved.tags} ${saved.content}`)
     return saved
   },
   'novel:worldbuildDelete': (_ctx, id: string): void => {
@@ -675,6 +675,8 @@ export const sharedHandlers: Record<string, Handler> = {
   'novel:volumeSummary': (_ctx, projectId: string, volume: number) =>
     store.getVolumeSummary(projectId, volume),
   'novel:volumeSummaries': (_ctx, projectId: string) => store.listVolumeSummaries(projectId),
+
+  'lint:run': (_ctx, outlineId: string, text?: string) => lintChapterReport(outlineId, text),
 
   'embedding:status': (_ctx, projectId?: string) => getEmbeddingStatus(projectId),
   'embedding:setEnabled': (_ctx, enabled: boolean): void => setEmbeddingEnabled(enabled),
