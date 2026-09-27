@@ -33,9 +33,18 @@ export const PURPOSES = [
   'summary',
   'polish',
   'check',
+  'review',
+  'expand',
   'agent'
 ] as const
 export type Purpose = (typeof PURPOSES)[number]
+
+export interface PurposeRoute {
+  provider?: ProviderId
+  model: string
+}
+
+export type ModelRouting = Partial<Record<Purpose, string | PurposeRoute>>
 
 export interface ToolDef {
   name: string
@@ -82,8 +91,6 @@ export interface UsageRecord {
   durationMs: number
   ratelimit?: Record<string, string>
 }
-
-export type ModelRouting = Partial<Record<Purpose, string>>
 
 export interface ProviderProfile {
   baseUrl: string
@@ -204,6 +211,7 @@ export interface Character {
   role: string
   tags: string
   card: string
+  state: string
   createdAt: number
   updatedAt: number
 }
@@ -214,6 +222,7 @@ export interface CharacterInput {
   role?: string
   tags?: string
   card?: string
+  state?: string
 }
 
 export interface WorldbuildEntry {
@@ -244,6 +253,11 @@ export interface OutlineItem {
   chapterNo: number
   title: string
   synopsis: string
+  role: string
+  suspense: string
+  twist: number
+  hook: string
+  foreshadowOps: string
   status: OutlineStatus
   createdAt: number
   updatedAt: number
@@ -255,6 +269,11 @@ export interface OutlineInput {
   chapterNo: number
   title?: string
   synopsis?: string
+  role?: string
+  suspense?: string
+  twist?: number
+  hook?: string
+  foreshadowOps?: string
   status?: OutlineStatus
 }
 
@@ -298,6 +317,13 @@ export interface ChapterSummary {
   createdAt: number
 }
 
+export interface VolumeSummary {
+  projectId: string
+  volume: number
+  summary: string
+  updatedAt: number
+}
+
 export interface Foreshadow {
   id: string
   projectId: string
@@ -305,6 +331,8 @@ export interface Foreshadow {
   plantedChapter: string
   status: string
   resolvedChapter: string
+  plannedResolve: string
+  priority: string
   createdAt: number
   updatedAt: number
 }
@@ -315,6 +343,8 @@ export interface ForeshadowInput {
   plantedChapter?: string
   status?: string
   resolvedChapter?: string
+  plannedResolve?: string
+  priority?: string
 }
 
 export interface ContextPart {
@@ -336,6 +366,10 @@ export type PipelineAction =
   | 'summary'
   | 'polish'
   | 'check'
+  | 'review'
+  | 'expand'
+  | 'volumeSummary'
+  | 'stateSync'
   | 'character'
   | 'worldbuild'
 
@@ -375,6 +409,20 @@ export interface OutlineGenParams {
   allowUpdate?: boolean
 }
 
+export interface ReviewScore {
+  dim: string
+  score: number
+  quote: string
+  comment: string
+}
+
+export interface ReviewResult {
+  verdict: 'rewrite' | 'polish' | 'pass'
+  scores: ReviewScore[]
+  summary: string
+  parsed: boolean
+}
+
 export type GraphNodeKind = 'character' | 'worldbuild' | 'outline' | 'foreshadow'
 
 export interface ProjectGraphNode {
@@ -389,11 +437,31 @@ export interface ProjectGraphNode {
 export interface ProjectGraphEdge {
   source: string
   target: string
+  rel?: string
 }
 
 export interface ProjectGraph {
   nodes: ProjectGraphNode[]
   edges: ProjectGraphEdge[]
+  danglingLinks: string[]
+}
+
+export interface SearchHit {
+  kind: 'worldbuild' | 'character' | 'chapter'
+  id: string
+  title: string
+  snippet: string
+  score: number
+}
+
+export interface EmbeddingStatus {
+  available: boolean
+  enabled: boolean
+  reason: string
+  model: string
+  count: number
+  downloading: boolean
+  progress: number
 }
 
 export type AgentToolState = 'running' | 'confirming' | 'ok' | 'error' | 'denied'

@@ -80,9 +80,32 @@ CREATE TABLE IF NOT EXISTS foreshadows (
   planted_chapter TEXT DEFAULT '',
   status TEXT DEFAULT 'open',
   resolved_chapter TEXT DEFAULT '',
+  planned_resolve TEXT DEFAULT '',
+  priority TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
+CREATE TABLE IF NOT EXISTS volume_summaries (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  volume INTEGER NOT NULL,
+  summary TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(project_id, volume)
+);
+CREATE TABLE IF NOT EXISTS embeddings (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  ref_id TEXT NOT NULL,
+  text_hash TEXT NOT NULL,
+  vec BLOB NOT NULL,
+  updated_at INTEGER NOT NULL,
+  UNIQUE(project_id, kind, ref_id)
+);
+CREATE INDEX IF NOT EXISTS idx_volume_summaries_project ON volume_summaries(project_id, volume);
+CREATE INDEX IF NOT EXISTS idx_embeddings_project ON embeddings(project_id, kind);
 CREATE INDEX IF NOT EXISTS idx_characters_project ON characters(project_id);
 CREATE INDEX IF NOT EXISTS idx_worldbuild_project ON worldbuild(project_id);
 CREATE INDEX IF NOT EXISTS idx_outlines_project ON outlines(project_id, volume, chapter_no);
@@ -113,5 +136,22 @@ function migrate(d: DatabaseSync): void {
     d.exec(
       "UPDATE worldbuild_types SET priority = CASE name WHEN '地理' THEN 10 WHEN '势力' THEN 20 WHEN '历史' THEN 30 WHEN '力量体系' THEN 40 WHEN '物品' THEN 50 WHEN '其他' THEN 10000 ELSE 100 END"
     )
+  }
+  const outlineCols = d.prepare('PRAGMA table_info(outlines)').all() as Array<{ name: string }>
+  if (!outlineCols.some((c) => c.name === 'role')) {
+    d.exec("ALTER TABLE outlines ADD COLUMN role TEXT DEFAULT ''")
+    d.exec("ALTER TABLE outlines ADD COLUMN suspense TEXT DEFAULT ''")
+    d.exec('ALTER TABLE outlines ADD COLUMN twist INTEGER DEFAULT 0')
+    d.exec("ALTER TABLE outlines ADD COLUMN hook TEXT DEFAULT ''")
+    d.exec("ALTER TABLE outlines ADD COLUMN foreshadow_ops TEXT DEFAULT ''")
+  }
+  const charCols = d.prepare('PRAGMA table_info(characters)').all() as Array<{ name: string }>
+  if (!charCols.some((c) => c.name === 'state')) {
+    d.exec("ALTER TABLE characters ADD COLUMN state TEXT DEFAULT ''")
+  }
+  const foreCols = d.prepare('PRAGMA table_info(foreshadows)').all() as Array<{ name: string }>
+  if (!foreCols.some((c) => c.name === 'planned_resolve')) {
+    d.exec("ALTER TABLE foreshadows ADD COLUMN planned_resolve TEXT DEFAULT ''")
+    d.exec("ALTER TABLE foreshadows ADD COLUMN priority TEXT DEFAULT ''")
   }
 }
