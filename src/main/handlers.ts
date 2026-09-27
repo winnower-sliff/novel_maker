@@ -556,12 +556,27 @@ export const sharedHandlers: Record<string, Handler> = {
       })
     }
     if (action === 'polish') {
-      const { outlineId } = params as { outlineId: string }
+      const { outlineId, focus, save } = params as {
+        outlineId: string
+        focus?: string
+        save?: boolean
+      }
       const outline = store.getOutline(outlineId)
       if (!outline) throw new Error('章节不存在')
-      return startStream(ctx.sink, buildPolishRequest(outline.projectId, outlineId), {
+      return startStream(ctx.sink, buildPolishRequest(outline.projectId, outlineId, focus), {
         action,
-        afterDone: (r) => ({ wordCount: r.text.replace(/\s/g, '').length })
+        afterDone: (r) => {
+          if (save) {
+            const chapter = store.saveChapter({
+              outlineId,
+              projectId: outline.projectId,
+              content: stripHtmlComments(r.text),
+              status: 'polished'
+            })
+            return { wordCount: chapter.wordCount, saved: true }
+          }
+          return { wordCount: r.text.replace(/\s/g, '').length }
+        }
       })
     }
     if (action === 'check') {

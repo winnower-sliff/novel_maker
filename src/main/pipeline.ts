@@ -149,14 +149,19 @@ export function buildSummaryRequest(projectId: string, outlineId: string): ChatP
   }
 }
 
-export function buildPolishRequest(projectId: string, outlineId: string): ChatParams {
+export function buildPolishRequest(
+  projectId: string,
+  outlineId: string,
+  focus?: string
+): ChatParams {
   const project = store.listProjects().find((x) => x.id === projectId)
   const outline = store.getOutline(outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
   if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法润色')
   const system = [
     skillBody('style-polisher'),
-    project?.styleGuide && `【作品风格】\n${project.styleGuide}`
+    project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
+    focus && `【本次定向修复重点（优先处理，其余保持原意）】\n${focus}`
   ]
     .filter(Boolean)
     .join('\n\n')
@@ -164,9 +169,12 @@ export function buildPolishRequest(projectId: string, outlineId: string): ChatPa
     model: '',
     system,
     messages: [
-      { role: 'user', content: `第${outline.chapterNo}章《${outline.title}》正文：\n\n${chapter.content}` }
+      {
+        role: 'user',
+        content: `第${outline.chapterNo}章《${outline.title}》正文：\n\n${chapter.content}`
+      }
     ],
-    maxTokens: 8192,
+    maxTokens: 16384,
     temperature: 0.5,
     purpose: 'polish'
   }

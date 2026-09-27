@@ -11,6 +11,9 @@ interface ChapterDoneData {
   wordCount?: number
   contextParts?: ContextPart[]
   contextTokens?: number
+  longMode?: boolean
+  segments?: number
+  lint?: LintReport
   error?: string
 }
 
@@ -478,17 +481,24 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const runBatchList = async (ids: string[]): Promise<void> => {
     batchStopRef.current = false
     setBatch({ running: true, paused: false, done: 0, total: ids.length, currentNo: 0, log: [] })
+    const results: boolean[] = []
+    let consecutiveFail = 0
+    const appendLog = (line: string): void =>
+      setBatch((prev) => (prev ? { ...prev, log: [...prev.log, line] } : prev))
+
     for (let i = 0; i < ids.length; i++) {
       if (batchStopRef.current) break
       const brief = briefs.find((b) => b.id === ids[i])
       if (!brief) continue
-      setBatch((prev) =>
-        prev
-          ? { ...prev, currentNo: brief.chapterNo, log: [...prev.log, `第${brief.chapterNo}章 生成中…`] }
-          : prev
-      )
+      setBatch((prev) => (prev ? { ...prev, currentNo: brief.chapterNo } : prev))
+      appendLog(`第${brief.chapterNo}章 生成中…`)
       try {
-        batchAbortRef.current = await window.api.pipeline.run('chapter', { outlineId: ids[i] })
+        batchAbortRef.current = await window.api.pipeline.run('chapter', {
+          outlineId: ids[i],
+          wordTarget: parseInt(wordTarget, 10) || undefined,
+          candidates:
+            parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined
+        })
         const gen = await new Promise<DonePayload>((resolve, reject) => {
           const offs: Array<() => void> = []
           const cleanup = (): void => offs.forEach((o) => o())
@@ -508,18 +518,43 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
           )
         })
         const d = gen.data as ChapterDoneData
-        setBatch((prev) =>
-          prev
-            ? {
-                ...prev,
-                done: prev.done + 1,
-                log: [...prev.log, `第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字，摘要中…`]
-              }
-            : prev
-        )
-        await runPipeline('summary', { outlineId: ids[i], finalize: false })
-        setBatch((prev) => (prev ? { ...prev, log: [...prev.log, `第${brief.chapterNo}章 ✓ 完成`] } : prev))
+        setBatch((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev))
+        appendLog(`第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字${d?.longMode ? `（长章 ${d.segments} 段）` : ''}`)
+
+        // 硬闸判定 + 自动返修（一次）
+        let passed = d?.lint?.pass !== false
+        if (!passed && d?.lint) {
+          const focus = d.lint.issues.map((it) => `- ${it.rule}：${it.advice}${it.quote ? `（原文：${it.quote}）` : ''}`).join('\n')
+          appendLog(`第${brief.chapterNo}章 硬闸未过（${d.lint.issues.length} 项），自动返修…`)
+          try {
+            await runPipeline('polish', { outlineId: ids[i], focus, save: true })
+            const re = (await window.api.lint.run(ids[i])) as LintReport
+            passed = re.pass
+            appendLog(passed ? `第${brief.chapterNo}章 返修通过` : `第${brief.chapterNo}章 返修仍未过 → 需人工`)
+          } catch (err) {
+            appendLog(`第${brief.chapterNo}章 返修失败：${(err as Error).message}`)
+          }
+        }
+
+        try {
+          await runPipeline('summary', { outlineId: ids[i], finalize: false })
+          appendLog(`第${brief.chapterNo}章 ${passed ? '✓ 完成' : '⚠ 已写入（需人工）'}`)
+        } catch (err) {
+          appendLog(`第${brief.chapterNo}章 摘要失败：${(err as Error).message}`)
+        }
         loadBriefs()
+
+        results.push(passed)
+        consecutiveFail = passed ? 0 : consecutiveFail + 1
+        const window10 = results.slice(-10)
+        const failIn10 = window10.filter((r) => !r).length
+        if (consecutiveFail >= 3 || (window10.length >= 10 && failIn10 >= 6)) {
+          appendLog(`⚠ 熔断：连续 ${consecutiveFail} 章未过（近期 ${failIn10}/${window10.length}）——暂停批量，建议先排查根因`)
+          resumeRef.current = ids.slice(i + 1)
+          setBatch((prev) => (prev ? { ...prev, paused: true } : prev))
+          return
+        }
+
         if (pauseEach && i < ids.length - 1 && !batchStopRef.current) {
           resumeRef.current = ids.slice(i + 1)
           setBatch((prev) => (prev ? { ...prev, paused: true } : prev))
