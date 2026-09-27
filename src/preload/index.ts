@@ -13,6 +13,7 @@ import type {
   ChatMessage,
   ChatParams,
   ChatResult,
+  EmbeddingStatus,
   Foreshadow,
   ForeshadowInput,
   ModelProbeOptions,
@@ -24,6 +25,7 @@ import type {
   Project,
   ProjectGraph,
   ProjectInput,
+  SearchHit,
   ServerConfigPatch,
   ServerStatus,
   SettingsPatch,
@@ -32,6 +34,7 @@ import type {
   SkillMeta,
   UsageRecord,
   UsageStats,
+  VolumeSummary,
   WorldbuildEntry,
   WorldbuildGenParams,
   WorldbuildInput,
@@ -97,6 +100,12 @@ const api = {
         cb(requestId, message)
       ipcRenderer.on('llm:error', listener)
       return () => ipcRenderer.off('llm:error', listener)
+    },
+    onNotice: (cb: (requestId: string, message: string) => void): (() => void) => {
+      const listener = (_e: unknown, requestId: string, message: string): void =>
+        cb(requestId, message)
+      ipcRenderer.on('llm:notice', listener)
+      return () => ipcRenderer.off('llm:notice', listener)
     }
   },
   usage: {
@@ -174,7 +183,23 @@ const api = {
     foreshadowDelete: (id: string): Promise<void> =>
       ipcRenderer.invoke('novel:foreshadowDelete', id),
     summary: (outlineId: string): Promise<ChapterSummary | null> =>
-      ipcRenderer.invoke('novel:summary', outlineId)
+      ipcRenderer.invoke('novel:summary', outlineId),
+    volumeSummary: (projectId: string, volume: number): Promise<VolumeSummary | null> =>
+      ipcRenderer.invoke('novel:volumeSummary', projectId, volume),
+    volumeSummaries: (projectId: string): Promise<VolumeSummary[]> =>
+      ipcRenderer.invoke('novel:volumeSummaries', projectId)
+  },
+  embedding: {
+    status: (projectId?: string): Promise<EmbeddingStatus> =>
+      ipcRenderer.invoke('embedding:status', projectId),
+    setEnabled: (enabled: boolean): Promise<void> =>
+      ipcRenderer.invoke('embedding:setEnabled', enabled),
+    rebuild: (projectId?: string): Promise<{ count: number }> =>
+      ipcRenderer.invoke('embedding:rebuild', projectId)
+  },
+  search: {
+    project: (projectId: string, query: string, limit?: number): Promise<SearchHit[]> =>
+      ipcRenderer.invoke('search:project', projectId, query, limit)
   },
   pipeline: {
     run: (action: PipelineAction, params: unknown): Promise<string> =>

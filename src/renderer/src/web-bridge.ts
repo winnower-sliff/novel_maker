@@ -121,7 +121,8 @@ function installWebBridge(): void {
       abort: (requestId) => rpc('llm:abort', [requestId]),
       onDelta: (cb) => on('llm:delta', cb),
       onDone: (cb) => on('llm:done', cb),
-      onError: (cb) => on('llm:error', cb)
+      onError: (cb) => on('llm:error', cb),
+      onNotice: (cb) => on('llm:notice', cb)
     },
     usage: {
       list: (limit) => rpc('usage:list', [limit]),
@@ -164,7 +165,17 @@ function installWebBridge(): void {
       foreshadows: (projectId) => rpc('novel:foreshadows', [projectId]),
       foreshadowSave: (input) => rpc('novel:foreshadowSave', [input]),
       foreshadowDelete: (id) => rpc('novel:foreshadowDelete', [id]),
-      summary: (outlineId) => rpc('novel:summary', [outlineId])
+      summary: (outlineId) => rpc('novel:summary', [outlineId]),
+      volumeSummary: (projectId, volume) => rpc('novel:volumeSummary', [projectId, volume]),
+      volumeSummaries: (projectId) => rpc('novel:volumeSummaries', [projectId])
+    },
+    embedding: {
+      status: (projectId) => rpc('embedding:status', [projectId]),
+      setEnabled: (enabled) => rpc('embedding:setEnabled', [enabled]),
+      rebuild: (projectId) => rpc('embedding:rebuild', [projectId])
+    },
+    search: {
+      project: (projectId, query, limit) => rpc('search:project', [projectId, query, limit])
     },
     pipeline: {
       run: (action, params) => rpc('pipeline:run', [action, params])
