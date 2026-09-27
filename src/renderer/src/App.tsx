@@ -14,6 +14,7 @@ import Usage from './pages/Usage'
 import Worldbuild from './pages/Worldbuild'
 import Writing from './pages/Writing'
 import { Toaster } from './components/Toaster'
+import { CreationWizard } from './components/CreationWizard'
 import { fmtTokens } from './lib/format'
 import type { Navigate, Page } from './lib/nav'
 import { useWbGenNavBadge } from './lib/wbGenStore'
@@ -241,6 +242,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <Toaster />
+      <CreationWizard onNavigate={navigate} />
       <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900/95 px-3 pt-[env(safe-area-inset-top)] md:hidden">
         <button
           onClick={() => setNavOpen(true)}

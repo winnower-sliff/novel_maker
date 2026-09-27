@@ -3,6 +3,7 @@ import type {
   ChatParams,
   OutlineGenParams,
   OutlineItem,
+  PremiseDraftResult,
   ReviewResult,
   ReviewScore,
   WorldbuildEntry,
@@ -99,6 +100,94 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
     maxTokens: 16384,
     temperature: 0.7,
     purpose: 'outline'
+  }
+}
+
+const PREMISE_SYSTEM = [
+  '你是小说项目的首席策划。根据作品信息产出一份可直接执行的创作前置方案，严格输出单个 JSON 对象，不要 markdown 代码块、不要任何解释文字：',
+  '{"worldbuild":{"brief":"世界观构建方向，200字以内，说明力量体系/势力/地理/历史等应如何设定","categories":["力量体系","势力"],"count":8},"characters":[{"name":"人物名","brief":"一句话人物需求（定位/特质/与主线的关系）"}],"outline":{"idea":"第一卷核心创意，200字以内，含主线起点与第一阶段冲突","count":20}}',
+  '要求：',
+  '- worldbuild.brief 给出明确的设定方向与基调，将作为下一步 AI 批量生成世界观条目的需求描述',
+  '- characters 覆盖主线必需的核心人物（主角 1 名 + 关键配角/对手 3-5 名），brief 将作为逐个生成人物卡的需求描述',
+  '- outline.idea 将作为下一步生成第一卷章节大纲的核心创意；outline.count 按目标字数估算（每章约 2500-3000 字），上限 40',
+  '- categories 从 力量体系/地理/势力/历史/物品/其他 中选择 3-5 个最必要的',
+  '- JSON 字符串内不得出现未转义的引号或换行'
+].join('\n')
+
+export function buildPremiseDraftRequest(projectId: string): ChatParams {
+  const project = store.listProjects().find((x) => x.id === projectId)
+  if (!project) throw new Error('项目不存在')
+  const wbTitles = store
+    .listWorldbuild(projectId)
+    .map((e) => e.title)
+    .slice(0, 30)
+  const charNames = store
+    .listCharacters(projectId)
+    .map((c) => c.name)
+    .slice(0, 30)
+  const outlineCount = store.listOutlines(projectId).length
+  const system = [
+    PREMISE_SYSTEM,
+    wbTitles.length > 0 && `【已有世界观条目（方案应与之衔接补全，避免重复）】\n${wbTitles.join('、')}`,
+    charNames.length > 0 && `【已有人物（方案应与之衔接补全，避免重复）】\n${charNames.join('、')}`,
+    outlineCount > 0 && `【已有大纲 ${outlineCount} 章】`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  const user = [
+    `书名：${project.title}`,
+    project.genre && `题材：${project.genre}`,
+    project.targetWords > 0 && `目标字数：${project.targetWords}`,
+    project.styleGuide && `风格指南：${project.styleGuide}`,
+    '',
+    '请输出创作前置方案 JSON。'
+  ]
+    .filter(Boolean)
+    .join('\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: 4096,
+    temperature: 0.8,
+    purpose: 'outline'
+  }
+}
+
+function clampInt(v: unknown, min: number, max: number, fallback: number): number {
+  const n = typeof v === 'number' ? Math.floor(v) : parseInt(String(v ?? ''), 10)
+  if (!Number.isFinite(n)) return fallback
+  return Math.min(max, Math.max(min, n))
+}
+
+export function parsePremiseDraft(text: string): PremiseDraftResult {
+  const obj = extractJsonObject(text)
+  if (!obj) throw new Error('未能解析前置方案 JSON，请重试')
+  const wb = (obj.worldbuild ?? {}) as Record<string, unknown>
+  const outline = (obj.outline ?? {}) as Record<string, unknown>
+  const rawChars = Array.isArray(obj.characters) ? obj.characters : []
+  const characters = rawChars
+    .map((c) => {
+      const r = (c ?? {}) as Record<string, unknown>
+      return { name: String(r.name ?? '').trim().slice(0, 20), brief: String(r.brief ?? '').trim() }
+    })
+    .filter((c) => c.name)
+  const categories = Array.isArray(wb.categories)
+    ? wb.categories.map((c) => String(c).trim()).filter(Boolean)
+    : []
+  const worldbuildBrief = String(wb.brief ?? '').trim()
+  const outlineIdea = String(outline.idea ?? '').trim()
+  if (!worldbuildBrief && !outlineIdea && characters.length === 0) {
+    throw new Error('前置方案内容为空，请重试')
+  }
+  return {
+    worldbuildBrief,
+    worldbuildCategories:
+      categories.length > 0 ? categories.slice(0, 8) : ['力量体系', '地理', '势力', '历史', '物品'],
+    worldbuildCount: clampInt(wb.count, 3, 12, 8),
+    characters,
+    outlineIdea,
+    outlineCount: clampInt(outline.count, 5, 40, 20)
   }
 }
 

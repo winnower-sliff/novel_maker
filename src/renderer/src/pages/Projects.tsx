@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from 'react'
 import type { Project } from '@shared/types'
 import { Badge, Button, Card, Input, Label, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
+import { openWizard } from '../lib/wizardStore'
 
 interface Props {
   currentProjectId: string
@@ -77,6 +78,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
         setStyleGuide('')
         load()
         onSwitch(p.id)
+        openWizard(p.id)
       })
       .catch((err: unknown) => window.alert(`创建失败：${(err as Error).message}`))
   }
@@ -292,6 +294,11 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
           <div className="mb-3 flex items-center gap-2">
             <span className="text-sm font-medium text-zinc-200">创作路线</span>
             <span className="text-xs text-zinc-600">建议按 1→4 顺序推进</span>
+            <div className="ml-auto">
+              <Button variant="ghost" onClick={() => openWizard(currentProjectId)}>
+                创作向导
+              </Button>
+            </div>
           </div>
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
             {renderStep(

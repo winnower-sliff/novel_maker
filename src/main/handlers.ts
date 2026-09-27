@@ -19,6 +19,7 @@ import type {
   OutlineInput,
   OutlineItem,
   PipelineAction,
+  PremiseDraftParams,
   Project,
   ProjectGraph,
   ProjectInput,
@@ -59,6 +60,7 @@ import {
   buildExpandRequest,
   buildOutlineRequest,
   buildPolishRequest,
+  buildPremiseDraftRequest,
   buildReviewRequest,
   buildStateSyncRequest,
   buildSummaryRequest,
@@ -70,6 +72,7 @@ import {
   guessCharacterName,
   parseCharacterCards,
   parseCheckResult,
+  parsePremiseDraft,
   parseReviewResult,
   previewWorldbuildResult,
   relinkWorldbuildEntries,
@@ -485,6 +488,13 @@ export const sharedHandlers: Record<string, Handler> = {
   'usage:stats': (): UsageStats => computeStats(),
 
   'pipeline:run': async (ctx, action: PipelineAction, params: unknown): Promise<string> => {
+    if (action === 'premiseDraft') {
+      const p = params as PremiseDraftParams
+      return startStream(ctx.sink, buildPremiseDraftRequest(p.projectId), {
+        action,
+        afterDone: (r) => parsePremiseDraft(r.text)
+      })
+    }
     if (action === 'outline') {
       const p = params as OutlineGenParams
       return startStream(ctx.sink, buildOutlineRequest(p), {

@@ -380,6 +380,7 @@ export type PipelineAction =
   | 'stateSync'
   | 'character'
   | 'worldbuild'
+  | 'premiseDraft'
 
 export interface WorldbuildGenParams {
   projectId: string
@@ -415,6 +416,24 @@ export interface OutlineGenParams {
   startNo: number
   count: number
   allowUpdate?: boolean
+}
+
+export interface PremiseDraftParams {
+  projectId: string
+}
+
+export interface PremiseDraftCharacter {
+  name: string
+  brief: string
+}
+
+export interface PremiseDraftResult {
+  worldbuildBrief: string
+  worldbuildCategories: string[]
+  worldbuildCount: number
+  characters: PremiseDraftCharacter[]
+  outlineIdea: string
+  outlineCount: number
 }
 
 export interface ReviewScore {
