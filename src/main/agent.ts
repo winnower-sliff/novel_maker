@@ -609,6 +609,90 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
+      name: 'get_book_digest',
+      description:
+        '获取全书级概览（本地聚合，零成本）：各卷摘要、卷级大纲骨架（每卷首末章与章数）、主要人物当前状态、未回收伏笔统计、最新章节摘要。回答“全书整体脉络/主题/走向”这类全局问题前先调用它，再按需深入具体卷/章',
+      input_schema: schema({}, [])
+    },
+    danger: false,
+    handler: (_input, projectId) => {
+      const outlines = store.listOutlines(projectId)
+      const volumeSummaries = store.listVolumeSummaries(projectId)
+      const byVolume = new Map<number, OutlineItem[]>()
+      for (const o of outlines) {
+        const list = byVolume.get(o.volume) ?? []
+        list.push(o)
+        byVolume.set(o.volume, list)
+      }
+      const volumes = [...byVolume.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .map(([vol, list]) => {
+          const sorted = list.sort((a, b) => a.chapterNo - b.chapterNo)
+          const first = sorted[0]
+          const last = sorted[sorted.length - 1]
+          const written = sorted.filter((o) => store.getChapterByOutline(o.id)).length
+          const vs = volumeSummaries.find((v) => v.volume === vol)
+          return {
+            volume: vol,
+            chapters: list.length,
+            written,
+            range: `第${first.chapterNo}章 ${first.title} ~ 第${last.chapterNo}章 ${last.title}`,
+            summary: vs?.summary ?? null
+          }
+        })
+      const characters = store
+        .listCharacters(projectId)
+        .filter((c) => c.state.trim())
+        .map((c) => ({ name: c.name, role: c.role, state: clip(c.state, 300).text }))
+      const openForeshadows = store.listForeshadows(projectId).filter((f) => f.status === 'open')
+      const lastWritten = outlines
+        .slice()
+        .sort((a, b) => a.volume - b.volume || a.chapterNo - b.chapterNo)
+        .reverse()
+        .find((o) => store.getChapterByOutline(o.id))
+      const latest = lastWritten ? store.getChapterByOutline(lastWritten.id) : null
+      const latestSummary = latest ? store.getSummary(latest.id) : null
+      return {
+        totalChapters: outlines.length,
+        volumes,
+        charactersWithState: characters,
+        openForeshadows: {
+          count: openForeshadows.length,
+          top: openForeshadows.slice(0, 12).map((f) => `${f.content}（${f.plantedChapter}${f.priority ? `·${f.priority}` : ''}）`)
+        },
+        latest: latestSummary
+          ? { chapterNo: lastWritten!.chapterNo, title: lastWritten!.title, summary: latestSummary.summary }
+          : null
+      }
+    }
+  },
+  {
+    def: {
+      name: 'update_character_state',
+      description:
+        '更新一个人物的“动态状态”字段（物品/能力/身心状态/关系/最近事件）。只改状态、不动人物卡；写章节正文任务完成后，若人物状态发生变化应顺手调用。可用 id 或姓名指定（姓名需唯一）',
+      input_schema: schema(
+        { id: optS('人物 id'), name: optS('人物姓名（与 id 二选一）'), state: s('更新后的完整状态文档（markdown 要点式）') },
+        ['state']
+      )
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const list = store.listCharacters(projectId)
+      const id = optStr(input, 'id')
+      const name = optStr(input, 'name')?.trim()
+      const hit = id
+        ? list.find((c) => c.id === id)
+        : name
+          ? list.find((c) => c.name.trim() === name || c.name.includes(name))
+          : undefined
+      if (!hit) throw new Error('未找到该人物（请提供正确的 id 或唯一姓名）')
+      store.saveCharacter({ id: hit.id, projectId, name: hit.name, state: reqStr(input, 'state') })
+      return { ok: true, id: hit.id, name: hit.name }
+    }
+  },
+  {
+    def: {
       name: 'list_foreshadows',
       description: '列出当前项目全部伏笔（含 id、内容、埋设章节、状态）',
       input_schema: schema({}, [])
@@ -686,6 +770,7 @@ const READ_TOOLS = new Set([
   'get_chapter_tail',
   'list_summaries',
   'search_project',
+  'get_book_digest',
   'list_foreshadows'
 ])
 
@@ -742,7 +827,9 @@ function buildSystemPrompt(projectId: string): string {
     '7. 全局性任务（矛盾检查、一致性审校、批量统计或修改）必须覆盖全部相关条目：先看 total/hasMore/byCategory 规划分批，逐批读取直至 hasMore=false，再下结论并在结论中说明覆盖范围；结果被截断时改用 category/volume 过滤、offset/limit 分页或 detail=summary 重试，禁止基于不完整数据下最终结论',
     '8. 写入世界观词条或人物卡时遵循标签纪律：每条至少 2 个标签，优先复用现有标签，没有合适的就新建可被多条共享的上位主题标签（体系名/时代名/事件名/族群名等），禁止无标签条目或让标签留空',
     '9. 写章节正文前的固定序列（顺序不可省略）：① list_outlines 找到上一章大纲 id；② get_chapter_tail 回读上一章结尾，找回语气、当前悬念与情绪落点；③ 读取本章出场人物的 get_character（关注动态状态 state）；④ list_foreshadows 核对未回收伏笔（本章该埋/该收的在梗概或 foreshadowOps 里）；⑤ 然后才动笔',
-    '10. 找"与某主题相关的设定/人物/章节"时优先用 search_project 语义搜索，比翻页浏览高效；返回为空再回退 list_* 分页浏览'
+    '10. 找"与某主题相关的设定/人物/章节"时优先用 search_project 语义搜索，比翻页浏览高效；返回为空再回退 list_* 分页浏览',
+    '11. 回答全书级问题（整体脉络/主题/长线走向）前先用 get_book_digest 拿全局概览，再按需深入具体卷章；不要靠翻页拼凑全局判断',
+    '12. 完成写章任务后，若人物状态发生变化（伤势/物品/信息/立场），顺手用 update_character_state 更新其状态文档（旧条目可删，保持紧凑）'
   ].join('\n')
 }
 
