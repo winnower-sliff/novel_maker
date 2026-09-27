@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import {
   PURPOSES,
+  type EmbeddingStatus,
   type ModelProbeResult,
   type ProviderProfile,
   type SettingsView
@@ -11,7 +12,7 @@ import {
   type ProviderId
 } from '@shared/providers'
 import { ServerPanel } from '../components/ServerPanel'
-import { Badge, Button, Card, Input, Label } from '../components/ui'
+import { Badge, Button, Card, Input, Label, Select } from '../components/ui'
 import { purposeLabel } from '../lib/format'
 
 const EMPTY_PROFILE: ProviderProfile = {
@@ -222,31 +223,69 @@ export default function Settings() {
         </Card>
 
         <Card className="space-y-3 p-5">
-          <div className="text-sm font-medium text-zinc-200">模型路由（各环节使用的模型）</div>
+          <div className="text-sm font-medium text-zinc-200">模型路由（各环节使用的模型与通道）</div>
           <datalist id="model-options">
             {modelOptions.map((m) => (
               <option key={m} value={m} />
             ))}
           </datalist>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            {PURPOSES.map((p) => (
-              <div key={p}>
-                <Label>{purposeLabel(p)}</Label>
-                <Input
-                  list="model-options"
-                  value={active.modelRouting[p] ?? ''}
-                  placeholder={p === 'playground' ? active.defaultModel || '默认模型' : '留空用默认模型'}
-                  onChange={(e) =>
-                    patchDraft({ modelRouting: { ...active.modelRouting, [p]: e.target.value } })
-                  }
-                />
-              </div>
-            ))}
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            {PURPOSES.map((p) => {
+              const route = active.modelRouting[p]
+              const routeModel = typeof route === 'string' ? route : route?.model ?? ''
+              const routeProvider = typeof route === 'string' ? '' : route?.provider ?? ''
+              return (
+                <div key={p} className="grid grid-cols-12 items-end gap-2">
+                  <div className="col-span-4">
+                    <Label>{purposeLabel(p)}</Label>
+                    <Select
+                      value={routeProvider}
+                      onChange={(e) => {
+                        const prov = e.target.value
+                        const value =
+                          prov === ''
+                            ? routeModel || undefined
+                            : { provider: prov, model: routeModel }
+                        patchDraft({
+                          modelRouting: { ...active.modelRouting, [p]: value }
+                        })
+                      }}
+                      className="w-full"
+                      title="该环节走哪个通道"
+                    >
+                      <option value="">当前通道</option>
+                      {PROVIDER_IDS.filter((id) => id !== provider).map((id) => (
+                        <option key={id} value={id}>
+                          {providerPreset(id).label}
+                        </option>
+                      ))}
+                    </Select>
+                  </div>
+                  <div className="col-span-8">
+                    <Label>模型</Label>
+                    <Input
+                      list="model-options"
+                      value={routeModel}
+                      placeholder={p === 'playground' ? active.defaultModel || '默认模型' : '留空用默认模型'}
+                      onChange={(e) => {
+                        const model = e.target.value
+                        const value =
+                          routeProvider === '' ? model || undefined : { provider: routeProvider, model }
+                        patchDraft({
+                          modelRouting: { ...active.modelRouting, [p]: value }
+                        })
+                      }}
+                    />
+                  </div>
+                </div>
+              )
+            })}
           </div>
           <div className="text-xs text-zinc-600">
             {provider === 'glm'
-              ? '建议：摘要/检查用 glm-4.5-air 省 token，大纲/正文用 glm-5.3 保证质量。'
+              ? '建议：摘要/检查/评审用 glm-4.5-air 省 token，大纲/正文用 glm-5.3 保证质量。'
               : '路由按 Provider 分别保存，切换 Provider 后各自独立。'}
+            配置了 Ollama 时，可把摘要/检查/评审/状态同步等记账类任务指到 Ollama 通道本地跑，省云端 token。
           </div>
         </Card>
 
@@ -287,6 +326,8 @@ export default function Settings() {
           </div>
         </Card>
 
+        <EmbeddingPanel />
+
         <ServerPanel />
 
         <Card className="space-y-3 p-5">
@@ -320,5 +361,88 @@ export default function Settings() {
         </Card>
       </div>
     </div>
+  )
+}
+
+function EmbeddingPanel(): React.ReactElement {
+  const [status, setStatus] = useState<EmbeddingStatus | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState('')
+
+  const load = (): void => {
+    void window.api.embedding.status().then(setStatus)
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
+  useEffect(() => {
+    if (!status?.downloading) return
+    const t = setInterval(load, 1500)
+    return () => clearInterval(t)
+  }, [status?.downloading])
+
+  const toggle = async (enabled: boolean): Promise<void> => {
+    await window.api.embedding.setEnabled(enabled)
+    load()
+  }
+
+  const rebuild = async (): Promise<void> => {
+    setBusy(true)
+    setNotice('重建索引中（首次会先下载模型，约 25MB）…')
+    try {
+      const r = await window.api.embedding.rebuild()
+      setNotice(`已重建 ${r.count} 条语义索引`)
+    } catch (err) {
+      setNotice(`重建失败：${(err as Error).message}`)
+    } finally {
+      setBusy(false)
+      load()
+    }
+  }
+
+  if (!status) return <Card className="space-y-2 p-5 text-sm text-zinc-500">语义检索加载中…</Card>
+
+  return (
+    <Card className="space-y-3 p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="text-sm font-medium text-zinc-200">本地语义检索</div>
+        <label className="flex cursor-pointer items-center gap-2 text-xs text-zinc-400">
+          <input
+            type="checkbox"
+            checked={status.enabled}
+            disabled={status.downloading}
+            onChange={(e) => void toggle(e.target.checked)}
+            className="h-3.5 w-3.5 cursor-pointer accent-amber-600"
+          />
+          启用
+        </label>
+      </div>
+      <div className="text-xs leading-5 text-zinc-500">
+        写作上下文与智能体检索用本地嵌入模型（{status.model}）按语义召回相关设定/人物/章节，
+        与知识图谱链接互补；完全本地运行，不消耗云端 token。首次使用需下载约 25MB 模型（默认走
+        hf-mirror，可用环境变量 HF_ENDPOINT 覆盖）。
+      </div>
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <Badge tone={status.enabled && !status.reason ? 'green' : status.enabled ? 'red' : 'default'}>
+          {status.enabled ? (status.reason ? '模型不可用（已降级）' : '就绪') : '已关闭'}
+        </Badge>
+        <span className="text-zinc-500">已索引 {status.count} 条</span>
+        {status.downloading && (
+          <span className="text-amber-400">模型下载中 {Math.round(status.progress)}%</span>
+        )}
+        <Button
+          variant="ghost"
+          className="ml-auto px-2 py-1 text-xs"
+          onClick={() => void rebuild()}
+          disabled={busy || !status.enabled}
+        >
+          {busy ? '重建中…' : '重建索引'}
+        </Button>
+      </div>
+      {status.reason && <div className="text-xs text-red-400">{status.reason}</div>}
+      {notice && <div className="text-xs text-zinc-400">{notice}</div>}
+    </Card>
   )
 }

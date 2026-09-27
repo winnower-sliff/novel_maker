@@ -171,7 +171,12 @@ export default function Agent({ projectId }: { projectId: string }) {
     void (async () => {
       const s = await window.api.settings.get()
       setSettings(s)
-      setModel(s.modelRouting.agent || s.defaultModel)
+      setModel((() => {
+        const r = s.modelRouting.agent
+        if (typeof r === 'string') return r || s.defaultModel
+        if (!r) return s.defaultModel
+        return r.provider && r.provider !== s.provider ? s.defaultModel : r.model || s.defaultModel
+      })())
       try {
         setProbe(await window.api.models.probe())
       } catch {

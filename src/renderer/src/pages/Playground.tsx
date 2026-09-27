@@ -22,7 +22,12 @@ export default function Playground() {
     void (async () => {
       const s = await window.api.settings.get()
       setSettings(s)
-      setModel(s.modelRouting.playground || s.defaultModel)
+      setModel((() => {
+        const r = s.modelRouting.playground
+        if (typeof r === 'string') return r || s.defaultModel
+        if (!r) return s.defaultModel
+        return r.provider && r.provider !== s.provider ? s.defaultModel : r.model || s.defaultModel
+      })())
       try {
         const p = await window.api.models.probe()
         setProbe(p)

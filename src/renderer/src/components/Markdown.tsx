@@ -18,6 +18,33 @@ const WIKI_LINK_RE = /\[\[([^\[\]]+?)\]\]/g
 const WIKI_URL_PREFIX = 'wiki:'
 const HOVER_DELAY_MS = 500
 
+/** [[目标|关系短语]]：链接指向目标，显示关系短语（Obsidian alias 语义） */
+function splitWikiText(value: string): PhrasingContent[] {
+  const out: PhrasingContent[] = []
+  let last = 0
+  for (const m of value.matchAll(WIKI_LINK_RE)) {
+    const idx = m.index ?? 0
+    if (idx > last) out.push({ type: 'text', value: value.slice(last, idx) })
+    const raw = m[1].trim()
+    if (raw) {
+      const pipe = raw.indexOf('|')
+      const name = (pipe >= 0 ? raw.slice(0, pipe) : raw).trim()
+      const alias = pipe >= 0 ? raw.slice(pipe + 1).trim() : ''
+      if (name) {
+        const link: Link = {
+          type: 'link',
+          url: WIKI_URL_PREFIX + encodeURIComponent(name),
+          children: [{ type: 'text', value: alias || name }]
+        }
+        out.push(link)
+      }
+    }
+    last = idx + m[0].length
+  }
+  if (last < value.length) out.push({ type: 'text', value: value.slice(last) })
+  return out
+}
+
 const remarkWikiLinks: Plugin<[], Root> = () => (tree) => {
   const walk = (parent: Parent): void => {
     const children = parent.children
@@ -33,27 +60,6 @@ const remarkWikiLinks: Plugin<[], Root> = () => (tree) => {
     }
   }
   walk(tree as unknown as Parent)
-}
-
-function splitWikiText(value: string): PhrasingContent[] {
-  const out: PhrasingContent[] = []
-  let last = 0
-  for (const m of value.matchAll(WIKI_LINK_RE)) {
-    const idx = m.index ?? 0
-    if (idx > last) out.push({ type: 'text', value: value.slice(last, idx) })
-    const name = m[1].trim()
-    if (name) {
-      const link: Link = {
-        type: 'link',
-        url: WIKI_URL_PREFIX + encodeURIComponent(name),
-        children: [{ type: 'text', value: name }]
-      }
-      out.push(link)
-    }
-    last = idx + m[0].length
-  }
-  if (last < value.length) out.push({ type: 'text', value: value.slice(last) })
-  return out
 }
 
 const WikiLink = memo(function WikiLink({

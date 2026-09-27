@@ -66,6 +66,7 @@ export default function GraphPage({
   const [clusterTags, setClusterTags] = useState(false)
   const [showTagLabels, setShowTagLabels] = useState(true)
   const [density, setDensity] = useState(1)
+  const [showDangling, setShowDangling] = useState(false)
   const autoClusterRef = useRef(false)
 
   const load = useCallback((): void => {
@@ -402,8 +403,28 @@ export default function GraphPage({
         <div className="ml-auto text-xs text-zinc-500">
           {view.nodes.length} 节点 · {view.edges.length} 关联
           {isolatedCount > 0 && !hideIsolated && ` · ${isolatedCount} 孤点`}
+          {(graph?.danglingLinks.length ?? 0) > 0 && (
+            <button
+              onClick={() => setShowDangling((v) => !v)}
+              className="ml-2 cursor-pointer rounded border border-red-900/60 bg-red-950/30 px-1.5 py-0.5 text-red-400 hover:text-red-300"
+              title="正文/设定中引用了 [[链接]] 但目标不存在的名字"
+            >
+              {graph?.danglingLinks.length} 条悬空链接
+            </button>
+          )}
         </div>
       </div>
+
+      {showDangling && (graph?.danglingLinks.length ?? 0) > 0 && (
+        <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-red-900/40 bg-red-950/20 px-3 py-2 text-xs">
+          <span className="text-red-400">悬空链接（[[引用]] 找不到目标条目，改名或补建可修复）：</span>
+          {graph!.danglingLinks.map((name) => (
+            <span key={name} className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-zinc-300">
+              [[{name}]]
+            </span>
+          ))}
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1 flex-col gap-3 md:flex-row">
         <div className="min-h-[45vh] min-w-0 flex-1 overflow-hidden rounded-lg border border-zinc-800 bg-zinc-900/50 md:min-h-0">

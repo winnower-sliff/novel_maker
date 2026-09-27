@@ -7,6 +7,8 @@ export const PURPOSE_LABELS: Record<string, string> = {
   summary: '摘要',
   polish: '润色',
   check: '检查',
+  review: '评审',
+  expand: '扩写',
   agent: '智能体'
 }
 

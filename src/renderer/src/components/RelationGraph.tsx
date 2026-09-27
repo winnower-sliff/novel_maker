@@ -29,6 +29,7 @@ export interface GraphNodeData {
 export interface GraphEdgeData {
   source: string
   target: string
+  rel?: string
 }
 
 interface RelationGraphProps {
@@ -762,12 +763,18 @@ export const RelationGraph = memo(function RelationGraph({
         if (!sid || !tid) return []
         const hl = activeId ?? tagHover
         const hot = hl !== null && !hl.startsWith('tag:') && (sid === hl || tid === hl)
+        const rel = edges.find((e) => e.source === sid && e.target === tid)?.rel
         return [
           {
             id: `e${i}`,
             source: sid,
             target: tid,
             type: 'straight',
+            label: hot && rel ? rel : undefined,
+            labelStyle: { fill: '#a1a1aa', fontSize: 10 },
+            labelBgStyle: { fill: '#18181b' },
+            labelBgPadding: [4, 2] as [number, number],
+            labelBgBorderRadius: 4,
             style: hot
               ? { stroke: '#f59e0b', strokeWidth: 2 }
               : {
@@ -777,7 +784,7 @@ export const RelationGraph = memo(function RelationGraph({
           }
         ]
       }),
-    [links, activeId, tagHover]
+    [links, activeId, tagHover, edges]
   )
 
   useEffect(() => {
