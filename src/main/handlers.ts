@@ -386,7 +386,7 @@ function startChapterCandidatesStream(
             candidateMode: true,
             winnerIndex: result.winnerIndex,
             candidates: result.candidates.map((c) => ({
-              text: c.text,
+              text: stripHtmlComments(c.text),
               score: c.score,
               wordCount: c.wordCount,
               issues: c.lint.issues.length,

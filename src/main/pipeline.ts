@@ -246,7 +246,8 @@ export function parseReviewResult(text: string): { result: ReviewResult; raw: st
       dim: String(p.dim ?? '').trim(),
       severity: p.severity === 'major' ? 'major' : 'minor',
       quote: String(p.quote ?? '').trim(),
-      issue: String(p.issue ?? '').trim()
+      issue: String(p.issue ?? '').trim(),
+      fix: String(p.fix ?? '').trim()
     }))
     .filter((p) => p.quote && p.issue)
   // 程序算分：每维 10 分起扣，major -3 / minor -1，下限 0
@@ -259,7 +260,12 @@ export function parseReviewResult(text: string): { result: ReviewResult; raw: st
       dim,
       score,
       quote: first?.quote ?? '',
-      comment: mine.length === 0 ? '未见带引证的问题' : mine.map((p) => p.issue).join('；')
+      comment:
+        mine.length === 0
+          ? '未见带引证的问题'
+          : mine
+              .map((p) => `${p.severity === 'major' ? '【重】' : ''}${p.issue}${p.fix ? `（建议：${p.fix}）` : ''}`)
+              .join('；')
     }
   })
   const total = scores.reduce((a, s) => a + s.score, 0)
