@@ -3,12 +3,14 @@ import type {
   ChatParams,
   OutlineGenParams,
   OutlineItem,
+  ReviewResult,
   WorldbuildEntry,
   WorldbuildGenParams,
   WorldbuildPreviewEntry
 } from '../shared/types'
 import { splitHeadingHashtags, splitTags } from '../shared/tags'
 import { buildChapterContext } from './context'
+import { enqueueEmbedding } from './embedding'
 import { getSkill } from './skills'
 import * as store from './store'
 
@@ -66,11 +68,21 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
     .sort((a, b) => a.chapterNo - b.chapterNo)
     .map((o) => `- 第${o.chapterNo}章《${o.title}》：${o.synopsis.slice(0, 200)}`)
     .join('\n')
+  const openFore = store
+    .listForeshadows(p.projectId)
+    .filter((f) => f.status === 'open')
+    .map(
+      (f) =>
+        `- ${f.content}（埋于${f.plantedChapter || '?'}${f.plannedResolve ? `，计划回收：${f.plannedResolve}` : ''}${f.priority ? `，优先级：${f.priority}` : ''}）`
+    )
+    .join('\n')
   const system = [
     skillBody('outline-architect'),
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
     wb && `【已有世界观】\n${wb}`,
     chars && `【已有人物】\n${chars}`,
+    openFore &&
+      `【未回收伏笔台账（规划新章节时应安排合理回收点，并在对应章节的 foreshadow_ops 中写明）】\n${openFore}`,
     outlineCtx &&
       (p.allowUpdate
         ? `【第 ${p.volume} 卷已有大纲（新章节须与之自然衔接；若新创意要求调整已有章节，可在结果中输出该章的修订条目——volume 与 chapter_no 与原章保持一致，synopsis 为融合后的完整修订梗概，该修订会覆盖更新原章梗概，无必要时不要修订）】\n${outlineCtx}`
@@ -83,24 +95,25 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
     model: '',
     system,
     messages: [{ role: 'user', content: user }],
-    maxTokens: 8192,
+    maxTokens: 16384,
     temperature: 0.7,
     purpose: 'outline'
   }
 }
 
-export function buildChapterRequest(
+export async function buildChapterRequest(
   projectId: string,
-  outlineId: string
-): { params: ChatParams; ctx: BuiltContext } {
-  const ctx = buildChapterContext(projectId, outlineId)
+  outlineId: string,
+  wordTarget?: number
+): Promise<{ params: ChatParams; ctx: BuiltContext }> {
+  const ctx = await buildChapterContext(projectId, outlineId, wordTarget)
   const system = [skillBody('chapter-writer'), ctx.system].filter(Boolean).join('\n\n')
   return {
     params: {
       model: '',
       system,
       messages: [{ role: 'user', content: ctx.user }],
-    maxTokens: 16384,
+      maxTokens: 16384,
       temperature: 0.8,
       purpose: 'chapter'
     },
@@ -158,11 +171,11 @@ export function buildPolishRequest(projectId: string, outlineId: string): ChatPa
   }
 }
 
-export function buildCheckRequest(projectId: string, outlineId: string): ChatParams {
+export async function buildCheckRequest(projectId: string, outlineId: string): Promise<ChatParams> {
   const outline = store.getOutline(outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
   if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法检查')
-  const ctx = buildChapterContext(projectId, outlineId)
+  const ctx = await buildChapterContext(projectId, outlineId)
   const system = [skillBody('continuity-checker'), ctx.system].filter(Boolean).join('\n\n')
   return {
     model: '',
@@ -194,6 +207,226 @@ export function parseCheckResult(text: string): { issues: CheckIssue[]; parsed: 
     }))
     .filter((i) => i.issue)
   return { issues, parsed: true }
+}
+
+export async function buildReviewRequest(projectId: string, outlineId: string): Promise<ChatParams> {
+  const outline = store.getOutline(outlineId)
+  const chapter = outline ? store.getChapterByOutline(outlineId) : null
+  if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法评审')
+  const ctx = await buildChapterContext(projectId, outlineId)
+  const system = [skillBody('chapter-reviewer'), ctx.system].filter(Boolean).join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: `请评审以下章节正文：\n\n${chapter.content}` }],
+    maxTokens: 4096,
+    temperature: 0.2,
+    purpose: 'review'
+  }
+}
+
+export function parseReviewResult(text: string): { result: ReviewResult; raw: string } {
+  const obj = extractJsonObject(text)
+  if (!obj) return { result: { verdict: 'polish', scores: [], summary: '', parsed: false }, raw: text }
+  const verdict = obj.verdict === 'rewrite' || obj.verdict === 'pass' ? obj.verdict : 'polish'
+  const scores = Array.isArray(obj.scores)
+    ? (obj.scores as Array<Record<string, unknown>>).map((s) => ({
+        dim: String(s.dim ?? ''),
+        score: Number(s.score) || 0,
+        quote: String(s.quote ?? ''),
+        comment: String(s.comment ?? '')
+      }))
+    : []
+  return {
+    result: { verdict, scores, summary: String(obj.summary ?? ''), parsed: true },
+    raw: text
+  }
+}
+
+export function buildExpandRequest(
+  projectId: string,
+  outlineId: string,
+  targetWords: number
+): ChatParams {
+  const project = store.listProjects().find((x) => x.id === projectId)
+  const outline = store.getOutline(outlineId)
+  const chapter = outline ? store.getChapterByOutline(outlineId) : null
+  if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法扩写')
+  const system = [
+    skillBody('chapter-expander'),
+    project?.styleGuide && `【作品风格】\n${project.styleGuide}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  const user = `第${outline.chapterNo}章《${outline.title}》正文（当前 ${chapter.wordCount} 字）：\n\n${chapter.content}\n\n请诊断式扩写至约 ${targetWords} 字。`
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: 16384,
+    temperature: 0.6,
+    purpose: 'expand'
+  }
+}
+
+export function buildVolumeSummaryRequest(projectId: string, volume: number): ChatParams {
+  const outlines = store
+    .listOutlines(projectId)
+    .filter((o) => o.volume === volume)
+    .sort((a, b) => a.chapterNo - b.chapterNo)
+  if (outlines.length === 0) throw new Error(`第 ${volume} 卷还没有大纲`)
+  const withSummary = outlines.filter((o) => {
+    const c = store.getChapterByOutline(o.id)
+    return c && store.getSummary(c.id)
+  })
+  if (withSummary.length === 0) throw new Error(`第 ${volume} 卷还没有已定稿的章节摘要`)
+  const chapterLines = outlines
+    .map((o) => {
+      const c = store.getChapterByOutline(o.id)
+      const s = c ? store.getSummary(c.id) : null
+      if (s) {
+        return `第${o.chapterNo}章《${o.title}》：${s.summary}${s.timeline ? `（时间线：${s.timeline}）` : ''}`
+      }
+      return `第${o.chapterNo}章《${o.title}》（未写/未定稿）：${o.synopsis.slice(0, 80)}`
+    })
+    .join('\n')
+  const foreLines = store
+    .listForeshadows(projectId)
+    .filter((f) => f.status === 'open' && f.plantedChapter)
+    .map((f) => `- ${f.content}（埋于${f.plantedChapter}）`)
+    .join('\n')
+  const stateLines = withSummary
+    .flatMap((o) => {
+      const c = store.getChapterByOutline(o.id)
+      return c && store.getSummary(c.id) ? store.getSummary(c.id)!.characterStates : []
+    })
+    .filter((cs) => cs.name)
+    .join('；')
+  const system = skillBody('volume-summarizer')
+  const user = [
+    `请生成第 ${volume} 卷的卷摘要。`,
+    `【各章摘要】\n${chapterLines}`,
+    foreLines && `【当前未回收伏笔（参考）】\n${foreLines}`,
+    stateLines && `【末章人物状态（参考）】${stateLines}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: 2048,
+    temperature: 0.3,
+    purpose: 'summary'
+  }
+}
+
+export function applyVolumeSummaryResult(
+  projectId: string,
+  volume: number,
+  text: string
+): { volume: number; summaryChars: number; parsed: boolean } {
+  const summary = text.trim()
+  if (!summary) return { volume, summaryChars: 0, parsed: false }
+  store.saveVolumeSummary(projectId, volume, summary)
+  return { volume, summaryChars: summary.length, parsed: true }
+}
+
+export function buildStateSyncRequest(projectId: string, outlineId: string): ChatParams {
+  const outline = store.getOutline(outlineId)
+  const chapter = outline ? store.getChapterByOutline(outlineId) : null
+  const summary = chapter ? store.getSummary(chapter.id) : null
+  if (!outline || !summary) throw new Error('该章节还没有定稿摘要，无法同步人物状态')
+  const characters = store.listCharacters(projectId)
+  const affected = characters.filter((c) =>
+    summary.characterStates.some(
+      (cs) =>
+        cs.name.trim() === c.name.trim() ||
+        c.name.includes(cs.name.trim()) ||
+        cs.name.includes(c.name.trim())
+    )
+  )
+  if (affected.length === 0) return {
+    model: '',
+    system: '',
+    messages: [{ role: 'user', content: 'noop' }],
+    maxTokens: 16,
+    temperature: 0,
+    purpose: 'summary'
+  }
+  const blocks = affected
+    .map((c) => {
+      const changes = summary.characterStates
+        .filter(
+          (cs) =>
+            cs.name.trim() === c.name.trim() ||
+            c.name.includes(cs.name.trim()) ||
+            cs.name.includes(c.name.trim())
+        )
+        .map((cs) => `- ${cs.state}`)
+        .join('\n')
+      return `### ${c.name}\n【当前状态文档】\n${c.state.trim() || '（空——请按分区结构新建：物品/能力/身心状态/关系/最近事件）'}\n【第${outline.chapterNo}章的变化】\n${changes}`
+    })
+    .join('\n\n')
+  const system = skillBody('state-syncer')
+  const user = `请合并以下人物的状态变化，输出每人更新后的完整状态文档：\n\n${blocks}`
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: 4096,
+    temperature: 0.2,
+    purpose: 'summary'
+  }
+}
+
+export interface ParsedCharacterState {
+  name: string
+  state: string
+}
+
+export function parseCharacterStates(text: string): ParsedCharacterState[] {
+  const out: ParsedCharacterState[] = []
+  let current: { name: string; body: string[] } | null = null
+  for (const line of text.split(/\r?\n/)) {
+    const m = /^#{1,3}\s*(.+?)\s*$/.exec(line)
+    if (m && !/^[（(【]/.test(m[1])) {
+      if (current && current.body.join('').trim()) {
+        out.push({ name: current.name, state: current.body.join('\n').trim() })
+      }
+      current = { name: m[1].replace(/[（(【].*$/, '').trim(), body: [] }
+    } else if (current) {
+      current.body.push(line)
+    }
+  }
+  if (current && current.body.join('').trim()) {
+    out.push({ name: current.name, state: current.body.join('\n').trim() })
+  }
+  return out
+}
+
+export function applyStateSyncResult(
+  projectId: string,
+  text: string
+): { updated: Array<{ id: string; name: string }>; parsed: boolean } {
+  const parsed = parseCharacterStates(text)
+  if (parsed.length === 0) return { updated: [], parsed: false }
+  const characters = store.listCharacters(projectId)
+  const updated: Array<{ id: string; name: string }> = []
+  for (const p of parsed) {
+    const hit = characters.find(
+      (c) => c.name.trim() === p.name || c.name.includes(p.name) || p.name.includes(c.name.trim())
+    )
+    if (!hit) continue
+    store.saveCharacter({
+      id: hit.id,
+      projectId,
+      name: hit.name,
+      state: p.state
+    })
+    updated.push({ id: hit.id, name: hit.name })
+  }
+  return { updated, parsed: updated.length > 0 }
 }
 
 export function buildCharacterRequest(
@@ -776,6 +1009,18 @@ export function applyOutlineResult(
     if (!chapterNo || Number.isNaN(chapterNo)) continue
     const key = `${volume}:${chapterNo}`
     const hit = existing.get(key)
+    const meta = {
+      role: typeof r.role === 'string' ? r.role.slice(0, 40) : undefined,
+      suspense: typeof r.suspense === 'string' ? r.suspense.slice(0, 20) : undefined,
+      twist: Number.isFinite(Number(r.twist)) ? Math.min(5, Math.max(0, Math.round(Number(r.twist)))) : undefined,
+      hook: typeof r.hook === 'string' ? r.hook.slice(0, 120) : undefined,
+      foreshadowOps:
+        typeof r.foreshadow_ops === 'string'
+          ? r.foreshadow_ops.slice(0, 200)
+          : typeof (r as { foreshadowOps?: unknown }).foreshadowOps === 'string'
+            ? String((r as { foreshadowOps?: unknown }).foreshadowOps).slice(0, 200)
+            : undefined
+    }
     if (hit !== undefined) {
       if (hit && p.allowUpdate) {
         store.saveOutline({
@@ -785,7 +1030,8 @@ export function applyOutlineResult(
           chapterNo,
           title: String(r.title ?? hit.title),
           synopsis: String(r.synopsis ?? hit.synopsis),
-          status: hit.status
+          status: hit.status,
+          ...meta
         })
         updated++
       } else {
@@ -799,7 +1045,8 @@ export function applyOutlineResult(
       chapterNo,
       title: String(r.title ?? ''),
       synopsis: String(r.synopsis ?? ''),
-      status: 'draft'
+      status: 'draft',
+      ...meta
     })
     existing.set(key, null)
     created++
@@ -837,6 +1084,12 @@ export function applySummaryResult(
       ? obj.foreshadows_resolved.map(String)
       : []
   })
+  enqueueEmbedding(
+    projectId,
+    'summary',
+    outlineId,
+    `第${outline.chapterNo}章 ${outline.title}：${String(obj.summary ?? '')} ${Array.isArray(obj.events) ? obj.events.join('；') : ''}`
+  )
 
   const existingOpen = store.listForeshadows(projectId).filter((f) => f.status === 'open')
   let plantedCount = 0

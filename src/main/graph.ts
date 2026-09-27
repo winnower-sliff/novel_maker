@@ -2,10 +2,14 @@ import type { GraphNodeKind, ProjectGraph, ProjectGraphEdge, ProjectGraphNode } 
 import { splitTags } from '../shared/tags'
 import * as store from './store'
 
-const WIKI_LINK_RE = /\[\[([^\[\]]+?)\]\]/g
-
-function extractLinkNames(text: string): string[] {
-  return [...new Set([...text.matchAll(WIKI_LINK_RE)].map((m) => m[1].trim()).filter(Boolean))]
+/** 解析 [[目标]] 与 [[目标|关系]]，返回 {名字 → 关系(可空)} */
+function extractLinks(text: string): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const m of text.matchAll(/\[\[([^\[\]|]+)(?:\|([^\[\]]+))?\]\]/g)) {
+    const name = m[1].trim()
+    if (name && !out.has(name)) out.set(name, (m[2] ?? '').trim())
+  }
+  return out
 }
 
 export function buildProjectGraph(projectId: string): ProjectGraph {
@@ -48,18 +52,33 @@ export function buildProjectGraph(projectId: string): ProjectGraph {
   }
 
   const degree = new Map<string, number>()
-  const edgeKeys = new Set<string>()
+  const dangling = new Map<string, number>()
+  const edgeByKey = new Map<string, ProjectGraphEdge>()
   const edges: ProjectGraphEdge[] = []
+
+  const edgeKey = (a: string, b: string): string => (a < b ? `${a}|${b}` : `${b}|${a}`)
 
   const addEdgesFrom = (sourceId: string, text: string): void => {
     if (!text) return
-    for (const name of extractLinkNames(text)) {
+    for (const [name, rel] of extractLinks(text)) {
       const targetId = nameIndex.get(name)
-      if (!targetId || targetId === sourceId) continue
-      const key = sourceId < targetId ? `${sourceId}|${targetId}` : `${targetId}|${sourceId}`
-      if (edgeKeys.has(key)) continue
-      edgeKeys.add(key)
-      edges.push({ source: sourceId, target: targetId })
+      if (!targetId) {
+        dangling.set(name, (dangling.get(name) ?? 0) + 1)
+        continue
+      }
+      if (targetId === sourceId) continue
+      const key = edgeKey(sourceId, targetId)
+      const existing = edgeByKey.get(key)
+      if (existing) {
+        if (rel) {
+          const parts = new Set([...(existing.rel ? existing.rel.split('、') : []), rel])
+          existing.rel = [...parts].join('、')
+        }
+        continue
+      }
+      const edge: ProjectGraphEdge = { source: sourceId, target: targetId, rel: rel || undefined }
+      edgeByKey.set(key, edge)
+      edges.push(edge)
       degree.set(sourceId, (degree.get(sourceId) ?? 0) + 1)
       degree.set(targetId, (degree.get(targetId) ?? 0) + 1)
     }
@@ -76,6 +95,10 @@ export function buildProjectGraph(projectId: string): ProjectGraph {
 
   return {
     nodes: nodes.map((n) => ({ ...n, degree: degree.get(n.id) ?? 0 })),
-    edges
+    edges,
+    danglingLinks: [...dangling.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([name]) => name)
+      .slice(0, 50)
   }
 }
