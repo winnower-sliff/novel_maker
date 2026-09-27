@@ -48,13 +48,19 @@ import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
 import { providerPreset } from '../shared/providers'
 import {
   applyOutlineResult,
+  applyStateSyncResult,
   applySummaryResult,
+  applyVolumeSummaryResult,
   buildChapterRequest,
   buildCharacterRequest,
   buildCheckRequest,
+  buildExpandRequest,
   buildOutlineRequest,
   buildPolishRequest,
+  buildReviewRequest,
+  buildStateSyncRequest,
   buildSummaryRequest,
+  buildVolumeSummaryRequest,
   buildWorldbuildIndex,
   buildWorldbuildRequest,
   buildWorldbuildRetrieveRequest,
@@ -62,13 +68,24 @@ import {
   guessCharacterName,
   parseCharacterCards,
   parseCheckResult,
+  parseReviewResult,
   previewWorldbuildResult,
   relinkWorldbuildEntries,
   resolveWorldbuildRetrieval,
   saveWorldbuildBatch,
   type WorldbuildRetrieval
 } from './pipeline'
-import { getApiKeyFor, getLlmAuth, loadSettingsView, saveSettings } from './settings'
+import {
+  deleteEmbeddings,
+  deleteEmbeddingsByRef,
+  enqueueEmbedding,
+  getEmbeddingStatus,
+  rebuildEmbeddings,
+  semanticSearch,
+  setEmbeddingEnabled
+} from './embedding'
+import type { SearchHit } from '../shared/types'
+import { getApiKeyFor, loadSettingsView, resolveRequestAuth, saveSettings } from './settings'
 import { getServerStatus } from './serverState'
 import * as store from './store'
 import { deleteSkill, getSkill, listSkills, saveSkill } from './skills'
@@ -99,14 +116,13 @@ function startAgentRun(
   void (async () => {
     let payload: Awaited<ReturnType<typeof runAgent>>
     try {
-      const s = await loadSettingsView()
-      const model = params.model?.trim() || s.modelRouting.agent || s.defaultModel
+      const auth = await resolveRequestAuth('agent')
       payload = await runAgent({
         sink,
         requestId,
         projectId: params.projectId,
         messages: params.messages,
-        model,
+        model: params.model?.trim() || auth.model,
         signal: controller.signal
       })
     } catch (err) {
@@ -152,13 +168,12 @@ function startStream(
 
   void (async () => {
     try {
-      const auth = await getLlmAuth()
+      const auth = await resolveRequestAuth(rawParams.purpose)
       if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
       const params: ChatParams = { ...rawParams }
-      if (!params.model) {
-        const s = await loadSettingsView()
-        params.model =
-          (params.purpose && s.modelRouting[params.purpose]) || s.defaultModel
+      if (!params.model) params.model = auth.model
+      if (auth.fallbackReason && !sink.isClosed()) {
+        sink.send('llm:notice', requestId, auth.fallbackReason)
       }
       if (auth.promptCache && params.system) params.cacheSystem = true
 
@@ -261,13 +276,9 @@ async function runWorldbuildRetrieval(p: WorldbuildGenParams): Promise<Worldbuil
   const req = buildWorldbuildRetrieveRequest(p)
   if (!req) return undefined
   try {
-    const auth = await getLlmAuth()
+    const auth = await resolveRequestAuth(req.purpose)
     if (!auth.apiKey && auth.needsKey) return undefined
-    const s = await loadSettingsView()
-    const params: ChatParams = { ...req }
-    if (!params.model) {
-      params.model = (params.purpose && s.modelRouting[params.purpose]) || s.defaultModel
-    }
+    const params: ChatParams = { ...req, model: req.model || auth.model }
     const result = await chatStream(params, { apiKey: auth.apiKey, baseUrl: auth.baseUrl }, () => {})
     appendUsage({
       ts: Date.now(),
@@ -342,10 +353,10 @@ export const sharedHandlers: Record<string, Handler> = {
       })
     }
     if (action === 'chapter') {
-      const { outlineId } = params as { outlineId: string }
+      const { outlineId, wordTarget } = params as { outlineId: string; wordTarget?: number }
       const outline = store.getOutline(outlineId)
       if (!outline) throw new Error('章节不存在')
-      const built = buildChapterRequest(outline.projectId, outlineId)
+      const built = await buildChapterRequest(outline.projectId, outlineId, wordTarget)
       return startStream(ctx.sink, built.params, {
         action,
         afterDone: (r) => {
@@ -355,6 +366,7 @@ export const sharedHandlers: Record<string, Handler> = {
             content: r.text,
             status: 'draft'
           })
+          enqueueEmbedding(outline.projectId, 'summary', outlineId, r.text.slice(0, 1200))
           return {
             chapterId: chapter.id,
             wordCount: chapter.wordCount,
@@ -398,9 +410,45 @@ export const sharedHandlers: Record<string, Handler> = {
       const { outlineId } = params as { outlineId: string }
       const outline = store.getOutline(outlineId)
       if (!outline) throw new Error('章节不存在')
-      return startStream(ctx.sink, buildCheckRequest(outline.projectId, outlineId), {
+      return startStream(ctx.sink, await buildCheckRequest(outline.projectId, outlineId), {
         action,
         afterDone: (r) => parseCheckResult(r.text)
+      })
+    }
+    if (action === 'review') {
+      const { outlineId } = params as { outlineId: string }
+      const outline = store.getOutline(outlineId)
+      if (!outline) throw new Error('章节不存在')
+      return startStream(ctx.sink, await buildReviewRequest(outline.projectId, outlineId), {
+        action,
+        afterDone: (r) => parseReviewResult(r.text).result
+      })
+    }
+    if (action === 'expand') {
+      const { outlineId, targetWords } = params as { outlineId: string; targetWords: number }
+      const outline = store.getOutline(outlineId)
+      if (!outline) throw new Error('章节不存在')
+      if (!targetWords || targetWords < 500) throw new Error('目标字数无效')
+      return startStream(ctx.sink, buildExpandRequest(outline.projectId, outlineId, targetWords), {
+        action,
+        afterDone: (r) => ({ wordCount: r.text.replace(/\s/g, '').length }),
+        continueOnMaxTokens: 2
+      })
+    }
+    if (action === 'volumeSummary') {
+      const { projectId, volume } = params as { projectId: string; volume: number }
+      return startStream(ctx.sink, buildVolumeSummaryRequest(projectId, volume), {
+        action,
+        afterDone: (r) => applyVolumeSummaryResult(projectId, volume, r.text)
+      })
+    }
+    if (action === 'stateSync') {
+      const { outlineId } = params as { outlineId: string }
+      const outline = store.getOutline(outlineId)
+      if (!outline) throw new Error('章节不存在')
+      return startStream(ctx.sink, buildStateSyncRequest(outline.projectId, outlineId), {
+        action,
+        afterDone: (r) => applyStateSyncResult(outline.projectId, r.text)
       })
     }
     if (action === 'character') {
@@ -460,16 +508,30 @@ export const sharedHandlers: Record<string, Handler> = {
     store.updateProject(id, input),
   'novel:projectDelete': (_ctx, id: string): void => store.deleteProject(id),
   'novel:characters': (_ctx, projectId: string): Character[] => store.listCharacters(projectId),
-  'novel:characterSave': (_ctx, input: CharacterInput & { id?: string }): Character =>
-    store.saveCharacter(input),
-  'novel:characterDelete': (_ctx, id: string): void => store.deleteCharacter(id),
+  'novel:characterSave': (_ctx, input: CharacterInput & { id?: string }): Character => {
+    const saved = store.saveCharacter(input)
+    enqueueEmbedding(saved.projectId, 'character', saved.id, `${saved.name} ${saved.role} ${saved.tags} ${saved.card}`)
+    return saved
+  },
+  'novel:characterDelete': (_ctx, id: string): void => {
+    deleteEmbeddingsByRef('character', id)
+    store.deleteCharacter(id)
+  },
   'novel:worldbuild': (_ctx, projectId: string): WorldbuildEntry[] =>
     store.listWorldbuild(projectId),
-  'novel:worldbuildSave': (_ctx, input: WorldbuildInput & { id?: string }): WorldbuildEntry =>
-    store.saveWorldbuild(input),
-  'novel:worldbuildDelete': (_ctx, id: string): void => store.deleteWorldbuild(id),
-  'novel:worldbuildDeleteBatch': (_ctx, projectId: string, ids: string[]): number =>
-    store.deleteWorldbuildBatch(projectId, ids),
+  'novel:worldbuildSave': (_ctx, input: WorldbuildInput & { id?: string }): WorldbuildEntry => {
+    const saved = store.saveWorldbuild(input)
+    enqueueEmbedding(saved.projectId, 'worldbuild', saved.id, `${saved.title} ${saved.tags} ${saved.content}`)
+    return saved
+  },
+  'novel:worldbuildDelete': (_ctx, id: string): void => {
+    deleteEmbeddingsByRef('worldbuild', id)
+    store.deleteWorldbuild(id)
+  },
+  'novel:worldbuildDeleteBatch': (_ctx, projectId: string, ids: string[]): number => {
+    for (const id of ids) deleteEmbeddingsByRef('worldbuild', id)
+    return store.deleteWorldbuildBatch(projectId, ids)
+  },
   'novel:worldbuildCommitChunk': (
     _ctx,
     projectId: string,
@@ -539,6 +601,39 @@ export const sharedHandlers: Record<string, Handler> = {
   'novel:summary': (_ctx, outlineId: string): ChapterSummary | null => {
     const chapter = store.getChapterByOutline(outlineId)
     return chapter ? store.getSummary(chapter.id) : null
+  },
+  'novel:volumeSummary': (_ctx, projectId: string, volume: number) =>
+    store.getVolumeSummary(projectId, volume),
+  'novel:volumeSummaries': (_ctx, projectId: string) => store.listVolumeSummaries(projectId),
+
+  'embedding:status': (_ctx, projectId?: string) => getEmbeddingStatus(projectId),
+  'embedding:setEnabled': (_ctx, enabled: boolean): void => setEmbeddingEnabled(enabled),
+  'embedding:rebuild': async (_ctx, projectId?: string): Promise<{ count: number }> => ({
+    count: await rebuildEmbeddings(projectId)
+  }),
+
+  'search:project': async (_ctx, projectId: string, query: string, limit?: number): Promise<SearchHit[]> => {
+    const k = Math.min(20, Math.max(1, limit ?? 8))
+    const hits = await semanticSearch(projectId, query, ['worldbuild', 'character', 'summary'], k)
+    const wb = new Map(store.listWorldbuild(projectId).map((e) => [e.id, e]))
+    const ch = new Map(store.listCharacters(projectId).map((c) => [c.id, c]))
+    const ol = new Map(store.listOutlines(projectId).map((o) => [o.id, o]))
+    const out: SearchHit[] = []
+    for (const h of hits) {
+      if (h.kind === 'worldbuild') {
+        const e = wb.get(h.refId)
+        if (e) out.push({ kind: 'worldbuild', id: e.id, title: `[${e.category}] ${e.title}`, snippet: e.content.slice(0, 160), score: h.score })
+      } else if (h.kind === 'character') {
+        const c = ch.get(h.refId)
+        if (c) out.push({ kind: 'character', id: c.id, title: `${c.name}（${c.role || '未定位'}）`, snippet: c.card.slice(0, 160), score: h.score })
+      } else if (h.kind === 'summary') {
+        const o = ol.get(h.refId)
+        const chapter = o ? store.getChapterByOutline(o.id) : null
+        const s = chapter ? store.getSummary(chapter.id) : null
+        if (o && s) out.push({ kind: 'chapter', id: o.id, title: `第${o.chapterNo}章 ${o.title}`, snippet: s.summary.slice(0, 160), score: h.score })
+      }
+    }
+    return out
   },
 
   'graph:project': (_ctx, projectId: string): ProjectGraph => buildProjectGraph(projectId),

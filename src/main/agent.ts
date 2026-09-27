@@ -2,7 +2,7 @@ import type { AgentDonePayload, ChatMessage, ContentBlock, OutlineItem, ToolDef,
 import { splitTags } from '../shared/tags'
 import type { EventSink } from './eventSink'
 import { chatStream, pickRatelimitHeaders } from './llm'
-import { getLlmAuth } from './settings'
+import { resolveRequestAuth } from './settings'
 import * as store from './store'
 import { appendUsage } from './usage'
 
@@ -159,14 +159,14 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'get_character',
-      description: '按 id 读取单张人物卡全文（修改前取原文用）',
+      description: '按 id 读取单张人物卡全文（含动态状态 state，修改前取原文用）',
       input_schema: schema({ id: s('人物 id') }, ['id'])
     },
     danger: false,
     handler: (input, projectId) => {
       const c = store.listCharacters(projectId).find((x) => x.id === reqStr(input, 'id'))
       if (!c) throw new Error('未找到该人物')
-      return { id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card }
+      return { id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card, state: c.state }
     }
   },
   {
@@ -377,6 +377,11 @@ const TOOLS: AgentTool[] = [
           chapterNo: o.chapterNo,
           title: o.title,
           synopsis: o.synopsis,
+          role: o.role,
+          suspense: o.suspense,
+          twist: o.twist,
+          hook: o.hook,
+          foreshadowOps: o.foreshadowOps,
           status: o.status
         }))
       }
@@ -385,7 +390,8 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'save_outline',
-      description: '新建或修改大纲条目。传 id 表示修改既有条目；不传 id 表示新建（volume 与 chapterNo 必填）',
+      description:
+        '新建或修改大纲条目。传 id 表示修改既有条目；不传 id 表示新建（volume 与 chapterNo 必填）。可选元数据：role（章节定位）、suspense（悬念密度）、twist（认知颠覆1-5）、hook（结尾钩子设计）、foreshadowOps（伏笔操作，如 埋设(A)→回收(B)）；修改时未传字段保留原值',
       input_schema: schema(
         {
           id: optS('要修改的大纲 id（新建时省略）'),
@@ -393,6 +399,11 @@ const TOOLS: AgentTool[] = [
           chapterNo: optN('章号（新建必填）'),
           title: optS('章节标题'),
           synopsis: optS('章节梗概'),
+          role: optS('章节定位（情节推进/人物深化/氛围营造/过渡衔接/高潮转折）'),
+          suspense: optS('悬念密度（紧凑/渐进/爆发）'),
+          twist: optN('认知颠覆强度 1-5'),
+          hook: optS('结尾钩子设计'),
+          foreshadowOps: optS('伏笔操作'),
           status: optS("状态：draft/approved/written/polished")
         },
         []
@@ -409,6 +420,7 @@ const TOOLS: AgentTool[] = [
         chapterNo = chapterNo ?? cur.chapterNo
       }
       if (volume === undefined || chapterNo === undefined) throw new Error('新建时 volume 与 chapterNo 必填')
+      const twist = optNum(input, 'twist')
       const saved = store.saveOutline({
         id,
         projectId,
@@ -416,6 +428,11 @@ const TOOLS: AgentTool[] = [
         chapterNo,
         title: optStr(input, 'title'),
         synopsis: optStr(input, 'synopsis'),
+        role: optStr(input, 'role'),
+        suspense: optStr(input, 'suspense'),
+        twist: twist === undefined ? undefined : Math.min(5, Math.max(0, Math.round(twist))),
+        hook: optStr(input, 'hook'),
+        foreshadowOps: optStr(input, 'foreshadowOps'),
         status: optStr(input, 'status') as never
       })
       return { ok: true, id: saved.id, chapterNo: saved.chapterNo, title: saved.title, created: !id }
@@ -468,6 +485,101 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
+      name: 'get_chapter_tail',
+      description: '读取某一章正文的结尾片段（默认 800 字）。写新章前用它回读上一章结尾，找回语气、悬念与情绪落点',
+      input_schema: schema(
+        { outlineId: s('大纲条目 id'), chars: optN('要读取的结尾字数，默认 800') },
+        ['outlineId']
+      )
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const o = getOutlineOwned(reqStr(input, 'outlineId'), projectId)
+      const chapter = store.getChapterByOutline(o.id)
+      if (!chapter) return { exists: false, note: '该章节还没有正文' }
+      const n = Math.min(4000, Math.max(200, optNum(input, 'chars') ?? 800))
+      return {
+        exists: true,
+        chapterNo: o.chapterNo,
+        title: o.title,
+        wordCount: chapter.wordCount,
+        tail: chapter.content.slice(-n)
+      }
+    }
+  },
+  {
+    def: {
+      name: 'list_summaries',
+      description:
+        '按章列出已定稿的结构化摘要（概要/关键事件/时间线/人物状态），供检索前情。可选 volume 按卷过滤；默认返回全部',
+      input_schema: schema({ volume: optN('按卷号过滤') }, [])
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const volume = optNum(input, 'volume')
+      const outlines = store
+        .listOutlines(projectId)
+        .filter((o) => (volume === undefined ? true : o.volume === volume))
+      const items: unknown[] = []
+      for (const o of outlines) {
+        const chapter = store.getChapterByOutline(o.id)
+        if (!chapter) continue
+        const s = store.getSummary(chapter.id)
+        if (!s) continue
+        items.push({
+          outlineId: o.id,
+          chapterNo: o.chapterNo,
+          title: o.title,
+          summary: s.summary,
+          events: s.events,
+          timeline: s.timeline,
+          characterStates: s.characterStates
+        })
+      }
+      return { count: items.length, items }
+    }
+  },
+  {
+    def: {
+      name: 'search_project',
+      description:
+        '跨板块语义搜索（本地嵌入模型驱动）：在世界观/人物/章节摘要中按含义检索相关内容并返回命中列表。找"和某主题相关的设定/章节"时优先用它，比翻页浏览高效；模型不可用时返回空结果，应回退 list_* 工具',
+      input_schema: schema({ query: s('检索语句，如：主角身世相关的伏笔') }, ['query'])
+    },
+    danger: false,
+    handler: async (input, projectId) => {
+      const { semanticSearch } = await import('./embedding')
+      const hits = await semanticSearch(projectId, reqStr(input, 'query'), ['worldbuild', 'character', 'summary'], 8)
+      if (hits.length === 0) return { results: [], note: '无命中或语义检索不可用' }
+      const wb = new Map(store.listWorldbuild(projectId).map((e) => [e.id, e]))
+      const chs = new Map(store.listCharacters(projectId).map((c) => [c.id, c]))
+      const ols = new Map(store.listOutlines(projectId).map((o) => [o.id, o]))
+      return {
+        results: hits.map((h) => {
+          if (h.kind === 'worldbuild') {
+            const e = wb.get(h.refId)
+            return e
+              ? { kind: 'worldbuild', id: e.id, title: `[${e.category}] ${e.title}`, snippet: e.content.slice(0, 200), score: h.score }
+              : null
+          }
+          if (h.kind === 'character') {
+            const c = chs.get(h.refId)
+            return c
+              ? { kind: 'character', id: c.id, title: `${c.name}（${c.role || '未定位'}）`, snippet: c.card.slice(0, 200), score: h.score }
+              : null
+          }
+          const o = ols.get(h.refId)
+          const chapter = o ? store.getChapterByOutline(o.id) : null
+          const sm = chapter ? store.getSummary(chapter.id) : null
+          return o && sm
+            ? { kind: 'chapter', id: o.id, title: `第${o.chapterNo}章 ${o.title}`, snippet: sm.summary, score: h.score }
+            : null
+        }).filter(Boolean)
+      }
+    }
+  },
+  {
+    def: {
       name: 'save_chapter',
       description: '写入某一章的正文（新建草稿或覆盖已有正文）。覆盖已有正文需用户确认',
       input_schema: schema({ outlineId: s('大纲条目 id'), content: s('完整正文内容') }, ['outlineId', 'content'])
@@ -511,14 +623,17 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'save_foreshadow',
-      description: '新建或修改伏笔。传 id 表示修改；不传 id 表示新建',
+      description:
+        '新建或修改伏笔。传 id 表示修改；不传 id 表示新建。可选：plannedResolve（计划回收点，如 第2卷30-35章）、priority（优先级：主线/人物/氛围）；修改时未传字段保留原值',
       input_schema: schema(
         {
           id: optS('要修改的伏笔 id（新建时省略）'),
           content: s('伏笔内容'),
           plantedChapter: optS('埋设章节（如 第3章）'),
           status: optS('状态：open/resolved'),
-          resolvedChapter: optS('回收章节')
+          resolvedChapter: optS('回收章节'),
+          plannedResolve: optS('计划回收点'),
+          priority: optS('优先级：主线/人物/氛围')
         },
         ['content']
       )
@@ -531,7 +646,9 @@ const TOOLS: AgentTool[] = [
         content: reqStr(input, 'content'),
         plantedChapter: optStr(input, 'plantedChapter'),
         status: optStr(input, 'status'),
-        resolvedChapter: optStr(input, 'resolvedChapter')
+        resolvedChapter: optStr(input, 'resolvedChapter'),
+        plannedResolve: optStr(input, 'plannedResolve'),
+        priority: optStr(input, 'priority')
       })
       return { ok: true, id: saved.id, created: !optStr(input, 'id') }
     }
@@ -563,6 +680,9 @@ const READ_TOOLS = new Set([
   'list_outlines',
   'list_chapter_briefs',
   'get_chapter',
+  'get_chapter_tail',
+  'list_summaries',
+  'search_project',
   'list_foreshadows'
 ])
 
@@ -617,7 +737,9 @@ function buildSystemPrompt(projectId: string): string {
     '5. 若某操作被用户拒绝，不要重试同一操作，改为说明原因并询问下一步建议',
     '6. 用户要求模糊时（如"优化一下大纲"），先读取现状再决定改法，必要时先说明你的计划',
     '7. 全局性任务（矛盾检查、一致性审校、批量统计或修改）必须覆盖全部相关条目：先看 total/hasMore/byCategory 规划分批，逐批读取直至 hasMore=false，再下结论并在结论中说明覆盖范围；结果被截断时改用 category/volume 过滤、offset/limit 分页或 detail=summary 重试，禁止基于不完整数据下最终结论',
-    '8. 写入世界观词条或人物卡时遵循标签纪律：每条至少 2 个标签，优先复用现有标签，没有合适的就新建可被多条共享的上位主题标签（体系名/时代名/事件名/族群名等），禁止无标签条目或让标签留空'
+    '8. 写入世界观词条或人物卡时遵循标签纪律：每条至少 2 个标签，优先复用现有标签，没有合适的就新建可被多条共享的上位主题标签（体系名/时代名/事件名/族群名等），禁止无标签条目或让标签留空',
+    '9. 写章节正文前的固定序列（顺序不可省略）：① list_outlines 找到上一章大纲 id；② get_chapter_tail 回读上一章结尾，找回语气、当前悬念与情绪落点；③ 读取本章出场人物的 get_character（关注动态状态 state）；④ list_foreshadows 核对未回收伏笔（本章该埋/该收的在梗概或 foreshadowOps 里）；⑤ 然后才动笔',
+    '10. 找"与某主题相关的设定/人物/章节"时优先用 search_project 语义搜索，比翻页浏览高效；返回为空再回退 list_* 分页浏览'
   ].join('\n')
 }
 
@@ -644,7 +766,7 @@ export async function runAgent(opts: {
     if (!sink.isClosed()) sink.send(channel, requestId, ...args)
   }
 
-  const auth = await getLlmAuth()
+  const auth = await resolveRequestAuth('agent')
   if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
   const system = buildSystemPrompt(projectId)
 
@@ -673,7 +795,7 @@ export async function runAgent(opts: {
       turnCount = turn + 1
       const result = await chatStream(
         {
-          model: opts.model,
+          model: opts.model || auth.model,
           system,
           messages,
           tools,

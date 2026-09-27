@@ -4,6 +4,8 @@ import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
 import type {
   ModelRouting,
+  Purpose,
+  PurposeRoute,
   ProviderProfile,
   ServerConfig,
   SettingsPatch,
@@ -229,6 +231,62 @@ export async function getLlmAuth(): Promise<LlmAuth> {
     supportsCache: preset.supportsCache,
     promptCache: preset.supportsCache && profile.promptCache
   }
+}
+
+/** 旧版路由值是纯模型名字符串，新版是 {provider?, model}；统一归一化 */
+function normalizeRoute(value: string | PurposeRoute | undefined): PurposeRoute | null {
+  if (!value) return null
+  if (typeof value === 'string') {
+    const model = value.trim()
+    return model ? { model } : null
+  }
+  const model = value.model?.trim()
+  if (!model) return null
+  const provider = value.provider && isProviderId(value.provider) ? value.provider : undefined
+  return { model, provider }
+}
+
+export interface RequestAuth extends LlmAuth {
+  model: string
+  fallbackReason: string
+}
+
+/**
+ * 按用途解析鉴权与模型（跨 provider 路由）：
+ * - 当前 provider 的 modelRouting[purpose] 可指定 {provider, model}，让记账类任务走本地 ollama 等免费通道
+ * - 路由指向的 provider 未配置 Key（且需要 Key）时回退当前 provider 默认模型，并给出 fallbackReason
+ */
+export async function resolveRequestAuth(purpose?: Purpose): Promise<RequestAuth> {
+  const stored = readStored()
+  const base = await getLlmAuth()
+  const profile = profileFor(stored, stored.provider)
+  let model = profile.defaultModel.trim()
+  let fallbackReason = ''
+  const route = purpose ? normalizeRoute(profile.modelRouting[purpose]) : null
+  if (route) {
+    if (route.provider && route.provider !== stored.provider) {
+      const targetPreset = providerPreset(route.provider)
+      const targetProfile = profileFor(stored, route.provider)
+      const targetKey = decodeKey(stored.apiKeys[route.provider])
+      if (!targetKey && targetPreset.needsKey) {
+        fallbackReason = `任务 ${purpose} 路由到 ${route.provider} 但未配置 API Key，已回退当前 provider`
+      } else {
+        return {
+          provider: route.provider,
+          apiKey: route.provider === 'ollama' ? targetKey || 'ollama' : targetKey,
+          baseUrl: targetProfile.baseUrl.trim() || targetPreset.baseUrl,
+          needsKey: targetPreset.needsKey,
+          supportsCache: targetPreset.supportsCache,
+          promptCache: targetPreset.supportsCache && targetProfile.promptCache,
+          model: route.model,
+          fallbackReason: ''
+        }
+      }
+    } else {
+      model = route.model
+    }
+  }
+  return { ...base, model, fallbackReason }
 }
 
 export async function loadSettingsView(): Promise<SettingsView> {
