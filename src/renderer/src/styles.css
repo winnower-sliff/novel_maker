@@ -14,6 +14,27 @@ body {
   @apply bg-zinc-950 text-zinc-200 antialiased;
 }
 
+/* 移动端适配：输入控件 16px 防止 iOS 聚焦自动放大页面；
+   按钮保证最小触控高度（固定小尺寸的图标按钮除外）；禁止页面级横向滚动 */
+@media (max-width: 767px) {
+  body {
+    overflow-x: hidden;
+  }
+  input,
+  textarea,
+  select {
+    font-size: 16px !important;
+  }
+  button {
+    min-height: 32px;
+  }
+  button[class*='h-4'],
+  button[class*='h-5'],
+  button[class*='h-6'] {
+    min-height: 0;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 8px;
   height: 8px;

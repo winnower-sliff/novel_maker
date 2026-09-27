@@ -463,7 +463,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               {status && <Badge tone={status.tone}>{status.label}</Badge>}
               {dirty && <Badge tone="amber">未保存</Badge>}
               <span className="text-xs text-zinc-500">{wordCount} 字</span>
-              <div className="ml-auto flex flex-wrap gap-2">
+              <div className="ml-auto flex min-w-0 gap-2 overflow-x-auto pb-1 [&>*]:shrink-0 md:flex-wrap md:overflow-visible md:pb-0">
                 <Button variant="ghost" onClick={previewContext} disabled={busyAny}>
                   上下文
                 </Button>

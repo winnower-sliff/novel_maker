@@ -169,7 +169,7 @@ function loginPage(error?: string): string {
   h1 { margin: 0 0 6px; font-size: 18px; }
   p { margin: 0 0 18px; font-size: 13px; color: #a1a1aa; line-height: 1.6; }
   input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #3f3f46; background: #09090b;
-    color: #e4e4e7; font-size: 15px; }
+    color: #e4e4e7; font-size: 16px; }
   button { width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 8px; background: #d97706;
     color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
   .err { margin-top: 12px; font-size: 12px; color: #f87171; }

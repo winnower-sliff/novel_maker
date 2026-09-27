@@ -4,7 +4,7 @@ export function Toaster() {
   const toasts = useToasts()
   if (toasts.length === 0) return null
   return (
-    <div className="pointer-events-none fixed right-4 top-4 z-50 flex w-72 flex-col gap-2">
+    <div className="pointer-events-none fixed inset-x-3 top-[calc(3rem+env(safe-area-inset-top))] z-50 flex flex-col gap-2 md:inset-x-auto md:right-4 md:top-4 md:w-72">
       {toasts.map((t) => (
         <div
           key={t.id}

@@ -681,7 +681,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
               </button>
               <button
                 onClick={() => removeType(c)}
-                className="absolute -right-1 -top-1 hidden h-4 w-4 cursor-pointer items-center justify-center rounded-full border border-zinc-600 bg-zinc-900 text-[9px] leading-none text-zinc-400 hover:text-red-400 group-hover/type:flex"
+                className="absolute -right-1 -top-1 hidden h-4 w-4 cursor-pointer items-center justify-center rounded-full border border-zinc-600 bg-zinc-900 text-[9px] leading-none text-zinc-400 hover:text-red-400 group-hover/type:flex max-md:flex max-md:h-6 max-md:w-6 max-md:text-[11px]"
                 title="删除该类型"
               >
                 ×

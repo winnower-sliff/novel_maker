@@ -476,7 +476,7 @@ export default function Agent({ projectId }: { projectId: string }) {
         )}
       </Card>
 
-      <div>
+      <div className="pb-[env(safe-area-inset-bottom)]">
         <Textarea
           rows={3}
           value={input}
@@ -488,7 +488,7 @@ export default function Agent({ projectId }: { projectId: string }) {
           disabled={running}
         />
         <div className="mt-2 flex items-center justify-between">
-          <span className="text-xs text-zinc-600">Ctrl+Enter 发送</span>
+          <span className="hidden text-xs text-zinc-600 sm:inline">Ctrl+Enter 发送</span>
           <div className="flex gap-2">
             {running ? (
               <Button variant="danger" onClick={stop}>

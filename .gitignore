@@ -5,3 +5,5 @@ dist/
 dev.log
 .DS_Store
 
+.opencode/
+.playwright-mcp/

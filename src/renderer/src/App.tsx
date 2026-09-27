@@ -241,7 +241,7 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <Toaster />
-      <header className="flex h-12 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900/95 px-3 md:hidden">
+      <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900/95 px-3 pt-[env(safe-area-inset-top)] md:hidden">
         <button
           onClick={() => setNavOpen(true)}
           aria-label="打开导航"
@@ -373,7 +373,7 @@ export default function App() {
               </>
             )}
           </div>
-          <nav className="mt-3 flex-1 space-y-4 overflow-y-auto px-2 pb-2">
+          <nav className="mt-3 flex-1 space-y-4 overflow-y-auto px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
             <div className="space-y-1">
               <div className="px-3 pb-1 text-[10px] font-medium tracking-wider text-zinc-600">
                 创作
