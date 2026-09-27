@@ -41,10 +41,12 @@ import {
   loadAgentSession,
   saveAgentSession
 } from './agentSessions'
+import { LONG_CHAPTER_THRESHOLD, runLongChapter } from './chapterRunner'
 import { buildChapterContext } from './context'
 import type { EventSink } from './eventSink'
 import { buildProjectGraph } from './graph'
 import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
+import { lintChapterReport, stripHtmlComments } from './lint'
 import { providerPreset } from '../shared/providers'
 import {
   applyOutlineResult,
@@ -272,8 +274,71 @@ function startStream(
   return requestId
 }
 
-async function runWorldbuildRetrieval(p: WorldbuildGenParams): Promise<WorldbuildRetrieval | undefined> {
-  const req = buildWorldbuildRetrieveRequest(p)
+/** 长章模式（AgentWrite 计划→逐段写）：多请求编排，对外仍是单 requestId 流 */
+function startLongChapterStream(
+  sink: EventSink,
+  projectId: string,
+  outlineId: string,
+  wordTarget: number
+): string {
+  const requestId = randomUUID()
+  const controller = new AbortController()
+  activeRequests.set(requestId, controller)
+
+  void (async () => {
+    try {
+      const started = Date.now()
+      const result = await runLongChapter({
+        sink,
+        requestId,
+        projectId,
+        outlineId,
+        wordTarget,
+        signal: controller.signal
+      })
+      const clean = stripHtmlComments(result.text)
+      const chapter = store.saveChapter({
+        outlineId,
+        projectId,
+        content: clean,
+        status: 'draft'
+      })
+      enqueueEmbedding(projectId, 'summary', outlineId, clean.slice(0, 1200))
+      if (!sink.isClosed()) {
+        sink.send('llm:done', requestId, {
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          model: '',
+          stopReason: 'end_turn',
+          durationMs: Date.now() - started,
+          headers: {},
+          action: 'chapter' as PipelineAction,
+          data: {
+            chapterId: chapter.id,
+            wordCount: chapter.wordCount,
+            longMode: true,
+            segments: result.plan.length,
+            lint: lintChapterReport(outlineId, clean)
+          }
+        })
+      }
+    } catch (err) {
+      if (!sink.isClosed()) {
+        const message = controller.signal.aborted
+          ? '已停止'
+          : err instanceof LlmError
+            ? `[${err.status ?? '网络'}] ${err.message}`
+            : ((err as Error)?.message ?? String(err))
+        sink.send('llm:error', requestId, message)
+      }
+    } finally {
+      activeRequests.delete(requestId)
+    }
+  })()
+
+  return requestId
+}
+
+async function runWorldbuildRetrieval(p: WorldbuildGenParams): Promise<WorldbuildRetrieval | undefined> {  const req = buildWorldbuildRetrieveRequest(p)
   if (!req) return undefined
   try {
     const auth = await resolveRequestAuth(req.purpose)
@@ -356,22 +421,27 @@ export const sharedHandlers: Record<string, Handler> = {
       const { outlineId, wordTarget } = params as { outlineId: string; wordTarget?: number }
       const outline = store.getOutline(outlineId)
       if (!outline) throw new Error('章节不存在')
+      if (wordTarget && wordTarget >= LONG_CHAPTER_THRESHOLD) {
+        return startLongChapterStream(ctx.sink, outline.projectId, outlineId, wordTarget)
+      }
       const built = await buildChapterRequest(outline.projectId, outlineId, wordTarget)
       return startStream(ctx.sink, built.params, {
         action,
         afterDone: (r) => {
+          const clean = stripHtmlComments(r.text)
           const chapter = store.saveChapter({
             outlineId,
             projectId: outline.projectId,
-            content: r.text,
+            content: clean,
             status: 'draft'
           })
-          enqueueEmbedding(outline.projectId, 'summary', outlineId, r.text.slice(0, 1200))
+          enqueueEmbedding(outline.projectId, 'summary', outlineId, clean.slice(0, 1200))
           return {
             chapterId: chapter.id,
             wordCount: chapter.wordCount,
             contextParts: built.ctx.parts,
-            contextTokens: built.ctx.totalTokens
+            contextTokens: built.ctx.totalTokens,
+            lint: lintChapterReport(outlineId, clean)
           }
         }
       })

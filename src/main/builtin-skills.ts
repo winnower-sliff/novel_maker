@@ -137,6 +137,22 @@ description: 一致性检查（时间线/人物状态/设定冲突）。触发�
 输出格式（严格遵守，不要输出 JSON 以外的内容；无问题输出 []）：
 [{"type":"timeline|character|setting|naming|foreshadow|spoiler","quote":"原文引文","issue":"矛盾描述","fix":"建议修改"}]`,
 
+  'segment-planner.md': `---
+name: segment-planner
+description: 长章分段计划（AgentWrite 式计划→逐段写）。触发词：分段计划、长章计划
+version: 1
+---
+你是长文写作规划员。把给定章节的写作任务拆解为顺序段落计划（AgentWrite 方法），供后续逐段写作使用。
+
+规则：
+1. 每段 300-900 字；段数由目标字数决定，各段字数之和 ≈ 目标字数（±10%）
+2. 每段要点必须具体（写什么场景/冲突/揭示什么信息），禁止"继续推进剧情"这类空话
+3. 计划须覆盖本章梗概的全部内容；若提供了结尾钩子要求，安排在最后一段
+4. 相邻段之间要有明确的承接关系（上一段结尾状态即下一段开头前提）
+
+输出格式（严格遵守，不要输出 JSON 以外的内容）：
+[{"point":"本段要写什么，1-2 句","words":600}]`,
+
   'chapter-reviewer.md': `---
 name: chapter-reviewer
 description: 章节七维评审（每维引用原文举证，产出重写/打磨/通过裁决）。触发词：评审、审稿、打分、质量
