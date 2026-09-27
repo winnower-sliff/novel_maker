@@ -1,12 +1,15 @@
 import { useCallback, useEffect, useState } from 'react'
 import type { Foreshadow } from '@shared/types'
-import { Badge, Button, Card, Input, Label } from '../components/ui'
+import { Badge, Button, Card, Input, Label, Select } from '../components/ui'
 import type { Navigate } from '../lib/nav'
 
 export default function Foreshadows({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
   const [list, setList] = useState<Foreshadow[]>([])
   const [content, setContent] = useState('')
   const [planted, setPlanted] = useState('')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editPlanned, setEditPlanned] = useState('')
+  const [editPriority, setEditPriority] = useState('')
 
   const load = useCallback((): void => {
     if (!projectId) return
@@ -37,6 +40,27 @@ export default function Foreshadows({ projectId, onNavigate }: { projectId: stri
       .then(() => {
         setContent('')
         setPlanted('')
+        load()
+      })
+  }
+
+  const startEdit = (f: Foreshadow): void => {
+    setEditingId(f.id)
+    setEditPlanned(f.plannedResolve)
+    setEditPriority(f.priority)
+  }
+
+  const saveEdit = (f: Foreshadow): void => {
+    void window.api.novel
+      .foreshadowSave({
+        id: f.id,
+        projectId,
+        content: f.content,
+        plannedResolve: editPlanned.trim(),
+        priority: editPriority.trim()
+      })
+      .then(() => {
+        setEditingId(null)
         load()
       })
   }
@@ -72,24 +96,81 @@ export default function Foreshadows({ projectId, onNavigate }: { projectId: stri
           </div>
         )}
         {items.map((f) => (
-          <div key={f.id} className="group flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800/30">
-            <span className="min-w-0 flex-1 text-sm leading-6 text-zinc-300">{f.content}</span>
-            <span className="shrink-0 text-xs text-zinc-600">{f.plantedChapter || '?'}</span>
-            {f.status !== 'open' && <span className="shrink-0 text-xs text-emerald-500">→ {f.resolvedChapter || '?'}</span>}
-            <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
-              <Button variant="ghost" className="px-2 py-0.5 text-xs" onClick={() => toggle(f)}>
-                {f.status === 'open' ? '回收' : '重开'}
-              </Button>
-              <Button
-                variant="danger"
-                className="px-2 py-0.5 text-xs"
-                onClick={() => {
-                  if (window.confirm('删除该伏笔记录？')) void window.api.novel.foreshadowDelete(f.id).then(load)
-                }}
-              >
-                删除
-              </Button>
+          <div key={f.id} className="group px-4 py-2.5 hover:bg-zinc-800/30">
+            <div className="flex items-center gap-3">
+              {f.priority && (
+                <span
+                  className={`shrink-0 rounded px-1.5 py-0.5 text-[10px] ${
+                    f.priority === '主线'
+                      ? 'bg-red-900/50 text-red-300'
+                      : f.priority === '人物'
+                        ? 'bg-amber-900/50 text-amber-300'
+                        : 'bg-zinc-800 text-zinc-500'
+                  }`}
+                >
+                  {f.priority}
+                </span>
+              )}
+              <span className="min-w-0 flex-1 text-sm leading-6 text-zinc-300">{f.content}</span>
+              <span className="shrink-0 text-xs text-zinc-600">{f.plantedChapter || '?'}</span>
+              {f.plannedResolve && (
+                <span className="shrink-0 text-xs text-sky-500/80" title="计划回收点">
+                  →{f.plannedResolve}
+                </span>
+              )}
+              {f.status !== 'open' && <span className="shrink-0 text-xs text-emerald-500">→ {f.resolvedChapter || '?'}</span>}
+              <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                {f.status === 'open' && (
+                  <Button variant="ghost" className="px-2 py-0.5 text-xs" onClick={() => startEdit(f)}>
+                    规划
+                  </Button>
+                )}
+                <Button variant="ghost" className="px-2 py-0.5 text-xs" onClick={() => toggle(f)}>
+                  {f.status === 'open' ? '回收' : '重开'}
+                </Button>
+                <Button
+                  variant="danger"
+                  className="px-2 py-0.5 text-xs"
+                  onClick={() => {
+                    if (window.confirm('删除该伏笔记录？')) void window.api.novel.foreshadowDelete(f.id).then(load)
+                  }}
+                >
+                  删除
+                </Button>
+              </div>
             </div>
+            {editingId === f.id && (
+              <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-zinc-800 bg-zinc-950 p-2">
+                <div className="w-44">
+                  <Label>计划回收点</Label>
+                  <Input
+                    value={editPlanned}
+                    onChange={(e) => setEditPlanned(e.target.value)}
+                    placeholder="如 第2卷30-35章"
+                    className="py-1 text-xs"
+                  />
+                </div>
+                <div className="w-32">
+                  <Label>优先级</Label>
+                  <Select
+                    value={editPriority}
+                    onChange={(e) => setEditPriority(e.target.value)}
+                    className="py-1 text-xs"
+                  >
+                    <option value="">（无）</option>
+                    <option value="主线">主线</option>
+                    <option value="人物">人物</option>
+                    <option value="氛围">氛围</option>
+                  </Select>
+                </div>
+                <Button className="px-2 py-1 text-xs" onClick={() => saveEdit(f)}>
+                  保存
+                </Button>
+                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => setEditingId(null)}>
+                  取消
+                </Button>
+              </div>
+            )}
           </div>
         ))}
       </div>

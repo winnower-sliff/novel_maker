@@ -12,9 +12,10 @@ interface EditState {
   role: string
   tags: string
   card: string
+  state: string
 }
 
-const EMPTY: EditState = { name: '', role: '', tags: '', card: '' }
+const EMPTY: EditState = { name: '', role: '', tags: '', card: '', state: '' }
 
 export default function Characters({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
   const [list, setList] = useState<Character[]>([])
@@ -52,7 +53,7 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
   const save = (): void => {
     if (!edit.name.trim()) return
     void window.api.novel
-      .characterSave({ id: edit.id, projectId, name: edit.name.trim(), role: edit.role, tags: edit.tags, card: edit.card })
+      .characterSave({ id: edit.id, projectId, name: edit.name.trim(), role: edit.role, tags: edit.tags, card: edit.card, state: edit.state })
       .then((saved) => {
         setEdit(EMPTY)
         setSelectedId(null)
@@ -98,7 +99,7 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
           setSelectedId(d.characterId)
           void window.api.novel.characters(projectId).then((cs) => {
             const c = cs.find((x) => x.id === d.characterId)
-            if (c) setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card })
+            if (c) setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card, state: c.state })
           })
         }
       })
@@ -130,7 +131,7 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
               key={c.id}
               onClick={() => {
                 setSelectedId(c.id)
-                setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card })
+                setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card, state: c.state })
                 setRevisedIds((cur) => cur.filter((x) => x !== c.id))
               }}
               className={`mb-1 w-full cursor-pointer rounded-md px-3 py-2 text-left transition-colors ${
@@ -229,6 +230,18 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
                 ? `这是人物「${edit.name || '未命名'}」（定位：${edit.role || '未填'}）的人物卡全文：\n${edit.card}`
                 : undefined
             }
+          />
+        </div>
+        <div className="mt-3">
+          <Label>
+            动态状态（定稿章节时由摘要自动同步：物品/能力/身心状态/关系/最近事件；写作时随人物卡注入）
+          </Label>
+          <textarea
+            className="w-full rounded-md border border-zinc-800 bg-zinc-950 p-2.5 font-mono text-xs leading-5 text-zinc-200 outline-none focus:border-zinc-600"
+            rows={Math.min(12, Math.max(3, Math.ceil(edit.state.length / 60)))}
+            value={edit.state}
+            onChange={(e) => setEdit({ ...edit, state: e.target.value })}
+            placeholder={'物品：寒铁长剑（断裂）\n身心状态：左臂旧伤未愈，对宗门起疑\n关系：与云岚由盟转敌\n最近事件：第12章 黑袍人交出半张地图'}
           />
         </div>
         <div className="mt-3 flex justify-end gap-2">
