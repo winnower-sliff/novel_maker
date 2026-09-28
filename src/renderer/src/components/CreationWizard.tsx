@@ -5,7 +5,7 @@ import { startPipeline } from '../lib/ipc'
 import { closeWizard, useWizard } from '../lib/wizardStore'
 import { startGen, useWbGenTasks, useWbLiveEntries } from '../lib/wbGenStore'
 import { OverlayCard } from './OverlayCard'
-import { Button, Input, Label, Textarea } from './ui'
+import { Badge, Button, Input, Label, Textarea } from './ui'
 
 const STEP_LABELS = ['设定确认', '世界观', '人物', '大纲', '完成']
 const STEP_LABELS_SHORT = ['设定', '世界观', '人物', '大纲', '完成']
@@ -70,6 +70,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
   const [finalCounts, setFinalCounts] = useState<{ wb: number; char: number; ol: number } | null>(
     null
   )
+  const [existing, setExisting] = useState<{ wb: number; char: number; ol: number } | null>(null)
 
   useEffect(() => {
     if (!open || !projectId) return
@@ -100,6 +101,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
     setOutlineDone(false)
     outlineAbortRef.current = null
     setFinalCounts(null)
+    setExisting(null)
     void window.api.novel
       .projects()
       .then((ps) => setProject(ps.find((p) => p.id === projectId) ?? null))
@@ -107,6 +109,17 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
     void window.api.novel
       .worldbuildTypes(projectId)
       .then(setTypeOptions)
+      .catch(() => {})
+    void Promise.all([
+      window.api.novel.worldbuild(projectId),
+      window.api.novel.characters(projectId),
+      window.api.novel.outlines(projectId)
+    ])
+      .then(([wb, cs, ol]) => {
+        const counts = { wb: wb.length, char: cs.length, ol: ol.length }
+        setExisting(counts)
+        setStep(counts.wb === 0 ? 0 : counts.char === 0 ? 2 : counts.ol === 0 ? 3 : 4)
+      })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, projectId])
@@ -342,15 +355,21 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
               </Button>
             </div>
             <p className="text-xs text-zinc-500">
-              AI 将根据书名与题材，起草世界观方向、核心人物清单与第一卷故事创意，生成后可逐项修改。
+              {existing && existing.wb + existing.char + existing.ol > 0
+                ? `检测到项目已有内容（世界观 ${existing.wb} 条 / 人物 ${existing.char} 张 / 大纲 ${existing.ol} 章），起草会衔接补全而非重复生成。`
+                : 'AI 将根据书名与题材，起草世界观方向、核心人物清单与第一卷故事创意，生成后可逐项修改。'}
             </p>
           </div>
         )}
 
         {step === 1 && (
           <div className="space-y-3">
-            <div>
+            <div className="flex items-center gap-2">
               <Label>世界观方向（将作为 AI 生成条目的需求描述）</Label>
+              {existing && existing.wb > 0 && (
+                <Badge tone="green">已有 {existing.wb} 条</Badge>
+              )}
+            </div>
               <Textarea
                 value={wbBrief}
                 onChange={(e) => setWbBrief(e.target.value)}
@@ -359,7 +378,6 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 disabled={wbStarted}
                 placeholder="例：低魔武侠世界，内力源于血脉，朝廷与江湖门派相互制衡…"
               />
-            </div>
             <div className="flex flex-wrap items-center gap-1.5 text-xs">
               <span className="shrink-0 text-zinc-500">类型</span>
               {typeOptions.map((t) => (
@@ -406,11 +424,11 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
               </div>
             )}
             <div className="flex items-center gap-2">
-              <Button onClick={startWorldbuild} disabled={!wbBrief.trim() || wbStarted || wbRunning}>
-                {wbStarted ? '已开始生成' : '开始生成世界观'}
+              <Button onClick={startWorldbuild} disabled={!wbBrief.trim() || wbRunning}>
+                {wbRunning ? '生成中…' : wbStarted ? '再次生成' : '开始生成世界观'}
               </Button>
-              <Button variant="ghost" onClick={() => setStep(2)} disabled={wbStarted && wbRunning}>
-                {wbStarted ? '下一步' : '跳过这步'}
+              <Button variant="ghost" onClick={() => setStep(2)}>
+                {wbStarted || (existing?.wb ?? 0) > 0 ? '下一步' : '跳过这步'}
               </Button>
             </div>
             <p className="text-xs text-zinc-500">
@@ -422,7 +440,10 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
         {step === 2 && (
           <div className="space-y-3">
             <div className="flex items-center justify-between">
-              <Label>核心人物清单（逐个生成人物卡）</Label>
+              <div className="flex items-center gap-2">
+                <Label>核心人物清单（逐个生成人物卡）</Label>
+                {existing && existing.char > 0 && <Badge tone="green">已有 {existing.char} 张</Badge>}
+              </div>
               <button
                 onClick={addChar}
                 disabled={charRunning}
@@ -496,7 +517,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                     : '开始生成'}
               </Button>
               <Button variant="ghost" onClick={() => setStep(3)} disabled={charRunning}>
-                {charDoneNames.length > 0 ? '下一步' : '跳过这步'}
+                {charDoneNames.length > 0 || (existing?.char ?? 0) > 0 ? '下一步' : '跳过这步'}
               </Button>
             </div>
           </div>
@@ -504,8 +525,10 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
 
         {step === 3 && (
           <div className="space-y-3">
-            <div>
+            <div className="flex items-center gap-2">
               <Label>第一卷核心创意</Label>
+              {existing && existing.ol > 0 && <Badge tone="green">已有 {existing.ol} 章</Badge>}
+            </div>
               <Textarea
                 value={outlineIdea}
                 onChange={(e) => setOutlineIdea(e.target.value)}
@@ -514,7 +537,6 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 disabled={outlineBusy}
                 placeholder="例：主角觉醒血脉遭追杀，被迫离乡加入门派，卷入朝廷与魔教的暗斗"
               />
-            </div>
             <div className="flex flex-wrap items-center gap-4 text-xs">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 text-zinc-500">卷号</span>
@@ -567,7 +589,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 {outlineDone ? '重新生成' : outlineBusy ? '生成中…' : '生成大纲并导入'}
               </Button>
               <Button variant="ghost" onClick={() => setStep(4)} disabled={outlineBusy}>
-                {outlineDone ? '下一步' : '跳过这步'}
+                {outlineDone || (existing?.ol ?? 0) > 0 ? '下一步' : '跳过这步'}
               </Button>
             </div>
             {outlineDone && (
