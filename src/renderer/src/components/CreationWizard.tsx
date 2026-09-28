@@ -10,6 +10,21 @@ import { Button, Input, Label, Textarea } from './ui'
 const STEP_LABELS = ['设定确认', '世界观', '人物', '大纲', '完成']
 const STEP_LABELS_SHORT = ['设定', '世界观', '人物', '大纲', '完成']
 
+function StreamBox({ text, className }: { text: string; className: string }) {
+  const ref = useRef<HTMLPreElement>(null)
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
+  }, [text])
+  return (
+    <pre
+      ref={ref}
+      className={`overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs leading-relaxed text-zinc-400 ${className}`}
+    >
+      {text || '…'}
+    </pre>
+  )
+}
+
 interface CreationWizardProps {
   onNavigate: Navigate
 }
@@ -135,7 +150,9 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
     setDraftBusy(true)
     setDraftError(null)
     setDraftDelta('')
-    const { done, abort } = startPipeline('premiseDraft', { projectId }, setDraftDelta)
+    const { done, abort } = startPipeline('premiseDraft', { projectId }, (t) =>
+      setDraftDelta((v) => v + t)
+    )
     draftAbortRef.current = abort
     try {
       const payload = await done
@@ -192,7 +209,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
       const { done, abort } = startPipeline(
         'character',
         { projectId, name: c.name.trim(), brief: c.brief.trim() },
-        setCharDelta
+        (t) => setCharDelta((v) => v + t)
       )
       charAbortRef.current = abort
       try {
@@ -238,7 +255,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
         startNo: Number(startNo) || 1,
         count: Number.isFinite(count) && count >= 1 ? Math.floor(count) : 20
       },
-      setOutlineDelta
+      (t) => setOutlineDelta((v) => v + t)
     )
     outlineAbortRef.current = abort
     try {
@@ -312,10 +329,8 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 </div>
               )}
             </div>
-            {draftDelta && (
-              <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs leading-relaxed text-zinc-400">
-                {draftDelta}
-              </pre>
+            {(draftBusy || draftDelta) && (
+              <StreamBox text={draftDelta} className="h-28 shrink-0" />
             )}
             {draftError && <div className="text-xs text-red-400">{draftError}</div>}
             <div className="flex items-center gap-2">
@@ -460,11 +475,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 </div>
               )}
             </div>
-            {charRunning && charDelta && (
-              <pre className="max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs leading-relaxed text-zinc-500">
-                {charDelta}
-              </pre>
-            )}
+            {charRunning && <StreamBox text={charDelta} className="h-24 shrink-0" />}
             {charError && (
               <div className="flex items-center gap-2 text-xs text-red-400">
                 <span className="truncate">{charError}</span>
@@ -540,10 +551,8 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 />
               </div>
             </div>
-            {(outlineDelta || outlineBusy) && (
-              <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs leading-relaxed text-zinc-500">
-                {outlineDelta || '生成中…'}
-              </pre>
+            {(outlineBusy || outlineDelta) && (
+              <StreamBox text={outlineDelta} className="h-32 shrink-0" />
             )}
             {outlineError && (
               <div className="flex items-center gap-2 text-xs text-red-400">
