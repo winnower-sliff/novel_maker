@@ -10,7 +10,8 @@ import type {
 } from '@shared/types'
 import { Markdown } from '../components/Markdown'
 import { Badge, Button, Card, Select, Textarea } from '../components/ui'
-import { fmtDuration, fmtTokens } from '../lib/format'
+import { setAgentUi } from '../lib/agentUiStore'
+import { fmtDuration, fmtRelative, fmtTokens } from '../lib/format'
 import { makeSessionTitle, toolLabel, toolSummary, turnsToMessages } from '../lib/agentTurns'
 import type { AgentToolCallEvent, AgentToolResultEvent } from '../../../preload/index'
 
@@ -115,6 +116,10 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
   const [doneInfo, setDoneInfo] = useState<AgentDonePayload | null>(null)
+  const [panelOpen, setPanelOpen] = useState(false)
+  const [renamingId, setRenamingId] = useState<string | null>(null)
+  const [renameText, setRenameText] = useState('')
+  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const requestIdRef = useRef<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const sessionCreatedAtRef = useRef<number>(Date.now())
@@ -166,6 +171,7 @@ export default function Agent({ projectId }: { projectId: string }) {
       void window.api.agent.abort(requestIdRef.current)
       requestIdRef.current = null
       setRunning(false)
+      setAgentUi({ running: false, confirming: false })
     }
     if (!projectId) return
     void (async () => {
@@ -197,7 +203,11 @@ export default function Agent({ projectId }: { projectId: string }) {
         applyTurns([])
       }
     })
-  }, [projectId, applyTurns, setSession])
+    return () => {
+      const sid = sessionIdRef.current
+      if (sid && turnsRef.current.length > 0) persist(sid, finalizeTurns(turnsRef.current))
+    }
+  }, [projectId, applyTurns, setSession, persist])
 
   useEffect(() => {
     const offDelta = window.api.agent.onDelta((id, text) => {
@@ -213,6 +223,7 @@ export default function Agent({ projectId }: { projectId: string }) {
           { id: call.id, name: call.name, input: call.input, state: call.state, dangerReason: call.dangerReason }
         ]
       }))
+      if (call.state === 'confirming') setAgentUi({ confirming: true })
     })
     const offToolResult = window.api.agent.onToolResult((id, r: AgentToolResultEvent) => {
       if (id !== requestIdRef.current) return
@@ -224,6 +235,9 @@ export default function Agent({ projectId }: { projectId: string }) {
             : c
         )
       }))
+      setAgentUi({ confirming: false })
+      const sid = sessionIdRef.current
+      if (sid) persist(sid, turnsRef.current)
     })
     const offDone = window.api.agent.onDone((id, payload) => {
       if (id !== requestIdRef.current) return
@@ -238,6 +252,7 @@ export default function Agent({ projectId }: { projectId: string }) {
       setDoneInfo(payload)
       setRunning(false)
       requestIdRef.current = null
+      setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: true } })
     })
     const offError = window.api.agent.onError((id, message) => {
       if (id !== requestIdRef.current) return
@@ -248,6 +263,7 @@ export default function Agent({ projectId }: { projectId: string }) {
       setError(message)
       setRunning(false)
       requestIdRef.current = null
+      setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: false } })
     })
     return () => {
       offDelta()
@@ -299,6 +315,8 @@ export default function Agent({ projectId }: { projectId: string }) {
     setError('')
     setDoneInfo(null)
     setRunning(true)
+    setAgentUi({ running: true, confirming: false, ended: null })
+    persist(sid, next)
     void window.api.agent
       .run({ projectId, messages: turnsToMessages(next), model })
       .then((id) => {
@@ -321,6 +339,12 @@ export default function Agent({ projectId }: { projectId: string }) {
 
   const switchSession = (id: string): void => {
     if (running) stop()
+    requestIdRef.current = null
+    setRunning(false)
+    setAgentUi({ running: false, confirming: false })
+    setPanelOpen(false)
+    setRenamingId(null)
+    setConfirmDeleteId(null)
     if (!id) {
       setSession(null)
       applyTurns([])
@@ -338,11 +362,23 @@ export default function Agent({ projectId }: { projectId: string }) {
     })
   }
 
-  const deleteSession = (): void => {
-    if (!sessionId) return
-    void window.api.agent.sessionDelete(sessionId).then(() => {
-      setSession(null)
-      applyTurns([])
+  const renameSession = (id: string, title: string): void => {
+    void window.api.agent.sessionLoad(id).then((session) => {
+      if (!session) return
+      const next = title.trim() || makeSessionTitle(session.turns)
+      void window.api.agent.sessionSave({ ...session, title: next }).then(() => refreshSessions(projectId))
+    })
+  }
+
+  const deleteSessionById = (id: string): void => {
+    void window.api.agent.sessionDelete(id).then(() => {
+      if (id === sessionIdRef.current) {
+        setSession(null)
+        applyTurns([])
+        setError('')
+        setDoneInfo(null)
+      }
+      setConfirmDeleteId(null)
       refreshSessions(projectId)
     })
   }
@@ -360,24 +396,141 @@ export default function Agent({ projectId }: { projectId: string }) {
       <div className="flex flex-wrap items-center gap-3">
         <div className="w-full sm:w-56">
           <div className="mb-1.5 text-xs font-medium text-zinc-400">会话</div>
-          <div className="flex gap-1.5">
-            <Select
-              value={sessionId ?? ''}
-              onChange={(e) => switchSession(e.target.value)}
-              disabled={running}
-              className="min-w-0 flex-1"
+          <div className="relative">
+            <button
+              onClick={() => setPanelOpen((v) => !v)}
+              className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-left text-sm text-zinc-200 transition-colors hover:border-zinc-700"
             >
-              <option value="">＋ 新会话</option>
-              {sessions.map((s) => (
-                <option key={s.id} value={s.id}>
-                  {s.title}
-                </option>
-              ))}
-            </Select>
-            {sessionId && !running && (
-              <Button variant="ghost" onClick={deleteSession} title="删除当前会话">
-                删
-              </Button>
+              <span className="min-w-0 flex-1 truncate">
+                {sessions.find((s) => s.id === sessionId)?.title ?? '新会话'}
+              </span>
+              <svg
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                className={`h-3 w-3 shrink-0 text-zinc-500 transition-transform ${panelOpen ? 'rotate-180' : ''}`}
+              >
+                <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+            </button>
+            {panelOpen && (
+              <>
+                <div
+                  className="fixed inset-0 z-20"
+                  onClick={() => {
+                    setPanelOpen(false)
+                    setRenamingId(null)
+                    setConfirmDeleteId(null)
+                  }}
+                />
+                <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+                  <button
+                    onClick={() => switchSession('')}
+                    disabled={running}
+                    className="flex w-full cursor-pointer items-center px-2.5 py-2 text-left text-xs text-amber-400 transition-colors hover:bg-zinc-800/60 disabled:cursor-not-allowed disabled:text-zinc-600"
+                  >
+                    ＋ 新会话
+                  </button>
+                  {sessions.length === 0 && (
+                    <div className="border-t border-zinc-800/60 px-2.5 py-2 text-xs text-zinc-600">
+                      暂无历史会话
+                    </div>
+                  )}
+                  {sessions.map((s) => {
+                    const active = s.id === sessionId
+                    return (
+                      <div
+                        key={s.id}
+                        className={`flex items-center gap-1 border-t border-zinc-800/60 px-1.5 py-1.5 ${
+                          active ? 'bg-zinc-800/70' : ''
+                        }`}
+                      >
+                        {renamingId === s.id ? (
+                          <>
+                            <input
+                              autoFocus
+                              value={renameText}
+                              onChange={(e) => setRenameText(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                  renameSession(s.id, renameText)
+                                  setRenamingId(null)
+                                } else if (e.key === 'Escape') {
+                                  setRenamingId(null)
+                                }
+                              }}
+                              className="min-w-0 flex-1 rounded border border-amber-600/60 bg-zinc-950 px-1.5 py-1 text-xs text-zinc-200 outline-none"
+                            />
+                            <button
+                              onClick={() => {
+                                renameSession(s.id, renameText)
+                                setRenamingId(null)
+                              }}
+                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-amber-400 hover:bg-zinc-800"
+                            >
+                              存
+                            </button>
+                          </>
+                        ) : confirmDeleteId === s.id ? (
+                          <>
+                            <span className="min-w-0 flex-1 truncate px-1 text-xs text-red-300">
+                              删除「{s.title}」？
+                            </span>
+                            <button
+                              onClick={() => deleteSessionById(s.id)}
+                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-red-400 hover:bg-zinc-800"
+                            >
+                              确认
+                            </button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                            >
+                              取消
+                            </button>
+                          </>
+                        ) : (
+                          <>
+                            <button
+                              onClick={() => switchSession(s.id)}
+                              disabled={running || active}
+                              className="min-w-0 flex-1 cursor-pointer rounded px-1 py-0.5 text-left disabled:cursor-default"
+                            >
+                              <div
+                                className={`truncate text-xs ${
+                                  active ? 'font-medium text-amber-400' : 'text-zinc-200'
+                                }`}
+                              >
+                                {s.title}
+                              </div>
+                              <div className="text-[10px] text-zinc-500">{fmtRelative(s.updatedAt)}</div>
+                            </button>
+                            <button
+                              title="重命名"
+                              onClick={() => {
+                                setRenamingId(s.id)
+                                setRenameText(s.title)
+                              }}
+                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                            >
+                              改
+                            </button>
+                            <button
+                              title="删除"
+                              onClick={() => setConfirmDeleteId(s.id)}
+                              disabled={running}
+                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40"
+                            >
+                              删
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )
+                  })}
+                </div>
+              </>
             )}
           </div>
         </div>

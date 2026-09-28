@@ -17,6 +17,7 @@ import { Toaster } from './components/Toaster'
 import { CreationWizard } from './components/CreationWizard'
 import { fmtTokens } from './lib/format'
 import type { Navigate, Page } from './lib/nav'
+import { markAgentSeen, useAgentNavBadge } from './lib/agentUiStore'
 import { useWbGenNavBadge } from './lib/wbGenStore'
 
 interface NavItem {
@@ -157,6 +158,13 @@ const WB_BADGE_DOT: Record<string, string> = {
   mixed: 'bg-amber-400'
 }
 
+const AGENT_BADGE_DOT: Record<string, string> = {
+  running: 'bg-amber-500 animate-pulse',
+  confirming: 'bg-red-500 animate-pulse',
+  done: 'bg-emerald-500',
+  error: 'bg-red-500'
+}
+
 export default function App() {
   const [page, setPage] = useState<Page>('projects')
   const [writingFocus, setWritingFocus] = useState<string | null>(null)
@@ -168,6 +176,7 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const wbBadge = useWbGenNavBadge()
+  const agentBadge = useAgentNavBadge()
 
   const refresh = useCallback(() => {
     void window.api.usage.stats().then(setStats)
@@ -215,6 +224,10 @@ export default function App() {
 
   const clearGraphFocus = useCallback((): void => setGraphFocus(null), [])
 
+  useEffect(() => {
+    if (page === 'agent') markAgentSeen()
+  }, [page, agentBadge])
+
   const quotaPct =
     cfg && cfg.quota5hPrompts > 0
       ? Math.min(100, ((stats?.window5h.requests ?? 0) / cfg.quota5hPrompts) * 100)
@@ -235,6 +248,9 @@ export default function App() {
         {item.label}
         {item.id === 'worldbuild' && wbBadge && (
           <span className={`ml-auto h-2 w-2 shrink-0 rounded-full ${WB_BADGE_DOT[wbBadge.tone]}`} />
+        )}
+        {item.id === 'agent' && page !== item.id && agentBadge && (
+          <span className={`ml-auto h-2 w-2 shrink-0 rounded-full ${AGENT_BADGE_DOT[agentBadge.tone]}`} />
         )}
       </button>
     ))
@@ -395,7 +411,9 @@ export default function App() {
           {page === 'projects' && (
             <Projects currentProjectId={cfg?.currentProjectId ?? ''} onSwitch={switchProject} onNavigate={navigate} />
           )}
-          {page === 'agent' && <Agent projectId={currentProject?.id ?? ''} />}
+          <div className={page === 'agent' ? 'h-full' : 'hidden'}>
+            <Agent projectId={currentProject?.id ?? ''} />
+          </div>
           {page === 'graph' && (
             <GraphPage
               projectId={currentProject?.id ?? ''}
