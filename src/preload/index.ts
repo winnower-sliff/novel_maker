@@ -25,10 +25,11 @@ import type {
   Project,
   ProjectGraph,
   ProjectInput,
-  SearchHit,
-  ServerConfigPatch,
-  ServerStatus,
-  SettingsPatch,
+   SearchHit,
+   ServerConfigPatch,
+   ServerStatus,
+   SettingsPatch,
+   SubagentEvent,
   SettingsView,
   SkillFile,
   SkillMeta,
@@ -251,6 +252,12 @@ const api = {
       const listener = (_e: unknown, requestId: string, message: string): void => cb(requestId, message)
       ipcRenderer.on('agent:error', listener)
       return () => ipcRenderer.off('agent:error', listener)
+    },
+    onSubEvent: (cb: (requestId: string, ev: SubagentEvent) => void): (() => void) => {
+      const listener = (_e: unknown, requestId: string, ev: SubagentEvent): void =>
+        cb(requestId, ev)
+      ipcRenderer.on('agent:subEvent', listener)
+      return () => ipcRenderer.off('agent:subEvent', listener)
     }
   },
   exporter: {

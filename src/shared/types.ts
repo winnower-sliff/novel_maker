@@ -522,6 +522,14 @@ export interface AgentSessionBrief {
   updatedAt: number
 }
 
+export type SubagentEvent =
+  | { type: 'start'; parentId: string; task: string; role: string }
+  | { type: 'delta'; parentId: string; text: string }
+  | { type: 'toolCall'; parentId: string; call: AgentToolCall }
+  | { type: 'toolResult'; parentId: string; id: string; ok: boolean; result: string }
+  | { type: 'done'; parentId: string; text: string; turns: number }
+  | { type: 'error'; parentId: string; message: string }
+
 export interface AgentDonePayload {
   text: string
   turns: number
@@ -529,6 +537,7 @@ export interface AgentDonePayload {
   changed: boolean
   denied: boolean
   hitLimit: boolean
+  subagents: number
   usage: UsageInfo
   model: string
   durationMs: number

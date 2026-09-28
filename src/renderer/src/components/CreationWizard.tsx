@@ -8,6 +8,7 @@ import { OverlayCard } from './OverlayCard'
 import { Button, Input, Label, Textarea } from './ui'
 
 const STEP_LABELS = ['设定确认', '世界观', '人物', '大纲', '完成']
+const STEP_LABELS_SHORT = ['设定', '世界观', '人物', '大纲', '完成']
 
 interface CreationWizardProps {
   onNavigate: Navigate
@@ -282,7 +283,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
               key={label}
               disabled={i >= step}
               onClick={() => setStep(i)}
-              className={`flex-1 cursor-pointer rounded px-1 py-1 text-center text-xs transition-colors disabled:cursor-default ${
+              className={`flex-1 cursor-pointer rounded px-1 py-1 text-center text-[10px] transition-colors disabled:cursor-default sm:text-xs ${
                 i === step
                   ? 'bg-amber-600/20 font-medium text-amber-300'
                   : i < step
@@ -291,7 +292,8 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
               }`}
             >
               {i < step ? '✓ ' : `${i + 1}. `}
-              {label}
+              <span className="hidden sm:inline">{label}</span>
+              <span className="sm:hidden">{STEP_LABELS_SHORT[i]}</span>
             </button>
           ))}
         </div>

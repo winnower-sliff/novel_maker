@@ -17,6 +17,14 @@ import type { AgentToolCallEvent, AgentToolResultEvent } from '../../../preload/
 
 type AssistantTurn = Extract<AgentTurn, { role: 'assistant' }>
 
+interface SubProc {
+  task: string
+  role: string
+  text: string
+  tools: AgentToolCall[]
+  running: boolean
+}
+
 const STATE_DOT: Record<AgentToolCall['state'], string> = {
   running: 'bg-amber-500 animate-pulse',
   confirming: 'bg-red-500 animate-pulse',
@@ -51,13 +59,15 @@ function finalizeTurns(turns: AgentTurn[]): AgentTurn[] {
 function ToolCallCard({
   call,
   canResolve,
-  onResolve
+  onResolve,
+  sub
 }: {
   call: AgentToolCall
   canResolve: boolean
   onResolve: (allow: boolean, always: boolean) => void
+  sub?: SubProc
 }) {
-  const [open, setOpen] = useState(false)
+  const [open, setOpen] = useState(call.name === 'spawn_subagent')
   return (
     <div className="rounded-md border border-zinc-800 bg-zinc-900/60">
       <button
@@ -67,8 +77,33 @@ function ToolCallCard({
         <span className={`h-2 w-2 shrink-0 rounded-full ${STATE_DOT[call.state]}`} />
         <span className="shrink-0 font-mono text-[11px] text-amber-500/90">{toolLabel(call.name)}</span>
         <span className="flex-1 truncate text-xs text-zinc-300">{toolSummary(call)}</span>
-        <span className="shrink-0 text-[10px] text-zinc-500">{STATE_LABEL[call.state]}</span>
+        <span className="hidden shrink-0 text-[10px] text-zinc-500 sm:inline">
+          {STATE_LABEL[call.state]}
+        </span>
       </button>
+      {sub && (
+        <div className="space-y-2 border-t border-zinc-800 px-3 py-2.5">
+          <div className="text-[10px] text-zinc-500">
+            子智能体（{sub.role || '调研'}）{sub.running ? '· 工作中' : '· 已完成'}
+          </div>
+          {sub.tools.length > 0 && (
+            <div className="space-y-1">
+              {sub.tools.map((c) => (
+                <div key={c.id} className="flex items-center gap-2 text-[11px]">
+                  <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${STATE_DOT[c.state]}`} />
+                  <span className="shrink-0 font-mono text-zinc-500">{toolLabel(c.name)}</span>
+                  <span className="truncate text-zinc-400">{toolSummary(c)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+          {sub.text && (
+            <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap rounded bg-zinc-950 p-2 text-[11px] leading-4 text-zinc-500">
+              {sub.text}
+            </pre>
+          )}
+        </div>
+      )}
       {call.state === 'confirming' && canResolve && (
         <div className="border-t border-zinc-800 px-3 py-2.5">
           <div className="text-xs leading-5 text-red-300">⚠ {call.dangerReason ?? '该操作不可恢复'}</div>
@@ -116,6 +151,7 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
   const [doneInfo, setDoneInfo] = useState<AgentDonePayload | null>(null)
+  const [subProcs, setSubProcs] = useState<Record<string, SubProc>>({})
   const [panelOpen, setPanelOpen] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
@@ -265,12 +301,49 @@ export default function Agent({ projectId }: { projectId: string }) {
       requestIdRef.current = null
       setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: false } })
     })
+    const offSub = window.api.agent.onSubEvent((id, ev) => {
+      if (id !== requestIdRef.current) return
+      setSubProcs((prev) => {
+        const cur: SubProc = prev[ev.parentId] ?? {
+          task: '',
+          role: '',
+          text: '',
+          tools: [],
+          running: true
+        }
+        switch (ev.type) {
+          case 'start':
+            return { ...prev, [ev.parentId]: { ...cur, task: ev.task, role: ev.role } }
+          case 'delta':
+            return { ...prev, [ev.parentId]: { ...cur, text: cur.text + ev.text } }
+          case 'toolCall':
+            return { ...prev, [ev.parentId]: { ...cur, tools: [...cur.tools, ev.call] } }
+          case 'toolResult':
+            return {
+              ...prev,
+              [ev.parentId]: {
+                ...cur,
+                tools: cur.tools.map((c) =>
+                  c.id === ev.id
+                    ? { ...c, state: (ev.ok ? 'ok' : 'error') as AgentToolCall['state'], result: ev.result }
+                    : c
+                )
+              }
+            }
+          case 'done':
+            return { ...prev, [ev.parentId]: { ...cur, running: false, text: ev.text } }
+          case 'error':
+            return { ...prev, [ev.parentId]: { ...cur, running: false } }
+        }
+      })
+    })
     return () => {
       offDelta()
       offToolCall()
       offToolResult()
       offDone()
       offError()
+      offSub()
     }
   }, [applyTurns, patchLastAssistant, persist])
 
@@ -314,6 +387,7 @@ export default function Agent({ projectId }: { projectId: string }) {
     setInput('')
     setError('')
     setDoneInfo(null)
+    setSubProcs({})
     setRunning(true)
     setAgentUi({ running: true, confirming: false, ended: null })
     persist(sid, next)
@@ -350,6 +424,7 @@ export default function Agent({ projectId }: { projectId: string }) {
       applyTurns([])
       setError('')
       setDoneInfo(null)
+      setSubProcs({})
       return
     }
     void window.api.agent.sessionLoad(id).then((session) => {
@@ -359,6 +434,7 @@ export default function Agent({ projectId }: { projectId: string }) {
       sessionCreatedAtRef.current = session.createdAt
       setError('')
       setDoneInfo(null)
+      setSubProcs({})
     })
   }
 
@@ -394,7 +470,7 @@ export default function Agent({ projectId }: { projectId: string }) {
   return (
     <div className="flex h-full flex-col gap-3 p-3 md:p-4">
       <div className="flex flex-wrap items-center gap-3">
-        <div className="w-full sm:w-56">
+        <div className="w-[calc(50%-0.375rem)] sm:w-56">
           <div className="mb-1.5 text-xs font-medium text-zinc-400">会话</div>
           <div className="relative">
             <button
@@ -534,7 +610,7 @@ export default function Agent({ projectId }: { projectId: string }) {
             )}
           </div>
         </div>
-        <div className="w-full sm:w-56">
+        <div className="w-[calc(50%-0.375rem)] sm:w-56">
           <div className="mb-1.5 text-xs font-medium text-zinc-400">模型</div>
           <Select
             value={model}
@@ -549,7 +625,7 @@ export default function Agent({ projectId }: { projectId: string }) {
             ))}
           </Select>
         </div>
-        <div className="pt-5">
+        <div className="sm:pt-5">
           <Badge tone="amber">可直接读写当前项目的各板块</Badge>
         </div>
       </div>
@@ -588,6 +664,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                       call={call}
                       canResolve={running && call.id === confirmTarget?.id}
                       onResolve={resolveConfirm}
+                      sub={subProcs[call.id]}
                     />
                   ))}
                 </div>
@@ -628,6 +705,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                 {doneInfo.changed && <Badge tone="green">已修改资料库</Badge>}
                 {doneInfo.denied && <Badge tone="amber">有操作被拒绝</Badge>}
                 {doneInfo.hitLimit && <Badge tone="red">达到步数上限</Badge>}
+                {doneInfo.subagents > 0 && <Badge tone="amber">子任务 {doneInfo.subagents} 次</Badge>}
               </div>
             ) : null}
           </div>

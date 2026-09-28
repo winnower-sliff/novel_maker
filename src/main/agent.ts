@@ -1,4 +1,4 @@
-import type { AgentDonePayload, ChatMessage, ContentBlock, OutlineItem, ToolDef, UsageInfo } from '../shared/types'
+import type { AgentDonePayload, ChatMessage, ContentBlock, OutlineItem, SubagentEvent, ToolDef, UsageInfo } from '../shared/types'
 import { splitTags } from '../shared/tags'
 import type { EventSink } from './eventSink'
 import { chatStream, pickRatelimitHeaders } from './llm'
@@ -14,8 +14,26 @@ const FULL_PAGE_DEFAULT = 20
 
 export const AGENT_MAX_TOKENS = 8192
 
+const MAX_SUB_TURNS = 10
+const MAX_SUBAGENTS = 6
+const SUB_REPORT_CHARS = 8000
+const SUB_MAX_TOKENS = 4096
+
 interface ToolInput {
   [key: string]: unknown
+}
+
+interface ToolExecContext {
+  sink: EventSink
+  requestId: string
+  parentId: string
+  projectId: string
+  usage: UsageInfo
+  signal: AbortSignal
+  model: string
+  apiKey: string
+  baseUrl: string
+  promptCache: boolean
 }
 
 interface AgentTool {
@@ -23,6 +41,7 @@ interface AgentTool {
   danger: boolean
   handler: (input: ToolInput, projectId: string) => unknown
   dangerCheck?: (input: ToolInput, projectId: string) => string | null
+  execCtx?: (input: ToolInput, ctx: ToolExecContext) => Promise<unknown>
 }
 
 function schema(
@@ -753,6 +772,32 @@ const TOOLS: AgentTool[] = [
       store.deleteForeshadow(f.id)
       return { ok: true, deleted: f.content }
     }
+  },
+  {
+    def: {
+      name: 'spawn_subagent',
+      description:
+        '委派一个只读子智能体独立完成调研/分析类子任务。子智能体拥有独立上下文与步数预算（仅只读工具：get_project/list_*/get_*/search_project/get_book_digest），不能写入；适合「通读全书找矛盾」「批量核对设定与人物一致性」「大范围语义调研」这类会耗尽你上下文的任务。task 必须自带完整上下文（调查范围、判断标准、期望报告格式），子智能体看不到你们的对话历史。返回其最终报告',
+      input_schema: schema(
+        {
+          task: s(
+            '子任务完整描述：调查什么、范围（哪些卷/章/板块）、判断标准、期望报告格式（如：列出矛盾点，每条含涉及章节与原文依据）'
+          ),
+          role: optS('角色侧重，如 连续性审校/设定考据/时间线核查，默认通用调研')
+        },
+        ['task']
+      )
+    },
+    danger: false,
+    handler: () => {
+      throw new Error('spawn_subagent 需要流式上下文，当前环境不支持')
+    },
+    execCtx: (input, ctx) =>
+      runSubAgent({
+        ...ctx,
+        task: reqStr(input, 'task'),
+        role: optStr(input, 'role')?.trim() ?? ''
+      })
   }
 ]
 
@@ -773,6 +818,129 @@ const READ_TOOLS = new Set([
   'get_book_digest',
   'list_foreshadows'
 ])
+
+const SUB_TOOLS = TOOLS.filter((t) => READ_TOOLS.has(t.def.name))
+const SUB_TOOL_MAP = new Map(SUB_TOOLS.map((t) => [t.def.name, t]))
+
+function buildSubSystemPrompt(projectId: string, role: string): string {
+  const project = store.listProjects().find((p) => p.id === projectId)
+  if (!project) throw new Error('项目不存在')
+  return [
+    `你是小说项目《${project.title}》的子智能体（${role || '通用调研'}），由主智能体委派执行只读调研/分析任务，为它的决策提供事实依据。`,
+    project.genre ? `类型：${project.genre}` : '',
+    project.styleGuide ? `风格指南：${project.styleGuide}` : '',
+    '',
+    '规则：',
+    '1. 你只有只读工具，不能也不需要写入任何内容',
+    '2. 独立完成任务，不要反问；信息不足以得出确定结论时，在报告中说明不确定性与缺失信息',
+    '3. 全局范围的任务必须覆盖全部相关条目：按 total/hasMore/byCategory 分批读取直至读完，禁止基于不完整数据下结论',
+    '4. 找主题相关内容优先 search_project，全书级问题先 get_book_digest',
+    '5. 最终报告精炼、结构化：直接给结论，每条结论附证据（条目标题/人物名/章节号或原文短引），总长控制在 1500 字以内；不写过程流水账与客套话'
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+async function runSubAgent(ctx: ToolExecContext & { task: string; role: string }): Promise<{
+  report: string
+  turns: number
+}> {
+  const { sink, requestId, parentId, projectId, usage, signal, model, task, role } = ctx
+  const send = (ev: SubagentEvent): void => {
+    if (!sink.isClosed()) sink.send('agent:subEvent', requestId, ev)
+  }
+
+  const system = buildSubSystemPrompt(projectId, role)
+  const messages: ChatMessage[] = [{ role: 'user', content: task }]
+  send({ type: 'start', parentId, task, role })
+
+  let report = ''
+  let turns = 0
+  for (let turn = 0; turn < MAX_SUB_TURNS; turn++) {
+    turns = turn + 1
+    const result = await chatStream(
+      {
+        model,
+        system,
+        messages,
+        tools: SUB_TOOLS.map((t) => t.def),
+        maxTokens: SUB_MAX_TOKENS,
+        purpose: 'agent',
+        cacheSystem: ctx.promptCache
+      },
+      { apiKey: ctx.apiKey, baseUrl: ctx.baseUrl },
+      (text) => send({ type: 'delta', parentId, text }),
+      signal
+    )
+    usage.inputTokens += result.usage.inputTokens
+    usage.outputTokens += result.usage.outputTokens
+    usage.cacheReadTokens += result.usage.cacheReadTokens
+    usage.cacheCreationTokens += result.usage.cacheCreationTokens
+    appendUsage({
+      ts: Date.now(),
+      model: result.model,
+      purpose: 'agent',
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      cacheReadTokens: result.usage.cacheReadTokens,
+      cacheCreationTokens: result.usage.cacheCreationTokens,
+      durationMs: result.durationMs,
+      ratelimit: pickRatelimitHeaders(result.headers)
+    })
+
+    if (result.toolUses.length === 0) {
+      report = result.text
+      break
+    }
+
+    const assistantBlocks: ContentBlock[] = []
+    if (result.text) assistantBlocks.push({ type: 'text', text: result.text })
+    for (const tu of result.toolUses) {
+      assistantBlocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input })
+    }
+    messages.push({ role: 'assistant', content: assistantBlocks })
+
+    const resultBlocks: ContentBlock[] = []
+    for (const tu of result.toolUses) {
+      const tool = SUB_TOOL_MAP.get(tu.name)
+      if (!tool) {
+        resultBlocks.push({
+          type: 'tool_result',
+          tool_use_id: tu.id,
+          content: `错误: 未知工具 ${tu.name}`,
+          is_error: true
+        })
+        continue
+      }
+      send({ type: 'toolCall', parentId, call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' } })
+      let ok: boolean
+      let out: string
+      try {
+        out = serializeResult(await tool.handler(tu.input, projectId))
+        ok = true
+      } catch (err) {
+        out = `错误: ${(err as Error)?.message ?? String(err)}`
+        ok = false
+      }
+      resultBlocks.push({
+        type: 'tool_result',
+        tool_use_id: tu.id,
+        content: out,
+        is_error: ok ? undefined : true
+      })
+      send({ type: 'toolResult', parentId, id: tu.id, ok, result: out })
+    }
+    messages.push({ role: 'user', content: resultBlocks })
+
+    if (turn === MAX_SUB_TURNS - 1) {
+      report = `${result.text}\n[达到子任务步数上限，以上为部分结论]`
+    }
+  }
+
+  report = clip(report || '（子智能体未产出文本结论）', SUB_REPORT_CHARS).text
+  send({ type: 'done', parentId, text: report, turns })
+  return { report, turns }
+}
 
 export function getAgentToolDefs(): ToolDef[] {
   return TOOLS.map((t) => t.def)
@@ -829,7 +997,8 @@ function buildSystemPrompt(projectId: string): string {
     '9. 写章节正文前的固定序列（顺序不可省略）：① list_outlines 找到上一章大纲 id；② get_chapter_tail 回读上一章结尾，找回语气、当前悬念与情绪落点；③ 读取本章出场人物的 get_character（关注动态状态 state）；④ list_foreshadows 核对未回收伏笔（本章该埋/该收的在梗概或 foreshadowOps 里）；⑤ 然后才动笔',
     '10. 找"与某主题相关的设定/人物/章节"时优先用 search_project 语义搜索，比翻页浏览高效；返回为空再回退 list_* 分页浏览',
     '11. 回答全书级问题（整体脉络/主题/长线走向）前先用 get_book_digest 拿全局概览，再按需深入具体卷章；不要靠翻页拼凑全局判断',
-    '12. 完成写章任务后，若人物状态发生变化（伤势/物品/信息/立场），顺手用 update_character_state 更新其状态文档（旧条目可删，保持紧凑）'
+    '12. 完成写章任务后，若人物状态发生变化（伤势/物品/信息/立场），顺手用 update_character_state 更新其状态文档（旧条目可删，保持紧凑）',
+    '13. 大范围调研/核对（全书矛盾检查、批量统计、跨卷一致性）若预计要翻阅大量条目，用 spawn_subagent 委派只读子智能体代劳，拿到报告后再执行写入决策；委派时 task 必须写全调查范围、判断标准与期望报告格式，一个子任务聚焦一件事，需要写入的修改由你亲自执行'
   ].join('\n')
 }
 
@@ -869,6 +1038,20 @@ export async function runAgent(opts: {
     cacheReadTokens: 0,
     cacheCreationTokens: 0
   }
+
+  const execCtxBase: Omit<ToolExecContext, 'parentId'> = {
+    sink,
+    requestId,
+    projectId,
+    usage,
+    signal,
+    model: opts.model || auth.model,
+    apiKey: auth.apiKey,
+    baseUrl: auth.baseUrl,
+    promptCache: auth.promptCache
+  }
+  let subagentCount = 0
+
   const messages = [...opts.messages]
   const tools = getAgentToolDefs()
   let requests = 0
@@ -970,9 +1153,18 @@ export async function runAgent(opts: {
         let ok: boolean
         let out: string
         try {
-          out = serializeResult(await tool.handler(tu.input, projectId))
-          ok = true
-          if (!READ_TOOLS.has(tu.name)) changed = true
+          if (tool.execCtx) {
+            if (subagentCount >= MAX_SUBAGENTS) {
+              throw new Error('已达到本次任务的子智能体委派上限，请自行完成剩余工作并总结')
+            }
+            subagentCount++
+            out = serializeResult(await tool.execCtx(tu.input, { ...execCtxBase, parentId: tu.id }))
+            ok = true
+          } else {
+            out = serializeResult(await tool.handler(tu.input, projectId))
+            ok = true
+          }
+          if (!READ_TOOLS.has(tu.name) && tu.name !== 'spawn_subagent') changed = true
         } catch (err) {
           out = `错误: ${(err as Error)?.message ?? String(err)}`
           ok = false
@@ -1001,6 +1193,7 @@ export async function runAgent(opts: {
     changed,
     denied,
     hitLimit,
+    subagents: subagentCount,
     usage,
     model: lastModel,
     durationMs: Date.now() - started

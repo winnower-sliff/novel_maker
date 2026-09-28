@@ -19,7 +19,8 @@ export const TOOL_LABELS: Record<string, string> = {
   save_chapter: '正文·写入',
   list_foreshadows: '伏笔·列表',
   save_foreshadow: '伏笔·保存',
-  delete_foreshadow: '伏笔·删除'
+  delete_foreshadow: '伏笔·删除',
+  spawn_subagent: '子智能体·委派'
 }
 
 function str(input: Record<string, unknown>, key: string): string {
@@ -88,6 +89,10 @@ export function toolSummary(call: AgentToolCall): string {
     }
     case 'delete_foreshadow':
       return `删除伏笔（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
+    case 'spawn_subagent': {
+      const t = str(i, 'task')
+      return `${str(i, 'role') || '调研'}：${t.slice(0, 40)}${t.length > 40 ? '…' : ''}`
+    }
     default:
       return call.name
   }
@@ -123,5 +128,7 @@ export function turnsToMessages(turns: AgentTurn[]): ChatMessage[] {
 export function makeSessionTitle(turns: AgentTurn[]): string {
   const first = turns.find((t) => t.role === 'user')
   if (!first || first.role !== 'user') return '新会话'
-  return first.text.slice(0, 20) || '新会话'
+  const text = first.text.trim()
+  if (!text) return '新会话'
+  return text.length > 20 ? `${text.slice(0, 20)}…` : text
 }

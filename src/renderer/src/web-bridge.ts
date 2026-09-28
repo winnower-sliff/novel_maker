@@ -196,7 +196,8 @@ function installWebBridge(): void {
       onToolCall: (cb) => on('agent:toolCall', cb),
       onToolResult: (cb) => on('agent:toolResult', cb),
       onDone: (cb) => on('agent:done', cb),
-      onError: (cb) => on('agent:error', cb)
+      onError: (cb) => on('agent:error', cb),
+      onSubEvent: (cb) => on('agent:subEvent', cb)
     },
     exporter: {
       run: async (opts) => {
