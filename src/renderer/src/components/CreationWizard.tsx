@@ -43,6 +43,8 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
   const [wbCats, setWbCats] = useState<string[]>([])
   const [wbCount, setWbCount] = useState(8)
   const [wbStarted, setWbStarted] = useState(false)
+  const [wbResult, setWbResult] = useState<string | null>(null)
+  const wbBeforeRef = useRef<number | null>(null)
   const [typeOptions, setTypeOptions] = useState<string[]>([])
   const wbTasks = useWbGenTasks(projectId ?? '')
   const wbLive = useWbLiveEntries(projectId ?? '')
@@ -84,6 +86,8 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
     setWbCats([])
     setWbCount(8)
     setWbStarted(false)
+    setWbResult(null)
+    wbBeforeRef.current = null
     setChars([])
     setCharIndex(-1)
     setCharDelta('')
@@ -137,6 +141,23 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
       .then(([wb, cs, ol]) => setFinalCounts({ wb: wb.length, char: cs.length, ol: ol.length }))
       .catch(() => {})
   }, [step, projectId])
+
+  useEffect(() => {
+    if (!wbStarted || wbRunning || !projectId) return
+    void window.api.novel
+      .worldbuild(projectId)
+      .then((l) => {
+        const before = wbBeforeRef.current
+        if (before === null) return
+        const n = l.length - before
+        setWbResult(
+          n > 0
+            ? `本次生成入库 ${n} 条世界观条目`
+            : '本次未解析出有效条目，可调整需求后重试'
+        )
+      })
+      .catch(() => {})
+  }, [wbStarted, wbRunning, projectId])
 
   const abortAll = (): void => {
     draftAbortRef.current?.()
@@ -203,6 +224,13 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
   const startWorldbuild = (): void => {
     if (!projectId || !wbBrief.trim() || wbRunning) return
     const count = Number(wbCount)
+    setWbResult(null)
+    void window.api.novel
+      .worldbuild(projectId)
+      .then((l) => {
+        wbBeforeRef.current = l.length
+      })
+      .catch(() => {})
     startGen({
       projectId,
       categories: wbCats,
@@ -425,6 +453,9 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                   </div>
                 )}
               </div>
+            )}
+            {wbResult && !wbRunning && (
+              <div className="text-xs text-emerald-400">{wbResult}</div>
             )}
             <div className="flex items-center gap-2">
               <Button onClick={startWorldbuild} disabled={!wbBrief.trim() || wbRunning}>
