@@ -11,6 +11,7 @@ import {
 import type { Character, WorldbuildEntry } from '@shared/types'
 import { splitTags } from '@shared/tags'
 import { AiTextarea } from '../components/AiTextarea'
+import { EmptyGuide } from '../components/EmptyGuide'
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
 import { PreviewPanel } from '../components/PreviewPanel'
@@ -588,13 +589,29 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
   const entryGrid = (
     <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(240px,1fr))] content-start gap-3 overflow-y-auto pb-2">
       {filtered.length === 0 && liveEntries.length === 0 && (
-        <Card className="col-span-full p-10 text-center text-sm text-zinc-600">
-          {filter === '全部' && tagFilter === null
-            ? '暂无条目，点右上角「AI 生成」或「新增条目」开始建设世界观'
-            : tagFilter !== null
+        filter === '全部' && tagFilter === null && entries.length === 0 ? (
+          <div className="col-span-full">
+            <EmptyGuide
+              projectId={projectId}
+              wizardStep={1}
+              title="还没有世界观条目"
+              desc="力量体系、势力、地理等基础设定是大纲与写作的上文依据，建议最先建设。向导会按题材起草方向并批量生成条目。"
+            >
+              <Button variant="ghost" onClick={() => setGenOpen(true)}>
+                AI 生成…
+              </Button>
+              <Button variant="ghost" onClick={() => setEdit(EMPTY)}>
+                新增条目
+              </Button>
+            </EmptyGuide>
+          </div>
+        ) : (
+          <Card className="col-span-full p-10 text-center text-sm text-zinc-600">
+            {tagFilter !== null
               ? `「#${tagFilter}」标签下暂无条目`
               : `「${filter}」类型下暂无条目`}
-        </Card>
+          </Card>
+        )
       )}
       {liveEntries.map((s, i) => (
         <LiveCard key={`live-${s.taskId}-${i}`} section={s} />

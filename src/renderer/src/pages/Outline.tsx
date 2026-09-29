@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
+import { EmptyGuide } from '../components/EmptyGuide'
 import type { Navigate } from '../lib/nav'
 
 const STATUS: Array<{ value: OutlineStatus; label: string; tone: 'default' | 'amber' | 'green' | 'red' }> = [
@@ -387,9 +388,28 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
       )}
 
       {volumes.length === 0 && (
-        <Card className="flex flex-col items-center gap-3 p-10 text-center text-sm text-zinc-600">
-          暂无大纲，可点右上角「AI 生成大纲」一键生成，或「新增章节」手动录入
-        </Card>
+        <EmptyGuide
+          projectId={projectId}
+          wizardStep={3}
+          title="还没有大纲"
+          desc="AI 依据核心创意一次性生成整卷章节大纲（含定位/悬念/反转/钩子/伏笔操作元数据），也可手动录入。"
+        >
+          <Button variant="ghost" onClick={() => setGenOpen((v) => !v)}>
+            AI 生成大纲
+          </Button>
+          <Button
+            variant="ghost"
+            onClick={() =>
+              setEdit({
+                ...emptyEdit(),
+                volume: String(items.at(-1)?.volume ?? 1),
+                chapterNo: String((items.at(-1)?.chapterNo ?? 0) + 1)
+              })
+            }
+          >
+            新增章节
+          </Button>
+        </EmptyGuide>
       )}
 
       {volumes.map(([vol, list]) => (

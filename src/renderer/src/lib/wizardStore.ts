@@ -3,9 +3,10 @@ import { useSyncExternalStore } from 'react'
 interface WizardState {
   open: boolean
   projectId: string | null
+  step: number | null
 }
 
-let state: WizardState = { open: false, projectId: null }
+let state: WizardState = { open: false, projectId: null, step: null }
 const listeners = new Set<() => void>()
 
 function emit(next: WizardState): void {
@@ -13,8 +14,8 @@ function emit(next: WizardState): void {
   listeners.forEach((l) => l())
 }
 
-export function openWizard(projectId: string): void {
-  emit({ open: true, projectId })
+export function openWizard(projectId: string, step?: number): void {
+  emit({ open: true, projectId, step: step ?? null })
 }
 
 export function closeWizard(): void {

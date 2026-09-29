@@ -30,7 +30,7 @@ interface CreationWizardProps {
 }
 
 export function CreationWizard({ onNavigate }: CreationWizardProps) {
-  const { open, projectId } = useWizard()
+  const { open, projectId, step: initialStep } = useWizard()
   const [project, setProject] = useState<Project | null>(null)
   const [step, setStep] = useState(0)
 
@@ -118,7 +118,10 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
       .then(([wb, cs, ol]) => {
         const counts = { wb: wb.length, char: cs.length, ol: ol.length }
         setExisting(counts)
-        setStep(counts.wb === 0 ? 0 : counts.char === 0 ? 2 : counts.ol === 0 ? 3 : 4)
+        setStep(
+          initialStep ??
+            (counts.wb === 0 ? 0 : counts.char === 0 ? 2 : counts.ol === 0 ? 3 : 4)
+        )
       })
       .catch(() => {})
     // eslint-disable-next-line react-hooks/exhaustive-deps

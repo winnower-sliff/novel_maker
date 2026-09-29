@@ -5,6 +5,7 @@ import { DiffView } from '../components/DiffView'
 import { fmtDuration, fmtTokens } from '../lib/format'
 import { runPipeline, type DonePayload } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
+import { openWizard } from '../lib/wizardStore'
 
 interface ChapterDoneData {
   chapterId?: string
@@ -607,11 +608,16 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {volumes.length === 0 && (
-            <div className="p-4 text-center text-xs leading-5 text-zinc-600">
-              暂无大纲
-              <Button variant="ghost" className="mt-2 px-2 py-1 text-xs" onClick={() => onNavigate('outline')}>
-                去大纲页生成
-              </Button>
+            <div className="space-y-1.5 p-4 text-center text-xs leading-5 text-zinc-600">
+              <div>暂无大纲，先去生成章节列表</div>
+              <div className="flex flex-col items-center gap-1.5">
+                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openWizard(projectId, 3)}>
+                  用创作向导
+                </Button>
+                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => onNavigate('outline')}>
+                  去大纲页生成
+                </Button>
+              </div>
             </div>
           )}
           {volumes.map((vol) => (

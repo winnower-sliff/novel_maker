@@ -5,6 +5,7 @@ import { Badge, Button, Card, Input, Label } from '../components/ui'
 import { runPipeline } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
 import { pushToast } from '../lib/toastStore'
+import { openWizard } from '../lib/wizardStore'
 
 interface EditState {
   id?: string
@@ -125,7 +126,18 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
           </Button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
-          {list.length === 0 && <div className="p-4 text-center text-xs text-zinc-600">暂无人物</div>}
+          {list.length === 0 && (
+            <div className="space-y-2.5 p-4 text-center">
+              <div className="text-xs text-zinc-600">暂无人物</div>
+              <Button
+                variant="ghost"
+                className="px-2 py-1 text-xs"
+                onClick={() => openWizard(projectId, 2)}
+              >
+                用创作向导生成
+              </Button>
+            </div>
+          )}
           {list.map((c) => (
             <button
               key={c.id}
