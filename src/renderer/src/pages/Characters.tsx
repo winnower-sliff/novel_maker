@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
 import type { Character } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { AiTextarea } from '../components/AiTextarea'
 import { Badge, Button, Card, Input, Label } from '../components/ui'
 import { runPipeline } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 import { pushToast } from '../lib/toastStore'
 import { openWizard } from '../lib/wizardStore'
 
@@ -18,8 +20,15 @@ interface EditState {
 
 const EMPTY: EditState = { name: '', role: '', tags: '', card: '', state: '' }
 
-export default function Characters({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
-  const [list, setList] = useState<Character[]>([])
+export default function Characters({
+  projectId,
+  onNavigate
+}: {
+  projectId: string
+  onNavigate: Navigate
+}) {
+  const queryClient = useQueryClient()
+  const { data: list = [] } = useQuery(queries.characters(projectId))
   const [edit, setEdit] = useState<EditState>(EMPTY)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [genOpen, setGenOpen] = useState(false)
@@ -30,17 +39,15 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
   const [genOutput, setGenOutput] = useState('')
   const [revisedIds, setRevisedIds] = useState<string[]>([])
 
-  const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.novel.characters(projectId).then(setList)
-  }, [projectId])
+  const load = (): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.characters(projectId) })
+  }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
-    setList([])
     setEdit(EMPTY)
     setSelectedId(null)
-    load()
-  }, [load])
+  }, [projectId])
 
   if (!projectId) {
     return (
@@ -54,8 +61,16 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
   const save = (): void => {
     if (!edit.name.trim()) return
     void window.api.novel
-      .characterSave({ id: edit.id, projectId, name: edit.name.trim(), role: edit.role, tags: edit.tags, card: edit.card, state: edit.state })
-      .then((saved) => {
+      .characterSave({
+        id: edit.id,
+        projectId,
+        name: edit.name.trim(),
+        role: edit.role,
+        tags: edit.tags,
+        card: edit.card,
+        state: edit.state
+      })
+      .then((_saved) => {
         setEdit(EMPTY)
         setSelectedId(null)
         load()
@@ -84,12 +99,13 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
           error?: string
         }
         if (d?.error) window.alert(`生成完成但保存失败：${d.error}`)
-        if (d?.revised && d.revised.length > 0) {
+        const revised = d?.revised
+        if (revised && revised.length > 0) {
           pushToast(
             'success',
-            `已同步修订 ${d.revised.length} 个人物：${d.revised.map((x) => x.name).join('、')}（列表中橙点标识）`
+            `已同步修订 ${revised.length} 个人物：${revised.map((x) => x.name).join('、')}（列表中橙点标识）`
           )
-          setRevisedIds((cur) => [...new Set([...cur, ...d.revised!.map((x) => x.id)])])
+          setRevisedIds((cur) => [...new Set([...cur, ...revised.map((x) => x.id)])])
         }
         setGenerating(false)
         setGenOpen(false)
@@ -98,9 +114,19 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
         load()
         if (d?.characterId) {
           setSelectedId(d.characterId)
-          void window.api.novel.characters(projectId).then((cs) => {
-            const c = cs.find((x) => x.id === d.characterId)
-            if (c) setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card, state: c.state })
+          void queryClient.invalidateQueries({ queryKey: qk.characters(projectId) }).then(() => {
+            const c = (queryClient.getQueryData(qk.characters(projectId)) as Character[]).find(
+              (x) => x.id === d.characterId
+            )
+            if (c)
+              setEdit({
+                id: c.id,
+                name: c.name,
+                role: c.role,
+                tags: c.tags,
+                card: c.card,
+                state: c.state
+              })
           })
         }
       })
@@ -140,10 +166,18 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
           )}
           {list.map((c) => (
             <button
+              type="button"
               key={c.id}
               onClick={() => {
                 setSelectedId(c.id)
-                setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card, state: c.state })
+                setEdit({
+                  id: c.id,
+                  name: c.name,
+                  role: c.role,
+                  tags: c.tags,
+                  card: c.card,
+                  state: c.state
+                })
                 setRevisedIds((cur) => cur.filter((x) => x !== c.id))
               }}
               className={`mb-1 w-full cursor-pointer rounded-md px-3 py-2 text-left transition-colors ${
@@ -181,7 +215,11 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
             <div className="grid grid-cols-1 gap-3 md:grid-cols-4">
               <div>
                 <Label>预备名（可空，AI 会从输出推断）</Label>
-                <Input value={genName} onChange={(e) => setGenName(e.target.value)} disabled={generating} />
+                <Input
+                  value={genName}
+                  onChange={(e) => setGenName(e.target.value)}
+                  disabled={generating}
+                />
               </div>
               <div className="md:col-span-3">
                 <Label>人物需求（定位、性格方向、与主线的关联）</Label>
@@ -219,15 +257,27 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
           <div>
             <Label>姓名 *</Label>
-            <Input value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} placeholder="例：韩立" />
+            <Input
+              value={edit.name}
+              onChange={(e) => setEdit({ ...edit, name: e.target.value })}
+              placeholder="例：韩立"
+            />
           </div>
           <div>
             <Label>定位</Label>
-            <Input value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value })} placeholder="主角/反派/师尊…" />
+            <Input
+              value={edit.role}
+              onChange={(e) => setEdit({ ...edit, role: e.target.value })}
+              placeholder="主角/反派/师尊…"
+            />
           </div>
           <div>
             <Label>标签</Label>
-            <Input value={edit.tags} onChange={(e) => setEdit({ ...edit, tags: e.target.value })} placeholder="谨慎,苟道" />
+            <Input
+              value={edit.tags}
+              onChange={(e) => setEdit({ ...edit, tags: e.target.value })}
+              placeholder="谨慎,苟道"
+            />
           </div>
         </div>
         <div className="mt-3 flex-1">
@@ -253,7 +303,9 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
             rows={Math.min(12, Math.max(3, Math.ceil(edit.state.length / 60)))}
             value={edit.state}
             onChange={(e) => setEdit({ ...edit, state: e.target.value })}
-            placeholder={'物品：寒铁长剑（断裂）\n身心状态：左臂旧伤未愈，对宗门起疑\n关系：与云岚由盟转敌\n最近事件：第12章 黑袍人交出半张地图'}
+            placeholder={
+              '物品：寒铁长剑（断裂）\n身心状态：左臂旧伤未愈，对宗门起疑\n关系：与云岚由盟转敌\n最近事件：第12章 黑袍人交出半张地图'
+            }
           />
         </div>
         <div className="mt-3 flex justify-end gap-2">
@@ -261,8 +313,8 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
             <Button
               variant="danger"
               onClick={() => {
-                if (!window.confirm(`删除人物「${edit.name}」？`)) return
-                void window.api.novel.characterDelete(edit.id!).then(() => {
+                if (!edit.id || !window.confirm(`删除人物「${edit.name}」？`)) return
+                void window.api.novel.characterDelete(edit.id).then(() => {
                   setEdit(EMPTY)
                   setSelectedId(null)
                   load()
@@ -272,7 +324,13 @@ export default function Characters({ projectId, onNavigate }: { projectId: strin
               删除
             </Button>
           )}
-          <Button variant="ghost" onClick={() => { setEdit(EMPTY); setSelectedId(null) }}>
+          <Button
+            variant="ghost"
+            onClick={() => {
+              setEdit(EMPTY)
+              setSelectedId(null)
+            }}
+          >
             清空
           </Button>
           <Button onClick={save} disabled={!edit.name.trim()}>

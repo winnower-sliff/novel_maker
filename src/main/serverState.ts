@@ -1,4 +1,4 @@
-import type { ServerStatus, ServerConfig } from '../shared/types'
+import type { ServerConfig, ServerStatus } from '../shared/types'
 import { loadServerConfig } from './settings'
 
 let current: ServerStatus = {
@@ -21,7 +21,12 @@ export function setServerStatus(patch: Partial<ServerStatus>): void {
 }
 
 export function refreshServerConfigFlags(config: ServerConfig): void {
-  current = { ...current, enabled: config.enabled, hasPassword: !!config.passwordHash, port: config.port }
+  current = {
+    ...current,
+    enabled: config.enabled,
+    hasPassword: !!config.passwordHash,
+    port: config.port
+  }
 }
 
 export function initServerStatus(): void {

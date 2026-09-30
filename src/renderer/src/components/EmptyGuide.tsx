@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
-import { Button, Card } from './ui'
 import { openWizard } from '../lib/wizardStore'
+import { Button, Card } from './ui'
 
 interface EmptyGuideProps {
   projectId: string

@@ -1,10 +1,16 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { OutlineItem, OutlineStatus } from '@shared/types'
-import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EmptyGuide } from '../components/EmptyGuide'
+import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 
-const STATUS: Array<{ value: OutlineStatus; label: string; tone: 'default' | 'amber' | 'green' | 'red' }> = [
+const STATUS: Array<{
+  value: OutlineStatus
+  label: string
+  tone: 'default' | 'amber' | 'green' | 'red'
+}> = [
   { value: 'draft', label: '草稿', tone: 'default' },
   { value: 'approved', label: '已审定', tone: 'amber' },
   { value: 'written', label: '已写', tone: 'green' },
@@ -41,8 +47,16 @@ const emptyEdit = (): EditState => ({
   status: 'draft'
 })
 
-export default function Outline({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
-  const [items, setItems] = useState<OutlineItem[]>([])
+export default function Outline({
+  projectId,
+  onNavigate
+}: {
+  projectId: string
+  onNavigate: Navigate
+}) {
+  const queryClient = useQueryClient()
+  const { data: items = [] } = useQuery(queries.outlines(projectId))
+  const { data: volSummaryList = [] } = useQuery(queries.volumeSummaries(projectId))
   const [edit, setEdit] = useState<EditState | null>(null)
   const [genOpen, setGenOpen] = useState(false)
   const [idea, setIdea] = useState('')
@@ -55,25 +69,23 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
   const [genNotice, setGenNotice] = useState('')
   const genRequestId = useRef<string | null>(null)
   const [volNotice, setVolNotice] = useState('')
-  const [volSummaries, setVolSummaries] = useState<Record<number, string>>({})
+  const volSummaries = useMemo(() => {
+    const map: Record<number, string> = {}
+    for (const v of volSummaryList) map[v.volume] = v.summary
+    return map
+  }, [volSummaryList])
   const [openVolumeSummary, setOpenVolumeSummary] = useState<number | null>(null)
   const volSummaryRequestId = useRef<string | null>(null)
 
   const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.novel.outlines(projectId).then(setItems)
-    void window.api.novel.volumeSummaries(projectId).then((list) => {
-      const map: Record<number, string> = {}
-      for (const v of list) map[v.volume] = v.summary
-      setVolSummaries(map)
-    })
-  }, [projectId])
+    void queryClient.invalidateQueries({ queryKey: qk.outlines(projectId) })
+    void queryClient.invalidateQueries({ queryKey: qk.volumeSummaries(projectId) })
+  }, [projectId, queryClient])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
-    setItems([])
     setEdit(null)
-    load()
-  }, [load])
+  }, [projectId])
 
   useEffect(() => {
     const offDelta = window.api.llm.onDelta((id, text) => {
@@ -98,11 +110,15 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
           setGenNotice(parts.join('，'))
         }
         load()
-        void window.api.novel.outlines(projectId).then(setItems)
         return
       }
       if (id === volSummaryRequestId.current) {
-        const d = payload.data as { volume?: number; summaryChars?: number; parsed?: boolean; error?: string }
+        const d = payload.data as {
+          volume?: number
+          summaryChars?: number
+          parsed?: boolean
+          error?: string
+        }
         if (d?.error) setVolNotice(`卷摘要失败：${d.error}`)
         else if (!d?.parsed) setVolNotice('卷摘要解析失败，可重试')
         else setVolNotice(`第 ${d.volume} 卷摘要已生成（${d.summaryChars} 字）`)
@@ -121,7 +137,7 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
       offDone()
       offError()
     }
-  }, [load, projectId])
+  }, [load])
 
   const volumes = useMemo(() => {
     const map = new Map<number, OutlineItem[]>()
@@ -149,7 +165,7 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
   }
 
   const save = (): void => {
-    if (!edit || !edit.chapterNo.trim()) return
+    if (!edit?.chapterNo.trim()) return
     void window.api.novel
       .outlineSave({
         id: edit.id,
@@ -225,15 +241,30 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
               <Label>卷号</Label>
-              <Input type="number" value={volume} onChange={(e) => setVolume(e.target.value)} disabled={generating} />
+              <Input
+                type="number"
+                value={volume}
+                onChange={(e) => setVolume(e.target.value)}
+                disabled={generating}
+              />
             </div>
             <div>
               <Label>起始章号</Label>
-              <Input type="number" value={startNo} onChange={(e) => setStartNo(e.target.value)} disabled={generating} />
+              <Input
+                type="number"
+                value={startNo}
+                onChange={(e) => setStartNo(e.target.value)}
+                disabled={generating}
+              />
             </div>
             <div>
               <Label>生成章数</Label>
-              <Input type="number" value={count} onChange={(e) => setCount(e.target.value)} disabled={generating} />
+              <Input
+                type="number"
+                value={count}
+                onChange={(e) => setCount(e.target.value)}
+                disabled={generating}
+              />
             </div>
           </div>
           <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-400">
@@ -297,7 +328,11 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
         <Card className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-12 md:p-4">
           <div className="col-span-1 sm:col-span-2">
             <Label>卷</Label>
-            <Input type="number" value={edit.volume} onChange={(e) => setEdit({ ...edit, volume: e.target.value })} />
+            <Input
+              type="number"
+              value={edit.volume}
+              onChange={(e) => setEdit({ ...edit, volume: e.target.value })}
+            />
           </div>
           <div className="col-span-1 sm:col-span-2">
             <Label>章号 *</Label>
@@ -309,7 +344,10 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
           </div>
           <div className="col-span-2 sm:col-span-4">
             <Label>章节名</Label>
-            <Input value={edit.title} onChange={(e) => setEdit({ ...edit, title: e.target.value })} />
+            <Input
+              value={edit.title}
+              onChange={(e) => setEdit({ ...edit, title: e.target.value })}
+            />
           </div>
           <div className="col-span-2 sm:col-span-3">
             <Label>状态</Label>
@@ -336,7 +374,11 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
           </div>
           <div className="col-span-1 sm:col-span-3">
             <Label>章节定位</Label>
-            <Select value={edit.role} onChange={(e) => setEdit({ ...edit, role: e.target.value })} className="w-full">
+            <Select
+              value={edit.role}
+              onChange={(e) => setEdit({ ...edit, role: e.target.value })}
+              className="w-full"
+            >
               <option value="">（未设置）</option>
               <option value="情节推进">情节推进</option>
               <option value="人物深化">人物深化</option>
@@ -347,7 +389,11 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
           </div>
           <div className="col-span-1 sm:col-span-3">
             <Label>悬念密度</Label>
-            <Select value={edit.suspense} onChange={(e) => setEdit({ ...edit, suspense: e.target.value })} className="w-full">
+            <Select
+              value={edit.suspense}
+              onChange={(e) => setEdit({ ...edit, suspense: e.target.value })}
+              className="w-full"
+            >
               <option value="">（未设置）</option>
               <option value="紧凑">紧凑</option>
               <option value="渐进">渐进</option>
@@ -356,7 +402,11 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
           </div>
           <div className="col-span-1 sm:col-span-2">
             <Label>认知颠覆</Label>
-            <Select value={edit.twist} onChange={(e) => setEdit({ ...edit, twist: e.target.value })} className="w-full">
+            <Select
+              value={edit.twist}
+              onChange={(e) => setEdit({ ...edit, twist: e.target.value })}
+              className="w-full"
+            >
               {[0, 1, 2, 3, 4, 5].map((n) => (
                 <option key={n} value={String(n)}>
                   {n === 0 ? '（未设置）' : '★'.repeat(n)}
@@ -366,7 +416,11 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
           </div>
           <div className="col-span-2 sm:col-span-4">
             <Label>结尾钩子</Label>
-            <Input value={edit.hook} onChange={(e) => setEdit({ ...edit, hook: e.target.value })} placeholder="用什么悬念收尾" />
+            <Input
+              value={edit.hook}
+              onChange={(e) => setEdit({ ...edit, hook: e.target.value })}
+              placeholder="用什么悬念收尾"
+            />
           </div>
           <div className="col-span-2 sm:col-span-12">
             <Label>伏笔操作</Label>
@@ -429,7 +483,11 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
                   {openVolumeSummary === vol ? '收起卷摘要' : '查看卷摘要'}
                 </Button>
               )}
-              <Button variant="ghost" className="px-2 py-0.5 text-xs" onClick={() => volumeSummary(vol)}>
+              <Button
+                variant="ghost"
+                className="px-2 py-0.5 text-xs"
+                onClick={() => volumeSummary(vol)}
+              >
                 {volSummaries[vol] ? '重新生成卷摘要' : '生成卷摘要'}
               </Button>
             </div>
@@ -439,7 +497,11 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
               {volSummaries[vol]}
             </div>
           )}
-          {volNotice && <div className="border-b border-zinc-800 px-4 py-1.5 text-xs text-zinc-500">{volNotice}</div>}
+          {volNotice && (
+            <div className="border-b border-zinc-800 px-4 py-1.5 text-xs text-zinc-500">
+              {volNotice}
+            </div>
+          )}
           <div className="divide-y divide-zinc-800/60">
             {list.map((it) => {
               const s = statusLabel(it.status)
@@ -450,20 +512,30 @@ export default function Outline({ projectId, onNavigate }: { projectId: string; 
               if (it.hook) chips.push(['钩子', it.hook])
               if (it.foreshadowOps) chips.push(['伏笔', it.foreshadowOps])
               return (
-                <div key={it.id} className="group flex items-start gap-3 px-4 py-3 hover:bg-zinc-800/30">
+                <div
+                  key={it.id}
+                  className="group flex items-start gap-3 px-4 py-3 hover:bg-zinc-800/30"
+                >
                   <span className="w-12 shrink-0 pt-0.5 text-right font-mono text-xs text-zinc-500">
                     {it.chapterNo}
                   </span>
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <span className="text-sm font-medium text-zinc-200">{it.title || '未命名'}</span>
+                      <span className="text-sm font-medium text-zinc-200">
+                        {it.title || '未命名'}
+                      </span>
                       <Badge tone={s.tone}>{s.label}</Badge>
                     </div>
-                    <div className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">{it.synopsis}</div>
+                    <div className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
+                      {it.synopsis}
+                    </div>
                     {chips.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] text-zinc-500">
                         {chips.map(([k, v]) => (
-                          <span key={k} className="max-w-full truncate rounded bg-zinc-800/80 px-1.5 py-0.5">
+                          <span
+                            key={k}
+                            className="max-w-full truncate rounded bg-zinc-800/80 px-1.5 py-0.5"
+                          >
                             <span className="text-zinc-600">{k}</span> {v}
                           </span>
                         ))}

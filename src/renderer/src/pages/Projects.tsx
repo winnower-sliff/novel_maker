@@ -1,7 +1,9 @@
-import { useEffect, useState, type ReactNode } from 'react'
 import type { Project } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type ReactNode, useState } from 'react'
 import { Badge, Button, Card, Input, Label, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 import { openWizard } from '../lib/wizardStore'
 
 interface Props {
@@ -26,40 +28,31 @@ interface Guide {
 }
 
 export default function Projects({ currentProjectId, onSwitch, onNavigate }: Props) {
-  const [projects, setProjects] = useState<Project[]>([])
+  const queryClient = useQueryClient()
+  const { data: projects = [] } = useQuery(queries.projects())
+  const { data: wb = [] } = useQuery(queries.worldbuild(currentProjectId))
+  const { data: cs = [] } = useQuery(queries.characters(currentProjectId))
+  const { data: os = [] } = useQuery(queries.outlines(currentProjectId))
+  const { data: br = [] } = useQuery(queries.chapterBriefs(currentProjectId))
+  const guide: Guide | null = currentProjectId
+    ? {
+        worldbuild: wb.length,
+        characters: cs.length,
+        outlines: os.length,
+        written: br.filter((b) => b.hasDraft).length
+      }
+    : null
   const [creating, setCreating] = useState(false)
   const [title, setTitle] = useState('')
   const [genre, setGenre] = useState('')
   const [targetWords, setTargetWords] = useState('')
   const [styleGuide, setStyleGuide] = useState('')
   const [editForm, setEditForm] = useState<EditForm | null>(null)
-  const [guide, setGuide] = useState<Guide | null>(null)
 
-  const load = (): void => {
-    void window.api.novel.projects().then(setProjects)
+  const reload = (): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.projects })
+    void queryClient.invalidateQueries({ queryKey: qk.novel })
   }
-
-  useEffect(load, [])
-
-  useEffect(() => {
-    if (!currentProjectId) {
-      setGuide(null)
-      return
-    }
-    void Promise.all([
-      window.api.novel.worldbuild(currentProjectId),
-      window.api.novel.characters(currentProjectId),
-      window.api.novel.outlines(currentProjectId),
-      window.api.novel.chapterBriefs(currentProjectId)
-    ]).then(([wb, cs, os, br]) => {
-      setGuide({
-        worldbuild: wb.length,
-        characters: cs.length,
-        outlines: os.length,
-        written: br.filter((b) => b.hasDraft).length
-      })
-    })
-  }, [currentProjectId])
 
   const create = (): void => {
     if (!title.trim()) return
@@ -76,7 +69,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
         setGenre('')
         setTargetWords('')
         setStyleGuide('')
-        load()
+        reload()
         onSwitch(p.id)
         openWizard(p.id)
       })
@@ -84,7 +77,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
   }
 
   const saveEdit = (): void => {
-    if (!editForm || !editForm.title.trim()) return
+    if (!editForm?.title.trim()) return
     void window.api.novel
       .projectUpdate(editForm.id, {
         title: editForm.title.trim(),
@@ -94,7 +87,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
       })
       .then(() => {
         setEditForm(null)
-        load()
+        reload()
       })
       .catch((err: unknown) => window.alert(`保存失败：${(err as Error).message}`))
   }
@@ -103,7 +96,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
     if (!window.confirm(`确认删除项目「${p.title}」？其大纲/人物/世界观/章节将一并删除。`)) return
     void window.api.novel.projectDelete(p.id).then(() => {
       if (p.id === currentProjectId) onSwitch('')
-      load()
+      reload()
     })
   }
 
@@ -122,11 +115,19 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <Label>书名 *</Label>
-          <Input value={title} onChange={(e) => setTitle(e.target.value)} placeholder="例：凡人修仙传" />
+          <Input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="例：凡人修仙传"
+          />
         </div>
         <div>
           <Label>题材</Label>
-          <Input value={genre} onChange={(e) => setGenre(e.target.value)} placeholder="仙侠/都市/科幻…" />
+          <Input
+            value={genre}
+            onChange={(e) => setGenre(e.target.value)}
+            placeholder="仙侠/都市/科幻…"
+          />
         </div>
       </div>
       <div>
@@ -160,6 +161,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
         <div className="w-full max-w-lg space-y-5">
           <div className="text-center">
             <svg
+              aria-hidden="true"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
@@ -181,6 +183,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
               <div className="divide-y divide-zinc-800/60">
                 {projects.map((p) => (
                   <button
+                    type="button"
                     key={p.id}
                     onClick={() => onSwitch(p.id)}
                     className="flex w-full cursor-pointer items-center gap-3 px-4 py-2.5 text-left transition-colors hover:bg-zinc-800/40"
@@ -218,7 +221,9 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
         {done ? '✓' : key}
       </span>
       <div className="min-w-0">
-        <div className={`text-xs font-medium ${done ? 'text-zinc-300' : 'text-zinc-200'}`}>{label}</div>
+        <div className={`text-xs font-medium ${done ? 'text-zinc-300' : 'text-zinc-200'}`}>
+          {label}
+        </div>
         <div className="mt-0.5 text-[11px] text-zinc-500">{done ? doneText : todoText}</div>
         <Button
           variant="ghost"
@@ -376,7 +381,12 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
             </Button>
             <span className="mx-1 flex gap-1">
               {(['txt', 'md', 'docx'] as const).map((f) => (
-                <Button key={f} variant="ghost" className="px-2 py-1 text-xs" onClick={() => exportAll(p, f)}>
+                <Button
+                  key={f}
+                  variant="ghost"
+                  className="px-2 py-1 text-xs"
+                  onClick={() => exportAll(p, f)}
+                >
                   {f}
                 </Button>
               ))}

@@ -1,4 +1,4 @@
-import { useEffect, type ReactNode } from 'react'
+import { type ReactNode, useEffect } from 'react'
 
 interface OverlayCardProps {
   open: boolean
@@ -30,13 +30,14 @@ export function OverlayCard({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-2 sm:p-6">
-      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="absolute inset-0 bg-black/60" aria-hidden="true" onClick={onClose} />
       <div
         className={`relative flex max-h-[85vh] w-full ${widthClass} flex-col rounded-xl border border-zinc-700 bg-zinc-900 shadow-2xl`}
       >
         <div className="flex items-center justify-between border-b border-zinc-800 px-5 py-3.5">
           <div className="text-sm font-semibold text-zinc-100">{title}</div>
           <button
+            type="button"
             onClick={onClose}
             className="cursor-pointer px-1 text-zinc-500 transition-colors hover:text-zinc-200"
           >

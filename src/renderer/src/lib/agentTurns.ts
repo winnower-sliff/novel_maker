@@ -127,7 +127,7 @@ export function turnsToMessages(turns: AgentTurn[]): ChatMessage[] {
 
 export function makeSessionTitle(turns: AgentTurn[]): string {
   const first = turns.find((t) => t.role === 'user')
-  if (!first || first.role !== 'user') return '新会话'
+  if (first?.role !== 'user') return '新会话'
   const text = first.text.trim()
   if (!text) return '新会话'
   return text.length > 20 ? `${text.slice(0, 20)}…` : text

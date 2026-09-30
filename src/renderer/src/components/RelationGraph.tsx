@@ -1,21 +1,21 @@
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import {
   Background,
   Controls,
+  type Edge,
   Handle,
   MiniMap,
-  Position,
-  ReactFlow,
-  useNodesState,
-  useStore,
-  type Edge,
   type MiniMapNodeProps,
   type Node,
   type NodeMouseHandler,
   type NodeProps,
   type OnNodeDrag,
-  type ReactFlowInstance
+  Position,
+  ReactFlow,
+  type ReactFlowInstance,
+  useNodesState,
+  useStore
 } from '@xyflow/react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import '@xyflow/react/dist/style.css'
 
 export interface GraphNodeData {
@@ -144,7 +144,7 @@ function resolveCollisions(pts: SimPoint[], gapHard: number): void {
         let dx = b.x - ax
         let dy = b.y + b.cOff - ay
         const minDist = a.cr + b.cr + gapHard
-        let d2 = dx * dx + dy * dy
+        const d2 = dx * dx + dy * dy
         if (d2 >= minDist * minDist) continue
         let d = Math.sqrt(d2)
         if (d < 0.01) {
@@ -197,7 +197,7 @@ function runIterations(
   const cx = new Array<number>(clusterCount).fill(0)
   const cy = new Array<number>(clusterCount).fill(0)
   for (let it = 0; it < iterations; it++) {
-    const a = alpha * Math.pow(ALPHA_DECAY, it)
+    const a = alpha * ALPHA_DECAY ** it
     if (clusterCount > 0) {
       for (let ci = 0; ci < clusterCount; ci++) {
         const ms = membersOf[ci]
@@ -364,8 +364,20 @@ function DotNode({ data }: NodeProps<Node<WikiNodeData>>) {
         transition: 'opacity 0.2s'
       }}
     >
-      <Handle type="target" position={Position.Left} className="center-handle" style={CENTER_HANDLE_STYLE} isConnectable={false} />
-      <Handle type="source" position={Position.Right} className="center-handle" style={CENTER_HANDLE_STYLE} isConnectable={false} />
+      <Handle
+        type="target"
+        position={Position.Left}
+        className="center-handle"
+        style={CENTER_HANDLE_STYLE}
+        isConnectable={false}
+      />
+      <Handle
+        type="source"
+        position={Position.Right}
+        className="center-handle"
+        style={CENTER_HANDLE_STYLE}
+        isConnectable={false}
+      />
       <div
         style={{
           width: '100%',
@@ -450,7 +462,11 @@ function TagLabelNode({ data }: NodeProps<Node<TagLabelData>>) {
         cursor: 'pointer',
         userSelect: 'none'
       }}
-      title={data.count !== undefined ? `#${data.label} · ${data.count} 条 · 点击筛选` : '点击按此标签筛选'}
+      title={
+        data.count !== undefined
+          ? `#${data.label} · ${data.count} 条 · 点击筛选`
+          : '点击按此标签筛选'
+      }
     >
       # {data.label}
     </div>
@@ -459,7 +475,10 @@ function TagLabelNode({ data }: NodeProps<Node<TagLabelData>>) {
 
 function MiniMapCircle({ id, x, y, width, height, color, onClick }: MiniMapNodeProps) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: SVG 小地图节点无对应原生元素，点击+hover 即全部交互
     <circle
+      role="button"
+      tabIndex={0}
       cx={x + width / 2}
       cy={y + height / 2}
       r={Math.max(2, width / 2)}
@@ -546,7 +565,10 @@ export const RelationGraph = memo(function RelationGraph({
       }
       hits.sort((a, b) => b.count - a.count)
       primaries.set(n.id, hits.length > 0 ? hits[0].ci : -1)
-      memberLists.set(n.id, hits.map((h) => h.ci))
+      memberLists.set(
+        n.id,
+        hits.map((h) => h.ci)
+      )
       for (const h of hits) membersByCluster[h.ci].add(n.id)
     }
     return {
@@ -558,7 +580,9 @@ export const RelationGraph = memo(function RelationGraph({
     }
   }, [clusterTags, nodes])
 
-  const [flowNodes, setFlowNodes, onNodesChange] = useNodesState<Node<WikiNodeData | TagLabelData>>([])
+  const [flowNodes, setFlowNodes, onNodesChange] = useNodesState<Node<WikiNodeData | TagLabelData>>(
+    []
+  )
   const [tagHover, setTagHover] = useState<string | null>(null)
   const simRef = useRef<SimPoint[]>([])
   const clusterRef = useRef(cluster)
@@ -606,7 +630,14 @@ export const RelationGraph = memo(function RelationGraph({
       applySimToNodes()
       return
     }
-    runIterations(simRef.current, linksRef.current, clusterRef.current?.tags.length ?? 0, 1, alpha, densityRef.current)
+    runIterations(
+      simRef.current,
+      linksRef.current,
+      clusterRef.current?.tags.length ?? 0,
+      1,
+      alpha,
+      densityRef.current
+    )
     alphaRef.current = alpha * ALPHA_DECAY
     applySimToNodes()
     rafRef.current = requestAnimationFrame(tick)
@@ -787,6 +818,7 @@ export const RelationGraph = memo(function RelationGraph({
     [links, activeId, tagHover, edges]
   )
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
     if (!centerSignal || centerSignal === centeredSignalRef.current) return
     if (!activeId || !rfInstanceRef.current) return
@@ -828,13 +860,10 @@ export const RelationGraph = memo(function RelationGraph({
     [kick]
   )
 
-  const handleDragStop = useCallback<OnNodeDrag<Node<WikiNodeData | TagLabelData>>>(
-    () => {
-      alphaRef.current = Math.max(alphaRef.current, DRAG_ALPHA)
-      kick()
-    },
-    [kick]
-  )
+  const handleDragStop = useCallback<OnNodeDrag<Node<WikiNodeData | TagLabelData>>>(() => {
+    alphaRef.current = Math.max(alphaRef.current, DRAG_ALPHA)
+    kick()
+  }, [kick])
 
   if (nodes.length === 0) {
     return (

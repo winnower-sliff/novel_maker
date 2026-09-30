@@ -24,7 +24,7 @@ const MIME: Record<ExportFormat, string> = {
 
 /** 导出剥离 [[目标]] / [[目标|关系]]：前者还原为目标名，后者还原为关系短语 */
 function stripWikiLinks(text: string): string {
-  return text.replace(/\[\[([^\[\]|]+)(?:\|([^\[\]]+))?\]\]/g, (_m, target: string, rel?: string) =>
+  return text.replace(/\[\[([^[\]|]+)(?:\|([^[\]]+))?\]\]/g, (_m, target: string, rel?: string) =>
     (rel ?? target).trim()
   )
 }
@@ -47,7 +47,10 @@ export async function buildExport(opts: ExportOptions): Promise<BuiltExport> {
   let data: Buffer
   if (opts.format === 'txt') {
     const text = entries
-      .map((x) => `第${x.outline.chapterNo}章 ${x.outline.title}\n\n${stripWikiLinks(x.chapter?.content ?? '')}`)
+      .map(
+        (x) =>
+          `第${x.outline.chapterNo}章 ${x.outline.title}\n\n${stripWikiLinks(x.chapter?.content ?? '')}`
+      )
       .join('\n\n\n')
     data = Buffer.from(text, 'utf-8')
   } else if (opts.format === 'md') {
@@ -73,7 +76,10 @@ export async function buildExport(opts: ExportOptions): Promise<BuiltExport> {
                 text: `第${x.outline.chapterNo}章 ${x.outline.title}`,
                 heading: HeadingLevel.HEADING_1
               }),
-              ...stripWikiLinks(x.chapter!.content)
+              ...stripWikiLinks(
+                // biome-ignore lint/style/noNonNullAssertion: 卷内必有正文（上方 hasDraft 过滤）
+                x.chapter!.content
+              )
                 .split(/\n+/)
                 .map((p) => new Paragraph({ text: p.trim() }))
             ])

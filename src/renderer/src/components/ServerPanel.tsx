@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import type { ServerConfigPatch, ServerStatus } from '@shared/types'
+import { useEffect, useState } from 'react'
 import { Badge, Button, Card, Input, Label } from './ui'
 
 async function copyText(text: string): Promise<boolean> {
@@ -46,7 +46,8 @@ export function ServerPanel() {
   const apply = (patch: ServerConfigPatch): void => {
     setBusy(true)
     setMessage('')
-    void window.api.server.config(patch)
+    void window.api.server
+      .config(patch)
       .then((s) => {
         setStatus(s)
         setEnabled(s.enabled)
@@ -91,7 +92,9 @@ export function ServerPanel() {
       </div>
 
       {isWeb ? (
-        <div className="text-xs text-zinc-600">当前正通过浏览器访问，服务器配置请在桌面端修改。</div>
+        <div className="text-xs text-zinc-600">
+          当前正通过浏览器访问，服务器配置请在桌面端修改。
+        </div>
       ) : (
         <>
           <label className="flex cursor-pointer items-center gap-2.5 text-sm text-zinc-300">
@@ -153,7 +156,8 @@ export function ServerPanel() {
               variant="ghost"
               className="px-2 py-1 text-xs"
               onClick={() => {
-                void copyText(status.url!).then((ok) =>
+                if (!status.url) return
+                void copyText(status.url).then((ok) =>
                   setMessage(ok ? '已复制访问地址' : '复制失败，请手动选择复制')
                 )
               }}
@@ -170,14 +174,16 @@ export function ServerPanel() {
         </div>
       )}
       {!isWeb && status && !status.lanReachable && (
-        <div className="text-xs text-amber-400">未检测到局域网地址，请确认电脑已连接 Wi-Fi 或网线。</div>
+        <div className="text-xs text-amber-400">
+          未检测到局域网地址，请确认电脑已连接 Wi-Fi 或网线。
+        </div>
       )}
       {status?.error && <div className="text-xs text-red-400">服务器错误：{status.error}</div>}
       {message && <div className="text-xs text-emerald-400">{message}</div>}
 
       <div className="text-xs text-zinc-600">
-        手机浏览器访问的是同一套项目数据，并可调用相同的 AI 能力（消耗本机配置的额度）。首次在 Windows
-        上监听端口时，防火墙可能弹出放行提示，请选择允许（专用网络）。
+        手机浏览器访问的是同一套项目数据，并可调用相同的 AI 能力（消耗本机配置的额度）。首次在
+        Windows 上监听端口时，防火墙可能弹出放行提示，请选择允许（专用网络）。
       </div>
     </Card>
   )

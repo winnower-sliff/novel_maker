@@ -1,23 +1,27 @@
+import { splitTags } from '@shared/tags'
+import type { Character, WorldbuildEntry } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Fragment,
+  type KeyboardEvent,
   memo,
   useCallback,
   useEffect,
   useMemo,
   useRef,
-  useState,
-  type KeyboardEvent
+  useState
 } from 'react'
-import type { Character, WorldbuildEntry } from '@shared/types'
-import { splitTags } from '@shared/tags'
 import { AiTextarea } from '../components/AiTextarea'
 import { EmptyGuide } from '../components/EmptyGuide'
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
 import { PreviewPanel } from '../components/PreviewPanel'
-import { RelationGraph, type GraphEdgeData, type GraphNodeData } from '../components/RelationGraph'
-import { WbGenOverlay } from '../components/WbGenOverlay'
+import { type GraphEdgeData, type GraphNodeData, RelationGraph } from '../components/RelationGraph'
 import { Button, Card, Input, Label, Select } from '../components/ui'
+import { WbGenOverlay } from '../components/WbGenOverlay'
+import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
+import { pushToast } from '../lib/toastStore'
 import {
   markEntrySeen,
   useNewEntryIds,
@@ -26,8 +30,6 @@ import {
   useWbSavedSeq,
   type WbLiveSection
 } from '../lib/wbGenStore'
-import { pushToast } from '../lib/toastStore'
-import type { Navigate } from '../lib/nav'
 import { extractLinkNames } from '../lib/wikiLink'
 
 const GROUP_COLORS: Record<string, string> = {
@@ -55,10 +57,7 @@ interface EditState {
 
 const EMPTY: EditState = { category: '', title: '', tags: '', keys: '', content: '' }
 
-type Preview =
-  | { type: 'entry'; entry: WorldbuildEntry }
-  | { type: 'char'; char: Character }
-  | null
+type Preview = { type: 'entry'; entry: WorldbuildEntry } | { type: 'char'; char: Character } | null
 
 interface EntryCardProps {
   entry: WorldbuildEntry
@@ -89,6 +88,7 @@ const EntryCard = memo(function EntryCard({
     else onOpen(entry)
   }
   return (
+    // biome-ignore lint/a11y/useSemanticElements: 整卡可点击且内部含交互元素，不能用原生 button 包裹
     <div
       id={`wb-${entry.id}`}
       role="button"
@@ -134,6 +134,7 @@ const EntryCard = memo(function EntryCard({
         <span className="truncate text-sm font-medium text-zinc-200">{entry.title}</span>
         {tags.map((t) => (
           <button
+            type="button"
             key={t}
             onClick={(e) => {
               e.stopPropagation()
@@ -147,10 +148,7 @@ const EntryCard = memo(function EntryCard({
         ))}
       </div>
       <div className="mt-2 max-h-[7.5rem] overflow-hidden text-xs leading-5 text-zinc-400">
-        <Markdown
-          text={entry.content}
-          wiki={{ resolve: resolveLink, onOpen: onOpenLink }}
-        />
+        <Markdown text={entry.content} wiki={{ resolve: resolveLink, onOpen: onOpenLink }} />
       </div>
     </div>
   )
@@ -169,9 +167,7 @@ function LiveCard({ section }: { section: WbLiveSection }) {
         <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
           {section.category ?? '生成中'}
         </span>
-        <span className="truncate text-sm font-medium text-zinc-200">
-          {section.title || '…'}
-        </span>
+        <span className="truncate text-sm font-medium text-zinc-200">{section.title || '…'}</span>
         {section.tags.map((t) => (
           <span
             key={t}
@@ -190,10 +186,17 @@ function LiveCard({ section }: { section: WbLiveSection }) {
 
 const TAG_PREVIEW_LIMIT = 20
 
-export default function Worldbuild({ projectId, onNavigate }: { projectId: string; onNavigate: Navigate }) {
-  const [entries, setEntries] = useState<WorldbuildEntry[]>([])
-  const [characters, setCharacters] = useState<Character[]>([])
-  const [types, setTypes] = useState<string[]>([])
+export default function Worldbuild({
+  projectId,
+  onNavigate
+}: {
+  projectId: string
+  onNavigate: Navigate
+}) {
+  const queryClient = useQueryClient()
+  const { data: entries = [] } = useQuery(queries.worldbuild(projectId))
+  const { data: characters = [] } = useQuery(queries.characters(projectId))
+  const { data: types = [] } = useQuery(queries.worldbuildTypes(projectId))
   const [filter, setFilter] = useState('全部')
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [tagExpanded, setTagExpanded] = useState(false)
@@ -211,7 +214,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
   const [edit, setEdit] = useState<EditState>(EMPTY)
   const [editOpen, setEditOpen] = useState(false)
   const [genOpen, setGenOpen] = useState(false)
-  const [highlightIds, setHighlightIds] = useState<string[]>([])
+  const [highlightIds, _setHighlightIds] = useState<string[]>([])
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [actionOpen, setActionOpen] = useState(false)
@@ -223,17 +226,14 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
   const revisedEntryIdList = useRevisedEntryIds(projectId)
   const savedSeq = useWbSavedSeq()
 
-  const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.novel.worldbuild(projectId).then(setEntries)
-    void window.api.novel.characters(projectId).then(setCharacters)
-    void window.api.novel.worldbuildTypes(projectId).then(setTypes)
-  }, [projectId])
+  const load = (): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.worldbuild(projectId) })
+    void queryClient.invalidateQueries({ queryKey: qk.characters(projectId) })
+    void queryClient.invalidateQueries({ queryKey: qk.worldbuildTypes(projectId) })
+  }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
-    setEntries([])
-    setCharacters([])
-    setTypes([])
     setFilter('全部')
     setTagFilter(null)
     setTagExpanded(false)
@@ -247,12 +247,12 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     setSelectMode(false)
     setSelectedIds(new Set())
     setActionOpen(false)
-    load()
-  }, [load])
+  }, [projectId])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: savedSeq 仅作触发信号，load 每渲染重建
   useEffect(() => {
     if (savedSeq > 0) load()
-  }, [savedSeq, load])
+  }, [savedSeq])
 
   useEffect(() => {
     if (!actionOpen) return
@@ -460,14 +460,19 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     })
   }
 
-  const allFilteredSelected =
-    filtered.length > 0 && filtered.every((e) => selectedIds.has(e.id))
+  const allFilteredSelected = filtered.length > 0 && filtered.every((e) => selectedIds.has(e.id))
 
   const toggleSelectAll = (): void => {
     setSelectedIds((cur) => {
       const next = new Set(cur)
-      if (allFilteredSelected) filtered.forEach((e) => next.delete(e.id))
-      else filtered.forEach((e) => next.add(e.id))
+      if (allFilteredSelected)
+        filtered.forEach((e) => {
+          next.delete(e.id)
+        })
+      else
+        filtered.forEach((e) => {
+          next.add(e.id)
+        })
       return next
     })
   }
@@ -522,8 +527,8 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     } else {
       void window.api.novel
         .worldbuildTypeCreate(projectId, category)
-        .then((list) => {
-          setTypes(list)
+        .then(() => {
+          void queryClient.invalidateQueries({ queryKey: qk.worldbuildTypes(projectId) })
           pushToast('success', `已新建类型「${category}」`)
           doSave(category)
         })
@@ -557,8 +562,8 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     if (!name) return
     void window.api.novel
       .worldbuildTypeCreate(projectId, name)
-      .then((list) => {
-        setTypes(list)
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: qk.worldbuildTypes(projectId) })
         pushToast('success', `已新建类型「${name}」`)
       })
       .catch((err: unknown) => {
@@ -576,8 +581,8 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
     if (count > 0) return
     void window.api.novel
       .worldbuildTypeDelete(projectId, name)
-      .then((list) => {
-        setTypes(list)
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: qk.worldbuildTypes(projectId) })
         if (filter === name) setFilter('全部')
         pushToast('success', `已删除类型「${name}」`)
       })
@@ -588,8 +593,9 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
 
   const entryGrid = (
     <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(240px,1fr))] content-start gap-3 overflow-y-auto pb-2">
-      {filtered.length === 0 && liveEntries.length === 0 && (
-        filter === '全部' && tagFilter === null && entries.length === 0 ? (
+      {filtered.length === 0 &&
+        liveEntries.length === 0 &&
+        (filter === '全部' && tagFilter === null && entries.length === 0 ? (
           <div className="col-span-full">
             <EmptyGuide
               projectId={projectId}
@@ -607,13 +613,11 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           </div>
         ) : (
           <Card className="col-span-full p-10 text-center text-sm text-zinc-600">
-            {tagFilter !== null
-              ? `「#${tagFilter}」标签下暂无条目`
-              : `「${filter}」类型下暂无条目`}
+            {tagFilter !== null ? `「#${tagFilter}」标签下暂无条目` : `「${filter}」类型下暂无条目`}
           </Card>
-        )
-      )}
+        ))}
       {liveEntries.map((s, i) => (
+        // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
         <LiveCard key={`live-${s.taskId}-${i}`} section={s} />
       ))}
       {grouped
@@ -677,6 +681,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
         <h1 className="shrink-0 text-lg font-semibold text-zinc-100">世界观</h1>
         <div className="ml-2 flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-1 [scrollbar-color:#3f3f46_transparent] [scrollbar-width:thin]">
           <button
+            type="button"
             onClick={() => setFilter('全部')}
             className={`shrink-0 cursor-pointer rounded-full px-3 py-1 text-xs transition-colors ${
               filter === '全部'
@@ -689,6 +694,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           {types.map((c) => (
             <span key={c} className="group/type relative inline-flex shrink-0">
               <button
+                type="button"
                 onClick={() => setFilter(c)}
                 className={`cursor-pointer rounded-full px-3 py-1 text-xs transition-colors ${
                   filter === c
@@ -701,6 +707,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                 {c}
               </button>
               <button
+                type="button"
                 onClick={() => removeType(c)}
                 className="absolute -right-1 -top-1 hidden h-4 w-4 cursor-pointer items-center justify-center rounded-full border border-zinc-600 bg-zinc-900 text-[9px] leading-none text-zinc-400 hover:text-red-400 group-hover/type:flex max-md:flex max-md:h-6 max-md:w-6 max-md:text-[11px]"
                 title="删除该类型"
@@ -711,6 +718,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           ))}
           {typeAdding ? (
             <input
+              // biome-ignore lint/a11y/noAutofocus: 类型内联新增打开时聚焦是预期交互
               autoFocus
               value={typeDraft}
               onChange={(e) => setTypeDraft(e.target.value)}
@@ -727,6 +735,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
             />
           ) : (
             <button
+              type="button"
               onClick={() => setTypeAdding(true)}
               className="shrink-0 cursor-pointer rounded-full border border-dashed border-zinc-700 px-3 py-1 text-xs text-zinc-500 transition-colors hover:border-amber-700 hover:text-amber-400"
               title="新增类型"
@@ -746,10 +755,13 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                   ] as const
                 ).map(([s, label]) => (
                   <button
+                    type="button"
                     key={s}
                     onClick={() => setGraphScope(s)}
                     className={`cursor-pointer px-2.5 py-1 transition-colors ${
-                      graphScope === s ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-400 hover:text-zinc-200'
+                      graphScope === s
+                        ? 'bg-zinc-700 text-zinc-100'
+                        : 'text-zinc-400 hover:text-zinc-200'
                     }`}
                   >
                     {label}
@@ -757,6 +769,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                 ))}
               </div>
               <button
+                type="button"
                 onClick={() => setClusterTags((v) => !v)}
                 className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
                   clusterTags
@@ -768,6 +781,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
               </button>
               {clusterTags && (
                 <button
+                  type="button"
                   onClick={() => setShowTagLabels((v) => !v)}
                   className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
                     showTagLabels
@@ -804,6 +818,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
               ] as const
             ).map(([v, label]) => (
               <button
+                type="button"
                 key={v}
                 onClick={() => setView(v)}
                 className={`cursor-pointer px-2.5 py-1 transition-colors ${
@@ -818,6 +833,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
             (selectMode ? (
               <div className="flex items-center gap-2">
                 <button
+                  type="button"
                   onClick={toggleSelectAll}
                   className="cursor-pointer rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-400 transition-colors hover:text-zinc-200"
                 >
@@ -835,11 +851,16 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
               <div className="relative" ref={actionMenuRef}>
                 <Button onClick={() => setActionOpen((v) => !v)}>
                   条目
-                  <span className={`ml-1 text-[10px] transition-transform ${actionOpen ? 'rotate-180' : ''}`}>▾</span>
+                  <span
+                    className={`ml-1 text-[10px] transition-transform ${actionOpen ? 'rotate-180' : ''}`}
+                  >
+                    ▾
+                  </span>
                 </Button>
                 {actionOpen && (
                   <div className="absolute right-0 top-full z-20 mt-1 w-44 overflow-hidden rounded-md border border-zinc-700 bg-zinc-900 py-1 shadow-xl shadow-black/40">
                     <button
+                      type="button"
                       onClick={() => {
                         setActionOpen(false)
                         setGenOpen(true)
@@ -849,6 +870,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                       AI 生成…
                     </button>
                     <button
+                      type="button"
                       onClick={() => {
                         setActionOpen(false)
                         setSelectMode(true)
@@ -861,6 +883,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
                     </button>
                     <div className="my-1 border-t border-zinc-800" />
                     <button
+                      type="button"
                       onClick={() => {
                         setActionOpen(false)
                         openNew()
@@ -881,6 +904,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           <span className="text-xs text-zinc-500">标签</span>
           {tagFilter !== null && (
             <button
+              type="button"
               onClick={() => setTagFilter(null)}
               className="cursor-pointer rounded-full bg-amber-600 px-2.5 py-0.5 text-xs font-medium text-zinc-950"
             >
@@ -888,12 +912,10 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
             </button>
           )}
           {tagCounts
-            .filter(
-              (t) =>
-                t.name !== tagFilter && (tagExpanded || collapsedTagSet.has(t.name))
-            )
+            .filter((t) => t.name !== tagFilter && (tagExpanded || collapsedTagSet.has(t.name)))
             .map((t) => (
               <button
+                type="button"
                 key={t.name}
                 onClick={() => setTagFilter(t.name)}
                 className="cursor-pointer rounded-full border border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-400 transition-colors hover:border-amber-700 hover:text-amber-300"
@@ -904,6 +926,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
             ))}
           {!tagExpanded && tagCounts.length > collapsedTagSet.size && (
             <button
+              type="button"
               onClick={() => setTagExpanded(true)}
               className="cursor-pointer rounded-full border border-dashed border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-500 transition-colors hover:border-amber-700 hover:text-amber-400"
               title="展开全部标签（含仅单条目使用的）"
@@ -913,6 +936,7 @@ export default function Worldbuild({ projectId, onNavigate }: { projectId: strin
           )}
           {tagExpanded && (
             <button
+              type="button"
               onClick={() => setTagExpanded(false)}
               className="cursor-pointer rounded-full border border-dashed border-zinc-700 px-2.5 py-0.5 text-xs text-zinc-500 transition-colors hover:border-amber-700 hover:text-amber-400"
             >

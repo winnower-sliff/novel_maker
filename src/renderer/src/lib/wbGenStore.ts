@@ -1,7 +1,10 @@
-import { useMemo, useSyncExternalStore } from 'react'
-import type { WorldbuildGenParams } from '@shared/types'
 import { splitHeadingHashtags } from '@shared/tags'
+import type { WorldbuildGenParams } from '@shared/types'
+import { useMemo } from 'react'
+import { create } from 'zustand'
 import { runPipeline } from './ipc'
+import { qk } from './queries'
+import { queryClient } from './queryClient'
 import { pushToast } from './toastStore'
 
 export type WbGenStatus = 'retrieving' | 'running'
@@ -52,7 +55,7 @@ interface RawSection {
 
 function splitSections(output: string): RawSection[] {
   const sections: RawSection[] = []
-  let current: Omit<RawSection, 'raw'> & { rawHeading: string } | null = null
+  let current: (Omit<RawSection, 'raw'> & { rawHeading: string }) | null = null
   for (const line of output.split(/\r?\n/)) {
     const m = SECTION_HEADING.exec(line)
     if (m && (m[1] || current)) {
@@ -83,14 +86,23 @@ function splitSections(output: string): RawSection[] {
   return sections
 }
 
-let tasks: WbGenTask[] = []
+interface WbStoreState {
+  tasks: WbGenTask[]
+  savedSeq: number
+  newIdsVersion: number
+  revisedIdsVersion: number
+}
+
+const useWbStore = create<WbStoreState>(() => ({
+  tasks: [],
+  savedSeq: 0,
+  newIdsVersion: 0,
+  revisedIdsVersion: 0
+}))
+
 let nextId = 1
-let savedSeq = 0
-let newIdsVersion = 0
-let revisedIdsVersion = 0
 const newEntryIds = new Map<string, string>()
 const revisedEntryIds = new Map<string, string>()
-const listeners = new Set<() => void>()
 const commitChains = new Map<number, Promise<unknown>>()
 
 interface ScanState {
@@ -99,10 +111,6 @@ interface ScanState {
 }
 const scanStates = new Map<number, ScanState>()
 const HEADING_LIKE_RE = /^#{1,3}\s/
-
-function emit(): void {
-  listeners.forEach((l) => l())
-}
 
 const DELTA_THROTTLE_MS = 100
 let pendingTimer: ReturnType<typeof setTimeout> | null = null
@@ -114,7 +122,7 @@ function emitNow(): void {
     pendingTimer = null
   }
   lastEmitAt = Date.now()
-  emit()
+  useWbStore.setState((s) => s)
 }
 
 function emitThrottled(): void {
@@ -123,23 +131,28 @@ function emitThrottled(): void {
   pendingTimer = setTimeout(() => {
     pendingTimer = null
     lastEmitAt = Date.now()
-    emit()
+    emitNow()
   }, wait)
 }
 
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
-}
-
 function patch(id: number, p: Partial<WbGenTask>, throttled = false): void {
-  tasks = tasks.map((t) => (t.id === id ? { ...t, ...p } : t))
+  useWbStore.setState((s) => ({
+    tasks: s.tasks.map((t) => (t.id === id ? { ...t, ...p } : t))
+  }))
   if (throttled) emitThrottled()
   else emitNow()
 }
 
+function bumpVersions(): void {
+  useWbStore.setState((s) => ({
+    savedSeq: s.savedSeq + 1,
+    newIdsVersion: s.newIdsVersion + 1,
+    revisedIdsVersion: s.revisedIdsVersion + 1
+  }))
+}
+
 function removeTask(id: number): void {
-  tasks = tasks.filter((t) => t.id !== id)
+  useWbStore.setState((s) => ({ tasks: s.tasks.filter((t) => t.id !== id) }))
   commitChains.delete(id)
   scanStates.delete(id)
   emitNow()
@@ -164,19 +177,22 @@ function scanForHeadings(id: number, output: string): void {
     if (HEADING_LIKE_RE.test(line)) sawHeading = true
   }
   if (!sawHeading) return
-  const cur = tasks.find((t) => t.id === id)
+  const cur = useWbStore.getState().tasks.find((t) => t.id === id)
   if (!cur) return
   void commitReadySections(id, splitSections(cur.output).length - 1)
 }
 
 async function commitReadySections(id: number, completeCount: number): Promise<void> {
-  const task = tasks.find((t) => t.id === id)
+  const task = useWbStore.getState().tasks.find((t) => t.id === id)
   if (!task || completeCount <= task.committedCount) return
   const from = task.committedCount
   const sections = splitSections(task.output)
   if (completeCount > sections.length) completeCount = sections.length
   if (completeCount <= from) return
-  const rawChunk = sections.slice(from, completeCount).map((s) => s.raw).join('\n\n')
+  const rawChunk = sections
+    .slice(from, completeCount)
+    .map((s) => s.raw)
+    .join('\n\n')
   const prev = commitChains.get(id) ?? Promise.resolve()
   const p = prev.then(() =>
     window.api.novel.worldbuildCommitChunk(task.projectId, rawChunk, task.categories, {
@@ -188,16 +204,15 @@ async function commitReadySections(id: number, completeCount: number): Promise<v
   commitChains.set(id, p)
   try {
     const r = await p
-    const cur = tasks.find((t) => t.id === id)
+    const cur = useWbStore.getState().tasks.find((t) => t.id === id)
     if (!cur) return
     const revisedSet = new Set(r.revisedIds)
     for (const eid of r.entryIds) {
       if (!revisedSet.has(eid)) newEntryIds.set(eid, cur.projectId)
     }
     for (const eid of r.revisedIds) revisedEntryIds.set(eid, cur.projectId)
-    newIdsVersion++
-    revisedIdsVersion++
-    savedSeq++
+    bumpVersions()
+    void queryClient.invalidateQueries({ queryKey: qk.worldbuild(cur.projectId) })
     patch(
       id,
       {
@@ -211,7 +226,7 @@ async function commitReadySections(id: number, completeCount: number): Promise<v
     )
     emitNow()
   } catch (err) {
-    const cur = tasks.find((t) => t.id === id)
+    const cur = useWbStore.getState().tasks.find((t) => t.id === id)
     if (!cur) return
     patch(id, { committedCount: Math.max(cur.committedCount, completeCount) }, true)
     pushToast(
@@ -223,34 +238,38 @@ async function commitReadySections(id: number, completeCount: number): Promise<v
 
 export function startGen(params: WbGenParams): void {
   const key = params.categories.join(',')
-  const dup = tasks.some(
-    (t) =>
-      t.projectId === params.projectId &&
-      t.categories.join(',') === key &&
-      t.title === params.title
-  )
+  const dup = useWbStore
+    .getState()
+    .tasks.some(
+      (t) =>
+        t.projectId === params.projectId &&
+        t.categories.join(',') === key &&
+        t.title === params.title
+    )
   if (dup) return
   const id = nextId++
-  tasks = [
-    ...tasks,
-    {
-      id,
-      projectId: params.projectId,
-      categories: params.categories,
-      title: params.title,
-      brief: params.brief,
-      count: params.count,
-      tags: params.tags ?? [],
-      output: '',
-      status: 'retrieving',
-      committedCount: 0,
-      entryIds: [],
-      revisedIds: [],
-      createdTypes: [],
-      allowNewType: true,
-      allowUpdate: params.allowUpdate === true
-    }
-  ]
+  useWbStore.setState((s) => ({
+    tasks: [
+      ...s.tasks,
+      {
+        id,
+        projectId: params.projectId,
+        categories: params.categories,
+        title: params.title,
+        brief: params.brief,
+        count: params.count,
+        tags: params.tags ?? [],
+        output: '',
+        status: 'retrieving',
+        committedCount: 0,
+        entryIds: [],
+        revisedIds: [],
+        createdTypes: [],
+        allowNewType: true,
+        allowUpdate: params.allowUpdate === true
+      }
+    ]
+  }))
   emitNow()
   const briefPreview = params.brief.trim().slice(0, 30)
   pushToast(
@@ -261,7 +280,7 @@ export function startGen(params: WbGenParams): void {
     'worldbuild',
     params,
     (text) => {
-      const cur = tasks.find((t) => t.id === id)
+      const cur = useWbStore.getState().tasks.find((t) => t.id === id)
       if (cur) {
         const output = cur.output + text
         patch(id, { status: 'running', output }, true)
@@ -271,13 +290,13 @@ export function startGen(params: WbGenParams): void {
     () => patch(id, { status: 'running' })
   )
     .then(async (payload) => {
-      const task = tasks.find((t) => t.id === id)
+      const task = useWbStore.getState().tasks.find((t) => t.id === id)
       if (!task) return
       const sections = splitSections(task.output)
       const truncated = payload.stopReason === 'max_tokens'
       const finalCount = truncated ? Math.max(0, sections.length - 1) : sections.length
       await commitReadySections(id, finalCount)
-      const done = tasks.find((t) => t.id === id)
+      const done = useWbStore.getState().tasks.find((t) => t.id === id)
       if (!done) return
       if (done.entryIds.length > 0) {
         try {
@@ -314,19 +333,21 @@ export function markEntrySeen(ids: string | string[]): void {
     if (revisedEntryIds.delete(id)) changed = true
   }
   if (changed) {
-    newIdsVersion++
-    revisedIdsVersion++
+    useWbStore.setState((s) => ({
+      newIdsVersion: s.newIdsVersion + 1,
+      revisedIdsVersion: s.revisedIdsVersion + 1
+    }))
     emitNow()
   }
 }
 
 export function useWbGenTasks(projectId: string): WbGenTask[] {
-  const all = useSyncExternalStore(subscribe, () => tasks)
+  const all = useWbStore((s) => s.tasks)
   return useMemo(() => all.filter((t) => t.projectId === projectId), [all, projectId])
 }
 
 export function useWbLiveEntries(projectId: string): WbLiveSection[] {
-  const all = useSyncExternalStore(subscribe, () => tasks)
+  const all = useWbStore((s) => s.tasks)
   return useMemo(() => {
     const out: WbLiveSection[] = []
     for (const t of all) {
@@ -349,40 +370,34 @@ export function useWbLiveEntries(projectId: string): WbLiveSection[] {
 }
 
 export function useNewEntryIds(projectId: string): string[] {
-  const version = useSyncExternalStore(subscribe, () => newIdsVersion)
+  const version = useWbStore((s) => s.newIdsVersion)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   return useMemo(
-    () =>
-      [...newEntryIds.entries()]
-        .filter(([, pid]) => pid === projectId)
-        .map(([id]) => id),
+    () => [...newEntryIds.entries()].filter(([, pid]) => pid === projectId).map(([id]) => id),
     [version, projectId]
   )
 }
 
 export function useRevisedEntryIds(projectId: string): string[] {
-  const version = useSyncExternalStore(subscribe, () => revisedIdsVersion)
+  const version = useWbStore((s) => s.revisedIdsVersion)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   return useMemo(
-    () =>
-      [...revisedEntryIds.entries()]
-        .filter(([, pid]) => pid === projectId)
-        .map(([id]) => id),
+    () => [...revisedEntryIds.entries()].filter(([, pid]) => pid === projectId).map(([id]) => id),
     [version, projectId]
   )
 }
 
 export function useWbSavedSeq(): number {
-  return useSyncExternalStore(subscribe, () => savedSeq)
+  return useWbStore((s) => s.savedSeq)
 }
 
 const BADGE_RUNNING: WbNavBadge = { tone: 'running', pulse: true }
 const BADGE_DONE: WbNavBadge = { tone: 'done', pulse: false }
 
-function aggregateBadge(): WbNavBadge | null {
-  if (tasks.length > 0) return BADGE_RUNNING
-  if (newEntryIds.size > 0 || revisedEntryIds.size > 0) return BADGE_DONE
-  return null
-}
-
 export function useWbGenNavBadge(): WbNavBadge | null {
-  return useSyncExternalStore(subscribe, aggregateBadge)
+  return useWbStore((s) => {
+    if (s.tasks.length > 0) return BADGE_RUNNING
+    if (newEntryIds.size > 0 || revisedEntryIds.size > 0) return BADGE_DONE
+    return null
+  })
 }

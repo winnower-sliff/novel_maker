@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { splitTags } from '../shared/tags'
 import type {
   Chapter,
   ChapterBrief,
@@ -7,16 +8,15 @@ import type {
   CharacterInput,
   Foreshadow,
   ForeshadowInput,
+  OutlineInput,
   OutlineItem,
   OutlineStatus,
-  OutlineInput,
   Project,
   ProjectInput,
   VolumeSummary,
   WorldbuildEntry,
   WorldbuildInput
 } from '../shared/types'
-import { splitTags } from '../shared/tags'
 import { getDb } from './db'
 
 type Row = Record<string, unknown>
@@ -133,7 +133,9 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
   const db = getDb()
   const ts = now()
   if (input.id) {
-    const cur = mapCharacter(db.prepare('SELECT * FROM characters WHERE id = ?').get(input.id) as Row)
+    const cur = mapCharacter(
+      db.prepare('SELECT * FROM characters WHERE id = ?').get(input.id) as Row
+    )
     db.prepare(
       'UPDATE characters SET name = ?, role = ?, tags = ?, card = ?, state = ?, updated_at = ? WHERE id = ?'
     ).run(
@@ -150,7 +152,17 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
   const id = randomUUID()
   db.prepare(
     'INSERT INTO characters (id, project_id, name, role, tags, card, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, input.projectId, input.name, input.role ?? '', input.tags ?? '', input.card ?? '', input.state ?? '', ts, ts)
+  ).run(
+    id,
+    input.projectId,
+    input.name,
+    input.role ?? '',
+    input.tags ?? '',
+    input.card ?? '',
+    input.state ?? '',
+    ts,
+    ts
+  )
   return mapCharacter(db.prepare('SELECT * FROM characters WHERE id = ?').get(id) as Row)
 }
 
@@ -166,7 +178,12 @@ export function listWorldbuild(projectId: string): WorldbuildEntry[] {
 }
 
 /** 标题改名后全局传播 [[旧标题]] -> [[新标题]]（覆盖世界观/人物卡/大纲/章节里的引用，含带 |关系 的写法） */
-function propagateWikiRenames(db: ReturnType<typeof getDb>, projectId: string, oldTitle: string, newTitle: string): number {
+function propagateWikiRenames(
+  db: ReturnType<typeof getDb>,
+  projectId: string,
+  oldTitle: string,
+  newTitle: string
+): number {
   const o = oldTitle.trim()
   const n = newTitle.trim()
   if (!o || !n || o === n) return 0
@@ -196,7 +213,7 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
     const cur = mapWorldbuild(
       db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(input.id) as Row
     )
-    if (input.title && input.title.trim() && input.title.trim() !== cur.title.trim()) {
+    if (input.title?.trim() && input.title.trim() !== cur.title.trim()) {
       propagateWikiRenames(db, input.projectId, cur.title, input.title)
     }
     db.prepare(
@@ -215,7 +232,17 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
   const id = randomUUID()
   db.prepare(
     'INSERT INTO worldbuild (id, project_id, category, title, tags, keys, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(id, input.projectId, input.category, input.title, input.tags ?? '', input.keys ?? '', input.content ?? '', ts, ts)
+  ).run(
+    id,
+    input.projectId,
+    input.category,
+    input.title,
+    input.tags ?? '',
+    input.keys ?? '',
+    input.content ?? '',
+    ts,
+    ts
+  )
   return mapWorldbuild(db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(id) as Row)
 }
 
@@ -276,15 +303,15 @@ export function listWorldbuildTypes(projectId: string): string[] {
     )
   }
   const used = new Set(
-    (db
-      .prepare('SELECT DISTINCT category FROM worldbuild WHERE project_id = ?')
-      .all(projectId) as Array<{ category: string | null }>)
+    (
+      db
+        .prepare('SELECT DISTINCT category FROM worldbuild WHERE project_id = ?')
+        .all(projectId) as Array<{ category: string | null }>
+    )
       .map((r) => r.category ?? '')
       .filter(Boolean)
   )
-  const names = [...DEFAULT_WORLDBUILD_TYPES, ...used].filter(
-    (n, i, arr) => arr.indexOf(n) === i
-  )
+  const names = [...DEFAULT_WORLDBUILD_TYPES, ...used].filter((n, i, arr) => arr.indexOf(n) === i)
   const insert = db.prepare(
     'INSERT INTO worldbuild_types (id, project_id, name, priority, created_at) VALUES (?, ?, ?, ?, ?)'
   )
@@ -408,7 +435,7 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
   }
   const id = randomUUID()
   db.prepare(
-    "INSERT INTO outlines (id, project_id, volume, chapter_no, title, synopsis, role, suspense, twist, hook, foreshadow_ops, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    'INSERT INTO outlines (id, project_id, volume, chapter_no, title, synopsis, role, suspense, twist, hook, foreshadow_ops, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     id,
     input.projectId,
@@ -490,9 +517,9 @@ export function saveChapter(args: {
 }): Chapter {
   const db = getDb()
   const ts = now()
-  const existing = db
-    .prepare('SELECT * FROM chapters WHERE outline_id = ?')
-    .get(args.outlineId) as ChapterRow | undefined
+  const existing = db.prepare('SELECT * FROM chapters WHERE outline_id = ?').get(args.outlineId) as
+    | ChapterRow
+    | undefined
   const wc = countWords(args.content)
   if (existing) {
     db.prepare(
@@ -520,7 +547,10 @@ export function getSummary(chapterId: string): ChapterSummary | null {
   }
 }
 
-export function saveSummary(chapterId: string, summary: Omit<ChapterSummary, 'id' | 'chapterId' | 'createdAt'>): void {
+export function saveSummary(
+  chapterId: string,
+  summary: Omit<ChapterSummary, 'id' | 'chapterId' | 'createdAt'>
+): void {
   const db = getDb()
   const raw = JSON.stringify(summary)
   const existing = db.prepare('SELECT id FROM summaries WHERE chapter_id = ?').get(chapterId) as
@@ -529,12 +559,9 @@ export function saveSummary(chapterId: string, summary: Omit<ChapterSummary, 'id
   if (existing) {
     db.prepare('UPDATE summaries SET content = ? WHERE chapter_id = ?').run(raw, chapterId)
   } else {
-    db.prepare('INSERT INTO summaries (id, chapter_id, content, created_at) VALUES (?, ?, ?, ?)').run(
-      randomUUID(),
-      chapterId,
-      raw,
-      now()
-    )
+    db.prepare(
+      'INSERT INTO summaries (id, chapter_id, content, created_at) VALUES (?, ?, ?, ?)'
+    ).run(randomUUID(), chapterId, raw, now())
   }
 }
 
@@ -595,7 +622,7 @@ export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foresh
   } else {
     const id = randomUUID()
     db.prepare(
-      "INSERT INTO foreshadows (id, project_id, content, planted_chapter, status, resolved_chapter, planned_resolve, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+      'INSERT INTO foreshadows (id, project_id, content, planted_chapter, status, resolved_chapter, planned_resolve, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id,
       input.projectId,
@@ -611,7 +638,9 @@ export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foresh
   }
   const row = input.id
     ? db.prepare('SELECT * FROM foreshadows WHERE id = ?').get(input.id)
-    : db.prepare('SELECT * FROM foreshadows WHERE project_id = ? ORDER BY created_at DESC LIMIT 1').get(input.projectId)
+    : db
+        .prepare('SELECT * FROM foreshadows WHERE project_id = ? ORDER BY created_at DESC LIMIT 1')
+        .get(input.projectId)
   return mapForeshadow(row as unknown as ForeshadowRow)
 }
 
@@ -640,17 +669,30 @@ export function listVolumeSummaries(projectId: string): VolumeSummary[] {
       summary: string
       updated_at: number
     }>
-  ).map((r) => ({ projectId: r.project_id, volume: r.volume, summary: r.summary, updatedAt: r.updated_at }))
+  ).map((r) => ({
+    projectId: r.project_id,
+    volume: r.volume,
+    summary: r.summary,
+    updatedAt: r.updated_at
+  }))
 }
 
-export function saveVolumeSummary(projectId: string, volume: number, summary: string): VolumeSummary {
+export function saveVolumeSummary(
+  projectId: string,
+  volume: number,
+  summary: string
+): VolumeSummary {
   const db = getDb()
   const ts = now()
   const existing = db
     .prepare('SELECT id FROM volume_summaries WHERE project_id = ? AND volume = ?')
     .get(projectId, volume) as { id: string } | undefined
   if (existing) {
-    db.prepare('UPDATE volume_summaries SET summary = ?, updated_at = ? WHERE id = ?').run(summary, ts, existing.id)
+    db.prepare('UPDATE volume_summaries SET summary = ?, updated_at = ? WHERE id = ?').run(
+      summary,
+      ts,
+      existing.id
+    )
   } else {
     db.prepare(
       'INSERT INTO volume_summaries (id, project_id, volume, summary, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)'

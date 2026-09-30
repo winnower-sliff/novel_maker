@@ -1,35 +1,29 @@
-import { useSyncExternalStore } from 'react'
+import { create } from 'zustand'
 
 interface WizardState {
   open: boolean
   projectId: string | null
   step: number | null
+  openWizard: (projectId: string, step?: number) => void
+  closeWizard: () => void
 }
 
-let state: WizardState = { open: false, projectId: null, step: null }
-const listeners = new Set<() => void>()
-
-function emit(next: WizardState): void {
-  state = next
-  listeners.forEach((l) => l())
-}
+export const useWizardStore = create<WizardState>((set) => ({
+  open: false,
+  projectId: null,
+  step: null,
+  openWizard: (projectId, step) => set({ open: true, projectId, step: step ?? null }),
+  closeWizard: () => set({ open: false })
+}))
 
 export function openWizard(projectId: string, step?: number): void {
-  emit({ open: true, projectId, step: step ?? null })
+  useWizardStore.getState().openWizard(projectId, step)
 }
 
 export function closeWizard(): void {
-  emit({ ...state, open: false })
+  useWizardStore.getState().closeWizard()
 }
 
 export function useWizard(): WizardState {
-  return useSyncExternalStore(
-    (cb) => {
-      listeners.add(cb)
-      return () => {
-        listeners.delete(cb)
-      }
-    },
-    () => state
-  )
+  return useWizardStore()
 }

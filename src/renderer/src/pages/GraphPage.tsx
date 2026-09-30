@@ -1,9 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { Character, GraphNodeKind, ProjectGraph, WorldbuildEntry } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PreviewPanel } from '../components/PreviewPanel'
-import { RelationGraph, type GraphEdgeData, type GraphNodeData } from '../components/RelationGraph'
+import { type GraphEdgeData, type GraphNodeData, RelationGraph } from '../components/RelationGraph'
 import { Button } from '../components/ui'
 import type { Navigate } from '../lib/nav'
+import { queries } from '../lib/queries'
 
 const KIND_LABELS: Record<GraphNodeKind, string> = {
   character: '人物',
@@ -36,10 +38,7 @@ interface FocusState {
   depth: number
 }
 
-type Preview =
-  | { type: 'wb'; entry: WorldbuildEntry }
-  | { type: 'char'; char: Character }
-  | null
+type Preview = { type: 'wb'; entry: WorldbuildEntry } | { type: 'char'; char: Character } | null
 
 export default function GraphPage({
   projectId,
@@ -52,9 +51,10 @@ export default function GraphPage({
   focusNodeId?: string | null
   onFocusConsumed?: () => void
 }) {
-  const [graph, setGraph] = useState<ProjectGraph | null>(null)
-  const [entries, setEntries] = useState<WorldbuildEntry[]>([])
-  const [characters, setCharacters] = useState<Character[]>([])
+  const _queryClient = useQueryClient()
+  const { data: graph = null } = useQuery(queries.graph(projectId))
+  const { data: entries = [] } = useQuery(queries.worldbuild(projectId))
+  const { data: characters = [] } = useQuery(queries.characters(projectId))
   const [preview, setPreview] = useState<Preview>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [centerSignal, setCenterSignal] = useState(0)
@@ -69,23 +69,10 @@ export default function GraphPage({
   const [showDangling, setShowDangling] = useState(false)
   const autoClusterRef = useRef(false)
 
-  const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.graph.project(projectId).then(setGraph)
-    void window.api.novel.worldbuild(projectId).then(setEntries)
-    void window.api.novel.characters(projectId).then(setCharacters)
-  }, [projectId])
-
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
     setFocus(null)
-    load()
-    const offAgent = window.api.agent.onDone(() => load())
-    const offLlm = window.api.llm.onDone(() => load())
-    return () => {
-      offAgent()
-      offLlm()
-    }
-  }, [load])
+  }, [projectId])
 
   useEffect(() => {
     if (!graph || autoClusterRef.current) return
@@ -304,6 +291,7 @@ export default function GraphPage({
       <div className="flex flex-wrap items-center gap-2">
         {ALL_KINDS.map((k) => (
           <button
+            type="button"
             key={k}
             onClick={() => toggleKind(k)}
             className={`flex cursor-pointer items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors ${
@@ -325,6 +313,7 @@ export default function GraphPage({
           />
         </div>
         <button
+          type="button"
           onClick={() => setHideIsolated((v) => !v)}
           className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
             hideIsolated
@@ -335,6 +324,7 @@ export default function GraphPage({
           隐藏孤点
         </button>
         <button
+          type="button"
           onClick={() => setClusterTags((v) => !v)}
           className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
             clusterTags
@@ -361,6 +351,7 @@ export default function GraphPage({
         </label>
         {clusterTags && (
           <button
+            type="button"
             onClick={() => setShowTagLabels((v) => !v)}
             className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs transition-colors ${
               showTagLabels
@@ -383,16 +374,20 @@ export default function GraphPage({
             </span>
             {[1, 2, 3].map((d) => (
               <button
+                type="button"
                 key={d}
                 onClick={() => setFocus({ id: focus.id, depth: d })}
                 className={`cursor-pointer rounded px-1.5 py-0.5 text-xs ${
-                  focus.depth === d ? 'bg-amber-700 text-zinc-950' : 'text-amber-400/80 hover:text-amber-300'
+                  focus.depth === d
+                    ? 'bg-amber-700 text-zinc-950'
+                    : 'text-amber-400/80 hover:text-amber-300'
                 }`}
               >
                 {d}度
               </button>
             ))}
             <button
+              type="button"
               onClick={() => setFocus(null)}
               className="cursor-pointer rounded px-1.5 py-0.5 text-xs text-zinc-400 hover:text-zinc-200"
             >
@@ -405,6 +400,7 @@ export default function GraphPage({
           {isolatedCount > 0 && !hideIsolated && ` · ${isolatedCount} 孤点`}
           {(graph?.danglingLinks.length ?? 0) > 0 && (
             <button
+              type="button"
               onClick={() => setShowDangling((v) => !v)}
               className="ml-2 cursor-pointer rounded border border-red-900/60 bg-red-950/30 px-1.5 py-0.5 text-red-400 hover:text-red-300"
               title="正文/设定中引用了 [[链接]] 但目标不存在的名字"
@@ -417,8 +413,10 @@ export default function GraphPage({
 
       {showDangling && (graph?.danglingLinks.length ?? 0) > 0 && (
         <div className="flex flex-wrap items-center gap-1.5 rounded-md border border-red-900/40 bg-red-950/20 px-3 py-2 text-xs">
-          <span className="text-red-400">悬空链接（[[引用]] 找不到目标条目，改名或补建可修复）：</span>
-          {graph!.danglingLinks.map((name) => (
+          <span className="text-red-400">
+            悬空链接（[[引用]] 找不到目标条目，改名或补建可修复）：
+          </span>
+          {graph?.danglingLinks.map((name) => (
             <span key={name} className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-zinc-300">
               [[{name}]]
             </span>
@@ -471,7 +469,8 @@ export default function GraphPage({
       <div className="text-[11px] text-zinc-600">
         单击节点高亮关联并右侧预览（再次单击或点空白取消）· 大纲/伏笔节点跳转对应板块 ·
         双击节点进入局部图谱 · 拖动节点看关联晃动 · 圆越大 = 被引用越多（核心条目/MOC）·
-        「标签聚类」开启时高频标签（≥3 条目）的条目/人物自动聚拢并按主标签着色、灰点不属任何高频标签簇 ·
+        「标签聚类」开启时高频标签（≥3
+        条目）的条目/人物自动聚拢并按主标签着色、灰点不属任何高频标签簇 ·
         连线来自各板块文本与章节正文中的 [[链接]]
       </div>
     </div>

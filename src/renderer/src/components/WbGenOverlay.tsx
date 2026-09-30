@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
+import { startGen } from '../lib/wbGenStore'
 import { OverlayCard } from './OverlayCard'
 import { Button, Input } from './ui'
-import { startGen } from '../lib/wbGenStore'
 
 interface WbGenOverlayProps {
   open: boolean
@@ -34,19 +34,17 @@ export function WbGenOverlay({
   } | null>(null)
   const retrieveSeq = useRef(0)
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅在打开时用初始 props 重置，initialTags/initialTypes 故意不进 deps
   useEffect(() => {
     if (!open) return
     setLimitTypes(initialTypes)
     setFocusTags(initialTags)
     setAllowUpdate(false)
     setRetrieval(null)
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   const briefForRetrieve =
-    brief.trim() ||
-    [...focusTags.map((t) => `#${t}`), ...limitTypes].join(' ') ||
-    ''
+    brief.trim() || [...focusTags.map((t) => `#${t}`), ...limitTypes].join(' ') || ''
   useEffect(() => {
     if (!briefForRetrieve) {
       setRetrieval(null)
@@ -76,7 +74,7 @@ export function WbGenOverlay({
     }, 900)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, briefForRetrieve, projectId])
+  }, [open, briefForRetrieve, projectId, focusTags, limitTypes])
 
   const submit = (): void => {
     const text = brief.trim()
@@ -126,6 +124,7 @@ export function WbGenOverlay({
         <div className="flex flex-wrap items-center gap-1.5 text-xs">
           <span className="shrink-0 text-zinc-500">类型</span>
           <button
+            type="button"
             onClick={() => setLimitTypes([])}
             className={`cursor-pointer rounded-full px-2.5 py-0.5 transition-colors ${
               limitTypes.length === 0
@@ -137,6 +136,7 @@ export function WbGenOverlay({
           </button>
           {types.map((t) => (
             <button
+              type="button"
               key={t}
               onClick={() =>
                 setLimitTypes((cur) => (cur.includes(t) ? cur.filter((x) => x !== t) : [...cur, t]))
@@ -157,6 +157,7 @@ export function WbGenOverlay({
             <div className="flex max-h-20 flex-1 flex-wrap gap-1.5 overflow-y-auto">
               {tagOptions.map((t) => (
                 <button
+                  type="button"
                   key={t.name}
                   onClick={() =>
                     setFocusTags((cur) =>
@@ -199,14 +200,17 @@ export function WbGenOverlay({
           <span className="text-zinc-400">
             允许修订已有条目
             <span className="ml-1 text-zinc-600">
-              （AI 发现矛盾或需补充时，会输出相关已有条目的修订版并直接覆盖入库，修订条目以橙点标识）
+              （AI
+              发现矛盾或需补充时，会输出相关已有条目的修订版并直接覆盖入库，修订条目以橙点标识）
             </span>
           </span>
         </label>
         {retrieval?.status === 'done' ? (
           <div className="rounded-md border border-zinc-800 bg-zinc-950/60 px-3 py-2 text-xs text-zinc-500">
             生成时将参考 {retrieval.count} 条相关条目
-            {retrieval.titles && retrieval.titles.length > 0 && `：${retrieval.titles.slice(0, 5).join('、')}`}
+            {retrieval.titles &&
+              retrieval.titles.length > 0 &&
+              `：${retrieval.titles.slice(0, 5).join('、')}`}
             {retrieval.titles && retrieval.titles.length > 5 ? ' 等' : ''}
           </div>
         ) : retrieval?.status === 'loading' ? (

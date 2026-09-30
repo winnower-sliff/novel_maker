@@ -1,8 +1,8 @@
 import type { BuiltContext, ChatParams } from '../shared/types'
-import type { EventSink } from './eventSink'
 import { buildChapterContext } from './context'
+import type { EventSink } from './eventSink'
+import { type LintReport, lintChapterReport } from './lint'
 import { chatStream, pickRatelimitHeaders } from './llm'
-import { lintChapterReport, type LintReport } from './lint'
 import { buildChapterRequest, extractJsonArray, skillBody } from './pipeline'
 import { resolveRequestAuth } from './settings'
 import * as store from './store'
@@ -15,7 +15,7 @@ import { appendUsage } from './usage'
  */
 
 export const LONG_CHAPTER_THRESHOLD = 3500
-const MAX_SEGMENT_WORDS = 900
+const _MAX_SEGMENT_WORDS = 900
 const MIN_SEGMENT_WORDS = 200
 
 export interface SegmentPlan {
@@ -29,8 +29,8 @@ export function parseSegmentPlan(text: string, wordTarget: number): SegmentPlan[
   if (arr) {
     for (const item of arr) {
       const r = item as Record<string, unknown>
-      const point = String(r.point ?? r['要点'] ?? '').trim()
-      const words = Math.round(Number(r.words ?? r['字数']))
+      const point = String(r.point ?? r.要点 ?? '').trim()
+      const words = Math.round(Number(r.words ?? r.字数))
       if (!point) continue
       plan.push({
         point: point.slice(0, 300),
@@ -65,9 +65,7 @@ function buildSegmentRequest(
   total: number
 ): ChatParams {
   const system = [skillBody('chapter-writer'), ctx.system].filter(Boolean).join('\n\n')
-  const planLines = plan
-    .map((s, i) => `第 ${i + 1} 段（${s.words} 字）：${s.point}`)
-    .join('\n')
+  const planLines = plan.map((s, i) => `第 ${i + 1} 段（${s.words} 字）：${s.point}`).join('\n')
   const user = [
     `本章写作指令：${ctx.user}`,
     '',
@@ -125,7 +123,11 @@ export async function runLongChapter(opts: {
 
   const planAuth = await resolveRequestAuth('outline')
   const planRes = await chatStream(
-    { ...buildPlanRequest(ctx, opts.wordTarget), model: planAuth.model, cacheSystem: planAuth.promptCache && true },
+    {
+      ...buildPlanRequest(ctx, opts.wordTarget),
+      model: planAuth.model,
+      cacheSystem: planAuth.promptCache && true
+    },
     { apiKey: planAuth.apiKey, baseUrl: planAuth.baseUrl },
     () => {},
     signal
@@ -170,7 +172,11 @@ export async function runLongChapter(opts: {
       if (pending.length >= 200 || pending.includes('\n')) flush()
     }
     const res = await chatStream(
-      { ...buildSegmentRequest(ctx, plan, written, i, plan.length), model: auth.model, cacheSystem: auth.promptCache && true },
+      {
+        ...buildSegmentRequest(ctx, plan, written, i, plan.length),
+        model: auth.model,
+        cacheSystem: auth.promptCache && true
+      },
       { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
       onDelta,
       signal
@@ -265,4 +271,3 @@ export async function runChapterCandidates(opts: {
   })
   return { candidates: out, winnerIndex }
 }
-

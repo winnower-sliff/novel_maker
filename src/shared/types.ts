@@ -1,4 +1,26 @@
+import type { OutlineStatus, Purpose } from './contract'
 import type { ProviderId } from './providers'
+
+// 输入类型与枚举已收敛到 contract.ts（zod 单一事实源），这里统一再导出兼容旧路径
+export type {
+  CharacterGenParams,
+  CharacterInput,
+  ChatParams,
+  ForeshadowInput,
+  ModelProbeOptions,
+  OutlineGenParams,
+  OutlineInput,
+  OutlineStatus,
+  PipelineAction,
+  PremiseDraftParams,
+  ProjectInput,
+  Purpose,
+  ServerConfigPatch,
+  SettingsPatch,
+  WorldbuildGenParams,
+  WorldbuildInput
+} from './contract'
+export { OUTLINE_STATUSES, PIPELINE_ACTIONS, PURPOSES } from './contract'
 
 export interface TextBlock {
   type: 'text'
@@ -26,19 +48,6 @@ export interface ChatMessage {
   content: string | ContentBlock[]
 }
 
-export const PURPOSES = [
-  'playground',
-  'outline',
-  'chapter',
-  'summary',
-  'polish',
-  'check',
-  'review',
-  'expand',
-  'agent'
-] as const
-export type Purpose = (typeof PURPOSES)[number]
-
 export interface PurposeRoute {
   provider?: ProviderId
   model: string
@@ -50,17 +59,6 @@ export interface ToolDef {
   name: string
   description: string
   input_schema: Record<string, unknown>
-}
-
-export interface ChatParams {
-  model: string
-  system?: string
-  messages: ChatMessage[]
-  maxTokens?: number
-  temperature?: number
-  purpose?: Purpose
-  cacheSystem?: boolean
-  tools?: ToolDef[]
 }
 
 export interface UsageInfo {
@@ -115,18 +113,6 @@ export interface SettingsView {
   currentProjectId: string
 }
 
-export interface SettingsPatch {
-  provider?: ProviderId
-  apiKey?: string
-  baseUrl?: string
-  defaultModel?: string
-  customModels?: string
-  modelRouting?: ModelRouting
-  quota5hPrompts?: number
-  promptCache?: boolean
-  currentProjectId?: string
-}
-
 export interface ServerConfig {
   enabled: boolean
   port: number
@@ -143,18 +129,6 @@ export interface ServerStatus {
   hasPassword: boolean
   clients: number
   error: string | null
-}
-
-export interface ServerConfigPatch {
-  enabled?: boolean
-  port?: number
-  password?: string | null
-}
-
-export interface ModelProbeOptions {
-  provider?: ProviderId
-  apiKey?: string
-  baseUrl?: string
 }
 
 export interface ModelProbeResult {
@@ -197,13 +171,6 @@ export interface Project {
   updatedAt: number
 }
 
-export interface ProjectInput {
-  title: string
-  genre?: string
-  styleGuide?: string
-  targetWords?: number
-}
-
 export interface Character {
   id: string
   projectId: string
@@ -214,15 +181,6 @@ export interface Character {
   state: string
   createdAt: number
   updatedAt: number
-}
-
-export interface CharacterInput {
-  projectId: string
-  name: string
-  role?: string
-  tags?: string
-  card?: string
-  state?: string
 }
 
 export interface WorldbuildEntry {
@@ -236,17 +194,6 @@ export interface WorldbuildEntry {
   createdAt: number
   updatedAt: number
 }
-
-export interface WorldbuildInput {
-  projectId: string
-  category: string
-  title: string
-  tags?: string
-  keys?: string
-  content?: string
-}
-
-export type OutlineStatus = 'draft' | 'approved' | 'written' | 'polished'
 
 export interface OutlineItem {
   id: string
@@ -263,20 +210,6 @@ export interface OutlineItem {
   status: OutlineStatus
   createdAt: number
   updatedAt: number
-}
-
-export interface OutlineInput {
-  projectId: string
-  volume: number
-  chapterNo: number
-  title?: string
-  synopsis?: string
-  role?: string
-  suspense?: string
-  twist?: number
-  hook?: string
-  foreshadowOps?: string
-  status?: OutlineStatus
 }
 
 export interface SkillMeta {
@@ -345,16 +278,6 @@ export interface Foreshadow {
   updatedAt: number
 }
 
-export interface ForeshadowInput {
-  projectId: string
-  content: string
-  plantedChapter?: string
-  status?: string
-  resolvedChapter?: string
-  plannedResolve?: string
-  priority?: string
-}
-
 export interface ContextPart {
   name: string
   detail: string
@@ -368,30 +291,6 @@ export interface BuiltContext {
   totalTokens: number
 }
 
-export type PipelineAction =
-  | 'outline'
-  | 'chapter'
-  | 'summary'
-  | 'polish'
-  | 'check'
-  | 'review'
-  | 'expand'
-  | 'volumeSummary'
-  | 'stateSync'
-  | 'character'
-  | 'worldbuild'
-  | 'premiseDraft'
-
-export interface WorldbuildGenParams {
-  projectId: string
-  categories: string[]
-  title: string
-  brief: string
-  count?: number
-  tags?: string[]
-  allowUpdate?: boolean
-}
-
 export interface WorldbuildPreviewEntry {
   category: string
   title: string
@@ -401,26 +300,6 @@ export interface WorldbuildPreviewEntry {
 }
 
 export type ExportFormat = 'txt' | 'md' | 'docx'
-
-export interface CharacterGenParams {
-  projectId: string
-  brief: string
-  name?: string
-  allowUpdate?: boolean
-}
-
-export interface OutlineGenParams {
-  projectId: string
-  idea: string
-  volume: number
-  startNo: number
-  count: number
-  allowUpdate?: boolean
-}
-
-export interface PremiseDraftParams {
-  projectId: string
-}
 
 export interface PremiseDraftCharacter {
   name: string

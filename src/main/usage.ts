@@ -32,9 +32,7 @@ function readAll(): UsageRecord[] {
 }
 
 export function listUsage(limit = 200): UsageRecord[] {
-  return readAll()
-    .slice(-limit)
-    .reverse()
+  return readAll().slice(-limit).reverse()
 }
 
 function dayKey(ts: number): string {
@@ -69,7 +67,9 @@ export function computeStats(now = Date.now()): UsageStats {
     return [...map.values()].sort((a, b) => b.requests - a.requests)
   }
 
-  const byDayMap = new Map<string, GroupStats>(group(all, (r) => dayKey(r.ts)).map((g) => [g.key, g]))
+  const byDayMap = new Map<string, GroupStats>(
+    group(all, (r) => dayKey(r.ts)).map((g) => [g.key, g])
+  )
   const byDay: GroupStats[] = []
   for (let i = DAY_SLOTS - 1; i >= 0; i--) {
     const key = dayKey(now - i * 24 * 60 * 60 * 1000)

@@ -40,7 +40,10 @@ function clipQuote(s: string): string {
 }
 
 export function stripHtmlComments(text: string): string {
-  return text.replace(/<!--[^>]*-->/g, '').replace(/\n{3,}/g, '\n\n').trim()
+  return text
+    .replace(/<!--[^>]*-->/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
 }
 
 function seamOverlap(head: string, tail: string): number {
@@ -54,7 +57,10 @@ function seamOverlap(head: string, tail: string): number {
 function findDuplicateParagraphs(text: string): string[][] {
   const seen = new Map<string, number>()
   const dups = new Map<string, string[]>()
-  const paras = text.split(/\n+/).map((p) => p.trim()).filter((p) => p.length >= 30)
+  const paras = text
+    .split(/\n+/)
+    .map((p) => p.trim())
+    .filter((p) => p.length >= 30)
   paras.forEach((p, i) => {
     const hit = seen.get(p)
     if (hit !== undefined) {
@@ -92,7 +98,8 @@ export function lintChapter(
         rule: `${label}（${matches.length} 处）`,
         level: label === 'HTML 注释残留' ? 'minor' : 'major',
         quote: clipQuote(matches[0][0]),
-        advice: label === 'HTML 注释残留' ? '定稿前剥离注释（保存时已自动处理）' : '删除或改写为自然叙述'
+        advice:
+          label === 'HTML 注释残留' ? '定稿前剥离注释（保存时已自动处理）' : '删除或改写为自然叙述'
       })
     }
   }
@@ -141,14 +148,14 @@ export function lintChapter(
 export function lintChapterReport(outlineId: string, text?: string): LintReport {
   const outline = store.getOutline(outlineId)
   if (!outline) return lintChapter('')
-  const outlines = store.listOutlines(outline.projectId).sort((a, b) =>
-    a.volume - b.volume || a.chapterNo - b.chapterNo
-  )
+  const outlines = store
+    .listOutlines(outline.projectId)
+    .sort((a, b) => a.volume - b.volume || a.chapterNo - b.chapterNo)
   const idx = outlines.findIndex((o) => o.id === outlineId)
   let prevTail = ''
   for (let i = idx - 1; i >= 0 && !prevTail; i--) {
     const c = store.getChapterByOutline(outlines[i].id)
-    if (c && c.content.trim()) prevTail = c.content.slice(-500)
+    if (c?.content.trim()) prevTail = c.content.slice(-500)
   }
   const content = text ?? store.getChapterByOutline(outlineId)?.content ?? ''
   return lintChapter(content, { prevTail: prevTail || undefined })
