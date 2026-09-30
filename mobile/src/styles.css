@@ -14,6 +14,8 @@ body {
     -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", "PingFang SC", sans-serif;
   -webkit-tap-highlight-color: transparent;
   overscroll-behavior: none;
+  /* 浏览器版适配状态栏/刘海；APK 由原生 margin 处理，此值在 WebView 内为 0 */
+  padding-top: env(safe-area-inset-top);
 }
 
 /* 移动端输入框聚焦时防止页面自动缩放 */

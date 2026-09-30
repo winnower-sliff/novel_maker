@@ -3,7 +3,8 @@
   "appName": "Novel Maker",
   "webDir": "www",
   "android": {
-    "allowMixedContent": true
+    "allowMixedContent": true,
+    "adjustMarginsForEdgeToEdge": "auto"
   },
   "server": {
     "androidScheme": "https"
