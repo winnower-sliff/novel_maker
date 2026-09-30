@@ -1,7 +1,5 @@
-import type { SearchHit } from '../../shared/types'
 import { buildChapterContext } from '../context'
-import { deleteEmbeddingsByRef, enqueueEmbedding, semanticSearch } from '../embedding'
-import { buildProjectGraph } from '../graph'
+import { deleteEmbeddingsByRef, enqueueEmbedding } from '../embedding'
 import { commitWorldbuildChunk, relinkWorldbuildEntries, saveWorldbuildBatch } from '../pipeline'
 import * as store from '../store'
 import type { PartialHandlerTable } from './context'

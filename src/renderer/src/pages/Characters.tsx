@@ -98,12 +98,13 @@ export default function Characters({
           error?: string
         }
         if (d?.error) window.alert(`生成完成但保存失败：${d.error}`)
-        if (d?.revised && d.revised.length > 0) {
+        const revised = d?.revised
+        if (revised && revised.length > 0) {
           pushToast(
             'success',
-            `已同步修订 ${d.revised.length} 个人物：${d.revised.map((x) => x.name).join('、')}（列表中橙点标识）`
+            `已同步修订 ${revised.length} 个人物：${revised.map((x) => x.name).join('、')}（列表中橙点标识）`
           )
-          setRevisedIds((cur) => [...new Set([...cur, ...d.revised!.map((x) => x.id)])])
+          setRevisedIds((cur) => [...new Set([...cur, ...revised.map((x) => x.id)])])
         }
         setGenerating(false)
         setGenOpen(false)
@@ -309,8 +310,8 @@ export default function Characters({
             <Button
               variant="danger"
               onClick={() => {
-                if (!window.confirm(`删除人物「${edit.name}」？`)) return
-                void window.api.novel.characterDelete(edit.id!).then(() => {
+                if (!edit.id || !window.confirm(`删除人物「${edit.name}」？`)) return
+                void window.api.novel.characterDelete(edit.id).then(() => {
                   setEdit(EMPTY)
                   setSelectedId(null)
                   load()

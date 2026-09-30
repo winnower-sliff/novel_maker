@@ -156,7 +156,8 @@ export function ServerPanel() {
               variant="ghost"
               className="px-2 py-1 text-xs"
               onClick={() => {
-                void copyText(status.url!).then((ok) =>
+                if (!status.url) return
+                void copyText(status.url).then((ok) =>
                   setMessage(ok ? '已复制访问地址' : '复制失败，请手动选择复制')
                 )
               }}

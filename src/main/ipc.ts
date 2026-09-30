@@ -26,7 +26,7 @@ export function registerIpc(): void {
     )
   }
 
-  ipcMain.handle('server:config', async (e, patch: Parameters<typeof saveServerConfig>[0]) => {
+  ipcMain.handle('server:config', async (_e, patch: Parameters<typeof saveServerConfig>[0]) => {
     saveServerConfig(patch)
     await restartServer()
     return getServerStatus()

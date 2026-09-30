@@ -426,7 +426,7 @@ export default function GraphPage({
           <span className="text-red-400">
             悬空链接（[[引用]] 找不到目标条目，改名或补建可修复）：
           </span>
-          {graph!.danglingLinks.map((name) => (
+          {graph?.danglingLinks.map((name) => (
             <span key={name} className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-zinc-300">
               [[{name}]]
             </span>

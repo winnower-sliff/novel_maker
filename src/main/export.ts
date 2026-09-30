@@ -76,7 +76,10 @@ export async function buildExport(opts: ExportOptions): Promise<BuiltExport> {
                 text: `第${x.outline.chapterNo}章 ${x.outline.title}`,
                 heading: HeadingLevel.HEADING_1
               }),
-              ...stripWikiLinks(x.chapter!.content)
+              ...stripWikiLinks(
+                // biome-ignore lint/style/noNonNullAssertion: 卷内必有正文（上方 hasDraft 过滤）
+                x.chapter!.content
+              )
                 .split(/\n+/)
                 .map((p) => new Paragraph({ text: p.trim() }))
             ])
