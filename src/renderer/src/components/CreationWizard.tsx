@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState } from 'react'
 import type { PremiseDraftCharacter, PremiseDraftResult, Project } from '@shared/types'
-import type { Navigate } from '../lib/nav'
+import { useEffect, useRef, useState } from 'react'
 import { startPipeline } from '../lib/ipc'
-import { closeWizard, useWizard } from '../lib/wizardStore'
+import type { Navigate } from '../lib/nav'
 import { startGen, useWbGenTasks, useWbLiveEntries } from '../lib/wbGenStore'
+import { closeWizard, useWizard } from '../lib/wizardStore'
 import { OverlayCard } from './OverlayCard'
 import { Badge, Button, Input, Label, Textarea } from './ui'
 
@@ -12,6 +12,7 @@ const STEP_LABELS_SHORT = ['设定', '世界观', '人物', '大纲', '完成']
 
 function StreamBox({ text, className }: { text: string; className: string }) {
   const ref = useRef<HTMLPreElement>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
     if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
   }, [text])
@@ -123,13 +124,11 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
         const counts = { wb: wb.length, char: cs.length, ol: ol.length }
         setExisting(counts)
         setStep(
-          initialStep ??
-            (counts.wb === 0 ? 0 : counts.char === 0 ? 2 : counts.ol === 0 ? 3 : 4)
+          initialStep ?? (counts.wb === 0 ? 0 : counts.char === 0 ? 2 : counts.ol === 0 ? 3 : 4)
         )
       })
       .catch(() => {})
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, projectId])
+  }, [open, projectId, initialStep])
 
   useEffect(() => {
     if (step !== 4 || !projectId) return
@@ -151,9 +150,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
         if (before === null) return
         const n = l.length - before
         setWbResult(
-          n > 0
-            ? `本次生成入库 ${n} 条世界观条目`
-            : '本次未解析出有效条目，可调整需求后重试'
+          n > 0 ? `本次生成入库 ${n} 条世界观条目` : '本次未解析出有效条目，可调整需求后重试'
         )
       })
       .catch(() => {})
@@ -341,6 +338,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
         <div className="flex items-center gap-1">
           {STEP_LABELS.map((label, i) => (
             <button
+              type="button"
               key={label}
               disabled={i >= step}
               onClick={() => setStep(i)}
@@ -373,9 +371,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 </div>
               )}
             </div>
-            {(draftBusy || draftDelta) && (
-              <StreamBox text={draftDelta} className="h-28 shrink-0" />
-            )}
+            {(draftBusy || draftDelta) && <StreamBox text={draftDelta} className="h-28 shrink-0" />}
             {draftError && <div className="text-xs text-red-400">{draftError}</div>}
             <div className="flex items-center gap-2">
               <Button onClick={() => void runDraft()} disabled={draftBusy || !projectId}>
@@ -397,22 +393,21 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
           <div className="space-y-3">
             <div className="flex items-center gap-2">
               <Label>世界观方向（将作为 AI 生成条目的需求描述）</Label>
-              {existing && existing.wb > 0 && (
-                <Badge tone="green">已有 {existing.wb} 条</Badge>
-              )}
+              {existing && existing.wb > 0 && <Badge tone="green">已有 {existing.wb} 条</Badge>}
             </div>
-              <Textarea
-                value={wbBrief}
-                onChange={(e) => setWbBrief(e.target.value)}
-                rows={3}
-                style={{ resize: 'vertical' }}
-                disabled={wbStarted}
-                placeholder="例：低魔武侠世界，内力源于血脉，朝廷与江湖门派相互制衡…"
-              />
+            <Textarea
+              value={wbBrief}
+              onChange={(e) => setWbBrief(e.target.value)}
+              rows={3}
+              style={{ resize: 'vertical' }}
+              disabled={wbStarted}
+              placeholder="例：低魔武侠世界，内力源于血脉，朝廷与江湖门派相互制衡…"
+            />
             <div className="flex flex-wrap items-center gap-1.5 text-xs">
               <span className="shrink-0 text-zinc-500">类型</span>
               {typeOptions.map((t) => (
                 <button
+                  type="button"
                   key={t}
                   disabled={wbStarted}
                   onClick={() => toggleCat(t)}
@@ -454,9 +449,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 )}
               </div>
             )}
-            {wbResult && !wbRunning && (
-              <div className="text-xs text-emerald-400">{wbResult}</div>
-            )}
+            {wbResult && !wbRunning && <div className="text-xs text-emerald-400">{wbResult}</div>}
             <div className="flex items-center gap-2">
               <Button onClick={startWorldbuild} disabled={!wbBrief.trim() || wbRunning}>
                 {wbRunning ? '生成中…' : wbStarted ? '再次生成' : '开始生成世界观'}
@@ -476,9 +469,12 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
             <div className="flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Label>核心人物清单（逐个生成人物卡）</Label>
-                {existing && existing.char > 0 && <Badge tone="green">已有 {existing.char} 张</Badge>}
+                {existing && existing.char > 0 && (
+                  <Badge tone="green">已有 {existing.char} 张</Badge>
+                )}
               </div>
               <button
+                type="button"
                 onClick={addChar}
                 disabled={charRunning}
                 className="cursor-pointer text-xs text-amber-400 hover:text-amber-300 disabled:text-zinc-600"
@@ -491,6 +487,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 const done = c.name.trim() !== '' && charDoneNames.includes(c.name.trim())
                 const busy = charRunning && charIndex === i
                 return (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                   <div key={i} className="rounded-md border border-zinc-800 bg-zinc-900/50 p-2">
                     <div className="flex items-center gap-2">
                       <Input
@@ -507,6 +504,7 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                       ) : null}
                       <div className="flex-1" />
                       <button
+                        type="button"
                         onClick={() => removeChar(i)}
                         disabled={charRunning || done}
                         className="cursor-pointer text-xs text-zinc-500 hover:text-red-400 disabled:cursor-default disabled:text-zinc-700"
@@ -521,7 +519,8 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                       disabled={charRunning || done}
                       placeholder="人物需求：定位/特质/与主线的关系"
                       className="mt-1.5"
-                    />                  </div>
+                    />{' '}
+                  </div>
                 )
               })}
               {chars.length === 0 && (
@@ -563,14 +562,14 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
               <Label>第一卷核心创意</Label>
               {existing && existing.ol > 0 && <Badge tone="green">已有 {existing.ol} 章</Badge>}
             </div>
-              <Textarea
-                value={outlineIdea}
-                onChange={(e) => setOutlineIdea(e.target.value)}
-                rows={3}
-                style={{ resize: 'vertical' }}
-                disabled={outlineBusy}
-                placeholder="例：主角觉醒血脉遭追杀，被迫离乡加入门派，卷入朝廷与魔教的暗斗"
-              />
+            <Textarea
+              value={outlineIdea}
+              onChange={(e) => setOutlineIdea(e.target.value)}
+              rows={3}
+              style={{ resize: 'vertical' }}
+              disabled={outlineBusy}
+              placeholder="例：主角觉醒血脉遭追杀，被迫离乡加入门派，卷入朝廷与魔教的暗斗"
+            />
             <div className="flex flex-wrap items-center gap-4 text-xs">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 text-zinc-500">卷号</span>
@@ -619,7 +618,10 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
               </div>
             )}
             <div className="flex items-center gap-2">
-              <Button onClick={() => void runOutline()} disabled={outlineBusy || !outlineIdea.trim()}>
+              <Button
+                onClick={() => void runOutline()}
+                disabled={outlineBusy || !outlineIdea.trim()}
+              >
                 {outlineDone ? '重新生成' : outlineBusy ? '生成中…' : '生成大纲并导入'}
               </Button>
               <Button variant="ghost" onClick={() => setStep(4)} disabled={outlineBusy}>
@@ -627,7 +629,9 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
               </Button>
             </div>
             {outlineDone && (
-              <p className="text-xs text-emerald-400">大纲已导入，可在大纲页继续调整或生成更多卷。</p>
+              <p className="text-xs text-emerald-400">
+                大纲已导入，可在大纲页继续调整或生成更多卷。
+              </p>
             )}
           </div>
         )}
@@ -640,7 +644,10 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
                 { label: '人物卡', count: finalCounts?.char },
                 { label: '大纲章节', count: finalCounts?.ol }
               ].map((item) => (
-                <div key={item.label} className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+                <div
+                  key={item.label}
+                  className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3"
+                >
                   <div className="text-lg font-semibold text-zinc-100">{item.count ?? '…'}</div>
                   <div className="mt-0.5 text-zinc-500">{item.label}</div>
                 </div>

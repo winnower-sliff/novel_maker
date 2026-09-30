@@ -17,7 +17,10 @@ export function runPipeline(
 ): Promise<DonePayload> {
   return new Promise((resolve, reject) => {
     const offs: Array<() => void> = []
-    const cleanup = (): void => offs.forEach((off) => off())
+    const cleanup = (): void =>
+      offs.forEach((off) => {
+        off()
+      })
     void window.api.pipeline
       .run(action, params)
       .then((id) => {
@@ -55,7 +58,10 @@ export function startPipeline(
   let requestId: string | null = null
   const done = new Promise<DonePayload>((resolve, reject) => {
     const offs: Array<() => void> = []
-    const cleanup = (): void => offs.forEach((off) => off())
+    const cleanup = (): void =>
+      offs.forEach((off) => {
+        off()
+      })
     void window.api.pipeline
       .run(action, params)
       .then((id) => {
@@ -98,7 +104,10 @@ export function chatStream(
   let requestId: string | null = null
   const done = new Promise<DonePayload>((resolve, reject) => {
     const offs: Array<() => void> = []
-    const cleanup = (): void => offs.forEach((off) => off())
+    const cleanup = (): void =>
+      offs.forEach((off) => {
+        off()
+      })
     void window.api.llm
       .chat(params)
       .then((id) => {

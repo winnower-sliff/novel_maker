@@ -1,5 +1,13 @@
-import type { AgentDonePayload, ChatMessage, ContentBlock, OutlineItem, SubagentEvent, ToolDef, UsageInfo } from '../shared/types'
 import { splitTags } from '../shared/tags'
+import type {
+  AgentDonePayload,
+  ChatMessage,
+  ContentBlock,
+  OutlineItem,
+  SubagentEvent,
+  ToolDef,
+  UsageInfo
+} from '../shared/types'
 import type { EventSink } from './eventSink'
 import { chatStream, pickRatelimitHeaders } from './llm'
 import { resolveRequestAuth } from './settings'
@@ -44,10 +52,7 @@ interface AgentTool {
   execCtx?: (input: ToolInput, ctx: ToolExecContext) => Promise<unknown>
 }
 
-function schema(
-  props: Record<string, unknown>,
-  required: string[]
-): Record<string, unknown> {
+function schema(props: Record<string, unknown>, required: string[]): Record<string, unknown> {
   return { type: 'object', properties: props, required }
 }
 
@@ -78,7 +83,7 @@ function optStr(input: ToolInput, key: string): string | undefined {
   return typeof v === 'string' ? v : undefined
 }
 
-function reqNum(input: ToolInput, key: string): number {
+function _reqNum(input: ToolInput, key: string): number {
   const v = input[key]
   if (typeof v !== 'number' || !Number.isFinite(v)) throw new Error(`参数 ${key} 必须为数字`)
   return v
@@ -115,7 +120,13 @@ const TOOLS: AgentTool[] = [
     handler: (_input, projectId) => {
       const p = store.listProjects().find((x) => x.id === projectId)
       if (!p) throw new Error('项目不存在')
-      return { title: p.title, genre: p.genre, styleGuide: p.styleGuide, targetWords: p.targetWords, status: p.status }
+      return {
+        title: p.title,
+        genre: p.genre,
+        styleGuide: p.styleGuide,
+        targetWords: p.targetWords,
+        status: p.status
+      }
     }
   },
   {
@@ -123,7 +134,12 @@ const TOOLS: AgentTool[] = [
       name: 'update_project',
       description: '修改当前项目的元信息。只传需要修改的字段',
       input_schema: schema(
-        { title: optS('新标题'), genre: optS('新类型'), styleGuide: optS('新风格指南'), targetWords: optN('新目标字数') },
+        {
+          title: optS('新标题'),
+          genre: optS('新类型'),
+          styleGuide: optS('新风格指南'),
+          targetWords: optN('新目标字数')
+        },
         []
       )
     },
@@ -194,7 +210,13 @@ const TOOLS: AgentTool[] = [
       description:
         '新建或修改人物卡。传 id 表示修改既有人物；不传 id 表示新建。tags 为标签（逗号分隔，2-4 个；新建时建议提供，修改时省略则保留原标签；优先复用已有标签，没有合适的就新建可被多个人物共享的主题标签）。修改时应先 list_characters 取原文再改',
       input_schema: schema(
-        { id: optS('要修改的人物 id（新建时省略）'), name: s('姓名'), role: optS('定位，如 主角/反派/配角'), tags: optS('标签'), card: optS('人物卡正文（markdown）') },
+        {
+          id: optS('要修改的人物 id（新建时省略）'),
+          name: s('姓名'),
+          role: optS('定位，如 主角/反派/配角'),
+          tags: optS('标签'),
+          card: optS('人物卡正文（markdown）')
+        },
         ['name']
       )
     },
@@ -279,7 +301,14 @@ const TOOLS: AgentTool[] = [
     handler: (input, projectId) => {
       const e = store.listWorldbuild(projectId).find((x) => x.id === reqStr(input, 'id'))
       if (!e) throw new Error('未找到该词条')
-      return { id: e.id, category: e.category, title: e.title, tags: e.tags, keys: e.keys, content: e.content }
+      return {
+        id: e.id,
+        category: e.category,
+        title: e.title,
+        tags: e.tags,
+        keys: e.keys,
+        content: e.content
+      }
     }
   },
   {
@@ -377,7 +406,11 @@ const TOOLS: AgentTool[] = [
       description:
         '列出大纲条目（id、卷号、章号、标题、梗概、状态），按卷号与章号排序。可选 volume 按卷过滤、offset/limit 分页（默认全部）。做全局检查类任务时应分批读取直至 hasMore=false',
       input_schema: schema(
-        { volume: optN('按卷号过滤'), offset: optN('分页起始下标，默认 0'), limit: optN('每页条数，默认全部') },
+        {
+          volume: optN('按卷号过滤'),
+          offset: optN('分页起始下标，默认 0'),
+          limit: optN('每页条数，默认全部')
+        },
         []
       )
     },
@@ -426,7 +459,7 @@ const TOOLS: AgentTool[] = [
           twist: optN('认知颠覆强度 1-5'),
           hook: optS('结尾钩子设计'),
           foreshadowOps: optS('伏笔操作'),
-          status: optS("状态：draft/approved/written/polished")
+          status: optS('状态：draft/approved/written/polished')
         },
         []
       )
@@ -441,7 +474,8 @@ const TOOLS: AgentTool[] = [
         volume = volume ?? cur.volume
         chapterNo = chapterNo ?? cur.chapterNo
       }
-      if (volume === undefined || chapterNo === undefined) throw new Error('新建时 volume 与 chapterNo 必填')
+      if (volume === undefined || chapterNo === undefined)
+        throw new Error('新建时 volume 与 chapterNo 必填')
       const twist = optNum(input, 'twist')
       const saved = store.saveOutline({
         id,
@@ -457,7 +491,13 @@ const TOOLS: AgentTool[] = [
         foreshadowOps: optStr(input, 'foreshadowOps'),
         status: optStr(input, 'status') as never
       })
-      return { ok: true, id: saved.id, chapterNo: saved.chapterNo, title: saved.title, created: !id }
+      return {
+        ok: true,
+        id: saved.id,
+        chapterNo: saved.chapterNo,
+        title: saved.title,
+        created: !id
+      }
     }
   },
   {
@@ -502,13 +542,21 @@ const TOOLS: AgentTool[] = [
       const chapter = store.getChapterByOutline(o.id)
       if (!chapter) return { exists: false, note: '该章节还没有正文' }
       const c = clip(chapter.content, MAX_CHAPTER_CHARS)
-      return { exists: true, chapterNo: o.chapterNo, title: o.title, wordCount: chapter.wordCount, truncated: c.truncated, content: c.text }
+      return {
+        exists: true,
+        chapterNo: o.chapterNo,
+        title: o.title,
+        wordCount: chapter.wordCount,
+        truncated: c.truncated,
+        content: c.text
+      }
     }
   },
   {
     def: {
       name: 'get_chapter_tail',
-      description: '读取某一章正文的结尾片段（默认 800 字）。写新章前用它回读上一章结尾，找回语气、悬念与情绪落点',
+      description:
+        '读取某一章正文的结尾片段（默认 800 字）。写新章前用它回读上一章结尾，找回语气、悬念与情绪落点',
       input_schema: schema(
         { outlineId: s('大纲条目 id'), chars: optN('要读取的结尾字数，默认 800') },
         ['outlineId']
@@ -571,32 +619,57 @@ const TOOLS: AgentTool[] = [
     danger: false,
     handler: async (input, projectId) => {
       const { semanticSearch } = await import('./embedding')
-      const hits = await semanticSearch(projectId, reqStr(input, 'query'), ['worldbuild', 'character', 'summary'], 8)
+      const hits = await semanticSearch(
+        projectId,
+        reqStr(input, 'query'),
+        ['worldbuild', 'character', 'summary'],
+        8
+      )
       if (hits.length === 0) return { results: [], note: '无命中或语义检索不可用' }
       const wb = new Map(store.listWorldbuild(projectId).map((e) => [e.id, e]))
       const chs = new Map(store.listCharacters(projectId).map((c) => [c.id, c]))
       const ols = new Map(store.listOutlines(projectId).map((o) => [o.id, o]))
       return {
-        results: hits.map((h) => {
-          if (h.kind === 'worldbuild') {
-            const e = wb.get(h.refId)
-            return e
-              ? { kind: 'worldbuild', id: e.id, title: `[${e.category}] ${e.title}`, snippet: e.content.slice(0, 200), score: h.score }
+        results: hits
+          .map((h) => {
+            if (h.kind === 'worldbuild') {
+              const e = wb.get(h.refId)
+              return e
+                ? {
+                    kind: 'worldbuild',
+                    id: e.id,
+                    title: `[${e.category}] ${e.title}`,
+                    snippet: e.content.slice(0, 200),
+                    score: h.score
+                  }
+                : null
+            }
+            if (h.kind === 'character') {
+              const c = chs.get(h.refId)
+              return c
+                ? {
+                    kind: 'character',
+                    id: c.id,
+                    title: `${c.name}（${c.role || '未定位'}）`,
+                    snippet: c.card.slice(0, 200),
+                    score: h.score
+                  }
+                : null
+            }
+            const o = ols.get(h.refId)
+            const chapter = o ? store.getChapterByOutline(o.id) : null
+            const sm = chapter ? store.getSummary(chapter.id) : null
+            return o && sm
+              ? {
+                  kind: 'chapter',
+                  id: o.id,
+                  title: `第${o.chapterNo}章 ${o.title}`,
+                  snippet: sm.summary,
+                  score: h.score
+                }
               : null
-          }
-          if (h.kind === 'character') {
-            const c = chs.get(h.refId)
-            return c
-              ? { kind: 'character', id: c.id, title: `${c.name}（${c.role || '未定位'}）`, snippet: c.card.slice(0, 200), score: h.score }
-              : null
-          }
-          const o = ols.get(h.refId)
-          const chapter = o ? store.getChapterByOutline(o.id) : null
-          const sm = chapter ? store.getSummary(chapter.id) : null
-          return o && sm
-            ? { kind: 'chapter', id: o.id, title: `第${o.chapterNo}章 ${o.title}`, snippet: sm.summary, score: h.score }
-            : null
-        }).filter(Boolean)
+          })
+          .filter(Boolean)
       }
     }
   },
@@ -604,7 +677,10 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_chapter',
       description: '写入某一章的正文（新建草稿或覆盖已有正文）。覆盖已有正文需用户确认',
-      input_schema: schema({ outlineId: s('大纲条目 id'), content: s('完整正文内容') }, ['outlineId', 'content'])
+      input_schema: schema({ outlineId: s('大纲条目 id'), content: s('完整正文内容') }, [
+        'outlineId',
+        'content'
+      ])
     },
     danger: false,
     handler: (input, projectId) => {
@@ -614,13 +690,18 @@ const TOOLS: AgentTool[] = [
         projectId,
         content: reqStr(input, 'content')
       })
-      return { ok: true, chapterNo: o.chapterNo, wordCount: chapter.wordCount, version: chapter.version }
+      return {
+        ok: true,
+        chapterNo: o.chapterNo,
+        wordCount: chapter.wordCount,
+        version: chapter.version
+      }
     },
     dangerCheck: (input, projectId) => {
       const outline = store.getOutline(reqStr(input, 'outlineId'))
       if (!outline || outline.projectId !== projectId) return null
       const chapter = store.getChapterByOutline(outline.id)
-      if (chapter && chapter.content.trim()) {
+      if (chapter?.content.trim()) {
         return `将覆盖第${outline.chapterNo}章《${outline.title}》已有正文（${chapter.wordCount} 字，当前版本 v${chapter.version}）`
       }
       return null
@@ -677,10 +758,16 @@ const TOOLS: AgentTool[] = [
         charactersWithState: characters,
         openForeshadows: {
           count: openForeshadows.length,
-          top: openForeshadows.slice(0, 12).map((f) => `${f.content}（${f.plantedChapter}${f.priority ? `·${f.priority}` : ''}）`)
+          top: openForeshadows
+            .slice(0, 12)
+            .map((f) => `${f.content}（${f.plantedChapter}${f.priority ? `·${f.priority}` : ''}）`)
         },
         latest: latestSummary
-          ? { chapterNo: lastWritten!.chapterNo, title: lastWritten!.title, summary: latestSummary.summary }
+          ? {
+              chapterNo: lastWritten!.chapterNo,
+              title: lastWritten!.title,
+              summary: latestSummary.summary
+            }
           : null
       }
     }
@@ -691,7 +778,11 @@ const TOOLS: AgentTool[] = [
       description:
         '更新一个人物的“动态状态”字段（物品/能力/身心状态/关系/最近事件）。只改状态、不动人物卡；写章节正文任务完成后，若人物状态发生变化应顺手调用。可用 id 或姓名指定（姓名需唯一）',
       input_schema: schema(
-        { id: optS('人物 id'), name: optS('人物姓名（与 id 二选一）'), state: s('更新后的完整状态文档（markdown 要点式）') },
+        {
+          id: optS('人物 id'),
+          name: optS('人物姓名（与 id 二选一）'),
+          state: s('更新后的完整状态文档（markdown 要点式）')
+        },
         ['state']
       )
     },
@@ -912,7 +1003,11 @@ async function runSubAgent(ctx: ToolExecContext & { task: string; role: string }
         })
         continue
       }
-      send({ type: 'toolCall', parentId, call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' } })
+      send({
+        type: 'toolCall',
+        parentId,
+        call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
+      })
       let ok: boolean
       let out: string
       try {
@@ -1135,14 +1230,25 @@ export async function runAgent(opts: {
         }
 
         if (dangerReason && !runState.alwaysAllowed.has(tu.name)) {
-          send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'confirming', dangerReason })
+          send('agent:toolCall', {
+            id: tu.id,
+            name: tu.name,
+            input: tu.input,
+            state: 'confirming',
+            dangerReason
+          })
           const allowed = await new Promise<boolean>((resolve) => {
             runState.confirms.set(tu.id, { resolve, toolName: tu.name })
           })
           if (!allowed) {
             denied = true
             const msg = '用户拒绝了该操作'
-            resultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: msg, is_error: true })
+            resultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: tu.id,
+              content: msg,
+              is_error: true
+            })
             send('agent:toolResult', { id: tu.id, ok: false, result: msg, denied: true })
             continue
           }

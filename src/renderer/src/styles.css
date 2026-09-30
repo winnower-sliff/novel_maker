@@ -1,4 +1,4 @@
-@import 'tailwindcss';
+@import "tailwindcss";
 
 :root {
   color-scheme: dark;
@@ -28,9 +28,9 @@ body {
   button {
     min-height: 32px;
   }
-  button[class*='h-4'],
-  button[class*='h-5'],
-  button[class*='h-6'] {
+  button[class*="h-4"],
+  button[class*="h-5"],
+  button[class*="h-6"] {
     min-height: 0;
   }
 }

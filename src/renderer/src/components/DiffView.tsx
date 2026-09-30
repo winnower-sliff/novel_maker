@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
 import { diffChars } from 'diff'
+import { useMemo, useState } from 'react'
 import { Button } from './ui'
 
 interface EditBlock {
@@ -109,9 +109,12 @@ export function DiffView({
       <div className="max-h-72 overflow-y-auto whitespace-pre-wrap text-xs leading-6 text-zinc-400">
         {pieces.map((p, i) =>
           p.kind === 'same' ? (
+            // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
             <span key={i}>{p.text}</span>
           ) : (
-            <span
+            <button
+              type="button"
+              // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
               key={i}
               className={`mx-0.5 inline-block cursor-pointer rounded border px-1 align-baseline ${
                 accepted[p.index]
@@ -119,19 +122,24 @@ export function DiffView({
                   : 'border-zinc-700 bg-zinc-800/60 opacity-60'
               }`}
               title={accepted[p.index] ? '点击拒绝此修改' : '点击采纳此修改'}
-              onClick={() =>
-                setAccepted((prev) => prev.map((v, j) => (j === p.index ? !v : v)))
-              }
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' || e.key === ' ') {
+                  setAccepted((prev) => prev.map((v, j) => (j === p.index ? !v : v)))
+                }
+              }}
+              onClick={() => setAccepted((prev) => prev.map((v, j) => (j === p.index ? !v : v)))}
             >
               {blocks[p.index].removed && (
                 <span className="text-red-400/80 line-through">{blocks[p.index].removed}</span>
               )}
               {blocks[p.index].added && (
-                <span className={accepted[p.index] ? 'text-emerald-300' : 'text-zinc-500 line-through'}>
+                <span
+                  className={accepted[p.index] ? 'text-emerald-300' : 'text-zinc-500 line-through'}
+                >
                   {blocks[p.index].added}
                 </span>
               )}
-            </span>
+            </button>
           )
         )}
       </div>

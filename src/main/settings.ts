@@ -1,17 +1,17 @@
-import { readFileSync, writeFileSync, existsSync } from 'node:fs'
 import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
+import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
+import { isProviderId, PROVIDER_IDS, type ProviderId, providerPreset } from '../shared/providers'
 import type {
   ModelRouting,
+  ProviderProfile,
   Purpose,
   PurposeRoute,
-  ProviderProfile,
   ServerConfig,
   SettingsPatch,
   SettingsView
 } from '../shared/types'
-import { PROVIDER_IDS, isProviderId, providerPreset, type ProviderId } from '../shared/providers'
 
 interface KeyPair {
   apiKeyEnc?: string

@@ -11,7 +11,9 @@ const listeners = new Set<() => void>()
 
 function emit(next: WizardState): void {
   state = next
-  listeners.forEach((l) => l())
+  listeners.forEach((l) => {
+    l()
+  })
 }
 
 export function openWizard(projectId: string, step?: number): void {

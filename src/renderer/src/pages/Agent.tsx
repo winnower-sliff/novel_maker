@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
 import type {
   AgentDonePayload,
   AgentSession,
@@ -8,12 +7,13 @@ import type {
   ModelProbeResult,
   SettingsView
 } from '@shared/types'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import type { AgentToolCallEvent, AgentToolResultEvent } from '../../../preload/index'
 import { Markdown } from '../components/Markdown'
 import { Badge, Button, Card, Select, Textarea } from '../components/ui'
+import { makeSessionTitle, toolLabel, toolSummary, turnsToMessages } from '../lib/agentTurns'
 import { setAgentUi } from '../lib/agentUiStore'
 import { fmtDuration, fmtRelative, fmtTokens } from '../lib/format'
-import { makeSessionTitle, toolLabel, toolSummary, turnsToMessages } from '../lib/agentTurns'
-import type { AgentToolCallEvent, AgentToolResultEvent } from '../../../preload/index'
 
 type AssistantTurn = Extract<AgentTurn, { role: 'assistant' }>
 
@@ -71,11 +71,14 @@ function ToolCallCard({
   return (
     <div className="rounded-md border border-zinc-800 bg-zinc-900/60">
       <button
+        type="button"
         onClick={() => setOpen((v) => !v)}
         className="flex w-full cursor-pointer items-center gap-2.5 px-3 py-2 text-left"
       >
         <span className={`h-2 w-2 shrink-0 rounded-full ${STATE_DOT[call.state]}`} />
-        <span className="shrink-0 font-mono text-[11px] text-amber-500/90">{toolLabel(call.name)}</span>
+        <span className="shrink-0 font-mono text-[11px] text-amber-500/90">
+          {toolLabel(call.name)}
+        </span>
         <span className="flex-1 truncate text-xs text-zinc-300">{toolSummary(call)}</span>
         <span className="hidden shrink-0 text-[10px] text-zinc-500 sm:inline">
           {STATE_LABEL[call.state]}
@@ -106,7 +109,9 @@ function ToolCallCard({
       )}
       {call.state === 'confirming' && canResolve && (
         <div className="border-t border-zinc-800 px-3 py-2.5">
-          <div className="text-xs leading-5 text-red-300">⚠ {call.dangerReason ?? '该操作不可恢复'}</div>
+          <div className="text-xs leading-5 text-red-300">
+            ⚠ {call.dangerReason ?? '该操作不可恢复'}
+          </div>
           <div className="mt-2 flex flex-wrap gap-2">
             <Button onClick={() => onResolve(true, false)}>允许</Button>
             <Button variant="ghost" onClick={() => onResolve(true, true)}>
@@ -213,12 +218,16 @@ export default function Agent({ projectId }: { projectId: string }) {
     void (async () => {
       const s = await window.api.settings.get()
       setSettings(s)
-      setModel((() => {
-        const r = s.modelRouting.agent
-        if (typeof r === 'string') return r || s.defaultModel
-        if (!r) return s.defaultModel
-        return r.provider && r.provider !== s.provider ? s.defaultModel : r.model || s.defaultModel
-      })())
+      setModel(
+        (() => {
+          const r = s.modelRouting.agent
+          if (typeof r === 'string') return r || s.defaultModel
+          if (!r) return s.defaultModel
+          return r.provider && r.provider !== s.provider
+            ? s.defaultModel
+            : r.model || s.defaultModel
+        })()
+      )
       try {
         setProbe(await window.api.models.probe())
       } catch {
@@ -256,7 +265,13 @@ export default function Agent({ projectId }: { projectId: string }) {
         ...t,
         toolCalls: [
           ...t.toolCalls,
-          { id: call.id, name: call.name, input: call.input, state: call.state, dangerReason: call.dangerReason }
+          {
+            id: call.id,
+            name: call.name,
+            input: call.input,
+            state: call.state,
+            dangerReason: call.dangerReason
+          }
         ]
       }))
       if (call.state === 'confirming') setAgentUi({ confirming: true })
@@ -267,7 +282,11 @@ export default function Agent({ projectId }: { projectId: string }) {
         ...t,
         toolCalls: t.toolCalls.map((c) =>
           c.id === r.id
-            ? { ...c, state: (r.denied ? 'denied' : r.ok ? 'ok' : 'error') as AgentToolCall['state'], result: r.result }
+            ? {
+                ...c,
+                state: (r.denied ? 'denied' : r.ok ? 'ok' : 'error') as AgentToolCall['state'],
+                result: r.result
+              }
             : c
         )
       }))
@@ -325,7 +344,11 @@ export default function Agent({ projectId }: { projectId: string }) {
                 ...cur,
                 tools: cur.tools.map((c) =>
                   c.id === ev.id
-                    ? { ...c, state: (ev.ok ? 'ok' : 'error') as AgentToolCall['state'], result: ev.result }
+                    ? {
+                        ...c,
+                        state: (ev.ok ? 'ok' : 'error') as AgentToolCall['state'],
+                        result: ev.result
+                      }
                     : c
                 )
               }
@@ -347,18 +370,24 @@ export default function Agent({ projectId }: { projectId: string }) {
     }
   }, [applyTurns, patchLastAssistant, persist])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
     endRef.current?.scrollIntoView({ block: 'nearest' })
   }, [turns])
 
   const modelOptions = (() => {
     const ids = new Set<string>()
-    if (probe) probe.models.forEach((m) => ids.add(m))
+    if (probe)
+      probe.models.forEach((m) => {
+        ids.add(m)
+      })
     settings?.customModels
       .split(/[,，\s]+/)
       .map((s) => s.trim())
       .filter(Boolean)
-      .forEach((m) => ids.add(m))
+      .forEach((m) => {
+        ids.add(m)
+      })
     if (model) ids.add(model)
     return [...ids]
   })()
@@ -442,7 +471,9 @@ export default function Agent({ projectId }: { projectId: string }) {
     void window.api.agent.sessionLoad(id).then((session) => {
       if (!session) return
       const next = title.trim() || makeSessionTitle(session.turns)
-      void window.api.agent.sessionSave({ ...session, title: next }).then(() => refreshSessions(projectId))
+      void window.api.agent
+        .sessionSave({ ...session, title: next })
+        .then(() => refreshSessions(projectId))
     })
   }
 
@@ -474,6 +505,7 @@ export default function Agent({ projectId }: { projectId: string }) {
           <div className="mb-1.5 text-xs font-medium text-zinc-400">会话</div>
           <div className="relative">
             <button
+              type="button"
               onClick={() => setPanelOpen((v) => !v)}
               className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-left text-sm text-zinc-200 transition-colors hover:border-zinc-700"
             >
@@ -481,6 +513,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                 {sessions.find((s) => s.id === sessionId)?.title ?? '新会话'}
               </span>
               <svg
+                aria-hidden="true"
                 viewBox="0 0 24 24"
                 fill="none"
                 stroke="currentColor"
@@ -494,6 +527,7 @@ export default function Agent({ projectId }: { projectId: string }) {
               <>
                 <div
                   className="fixed inset-0 z-20"
+                  aria-hidden="true"
                   onClick={() => {
                     setPanelOpen(false)
                     setRenamingId(null)
@@ -502,6 +536,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                 />
                 <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
                   <button
+                    type="button"
                     onClick={() => switchSession('')}
                     disabled={running}
                     className="flex w-full cursor-pointer items-center px-2.5 py-2 text-left text-xs text-amber-400 transition-colors hover:bg-zinc-800/60 disabled:cursor-not-allowed disabled:text-zinc-600"
@@ -525,6 +560,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                         {renamingId === s.id ? (
                           <>
                             <input
+                              // biome-ignore lint/a11y/noAutofocus: 会话重命名弹层打开时聚焦是预期交互
                               autoFocus
                               value={renameText}
                               onChange={(e) => setRenameText(e.target.value)}
@@ -539,6 +575,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                               className="min-w-0 flex-1 rounded border border-amber-600/60 bg-zinc-950 px-1.5 py-1 text-xs text-zinc-200 outline-none"
                             />
                             <button
+                              type="button"
                               onClick={() => {
                                 renameSession(s.id, renameText)
                                 setRenamingId(null)
@@ -554,12 +591,14 @@ export default function Agent({ projectId }: { projectId: string }) {
                               删除「{s.title}」？
                             </span>
                             <button
+                              type="button"
                               onClick={() => deleteSessionById(s.id)}
                               className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-red-400 hover:bg-zinc-800"
                             >
                               确认
                             </button>
                             <button
+                              type="button"
                               onClick={() => setConfirmDeleteId(null)}
                               className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
                             >
@@ -569,6 +608,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                         ) : (
                           <>
                             <button
+                              type="button"
                               onClick={() => switchSession(s.id)}
                               disabled={running || active}
                               className="min-w-0 flex-1 cursor-pointer rounded px-1 py-0.5 text-left disabled:cursor-default"
@@ -580,9 +620,12 @@ export default function Agent({ projectId }: { projectId: string }) {
                               >
                                 {s.title}
                               </div>
-                              <div className="text-[10px] text-zinc-500">{fmtRelative(s.updatedAt)}</div>
+                              <div className="text-[10px] text-zinc-500">
+                                {fmtRelative(s.updatedAt)}
+                              </div>
                             </button>
                             <button
+                              type="button"
                               title="重命名"
                               onClick={() => {
                                 setRenamingId(s.id)
@@ -593,6 +636,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                               改
                             </button>
                             <button
+                              type="button"
                               title="删除"
                               onClick={() => setConfirmDeleteId(s.id)}
                               disabled={running}
@@ -648,12 +692,14 @@ export default function Agent({ projectId }: { projectId: string }) {
           <div className="space-y-4">
             {turns.map((turn, idx) =>
               turn.role === 'user' ? (
+                // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                 <div key={idx} className="flex justify-end">
                   <div className="max-w-[75%] whitespace-pre-wrap rounded-lg bg-amber-600/90 px-3.5 py-2 text-sm leading-6 text-zinc-950">
                     {turn.text}
                   </div>
                 </div>
               ) : (
+                // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                 <div key={idx} className="space-y-2">
                   {turn.text && (
                     <Markdown text={turn.text} className="text-sm leading-7 text-zinc-200" />
@@ -689,23 +735,37 @@ export default function Agent({ projectId }: { projectId: string }) {
                   请求 <span className="font-mono text-zinc-200">{doneInfo.requests}</span> 次
                 </span>
                 <span>
-                  输入 <span className="font-mono text-zinc-200">{fmtTokens(doneInfo.usage.inputTokens)}</span>
+                  输入{' '}
+                  <span className="font-mono text-zinc-200">
+                    {fmtTokens(doneInfo.usage.inputTokens)}
+                  </span>
                 </span>
                 <span>
-                  输出 <span className="font-mono text-zinc-200">{fmtTokens(doneInfo.usage.outputTokens)}</span>
+                  输出{' '}
+                  <span className="font-mono text-zinc-200">
+                    {fmtTokens(doneInfo.usage.outputTokens)}
+                  </span>
                 </span>
                 {doneInfo.usage.cacheReadTokens > 0 && (
                   <span>
-                    缓存读 <span className="font-mono text-emerald-400">{fmtTokens(doneInfo.usage.cacheReadTokens)}</span>
+                    缓存读{' '}
+                    <span className="font-mono text-emerald-400">
+                      {fmtTokens(doneInfo.usage.cacheReadTokens)}
+                    </span>
                   </span>
                 )}
                 <span>
-                  耗时 <span className="font-mono text-zinc-200">{fmtDuration(doneInfo.durationMs)}</span>
+                  耗时{' '}
+                  <span className="font-mono text-zinc-200">
+                    {fmtDuration(doneInfo.durationMs)}
+                  </span>
                 </span>
                 {doneInfo.changed && <Badge tone="green">已修改资料库</Badge>}
                 {doneInfo.denied && <Badge tone="amber">有操作被拒绝</Badge>}
                 {doneInfo.hitLimit && <Badge tone="red">达到步数上限</Badge>}
-                {doneInfo.subagents > 0 && <Badge tone="amber">子任务 {doneInfo.subagents} 次</Badge>}
+                {doneInfo.subagents > 0 && (
+                  <Badge tone="amber">子任务 {doneInfo.subagents} 次</Badge>
+                )}
               </div>
             ) : null}
           </div>

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import type { UsageRecord, UsageStats } from '@shared/types'
+import { useEffect, useState } from 'react'
 import { Card } from '../components/ui'
 import { fmtDuration, fmtTime, fmtTokens, purposeLabel } from '../lib/format'
 
@@ -10,7 +10,10 @@ function QuotaBar({ used, limit }: { used: number; limit: number }) {
   return (
     <div>
       <div className="h-2 overflow-hidden rounded-full bg-zinc-800">
-        <div className={`h-full rounded-full transition-all ${tone}`} style={{ width: `${pct}%` }} />
+        <div
+          className={`h-full rounded-full transition-all ${tone}`}
+          style={{ width: `${pct}%` }}
+        />
       </div>
       <div className="mt-1 text-xs text-zinc-500">
         {used} / {limit} 次（{pct.toFixed(0)}%）
@@ -19,7 +22,13 @@ function QuotaBar({ used, limit }: { used: number; limit: number }) {
   )
 }
 
-function GroupTable({ title, rows }: { title: string; rows: Array<{ key: string; requests: number; inputTokens: number; outputTokens: number }> }) {
+function GroupTable({
+  title,
+  rows
+}: {
+  title: string
+  rows: Array<{ key: string; requests: number; inputTokens: number; outputTokens: number }>
+}) {
   return (
     <Card className="p-4">
       <div className="mb-2 text-sm font-medium text-zinc-200">{title}</div>
@@ -44,8 +53,12 @@ function GroupTable({ title, rows }: { title: string; rows: Array<{ key: string;
             <tr key={r.key} className="border-t border-zinc-800/60">
               <td className="py-1.5 font-mono text-zinc-300">{r.key}</td>
               <td className="py-1.5 text-right font-mono text-zinc-400">{r.requests}</td>
-              <td className="py-1.5 text-right font-mono text-zinc-400">{fmtTokens(r.inputTokens)}</td>
-              <td className="py-1.5 text-right font-mono text-zinc-400">{fmtTokens(r.outputTokens)}</td>
+              <td className="py-1.5 text-right font-mono text-zinc-400">
+                {fmtTokens(r.inputTokens)}
+              </td>
+              <td className="py-1.5 text-right font-mono text-zinc-400">
+                {fmtTokens(r.outputTokens)}
+              </td>
             </tr>
           ))}
         </tbody>
@@ -61,7 +74,11 @@ export default function Usage() {
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    void Promise.all([window.api.usage.stats(), window.api.usage.list(200), window.api.settings.get()])
+    void Promise.all([
+      window.api.usage.stats(),
+      window.api.usage.list(200),
+      window.api.settings.get()
+    ])
       .then(([s, r, cfg]) => {
         setStats(s)
         setRecords(r)
@@ -70,7 +87,9 @@ export default function Usage() {
       .finally(() => setLoading(false))
   }, [])
 
-  const maxDayTotal = stats ? Math.max(1, ...stats.byDay.map((d) => d.inputTokens + d.outputTokens)) : 1
+  const maxDayTotal = stats
+    ? Math.max(1, ...stats.byDay.map((d) => d.inputTokens + d.outputTokens))
+    : 1
   const windowEndText = stats
     ? new Date(stats.window5h.windowStart + 5 * 3600_000).toLocaleTimeString('zh-CN', {
         hour: '2-digit',
@@ -92,20 +111,30 @@ export default function Usage() {
           <div className="mt-3">
             <QuotaBar used={stats?.window5h.requests ?? 0} limit={quota} />
             {quota <= 0 && (
-              <div className="text-xs text-zinc-600">未设置 5h 限额（可在设置中配置，展示进度条）</div>
+              <div className="text-xs text-zinc-600">
+                未设置 5h 限额（可在设置中配置，展示进度条）
+              </div>
             )}
           </div>
           <div className="mt-3 flex gap-x-4 text-xs text-zinc-400">
             <span>
-              入 <span className="font-mono text-zinc-200">{fmtTokens(stats?.window5h.inputTokens ?? 0)}</span>
+              入{' '}
+              <span className="font-mono text-zinc-200">
+                {fmtTokens(stats?.window5h.inputTokens ?? 0)}
+              </span>
             </span>
             <span>
-              出 <span className="font-mono text-zinc-200">{fmtTokens(stats?.window5h.outputTokens ?? 0)}</span>
+              出{' '}
+              <span className="font-mono text-zinc-200">
+                {fmtTokens(stats?.window5h.outputTokens ?? 0)}
+              </span>
             </span>
           </div>
         </Card>
         <Card className="p-4 sm:col-span-2">
-          <div className="mb-2 text-xs text-zinc-500">近 14 天用量（上：输入 amber / 下：输出 sky）</div>
+          <div className="mb-2 text-xs text-zinc-500">
+            近 14 天用量（上：输入 amber / 下：输出 sky）
+          </div>
           <div className="flex h-24 items-end gap-1.5">
             {(stats?.byDay ?? []).map((d) => {
               const total = d.inputTokens + d.outputTokens
@@ -145,7 +174,9 @@ export default function Usage() {
 
       <Card className="min-h-64 overflow-auto">
         {loading ? (
-          <div className="flex h-full items-center justify-center py-8 text-sm text-zinc-600">加载中…</div>
+          <div className="flex h-full items-center justify-center py-8 text-sm text-zinc-600">
+            加载中…
+          </div>
         ) : records.length === 0 ? (
           <div className="flex h-full items-center justify-center py-8 text-sm text-zinc-600">
             暂无记录，去「试写」发一条消息
@@ -166,19 +197,26 @@ export default function Usage() {
             </thead>
             <tbody>
               {records.map((r, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                 <tr key={i} className="border-t border-zinc-800/60 hover:bg-zinc-800/30">
                   <td className="px-3 py-2 font-mono text-zinc-400">{fmtTime(r.ts)}</td>
                   <td className="px-3 py-2 font-mono text-zinc-300">{r.model}</td>
                   <td className="px-3 py-2 text-zinc-400">{purposeLabel(r.purpose)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-zinc-300">{fmtTokens(r.inputTokens)}</td>
-                  <td className="px-3 py-2 text-right font-mono text-zinc-300">{fmtTokens(r.outputTokens)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-zinc-300">
+                    {fmtTokens(r.inputTokens)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-zinc-300">
+                    {fmtTokens(r.outputTokens)}
+                  </td>
                   <td className="px-3 py-2 text-right font-mono text-emerald-400">
                     {r.cacheReadTokens ? fmtTokens(r.cacheReadTokens) : '-'}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-amber-400">
                     {r.cacheCreationTokens ? fmtTokens(r.cacheCreationTokens) : '-'}
                   </td>
-                  <td className="px-3 py-2 text-right font-mono text-zinc-400">{fmtDuration(r.durationMs)}</td>
+                  <td className="px-3 py-2 text-right font-mono text-zinc-400">
+                    {fmtDuration(r.durationMs)}
+                  </td>
                 </tr>
               ))}
             </tbody>

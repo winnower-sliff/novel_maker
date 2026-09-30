@@ -18,21 +18,20 @@ import type {
   ForeshadowInput,
   ModelProbeOptions,
   ModelProbeResult,
-  OutlineGenParams,
   OutlineInput,
   OutlineItem,
   PipelineAction,
   Project,
   ProjectGraph,
   ProjectInput,
-   SearchHit,
-   ServerConfigPatch,
-   ServerStatus,
-   SettingsPatch,
-   SubagentEvent,
+  SearchHit,
+  ServerConfigPatch,
+  ServerStatus,
+  SettingsPatch,
   SettingsView,
   SkillFile,
   SkillMeta,
+  SubagentEvent,
   UsageRecord,
   UsageStats,
   VolumeSummary,
@@ -71,7 +70,8 @@ export interface AgentToolResultEvent {
 const api = {
   settings: {
     get: (): Promise<SettingsView> => ipcRenderer.invoke('settings:get'),
-    save: (patch: SettingsPatch): Promise<SettingsView> => ipcRenderer.invoke('settings:save', patch)
+    save: (patch: SettingsPatch): Promise<SettingsView> =>
+      ipcRenderer.invoke('settings:save', patch)
   },
   server: {
     status: (): Promise<ServerStatus> => ipcRenderer.invoke('server:status'),
@@ -138,8 +138,12 @@ const api = {
       rawText: string,
       categories: string[],
       opts: { allowNewType: boolean; taskEntryIds: string[]; allowUpdate?: boolean }
-    ): Promise<{ entryIds: string[]; createdTypes: string[]; updatedIds: string[]; revisedIds: string[] }> =>
-      ipcRenderer.invoke('novel:worldbuildCommitChunk', projectId, rawText, categories, opts),
+    ): Promise<{
+      entryIds: string[]
+      createdTypes: string[]
+      updatedIds: string[]
+      revisedIds: string[]
+    }> => ipcRenderer.invoke('novel:worldbuildCommitChunk', projectId, rawText, categories, opts),
     worldbuildRelink: (projectId: string, entryIds: string[]): Promise<number> =>
       ipcRenderer.invoke('novel:worldbuildRelink', projectId, entryIds),
     worldbuildRetrieve: (p: WorldbuildGenParams): Promise<WorldbuildRetrievalBrief | null> =>
@@ -211,11 +215,18 @@ const api = {
       ipcRenderer.invoke('pipeline:run', action, params)
   },
   agent: {
-    run: (params: { projectId: string; messages: ChatMessage[]; model?: string }): Promise<string> =>
-      ipcRenderer.invoke('agent:run', params),
+    run: (params: {
+      projectId: string
+      messages: ChatMessage[]
+      model?: string
+    }): Promise<string> => ipcRenderer.invoke('agent:run', params),
     abort: (requestId: string): Promise<void> => ipcRenderer.invoke('agent:abort', requestId),
-    resolve: (requestId: string, confirmId: string, allow: boolean, always?: boolean): Promise<boolean> =>
-      ipcRenderer.invoke('agent:resolve', requestId, confirmId, allow, always),
+    resolve: (
+      requestId: string,
+      confirmId: string,
+      allow: boolean,
+      always?: boolean
+    ): Promise<boolean> => ipcRenderer.invoke('agent:resolve', requestId, confirmId, allow, always),
     sessions: (projectId?: string): Promise<AgentSessionBrief[]> =>
       ipcRenderer.invoke('agent:sessions', projectId),
     sessionLoad: (id: string): Promise<AgentSession | null> =>
@@ -228,9 +239,7 @@ const api = {
       ipcRenderer.on('agent:delta', listener)
       return () => ipcRenderer.off('agent:delta', listener)
     },
-    onToolCall: (
-      cb: (requestId: string, call: AgentToolCallEvent) => void
-    ): (() => void) => {
+    onToolCall: (cb: (requestId: string, call: AgentToolCallEvent) => void): (() => void) => {
       const listener = (_e: unknown, requestId: string, call: AgentToolCallEvent): void =>
         cb(requestId, call)
       ipcRenderer.on('agent:toolCall', listener)
@@ -249,7 +258,8 @@ const api = {
       return () => ipcRenderer.off('agent:done', listener)
     },
     onError: (cb: (requestId: string, message: string) => void): (() => void) => {
-      const listener = (_e: unknown, requestId: string, message: string): void => cb(requestId, message)
+      const listener = (_e: unknown, requestId: string, message: string): void =>
+        cb(requestId, message)
       ipcRenderer.on('agent:error', listener)
       return () => ipcRenderer.off('agent:error', listener)
     },
@@ -274,7 +284,8 @@ const api = {
   },
   skills: {
     list: (): Promise<SkillMeta[]> => ipcRenderer.invoke('skills:list'),
-    get: (filename: string): Promise<SkillFile | null> => ipcRenderer.invoke('skills:get', filename),
+    get: (filename: string): Promise<SkillFile | null> =>
+      ipcRenderer.invoke('skills:get', filename),
     save: (filename: string, raw: string): Promise<void> =>
       ipcRenderer.invoke('skills:save', filename, raw),
     delete: (filename: string): Promise<void> => ipcRenderer.invoke('skills:delete', filename)

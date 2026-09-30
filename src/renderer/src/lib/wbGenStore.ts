@@ -1,6 +1,6 @@
-import { useMemo, useSyncExternalStore } from 'react'
-import type { WorldbuildGenParams } from '@shared/types'
 import { splitHeadingHashtags } from '@shared/tags'
+import type { WorldbuildGenParams } from '@shared/types'
+import { useMemo, useSyncExternalStore } from 'react'
 import { runPipeline } from './ipc'
 import { pushToast } from './toastStore'
 
@@ -52,7 +52,7 @@ interface RawSection {
 
 function splitSections(output: string): RawSection[] {
   const sections: RawSection[] = []
-  let current: Omit<RawSection, 'raw'> & { rawHeading: string } | null = null
+  let current: (Omit<RawSection, 'raw'> & { rawHeading: string }) | null = null
   for (const line of output.split(/\r?\n/)) {
     const m = SECTION_HEADING.exec(line)
     if (m && (m[1] || current)) {
@@ -101,7 +101,9 @@ const scanStates = new Map<number, ScanState>()
 const HEADING_LIKE_RE = /^#{1,3}\s/
 
 function emit(): void {
-  listeners.forEach((l) => l())
+  listeners.forEach((l) => {
+    l()
+  })
 }
 
 const DELTA_THROTTLE_MS = 100
@@ -176,7 +178,10 @@ async function commitReadySections(id: number, completeCount: number): Promise<v
   const sections = splitSections(task.output)
   if (completeCount > sections.length) completeCount = sections.length
   if (completeCount <= from) return
-  const rawChunk = sections.slice(from, completeCount).map((s) => s.raw).join('\n\n')
+  const rawChunk = sections
+    .slice(from, completeCount)
+    .map((s) => s.raw)
+    .join('\n\n')
   const prev = commitChains.get(id) ?? Promise.resolve()
   const p = prev.then(() =>
     window.api.novel.worldbuildCommitChunk(task.projectId, rawChunk, task.categories, {
@@ -225,9 +230,7 @@ export function startGen(params: WbGenParams): void {
   const key = params.categories.join(',')
   const dup = tasks.some(
     (t) =>
-      t.projectId === params.projectId &&
-      t.categories.join(',') === key &&
-      t.title === params.title
+      t.projectId === params.projectId && t.categories.join(',') === key && t.title === params.title
   )
   if (dup) return
   const id = nextId++
@@ -350,22 +353,18 @@ export function useWbLiveEntries(projectId: string): WbLiveSection[] {
 
 export function useNewEntryIds(projectId: string): string[] {
   const version = useSyncExternalStore(subscribe, () => newIdsVersion)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   return useMemo(
-    () =>
-      [...newEntryIds.entries()]
-        .filter(([, pid]) => pid === projectId)
-        .map(([id]) => id),
+    () => [...newEntryIds.entries()].filter(([, pid]) => pid === projectId).map(([id]) => id),
     [version, projectId]
   )
 }
 
 export function useRevisedEntryIds(projectId: string): string[] {
   const version = useSyncExternalStore(subscribe, () => revisedIdsVersion)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   return useMemo(
-    () =>
-      [...revisedEntryIds.entries()]
-        .filter(([, pid]) => pid === projectId)
-        .map(([id]) => id),
+    () => [...revisedEntryIds.entries()].filter(([, pid]) => pid === projectId).map(([id]) => id),
     [version, projectId]
   )
 }

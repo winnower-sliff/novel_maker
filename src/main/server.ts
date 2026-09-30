@@ -14,8 +14,8 @@ import type { ExportFormat } from '../shared/types'
 import type { EventSink } from './eventSink'
 import { buildExport } from './export'
 import { sharedHandlers } from './handlers'
-import { loadServerConfig, verifyPassword } from './settings'
 import { setServerStatus } from './serverState'
+import { loadServerConfig, verifyPassword } from './settings'
 
 const MAX_BODY = 64 * 1024 * 1024
 const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
@@ -61,7 +61,9 @@ function addressScore(ip: string): number {
 
 /** 物理网卡（Wi-Fi/以太网）优先，虚拟网卡（VMware/Hyper-V/Tailscale 等）靠后。 */
 function interfaceScore(name: string): number {
-  if (/vmware|virtualbox|vethernet|hyper-v|tailscale|zerotier|loopback|tun\b|tap\b|wsl/i.test(name)) {
+  if (
+    /vmware|virtualbox|vethernet|hyper-v|tailscale|zerotier|loopback|tun\b|tap\b|wsl/i.test(name)
+  ) {
     return 20
   }
   if (/wi-?fi|wlan|wireless|ethernet|以太网|无线/i.test(name)) return 0
@@ -261,9 +263,10 @@ async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<v
     return
   }
   if (!verifyPassword(password, config.passwordSalt, config.passwordHash)) {
-    const next = record && record.resetAt > now
-      ? { count: record.count + 1, resetAt: record.resetAt }
-      : { count: 1, resetAt: now + LOGIN_WINDOW_MS }
+    const next =
+      record && record.resetAt > now
+        ? { count: record.count + 1, resetAt: record.resetAt }
+        : { count: 1, resetAt: now + LOGIN_WINDOW_MS }
     loginAttempts.set(ip, next)
     serveLogin(res, '密码错误', 401)
     return
@@ -426,7 +429,11 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   })
 }
 
-function handleUpgrade(req: IncomingMessage, socket: import('node:net').Socket, head: Buffer): void {
+function handleUpgrade(
+  req: IncomingMessage,
+  socket: import('node:net').Socket,
+  head: Buffer
+): void {
   const devTarget = process.env.ELECTRON_RENDERER_URL
   if (!devTarget) {
     socket.destroy()

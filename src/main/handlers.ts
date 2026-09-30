@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto'
+import { providerPreset } from '../shared/providers'
 import type {
   AgentSession,
   AgentSessionBrief,
@@ -23,6 +24,7 @@ import type {
   Project,
   ProjectGraph,
   ProjectInput,
+  SearchHit,
   ServerStatus,
   SettingsPatch,
   SettingsView,
@@ -44,11 +46,18 @@ import {
 } from './agentSessions'
 import { LONG_CHAPTER_THRESHOLD, runChapterCandidates, runLongChapter } from './chapterRunner'
 import { buildChapterContext } from './context'
+import {
+  deleteEmbeddingsByRef,
+  enqueueEmbedding,
+  getEmbeddingStatus,
+  rebuildEmbeddings,
+  semanticSearch,
+  setEmbeddingEnabled
+} from './embedding'
 import type { EventSink } from './eventSink'
 import { buildProjectGraph } from './graph'
-import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
 import { lintChapterReport, stripHtmlComments } from './lint'
-import { providerPreset } from '../shared/providers'
+import { chatStream, LlmError, pickRatelimitHeaders, probeModels } from './llm'
 import {
   applyOutlineResult,
   applyStateSyncResult,
@@ -80,20 +89,10 @@ import {
   saveWorldbuildBatch,
   type WorldbuildRetrieval
 } from './pipeline'
-import {
-  deleteEmbeddings,
-  deleteEmbeddingsByRef,
-  enqueueEmbedding,
-  getEmbeddingStatus,
-  rebuildEmbeddings,
-  semanticSearch,
-  setEmbeddingEnabled
-} from './embedding'
-import type { SearchHit } from '../shared/types'
-import { getApiKeyFor, loadSettingsView, resolveRequestAuth, saveSettings } from './settings'
 import { getServerStatus } from './serverState'
-import * as store from './store'
+import { getApiKeyFor, loadSettingsView, resolveRequestAuth, saveSettings } from './settings'
 import { deleteSkill, getSkill, listSkills, saveSkill } from './skills'
+import * as store from './store'
 import { appendUsage, computeStats, listUsage } from './usage'
 
 /**
@@ -215,7 +214,12 @@ function startStream(
           if (pending.length >= 200 || pending.includes('\n')) flush()
         }
 
-        result = await chatStream(params, { apiKey: auth.apiKey, baseUrl: auth.baseUrl }, onDelta, controller.signal)
+        result = await chatStream(
+          params,
+          { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+          onDelta,
+          controller.signal
+        )
         flush()
         totalMs += result.durationMs
         appendUsage({
@@ -416,13 +420,20 @@ function startChapterCandidatesStream(
   return requestId
 }
 
-async function runWorldbuildRetrieval(p: WorldbuildGenParams): Promise<WorldbuildRetrieval | undefined> {  const req = buildWorldbuildRetrieveRequest(p)
+async function runWorldbuildRetrieval(
+  p: WorldbuildGenParams
+): Promise<WorldbuildRetrieval | undefined> {
+  const req = buildWorldbuildRetrieveRequest(p)
   if (!req) return undefined
   try {
     const auth = await resolveRequestAuth(req.purpose)
     if (!auth.apiKey && auth.needsKey) return undefined
     const params: ChatParams = { ...req, model: req.model || auth.model }
-    const result = await chatStream(params, { apiKey: auth.apiKey, baseUrl: auth.baseUrl }, () => {})
+    const result = await chatStream(
+      params,
+      { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+      () => {}
+    )
     appendUsage({
       ts: Date.now(),
       model: result.model,
@@ -478,8 +489,7 @@ export const sharedHandlers: Record<string, Handler> = {
     allow: boolean,
     always?: boolean
   ): boolean => resolveAgentConfirm(requestId, confirmId, allow, !!always),
-  'agent:sessions': (_ctx, projectId?: string): AgentSessionBrief[] =>
-    listAgentSessions(projectId),
+  'agent:sessions': (_ctx, projectId?: string): AgentSessionBrief[] => listAgentSessions(projectId),
   'agent:sessionLoad': (_ctx, id: string): AgentSession | null => loadAgentSession(id),
   'agent:sessionSave': (_ctx, session: AgentSession): void => saveAgentSession(session),
   'agent:sessionDelete': (_ctx, id: string): void => deleteAgentSession(id),
@@ -636,42 +646,46 @@ export const sharedHandlers: Record<string, Handler> = {
     }
     if (action === 'character') {
       const p = params as CharacterGenParams
-      return startStream(ctx.sink, buildCharacterRequest(p.projectId, p.brief, p.allowUpdate === true), {
-        action,
-        afterDone: (r) => {
-          const parsed = parseCharacterCards(r.text)
-          let characterId: string | undefined
-          let name = ''
-          if (parsed.main) {
-            name = guessCharacterName(parsed.main, p.name ?? '')
-            const character = store.saveCharacter({
-              projectId: p.projectId,
-              name,
-              tags: parsed.mainTags.join(','),
-              card: parsed.main
-            })
-            characterId = character.id
-          }
-          const revised: Array<{ id: string; name: string }> = []
-          if (parsed.revisions.length > 0) {
-            const existing = store.listCharacters(p.projectId)
-            for (const rev of parsed.revisions) {
-              const hit = existing.find((c) => c.name.trim() === rev.name)
-              if (!hit || !rev.card.trim()) continue
-              store.saveCharacter({
-                id: hit.id,
+      return startStream(
+        ctx.sink,
+        buildCharacterRequest(p.projectId, p.brief, p.allowUpdate === true),
+        {
+          action,
+          afterDone: (r) => {
+            const parsed = parseCharacterCards(r.text)
+            let characterId: string | undefined
+            let name = ''
+            if (parsed.main) {
+              name = guessCharacterName(parsed.main, p.name ?? '')
+              const character = store.saveCharacter({
                 projectId: p.projectId,
-                name: hit.name,
-                role: hit.role,
-                tags: rev.tags.length > 0 ? rev.tags.join(',') : hit.tags,
-                card: rev.card
+                name,
+                tags: parsed.mainTags.join(','),
+                card: parsed.main
               })
-              revised.push({ id: hit.id, name: hit.name })
+              characterId = character.id
             }
+            const revised: Array<{ id: string; name: string }> = []
+            if (parsed.revisions.length > 0) {
+              const existing = store.listCharacters(p.projectId)
+              for (const rev of parsed.revisions) {
+                const hit = existing.find((c) => c.name.trim() === rev.name)
+                if (!hit || !rev.card.trim()) continue
+                store.saveCharacter({
+                  id: hit.id,
+                  projectId: p.projectId,
+                  name: hit.name,
+                  role: hit.role,
+                  tags: rev.tags.length > 0 ? rev.tags.join(',') : hit.tags,
+                  card: rev.card
+                })
+                revised.push({ id: hit.id, name: hit.name })
+              }
+            }
+            return { characterId, name, revised }
           }
-          return { characterId, name, revised }
         }
-      })
+      )
     }
     if (action === 'worldbuild') {
       const p = params as WorldbuildGenParams
@@ -693,7 +707,12 @@ export const sharedHandlers: Record<string, Handler> = {
   'novel:characters': (_ctx, projectId: string): Character[] => store.listCharacters(projectId),
   'novel:characterSave': (_ctx, input: CharacterInput & { id?: string }): Character => {
     const saved = store.saveCharacter(input)
-    enqueueEmbedding(saved.projectId, 'character', saved.id, `${saved.name} ${saved.role} ${saved.tags} ${saved.card}`)
+    enqueueEmbedding(
+      saved.projectId,
+      'character',
+      saved.id,
+      `${saved.name} ${saved.role} ${saved.tags} ${saved.card}`
+    )
     return saved
   },
   'novel:characterDelete': (_ctx, id: string): void => {
@@ -704,7 +723,12 @@ export const sharedHandlers: Record<string, Handler> = {
     store.listWorldbuild(projectId),
   'novel:worldbuildSave': (_ctx, input: WorldbuildInput & { id?: string }): WorldbuildEntry => {
     const saved = store.saveWorldbuild(input)
-    enqueueEmbedding(saved.projectId, 'worldbuild', saved.id, `${saved.title} ${saved.keys} ${saved.tags} ${saved.content}`)
+    enqueueEmbedding(
+      saved.projectId,
+      'worldbuild',
+      saved.id,
+      `${saved.title} ${saved.keys} ${saved.tags} ${saved.content}`
+    )
     return saved
   },
   'novel:worldbuildDelete': (_ctx, id: string): void => {
@@ -776,8 +800,7 @@ export const sharedHandlers: Record<string, Handler> = {
     if (!outline) throw new Error('章节不存在')
     return buildChapterContext(outline.projectId, outlineId)
   },
-  'novel:foreshadows': (_ctx, projectId: string): Foreshadow[] =>
-    store.listForeshadows(projectId),
+  'novel:foreshadows': (_ctx, projectId: string): Foreshadow[] => store.listForeshadows(projectId),
   'novel:foreshadowSave': (_ctx, input: ForeshadowInput & { id?: string }): Foreshadow =>
     store.saveForeshadow(input),
   'novel:foreshadowDelete': (_ctx, id: string): void => store.deleteForeshadow(id),
@@ -797,7 +820,12 @@ export const sharedHandlers: Record<string, Handler> = {
     count: await rebuildEmbeddings(projectId)
   }),
 
-  'search:project': async (_ctx, projectId: string, query: string, limit?: number): Promise<SearchHit[]> => {
+  'search:project': async (
+    _ctx,
+    projectId: string,
+    query: string,
+    limit?: number
+  ): Promise<SearchHit[]> => {
     const k = Math.min(20, Math.max(1, limit ?? 8))
     const hits = await semanticSearch(projectId, query, ['worldbuild', 'character', 'summary'], k)
     const wb = new Map(store.listWorldbuild(projectId).map((e) => [e.id, e]))
@@ -807,15 +835,36 @@ export const sharedHandlers: Record<string, Handler> = {
     for (const h of hits) {
       if (h.kind === 'worldbuild') {
         const e = wb.get(h.refId)
-        if (e) out.push({ kind: 'worldbuild', id: e.id, title: `[${e.category}] ${e.title}`, snippet: e.content.slice(0, 160), score: h.score })
+        if (e)
+          out.push({
+            kind: 'worldbuild',
+            id: e.id,
+            title: `[${e.category}] ${e.title}`,
+            snippet: e.content.slice(0, 160),
+            score: h.score
+          })
       } else if (h.kind === 'character') {
         const c = ch.get(h.refId)
-        if (c) out.push({ kind: 'character', id: c.id, title: `${c.name}（${c.role || '未定位'}）`, snippet: c.card.slice(0, 160), score: h.score })
+        if (c)
+          out.push({
+            kind: 'character',
+            id: c.id,
+            title: `${c.name}（${c.role || '未定位'}）`,
+            snippet: c.card.slice(0, 160),
+            score: h.score
+          })
       } else if (h.kind === 'summary') {
         const o = ol.get(h.refId)
         const chapter = o ? store.getChapterByOutline(o.id) : null
         const s = chapter ? store.getSummary(chapter.id) : null
-        if (o && s) out.push({ kind: 'chapter', id: o.id, title: `第${o.chapterNo}章 ${o.title}`, snippet: s.summary.slice(0, 160), score: h.score })
+        if (o && s)
+          out.push({
+            kind: 'chapter',
+            id: o.id,
+            title: `第${o.chapterNo}章 ${o.title}`,
+            snippet: s.summary.slice(0, 160),
+            score: h.score
+          })
       }
     }
     return out

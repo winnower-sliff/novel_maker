@@ -1,5 +1,5 @@
+import { type ProviderId, providerPreset } from '../shared/providers'
 import type { ChatParams, ChatResult, ModelProbeResult, UsageInfo } from '../shared/types'
-import { providerPreset, type ProviderId } from '../shared/providers'
 
 const ANTHROPIC_VERSION = '2023-06-01'
 
@@ -190,9 +190,7 @@ async function listOllamaTags(baseUrl: string): Promise<string[] | null> {
     const res = await fetch(`${baseUrl}/api/tags`)
     if (!res.ok) return null
     const j = (await res.json()) as { models?: Array<{ model?: string; name?: string }> }
-    const ids = (j.models ?? [])
-      .map((m) => m.model ?? m.name)
-      .filter((id): id is string => !!id)
+    const ids = (j.models ?? []).map((m) => m.model ?? m.name).filter((id): id is string => !!id)
     return ids.length > 0 ? ids : null
   } catch {
     return null

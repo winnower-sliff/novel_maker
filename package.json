@@ -10,6 +10,8 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json",
+    "lint": "biome check src",
+    "lint:fix": "biome check --write src",
     "dist": "electron-vite build && electron-builder --win"
   },
   "build": {
@@ -55,6 +57,7 @@
     "remark-gfm": "^4.0.1"
   },
   "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
     "@tailwindcss/vite": "^4.3.3",
     "@types/diff": "^7.0.2",
     "@types/node": "^24.13.4",

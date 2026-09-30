@@ -13,7 +13,9 @@ let nextId = 1
 const listeners = new Set<() => void>()
 
 function emit(): void {
-  listeners.forEach((l) => l())
+  listeners.forEach((l) => {
+    l()
+  })
 }
 
 export function pushToast(tone: ToastTone, text: string): void {

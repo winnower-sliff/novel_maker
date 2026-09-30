@@ -3,7 +3,14 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
 import { getDb } from './db'
-import { getChapterByOutline, getSummary, listCharacters, listOutlines, listProjects, listWorldbuild } from './store'
+import {
+  getChapterByOutline,
+  getSummary,
+  listCharacters,
+  listOutlines,
+  listProjects,
+  listWorldbuild
+} from './store'
 
 /**
  * 本地语义检索：transformers.js + bge-small-zh-v1.5（ONNX int8，约 25MB，首用时下载）。
@@ -32,7 +39,14 @@ type FeatureExtractionPipeline = (
   opts: { pooling: 'mean'; normalize: boolean }
 ) => Promise<Array<{ data: number[] }>>
 
-const state: ModuleState = { pipe: null, loading: null, loadError: '', downloading: false, progress: 0, queue: Promise.resolve() }
+const state: ModuleState = {
+  pipe: null,
+  loading: null,
+  loadError: '',
+  downloading: false,
+  progress: 0,
+  queue: Promise.resolve()
+}
 
 function configPath(): string {
   return join(app.getPath('userData'), 'embedding.json')
@@ -157,7 +171,13 @@ async function embedTexts(texts: string[]): Promise<number[][]> {
   return out
 }
 
-function upsertRow(projectId: string, kind: string, refId: string, text: string, vec: number[]): void {
+function upsertRow(
+  projectId: string,
+  kind: string,
+  refId: string,
+  text: string,
+  vec: number[]
+): void {
   const db = getDb()
   const blob = Buffer.from(new Float32Array(vec).buffer)
   db.prepare(
@@ -168,7 +188,12 @@ function upsertRow(projectId: string, kind: string, refId: string, text: string,
 }
 
 /** 异步嵌入（不阻塞调用方）；失败静默降级。通过内部队列串行避免并发加载模型。 */
-export function enqueueEmbedding(projectId: string, kind: string, refId: string, text: string): void {
+export function enqueueEmbedding(
+  projectId: string,
+  kind: string,
+  refId: string,
+  text: string
+): void {
   if (!isEmbeddingEnabled() || !text.trim()) return
   const db = getDb()
   const existing = db
@@ -257,7 +282,12 @@ export async function rebuildEmbeddings(projectId?: string): Promise<number> {
       const chapter = getChapterByOutline(o.id)
       const s = chapter ? getSummary(chapter.id) : null
       if (s) {
-        enqueueEmbedding(pid, 'summary', o.id, `第${o.chapterNo}章 ${o.title}：${s.summary} ${s.events.join('；')}`)
+        enqueueEmbedding(
+          pid,
+          'summary',
+          o.id,
+          `第${o.chapterNo}章 ${o.title}：${s.summary} ${s.events.join('；')}`
+        )
         n++
       }
     }

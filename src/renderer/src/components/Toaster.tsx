@@ -16,6 +16,7 @@ export function Toaster() {
         >
           <span className="flex-1 leading-5">{t.text}</span>
           <button
+            type="button"
             onClick={() => dismissToast(t.id)}
             className="cursor-pointer shrink-0 text-zinc-500 transition-colors hover:text-zinc-200"
           >

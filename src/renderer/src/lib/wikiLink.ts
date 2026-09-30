@@ -3,7 +3,7 @@ export interface WikiSegment {
   value: string
 }
 
-const WIKI_LINK_RE = /\[\[([^\[\]]+?)\]\]/g
+const WIKI_LINK_RE = /\[\[([^[\]]+?)\]\]/g
 
 export function parseWikiLinks(text: string): WikiSegment[] {
   const segments: WikiSegment[] = []

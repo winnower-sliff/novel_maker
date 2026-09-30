@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from 'react'
 import type { ModelProbeResult, SettingsView } from '@shared/types'
+import { useEffect, useRef, useState } from 'react'
 import { Markdown } from '../components/Markdown'
 import { Badge, Button, Card, Label, Select, Textarea } from '../components/ui'
 import { fmtDuration, fmtTokens } from '../lib/format'
@@ -22,12 +22,16 @@ export default function Playground() {
     void (async () => {
       const s = await window.api.settings.get()
       setSettings(s)
-      setModel((() => {
-        const r = s.modelRouting.playground
-        if (typeof r === 'string') return r || s.defaultModel
-        if (!r) return s.defaultModel
-        return r.provider && r.provider !== s.provider ? s.defaultModel : r.model || s.defaultModel
-      })())
+      setModel(
+        (() => {
+          const r = s.modelRouting.playground
+          if (typeof r === 'string') return r || s.defaultModel
+          if (!r) return s.defaultModel
+          return r.provider && r.provider !== s.provider
+            ? s.defaultModel
+            : r.model || s.defaultModel
+        })()
+      )
       try {
         const p = await window.api.models.probe()
         setProbe(p)
@@ -57,18 +61,24 @@ export default function Playground() {
     }
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
     outputEndRef.current?.scrollIntoView({ block: 'nearest' })
   }, [output])
 
   const modelOptions = (() => {
     const ids = new Set<string>()
-    if (probe) probe.models.forEach((m) => ids.add(m))
+    if (probe)
+      probe.models.forEach((m) => {
+        ids.add(m)
+      })
     settings?.customModels
       .split(/[,，\s]+/)
       .map((s) => s.trim())
       .filter(Boolean)
-      .forEach((m) => ids.add(m))
+      .forEach((m) => {
+        ids.add(m)
+      })
     if (model) ids.add(model)
     return [...ids]
   })()
@@ -156,26 +166,39 @@ export default function Playground() {
             ) : result ? (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-zinc-400">
                 <span>
-                  输入 <span className="font-mono text-zinc-200">{fmtTokens(result.usage.inputTokens)}</span>
+                  输入{' '}
+                  <span className="font-mono text-zinc-200">
+                    {fmtTokens(result.usage.inputTokens)}
+                  </span>
                 </span>
                 <span>
-                  输出 <span className="font-mono text-zinc-200">{fmtTokens(result.usage.outputTokens)}</span>
+                  输出{' '}
+                  <span className="font-mono text-zinc-200">
+                    {fmtTokens(result.usage.outputTokens)}
+                  </span>
                 </span>
                 {result.usage.cacheReadTokens > 0 && (
                   <span>
-                    缓存读 <span className="font-mono text-emerald-400">{fmtTokens(result.usage.cacheReadTokens)}</span>
+                    缓存读{' '}
+                    <span className="font-mono text-emerald-400">
+                      {fmtTokens(result.usage.cacheReadTokens)}
+                    </span>
                   </span>
                 )}
                 {result.usage.cacheCreationTokens > 0 && (
                   <span>
-                    缓存写 <span className="font-mono text-amber-400">{fmtTokens(result.usage.cacheCreationTokens)}</span>
+                    缓存写{' '}
+                    <span className="font-mono text-amber-400">
+                      {fmtTokens(result.usage.cacheCreationTokens)}
+                    </span>
                   </span>
                 )}
                 <span>
                   实际模型 <span className="font-mono text-zinc-200">{result.model}</span>
                 </span>
                 <span>
-                  耗时 <span className="font-mono text-zinc-200">{fmtDuration(result.durationMs)}</span>
+                  耗时{' '}
+                  <span className="font-mono text-zinc-200">{fmtDuration(result.durationMs)}</span>
                 </span>
                 <span>停止原因 {result.stopReason ?? '-'}</span>
                 <details className="w-full">

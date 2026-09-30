@@ -1,5 +1,5 @@
-import { useEffect, type ReactNode } from 'react'
 import { splitTags } from '@shared/tags'
+import { type ReactNode, useEffect } from 'react'
 import { Markdown, type WikiLinkHandlers } from './Markdown'
 
 interface PreviewPanelProps {
@@ -12,7 +12,15 @@ interface PreviewPanelProps {
   footer?: ReactNode
 }
 
-export function PreviewPanel({ title, badge, tags, text, wiki, onClose, footer }: PreviewPanelProps) {
+export function PreviewPanel({
+  title,
+  badge,
+  tags,
+  text,
+  wiki,
+  onClose,
+  footer
+}: PreviewPanelProps) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') onClose()
@@ -38,6 +46,7 @@ export function PreviewPanel({ title, badge, tags, text, wiki, onClose, footer }
           <div className="min-w-0 truncate text-sm font-semibold text-zinc-100">{title}</div>
         </div>
         <button
+          type="button"
           onClick={onClose}
           className="shrink-0 cursor-pointer px-1 text-zinc-500 transition-colors hover:text-zinc-200"
         >
@@ -62,7 +71,9 @@ export function PreviewPanel({ title, badge, tags, text, wiki, onClose, footer }
         </div>
       </div>
       {footer && (
-        <div className="flex items-center justify-end gap-2 border-t border-zinc-800 px-4 py-2.5">{footer}</div>
+        <div className="flex items-center justify-end gap-2 border-t border-zinc-800 px-4 py-2.5">
+          {footer}
+        </div>
       )}
     </div>
   )

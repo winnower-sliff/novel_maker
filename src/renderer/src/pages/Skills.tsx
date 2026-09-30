@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import type { SkillFile, SkillMeta } from '@shared/types'
+import { useEffect, useState } from 'react'
 import { Badge, Button, Card, Textarea } from '../components/ui'
 
 export default function Skills() {
@@ -29,6 +29,7 @@ export default function Skills() {
     })
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅挂载执行一次；load 引用不稳定，故意不进 deps
   useEffect(() => {
     load()
   }, [])
@@ -68,6 +69,7 @@ export default function Skills() {
         <div className="flex-1 overflow-y-auto p-2">
           {list.map((s) => (
             <button
+              type="button"
               key={s.filename}
               onClick={() => openSkill(s.filename)}
               className={`mb-1 w-full cursor-pointer rounded-md px-3 py-2 text-left transition-colors ${
@@ -75,7 +77,9 @@ export default function Skills() {
               }`}
             >
               <div className="truncate font-mono text-xs text-amber-400/90">{s.name}</div>
-              <div className="mt-0.5 line-clamp-2 text-xs leading-4 text-zinc-500">{s.description}</div>
+              <div className="mt-0.5 line-clamp-2 text-xs leading-4 text-zinc-500">
+                {s.description}
+              </div>
             </button>
           ))}
         </div>

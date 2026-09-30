@@ -1,16 +1,12 @@
-import { useEffect, useState } from 'react'
+import { PROVIDER_IDS, type ProviderId, providerPreset } from '@shared/providers'
 import {
-  PURPOSES,
   type EmbeddingStatus,
   type ModelProbeResult,
   type ProviderProfile,
+  PURPOSES,
   type SettingsView
 } from '@shared/types'
-import {
-  PROVIDER_IDS,
-  providerPreset,
-  type ProviderId
-} from '@shared/providers'
+import { useEffect, useState } from 'react'
 import { ServerPanel } from '../components/ServerPanel'
 import { Badge, Button, Card, Input, Label, Select } from '../components/ui'
 import { purposeLabel } from '../lib/format'
@@ -71,12 +67,17 @@ export default function Settings() {
 
   const modelOptions = (() => {
     const ids = new Set<string>(preset.builtinModels)
-    if (probeResult) probeResult.models.forEach((m) => ids.add(m))
+    if (probeResult)
+      probeResult.models.forEach((m) => {
+        ids.add(m)
+      })
     active.customModels
       .split(/[,，\s]+/)
       .map((s) => s.trim())
       .filter(Boolean)
-      .forEach((m) => ids.add(m))
+      .forEach((m) => {
+        ids.add(m)
+      })
     if (active.defaultModel) ids.add(active.defaultModel)
     return [...ids]
   })()
@@ -160,7 +161,9 @@ export default function Settings() {
               API Key{' '}
               {keyConfigured && (
                 <span className="text-zinc-500">
-                  （已配置{view?.provider === provider && view.apiKeyMasked ? `：${view.apiKeyMasked}` : ''}）
+                  （已配置
+                  {view?.provider === provider && view.apiKeyMasked ? `：${view.apiKeyMasked}` : ''}
+                  ）
                 </span>
               )}
             </Label>
@@ -223,7 +226,9 @@ export default function Settings() {
         </Card>
 
         <Card className="space-y-3 p-5">
-          <div className="text-sm font-medium text-zinc-200">模型路由（各环节使用的模型与通道）</div>
+          <div className="text-sm font-medium text-zinc-200">
+            模型路由（各环节使用的模型与通道）
+          </div>
           <datalist id="model-options">
             {modelOptions.map((m) => (
               <option key={m} value={m} />
@@ -232,8 +237,8 @@ export default function Settings() {
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
             {PURPOSES.map((p) => {
               const route = active.modelRouting[p]
-              const routeModel = typeof route === 'string' ? route : route?.model ?? ''
-              const routeProvider = typeof route === 'string' ? '' : route?.provider ?? ''
+              const routeModel = typeof route === 'string' ? route : (route?.model ?? '')
+              const routeProvider = typeof route === 'string' ? '' : (route?.provider ?? '')
               return (
                 <div key={p} className="grid grid-cols-12 items-end gap-2">
                   <div className="col-span-4">
@@ -266,11 +271,15 @@ export default function Settings() {
                     <Input
                       list="model-options"
                       value={routeModel}
-                      placeholder={p === 'playground' ? active.defaultModel || '默认模型' : '留空用默认模型'}
+                      placeholder={
+                        p === 'playground' ? active.defaultModel || '默认模型' : '留空用默认模型'
+                      }
                       onChange={(e) => {
                         const model = e.target.value
                         const value =
-                          routeProvider === '' ? model || undefined : { provider: routeProvider, model }
+                          routeProvider === ''
+                            ? model || undefined
+                            : { provider: routeProvider, model }
                         patchDraft({
                           modelRouting: { ...active.modelRouting, [p]: value }
                         })
@@ -285,7 +294,8 @@ export default function Settings() {
             {provider === 'glm'
               ? '建议：摘要/检查/评审用 glm-4.5-air 省 token，大纲/正文用 glm-5.3 保证质量。'
               : '路由按 Provider 分别保存，切换 Provider 后各自独立。'}
-            配置了 Ollama 时，可把摘要/检查/评审/状态同步等记账类任务指到 Ollama 通道本地跑，省云端 token。
+            配置了 Ollama 时，可把摘要/检查/评审/状态同步等记账类任务指到 Ollama 通道本地跑，省云端
+            token。
           </div>
         </Card>
 
@@ -341,7 +351,9 @@ export default function Settings() {
           {probeResult && (
             <div className="space-y-2">
               <Badge tone={probeResult.source === 'endpoint' ? 'green' : 'amber'}>
-                {probeResult.source === 'endpoint' ? '端点返回模型列表' : '端点不支持，使用内置列表'}
+                {probeResult.source === 'endpoint'
+                  ? '端点返回模型列表'
+                  : '端点不支持，使用内置列表'}
               </Badge>
               <div className="flex flex-wrap gap-1.5">
                 {probeResult.models.map((m) => (
@@ -373,10 +385,12 @@ function EmbeddingPanel(): React.ReactElement {
     void window.api.embedding.status().then(setStatus)
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅挂载执行一次；load 引用不稳定，故意不进 deps
   useEffect(() => {
     load()
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅挂载执行一次；load 引用不稳定，故意不进 deps
   useEffect(() => {
     if (!status?.downloading) return
     const t = setInterval(load, 1500)
@@ -425,7 +439,9 @@ function EmbeddingPanel(): React.ReactElement {
         hf-mirror，可用环境变量 HF_ENDPOINT 覆盖）。
       </div>
       <div className="flex flex-wrap items-center gap-3 text-xs">
-        <Badge tone={status.enabled && !status.reason ? 'green' : status.enabled ? 'red' : 'default'}>
+        <Badge
+          tone={status.enabled && !status.reason ? 'green' : status.enabled ? 'red' : 'default'}
+        >
           {status.enabled ? (status.reason ? '模型不可用（已降级）' : '就绪') : '已关闭'}
         </Badge>
         <span className="text-zinc-500">已索引 {status.count} 条</span>

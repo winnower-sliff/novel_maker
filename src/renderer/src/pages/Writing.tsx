@@ -1,9 +1,9 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
 import type { ChapterBrief, ContextPart, ReviewResult } from '@shared/types'
-import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { DiffView } from '../components/DiffView'
+import { Badge, Button, Card, Label, Select, Textarea } from '../components/ui'
 import { fmtDuration, fmtTokens } from '../lib/format'
-import { runPipeline, type DonePayload } from '../lib/ipc'
+import { type DonePayload, runPipeline } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
 import { openWizard } from '../lib/wizardStore'
 
@@ -87,10 +87,14 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const [notice, setNotice] = useState('')
   const [lastUsage, setLastUsage] = useState<DonePayload | null>(null)
   const [ctxPreview, setCtxPreview] = useState<ContextPart[] | null>(null)
-  const [checkResult, setCheckResult] = useState<{ issues: CheckIssue[]; parsed: boolean } | null>(null)
+  const [checkResult, setCheckResult] = useState<{ issues: CheckIssue[]; parsed: boolean } | null>(
+    null
+  )
   const [lintReport, setLintReport] = useState<LintReport | null>(null)
   const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null)
-  const [candidate, setCandidate] = useState<{ kind: 'polish' | 'expand'; text: string } | null>(null)
+  const [candidate, setCandidate] = useState<{ kind: 'polish' | 'expand'; text: string } | null>(
+    null
+  )
   const [wordTarget, setWordTarget] = useState('2700')
   const [candidateCount, setCandidateCount] = useState('0')
   const [candidateSet, setCandidateSet] = useState<{
@@ -171,11 +175,17 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         polishedRef.current = false
         const lint = (payload.data as { lint?: LintReport }).lint ?? null
         setLintReport(lint)
-        const cand = (payload.data as {
+        const cand = payload.data as {
           candidateMode?: boolean
           winnerIndex?: number
-          candidates?: Array<{ text: string; score: number; wordCount: number; issues: number; pass: boolean }>
-        })
+          candidates?: Array<{
+            text: string
+            score: number
+            wordCount: number
+            issues: number
+            pass: boolean
+          }>
+        }
         if (cand.candidateMode && cand.candidates && cand.candidates.length > 0) {
           const wi = cand.winnerIndex ?? 0
           setCandidateSet({ list: cand.candidates, winnerIndex: wi, selectedIndex: wi })
@@ -497,12 +507,14 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         batchAbortRef.current = await window.api.pipeline.run('chapter', {
           outlineId: ids[i],
           wordTarget: parseInt(wordTarget, 10) || undefined,
-          candidates:
-            parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined
+          candidates: parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined
         })
         const gen = await new Promise<DonePayload>((resolve, reject) => {
           const offs: Array<() => void> = []
-          const cleanup = (): void => offs.forEach((o) => o())
+          const cleanup = (): void =>
+            offs.forEach((o) => {
+              o()
+            })
           offs.push(
             window.api.llm.onDone((rid, p) => {
               if (rid === batchAbortRef.current) {
@@ -520,18 +532,26 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         })
         const d = gen.data as ChapterDoneData
         setBatch((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev))
-        appendLog(`第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字${d?.longMode ? `（长章 ${d.segments} 段）` : ''}`)
+        appendLog(
+          `第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字${d?.longMode ? `（长章 ${d.segments} 段）` : ''}`
+        )
 
         // 硬闸判定 + 自动返修（一次）
         let passed = d?.lint?.pass !== false
         if (!passed && d?.lint) {
-          const focus = d.lint.issues.map((it) => `- ${it.rule}：${it.advice}${it.quote ? `（原文：${it.quote}）` : ''}`).join('\n')
+          const focus = d.lint.issues
+            .map((it) => `- ${it.rule}：${it.advice}${it.quote ? `（原文：${it.quote}）` : ''}`)
+            .join('\n')
           appendLog(`第${brief.chapterNo}章 硬闸未过（${d.lint.issues.length} 项），自动返修…`)
           try {
             await runPipeline('polish', { outlineId: ids[i], focus, save: true })
             const re = (await window.api.lint.run(ids[i])) as LintReport
             passed = re.pass
-            appendLog(passed ? `第${brief.chapterNo}章 返修通过` : `第${brief.chapterNo}章 返修仍未过 → 需人工`)
+            appendLog(
+              passed
+                ? `第${brief.chapterNo}章 返修通过`
+                : `第${brief.chapterNo}章 返修仍未过 → 需人工`
+            )
           } catch (err) {
             appendLog(`第${brief.chapterNo}章 返修失败：${(err as Error).message}`)
           }
@@ -550,7 +570,9 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         const window10 = results.slice(-10)
         const failIn10 = window10.filter((r) => !r).length
         if (consecutiveFail >= 3 || (window10.length >= 10 && failIn10 >= 6)) {
-          appendLog(`⚠ 熔断：连续 ${consecutiveFail} 章未过（近期 ${failIn10}/${window10.length}）——暂停批量，建议先排查根因`)
+          appendLog(
+            `⚠ 熔断：连续 ${consecutiveFail} 章未过（近期 ${failIn10}/${window10.length}）——暂停批量，建议先排查根因`
+          )
           resumeRef.current = ids.slice(i + 1)
           setBatch((prev) => (prev ? { ...prev, paused: true } : prev))
           return
@@ -564,7 +586,11 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
       } catch (err) {
         setBatch((prev) =>
           prev
-            ? { ...prev, running: false, log: [...prev.log, `第${brief.chapterNo}章 失败：${(err as Error).message}`] }
+            ? {
+                ...prev,
+                running: false,
+                log: [...prev.log, `第${brief.chapterNo}章 失败：${(err as Error).message}`]
+              }
             : prev
         )
         return
@@ -611,10 +637,18 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
             <div className="space-y-1.5 p-4 text-center text-xs leading-5 text-zinc-600">
               <div>暂无大纲，先去生成章节列表</div>
               <div className="flex flex-col items-center gap-1.5">
-                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => openWizard(projectId, 3)}>
+                <Button
+                  variant="ghost"
+                  className="px-2 py-1 text-xs"
+                  onClick={() => openWizard(projectId, 3)}
+                >
                   用创作向导
                 </Button>
-                <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => onNavigate('outline')}>
+                <Button
+                  variant="ghost"
+                  className="px-2 py-1 text-xs"
+                  onClick={() => onNavigate('outline')}
+                >
                   去大纲页生成
                 </Button>
               </div>
@@ -629,6 +663,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 .filter((b) => b.volume === vol)
                 .map((b) => (
                   <button
+                    type="button"
                     key={b.id}
                     onClick={() => openChapter(b.id)}
                     className={`mb-0.5 flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
@@ -715,32 +750,60 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 <Button variant="ghost" onClick={expand} disabled={busyAny || !selected.hasDraft}>
                   {busy === 'expand' ? '扩写中…' : '扩写'}
                 </Button>
-                <Button variant="ghost" onClick={() => void check()} disabled={busyAny || !selected.hasDraft}>
+                <Button
+                  variant="ghost"
+                  onClick={() => void check()}
+                  disabled={busyAny || !selected.hasDraft}
+                >
                   {busy === 'check' ? '检查中…' : '检查'}
                 </Button>
-                <Button variant="ghost" onClick={() => void runLint()} disabled={busyAny || !content.trim()}>
+                <Button
+                  variant="ghost"
+                  onClick={() => void runLint()}
+                  disabled={busyAny || !content.trim()}
+                >
                   硬闸
                 </Button>
-                <Button variant="ghost" onClick={() => void review()} disabled={busyAny || !selected.hasDraft}>
+                <Button
+                  variant="ghost"
+                  onClick={() => void review()}
+                  disabled={busyAny || !selected.hasDraft}
+                >
                   {busy === 'review' ? '评审中…' : '评审'}
                 </Button>
-                <Button
-                  onClick={finalize}
-                  disabled={busyAny || content.trim().length === 0}
-                >
+                <Button onClick={finalize} disabled={busyAny || content.trim().length === 0}>
                   {busy === 'summary' ? '定稿中…' : '定稿'}
                 </Button>
                 <span className="mx-1 w-px bg-zinc-700" />
-                <Button variant="ghost" className="px-2" onClick={() => exportChapter('txt')} disabled={busyAny}>
+                <Button
+                  variant="ghost"
+                  className="px-2"
+                  onClick={() => exportChapter('txt')}
+                  disabled={busyAny}
+                >
                   txt
                 </Button>
-                <Button variant="ghost" className="px-2" onClick={() => exportChapter('md')} disabled={busyAny}>
+                <Button
+                  variant="ghost"
+                  className="px-2"
+                  onClick={() => exportChapter('md')}
+                  disabled={busyAny}
+                >
                   md
                 </Button>
-                <Button variant="ghost" className="px-2" onClick={() => exportChapter('docx')} disabled={busyAny}>
+                <Button
+                  variant="ghost"
+                  className="px-2"
+                  onClick={() => exportChapter('docx')}
+                  disabled={busyAny}
+                >
                   docx
                 </Button>
-                <Button variant="ghost" onClick={() => setBatchOpen((v) => !v)} disabled={batch?.running ?? false}>
+                <Button
+                  variant="ghost"
+                  onClick={() => setBatchOpen((v) => !v)}
+                  disabled={batch?.running ?? false}
+                >
                   批量
                 </Button>
               </div>
@@ -751,7 +814,11 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 <div className="grid grid-cols-2 items-end gap-3 md:grid-cols-12">
                   <div className="col-span-1 md:col-span-4">
                     <Label>起章</Label>
-                    <Select value={batchFrom} onChange={(e) => setBatchFrom(e.target.value)} className="w-full">
+                    <Select
+                      value={batchFrom}
+                      onChange={(e) => setBatchFrom(e.target.value)}
+                      className="w-full"
+                    >
                       <option value="">选择…</option>
                       {briefs.map((b) => (
                         <option key={b.id} value={b.id}>
@@ -762,7 +829,11 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   </div>
                   <div className="col-span-1 md:col-span-4">
                     <Label>止章</Label>
-                    <Select value={batchTo} onChange={(e) => setBatchTo(e.target.value)} className="w-full">
+                    <Select
+                      value={batchTo}
+                      onChange={(e) => setBatchTo(e.target.value)}
+                      className="w-full"
+                    >
                       <option value="">选择…</option>
                       {briefs.map((b) => (
                         <option key={b.id} value={b.id}>
@@ -794,7 +865,8 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   </div>
                 </div>
                 <div className="mt-2 text-xs text-zinc-600">
-                  流程：逐章「生成初稿 → 自动摘要」（保证后续章节上下文连续）。逐章暂停时每章完成后停下待审。
+                  流程：逐章「生成初稿 →
+                  自动摘要」（保证后续章节上下文连续）。逐章暂停时每章完成后停下待审。
                 </div>
               </div>
             )}
@@ -829,6 +901,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 {batch.log.length > 0 && (
                   <div className="mt-2 max-h-24 overflow-y-auto font-mono text-[10px] leading-4 text-zinc-500">
                     {batch.log.map((l, i) => (
+                      // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                       <div key={i}>{l}</div>
                     ))}
                   </div>
@@ -844,7 +917,13 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 setDirty(true)
               }}
               readOnly={busy !== null}
-              placeholder={busy === 'chapter' ? '正在生成初稿…' : busy === 'polish' ? '正在润色…' : '点「AI 初稿」生成本章，或直接手写'}
+              placeholder={
+                busy === 'chapter'
+                  ? '正在生成初稿…'
+                  : busy === 'polish'
+                    ? '正在润色…'
+                    : '点「AI 初稿」生成本章，或直接手写'
+              }
             />
 
             {candidate && busy === null && (
@@ -852,7 +931,9 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 <DiffView
                   oldText={content}
                   newText={candidate.text}
-                  title={candidate.kind === 'polish' ? '润色修订（逐块取舍）' : '扩写修订（逐块取舍）'}
+                  title={
+                    candidate.kind === 'polish' ? '润色修订（逐块取舍）' : '扩写修订（逐块取舍）'
+                  }
                   onApply={applyCandidate}
                   onDiscard={() => {
                     setCandidate(null)
@@ -868,6 +949,8 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 <span className="text-amber-300">候选对比（程序打分：硬闸分−字数偏差）：</span>
                 {candidateSet.list.map((c, i) => (
                   <button
+                    type="button"
+                    // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                     key={i}
                     onClick={() => {
                       setCandidateSet({ ...candidateSet, selectedIndex: i })
@@ -887,6 +970,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   </button>
                 ))}
                 <button
+                  type="button"
                   className="ml-auto cursor-pointer text-zinc-500 hover:text-zinc-300"
                   onClick={() => setCandidateSet(null)}
                 >
@@ -907,6 +991,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                     {lintReport.targetWords ? ` / 目标 ${lintReport.targetWords}` : ''}
                   </span>
                   <button
+                    type="button"
                     className="ml-auto cursor-pointer text-zinc-500 hover:text-zinc-300"
                     onClick={() => setLintReport(null)}
                   >
@@ -917,10 +1002,13 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   <div className="text-xs text-emerald-400">接缝、穿帮词、重复段、字数均正常</div>
                 )}
                 {lintReport.issues.map((iss, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                   <div key={i} className="mb-1.5 border-l-2 border-zinc-700 pl-2 text-xs leading-5">
                     <span
                       className={`mr-2 rounded px-1.5 py-0.5 text-[10px] ${
-                        iss.level === 'major' ? 'bg-red-900/50 text-red-300' : 'bg-zinc-800 text-zinc-400'
+                        iss.level === 'major'
+                          ? 'bg-red-900/50 text-red-300'
+                          : 'bg-zinc-800 text-zinc-400'
                       }`}
                     >
                       {iss.rule}
@@ -936,17 +1024,36 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               <div className="mt-2 max-h-56 overflow-y-auto rounded-md border border-zinc-800 bg-zinc-950 p-2">
                 <div className="mb-1.5 flex items-center gap-2 text-xs font-medium text-zinc-300">
                   七维评审
-                  <Badge tone={reviewResult.verdict === 'pass' ? 'green' : reviewResult.verdict === 'polish' ? 'amber' : 'red'}>
-                    {reviewResult.verdict === 'pass' ? '通过' : reviewResult.verdict === 'polish' ? '建议打磨' : '建议重写'}
+                  <Badge
+                    tone={
+                      reviewResult.verdict === 'pass'
+                        ? 'green'
+                        : reviewResult.verdict === 'polish'
+                          ? 'amber'
+                          : 'red'
+                    }
+                  >
+                    {reviewResult.verdict === 'pass'
+                      ? '通过'
+                      : reviewResult.verdict === 'polish'
+                        ? '建议打磨'
+                        : '建议重写'}
                   </Badge>
                 </div>
                 {reviewResult.scores.map((s, i) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                   <div key={i} className="mb-1.5 border-l-2 border-zinc-700 pl-2 text-xs leading-5">
                     <span className="mr-2 inline-flex items-center gap-1.5">
-                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">{s.dim}</span>
+                      <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-300">
+                        {s.dim}
+                      </span>
                       <span
                         className={
-                          s.score >= 8 ? 'text-emerald-400' : s.score >= 6 ? 'text-amber-400' : 'text-red-400'
+                          s.score >= 8
+                            ? 'text-emerald-400'
+                            : s.score >= 6
+                              ? 'text-amber-400'
+                              : 'text-red-400'
                         }
                       >
                         {s.score}/10
@@ -971,7 +1078,11 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   <div className="text-xs text-emerald-400">未发现矛盾</div>
                 )}
                 {checkResult.issues.map((iss, i) => (
-                  <div key={i} className="mb-1.5 border-l-2 border-amber-600/60 pl-2 text-xs leading-5">
+                  <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
+                    key={i}
+                    className="mb-1.5 border-l-2 border-amber-600/60 pl-2 text-xs leading-5"
+                  >
                     <span className="mr-2 rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-amber-400">
                       {iss.type}
                     </span>
@@ -1016,7 +1127,8 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                       key={p.name}
                       className="rounded bg-zinc-800/80 px-2 py-1 text-[11px] text-zinc-400"
                     >
-                      {p.name} · {p.detail} · <span className="font-mono">{fmtTokens(p.tokens)}t</span>
+                      {p.name} · {p.detail} ·{' '}
+                      <span className="font-mono">{fmtTokens(p.tokens)}t</span>
                     </span>
                   ))}
                 </div>

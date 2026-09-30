@@ -1,3 +1,4 @@
+import { splitHeadingHashtags, splitTags } from '../shared/tags'
 import type {
   BuiltContext,
   ChatParams,
@@ -10,7 +11,6 @@ import type {
   WorldbuildGenParams,
   WorldbuildPreviewEntry
 } from '../shared/types'
-import { splitHeadingHashtags, splitTags } from '../shared/tags'
 import { buildChapterContext } from './context'
 import { enqueueEmbedding } from './embedding'
 import { getSkill } from './skills'
@@ -128,7 +128,8 @@ export function buildPremiseDraftRequest(projectId: string): ChatParams {
   const outlineCount = store.listOutlines(projectId).length
   const system = [
     PREMISE_SYSTEM,
-    wbTitles.length > 0 && `【已有世界观条目（方案应与之衔接补全，避免重复）】\n${wbTitles.join('、')}`,
+    wbTitles.length > 0 &&
+      `【已有世界观条目（方案应与之衔接补全，避免重复）】\n${wbTitles.join('、')}`,
     charNames.length > 0 && `【已有人物（方案应与之衔接补全，避免重复）】\n${charNames.join('、')}`,
     outlineCount > 0 && `【已有大纲 ${outlineCount} 章】`
   ]
@@ -169,7 +170,12 @@ export function parsePremiseDraft(text: string): PremiseDraftResult {
   const characters = rawChars
     .map((c) => {
       const r = (c ?? {}) as Record<string, unknown>
-      return { name: String(r.name ?? '').trim().slice(0, 20), brief: String(r.brief ?? '').trim() }
+      return {
+        name: String(r.name ?? '')
+          .trim()
+          .slice(0, 20),
+        brief: String(r.brief ?? '').trim()
+      }
     })
     .filter((c) => c.name)
   const categories = Array.isArray(wb.categories)
@@ -220,10 +226,7 @@ export function buildSummaryRequest(projectId: string, outlineId: string): ChatP
     .listCharacters(projectId)
     .map((c) => c.name)
     .join('、')
-  const system = [
-    skillBody('summarizer'),
-    chars && `本书人物名单：${chars}`
-  ]
+  const system = [skillBody('summarizer'), chars && `本书人物名单：${chars}`]
     .filter(Boolean)
     .join('\n\n')
   return {
@@ -246,7 +249,7 @@ export function buildPolishRequest(
   const project = store.listProjects().find((x) => x.id === projectId)
   const outline = store.getOutline(outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
-  if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法润色')
+  if (!outline || !chapter?.content.trim()) throw new Error('该章节还没有正文，无法润色')
   const system = [
     skillBody('style-polisher'),
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
@@ -272,7 +275,7 @@ export function buildPolishRequest(
 export async function buildCheckRequest(projectId: string, outlineId: string): Promise<ChatParams> {
   const outline = store.getOutline(outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
-  if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法检查')
+  if (!outline || !chapter?.content.trim()) throw new Error('该章节还没有正文，无法检查')
   const ctx = await buildChapterContext(projectId, outlineId)
   const system = [skillBody('continuity-checker'), ctx.system].filter(Boolean).join('\n\n')
   return {
@@ -307,10 +310,13 @@ export function parseCheckResult(text: string): { issues: CheckIssue[]; parsed: 
   return { issues, parsed: true }
 }
 
-export async function buildReviewRequest(projectId: string, outlineId: string): Promise<ChatParams> {
+export async function buildReviewRequest(
+  projectId: string,
+  outlineId: string
+): Promise<ChatParams> {
   const outline = store.getOutline(outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
-  if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法评审')
+  if (!outline || !chapter?.content.trim()) throw new Error('该章节还没有正文，无法评审')
   const ctx = await buildChapterContext(projectId, outlineId)
   const system = [skillBody('chapter-reviewer'), ctx.system].filter(Boolean).join('\n\n')
   return {
@@ -323,12 +329,23 @@ export async function buildReviewRequest(projectId: string, outlineId: string): 
   }
 }
 
-const REVIEW_DIMS = ['设定一致性', '角色行为', '节奏', '叙事连贯', '伏笔', '钩子', '审美品质'] as const
+const REVIEW_DIMS = [
+  '设定一致性',
+  '角色行为',
+  '节奏',
+  '叙事连贯',
+  '伏笔',
+  '钩子',
+  '审美品质'
+] as const
 
 export function parseReviewResult(text: string): { result: ReviewResult; raw: string } {
   const obj = extractJsonObject(text)
-  if (!obj) return { result: { verdict: 'polish', scores: [], summary: '', parsed: false }, raw: text }
-  const rawProblems = Array.isArray(obj.problems) ? (obj.problems as Array<Record<string, unknown>>) : []
+  if (!obj)
+    return { result: { verdict: 'polish', scores: [], summary: '', parsed: false }, raw: text }
+  const rawProblems = Array.isArray(obj.problems)
+    ? (obj.problems as Array<Record<string, unknown>>)
+    : []
   // 只认证据：无原文引证的问题丢弃
   const problems = rawProblems
     .map((p) => ({
@@ -341,7 +358,9 @@ export function parseReviewResult(text: string): { result: ReviewResult; raw: st
     .filter((p) => p.quote && p.issue)
   // 程序算分：每维 10 分起扣，major -3 / minor -1，下限 0
   const scores: ReviewScore[] = REVIEW_DIMS.map((dim) => {
-    const mine = problems.filter((p) => p.dim === dim || (p.dim && dim.includes(p.dim)) || (p.dim && p.dim.includes(dim)))
+    const mine = problems.filter(
+      (p) => p.dim === dim || (p.dim && dim.includes(p.dim)) || p.dim?.includes(dim)
+    )
     const penalty = mine.reduce((a, p) => a + (p.severity === 'major' ? 3 : 1), 0)
     const score = Math.max(0, 10 - penalty)
     const first = mine[0]
@@ -353,13 +372,18 @@ export function parseReviewResult(text: string): { result: ReviewResult; raw: st
         mine.length === 0
           ? '未见带引证的问题'
           : mine
-              .map((p) => `${p.severity === 'major' ? '【重】' : ''}${p.issue}${p.fix ? `（建议：${p.fix}）` : ''}`)
+              .map(
+                (p) =>
+                  `${p.severity === 'major' ? '【重】' : ''}${p.issue}${p.fix ? `（建议：${p.fix}）` : ''}`
+              )
               .join('；')
     }
   })
   const total = scores.reduce((a, s) => a + s.score, 0)
   const anyLow = scores.some((s) => s.score <= 4)
-  const hookOrAestheticLow = scores.some((s) => (s.dim === '钩子' || s.dim === '审美品质') && s.score <= 6)
+  const hookOrAestheticLow = scores.some(
+    (s) => (s.dim === '钩子' || s.dim === '审美品质') && s.score <= 6
+  )
   const verdict: ReviewResult['verdict'] = anyLow
     ? 'rewrite'
     : total < 50 || hookOrAestheticLow
@@ -379,7 +403,7 @@ export function buildExpandRequest(
   const project = store.listProjects().find((x) => x.id === projectId)
   const outline = store.getOutline(outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
-  if (!outline || !chapter || !chapter.content.trim()) throw new Error('该章节还没有正文，无法扩写')
+  if (!outline || !chapter?.content.trim()) throw new Error('该章节还没有正文，无法扩写')
   const system = [
     skillBody('chapter-expander'),
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`
@@ -474,14 +498,15 @@ export function buildStateSyncRequest(projectId: string, outlineId: string): Cha
         cs.name.includes(c.name.trim())
     )
   )
-  if (affected.length === 0) return {
-    model: '',
-    system: '',
-    messages: [{ role: 'user', content: 'noop' }],
-    maxTokens: 16,
-    temperature: 0,
-    purpose: 'summary'
-  }
+  if (affected.length === 0)
+    return {
+      model: '',
+      system: '',
+      messages: [{ role: 'user', content: 'noop' }],
+      maxTokens: 16,
+      temperature: 0,
+      purpose: 'summary'
+    }
   const blocks = affected
     .map((c) => {
       const changes = summary.characterStates
@@ -519,7 +544,7 @@ export function parseCharacterStates(text: string): ParsedCharacterState[] {
   for (const line of text.split(/\r?\n/)) {
     const m = /^#{1,3}\s*(.+?)\s*$/.exec(line)
     if (m && !/^[（(【]/.test(m[1])) {
-      if (current && current.body.join('').trim()) {
+      if (current?.body.join('').trim()) {
         out.push({ name: current.name, state: current.body.join('\n').trim() })
       }
       current = { name: m[1].replace(/[（(【].*$/, '').trim(), body: [] }
@@ -527,7 +552,7 @@ export function parseCharacterStates(text: string): ParsedCharacterState[] {
       current.body.push(line)
     }
   }
-  if (current && current.body.join('').trim()) {
+  if (current?.body.join('').trim()) {
     out.push({ name: current.name, state: current.body.join('\n').trim() })
   }
   return out
@@ -569,7 +594,9 @@ export function buildCharacterRequest(
     .join('\n')
   const characters = store.listCharacters(projectId)
   const chars = allowUpdate
-    ? characters.map((c) => `### ${c.name}（${c.role || '未定位'}）\n${c.card.slice(0, 800)}`).join('\n\n')
+    ? characters
+        .map((c) => `### ${c.name}（${c.role || '未定位'}）\n${c.card.slice(0, 800)}`)
+        .join('\n\n')
     : characters.map((c) => `- ${c.name}（${c.role || '未定位'}）`).join('\n')
   const tagCounts = new Map<string, number>()
   for (const c of characters) {
@@ -636,7 +663,10 @@ export interface ParsedCharacterRevision {
 const REVISE_HEADING = /^#{1,3}\s*\[修订\]\s*(.+?)\s*$/
 
 function stripNameDecorations(raw: string): string {
-  return raw.replace(/[（(【].*$/, '').trim().slice(0, 20)
+  return raw
+    .replace(/[（(【].*$/, '')
+    .trim()
+    .slice(0, 20)
 }
 
 export function parseCharacterCards(text: string): {
@@ -687,7 +717,8 @@ export interface WorldbuildRetrieval {
   types: string[]
   tags: string[]
   entries: WorldbuildEntry[]
-}export interface WorldbuildIndex {
+}
+export interface WorldbuildIndex {
   types: string[]
   tagCounts: Array<{ name: string; count: number }>
   entries: WorldbuildEntry[]
@@ -727,12 +758,13 @@ export function buildWorldbuildRetrieveRequest(p: WorldbuildGenParams): ChatPara
     .join('\n')
   const user = [
     `生成需求：${p.title.trim() ? `【${p.title.trim()}】` : ''}${p.brief}`,
-    p.tags && p.tags.length > 0 &&
+    p.tags &&
+      p.tags.length > 0 &&
       `用户指定主题标签：${p.tags.map((t) => `#${t}`).join('、')}（优先考虑与这些主题相关的类型与标签）`,
     p.categories.filter(Boolean).length > 0 &&
       `用户限定类型：${p.categories.filter(Boolean).join('、')}（优先考虑这些类型下的条目）`,
     '',
-    '现有类型清单：' + (typeLine.length > 0 ? typeLine.join('、') : '（暂无）'),
+    `现有类型清单：${typeLine.length > 0 ? typeLine.join('、') : '（暂无）'}`,
     `现有标签清单：${tagLine}`,
     '全部条目：',
     entryLines,
@@ -752,13 +784,23 @@ export function buildWorldbuildRetrieveRequest(p: WorldbuildGenParams): ChatPara
 }
 
 export function resolveWorldbuildRetrieval(
-  p: WorldbuildGenParams,
+  _p: WorldbuildGenParams,
   index: WorldbuildIndex,
   text: string
 ): WorldbuildRetrieval {
   const obj = extractJsonObject(text)
-  const types = Array.isArray(obj?.types) ? obj.types.map(String).map((s) => s.trim()).filter(Boolean) : []
-  const tags = Array.isArray(obj?.tags) ? obj.tags.map(String).map((s) => s.trim()).filter(Boolean) : []
+  const types = Array.isArray(obj?.types)
+    ? obj.types
+        .map(String)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : []
+  const tags = Array.isArray(obj?.tags)
+    ? obj.tags
+        .map(String)
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : []
   const typeSet = new Set(types)
   const tagSet = new Set(tags)
   let related = index.entries.filter(
@@ -931,14 +973,8 @@ function hasWikiLink(content: string, title: string): boolean {
   return new RegExp(`\\[\\[\\s*${escaped}\\s*\\]\\]`).test(content)
 }
 
-function linkMissingTags(
-  entries: WorldbuildPreviewEntry[],
-  existingTitles: Set<string>
-): void {
-  const linkableTitles = new Set([
-    ...existingTitles,
-    ...entries.map((e) => e.title.trim())
-  ])
+function linkMissingTags(entries: WorldbuildPreviewEntry[], existingTitles: Set<string>): void {
+  const linkableTitles = new Set([...existingTitles, ...entries.map((e) => e.title.trim())])
   for (const e of entries) {
     const selfTitle = e.title.trim()
     const missing = [
@@ -946,11 +982,7 @@ function linkMissingTags(
         e.tags
           .map((t) => t.trim())
           .filter(
-            (t) =>
-              t &&
-              t !== selfTitle &&
-              linkableTitles.has(t) &&
-              !hasWikiLink(e.content, t)
+            (t) => t && t !== selfTitle && linkableTitles.has(t) && !hasWikiLink(e.content, t)
           )
       )
     ]
@@ -1088,7 +1120,10 @@ export function relinkWorldbuildEntries(projectId: string, entryIds: string[]): 
   const entries = store.listWorldbuild(projectId).filter((e) => idSet.has(e.id))
   if (entries.length === 0) return 0
   const allTitles = new Set(
-    store.listWorldbuild(projectId).map((e) => e.title.trim()).filter(Boolean)
+    store
+      .listWorldbuild(projectId)
+      .map((e) => e.title.trim())
+      .filter(Boolean)
   )
   const conv = entries.map((e) => ({
     category: e.category,
@@ -1140,7 +1175,9 @@ export function applyOutlineResult(
     const meta = {
       role: typeof r.role === 'string' ? r.role.slice(0, 40) : undefined,
       suspense: typeof r.suspense === 'string' ? r.suspense.slice(0, 20) : undefined,
-      twist: Number.isFinite(Number(r.twist)) ? Math.min(5, Math.max(0, Math.round(Number(r.twist)))) : undefined,
+      twist: Number.isFinite(Number(r.twist))
+        ? Math.min(5, Math.max(0, Math.round(Number(r.twist))))
+        : undefined,
       hook: typeof r.hook === 'string' ? r.hook.slice(0, 120) : undefined,
       foreshadowOps:
         typeof r.foreshadow_ops === 'string'
@@ -1203,10 +1240,12 @@ export function applySummaryResult(
         }))
       : [],
     ledger: Array.isArray(obj.ledger)
-      ? (obj.ledger as Array<Record<string, unknown>>).map((l) => ({
-          name: String(l.name ?? ''),
-          value: String(l.value ?? '')
-        })).filter((l) => l.name)
+      ? (obj.ledger as Array<Record<string, unknown>>)
+          .map((l) => ({
+            name: String(l.name ?? ''),
+            value: String(l.value ?? '')
+          }))
+          .filter((l) => l.name)
       : [],
     foreshadowsPlanted: Array.isArray(obj.foreshadows_planted)
       ? (obj.foreshadows_planted as Array<Record<string, unknown>>).map((f) => ({
@@ -1265,4 +1304,3 @@ export function applySummaryResult(
 
   return { planted: plantedCount, resolved: resolvedCount, parsed: true }
 }
-

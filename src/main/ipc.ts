@@ -5,8 +5,8 @@ import type { EventSink } from './eventSink'
 import { buildExport } from './export'
 import { ipcOnlyHandlers, sharedHandlers } from './handlers'
 import { restartServer } from './server'
-import { saveServerConfig } from './settings'
 import { getServerStatus } from './serverState'
+import { saveServerConfig } from './settings'
 
 function electronSink(win: WebContents): EventSink {
   return {
@@ -47,12 +47,9 @@ export function registerIpc(): void {
     }
   )
 
-  ipcMain.handle(
-    'server:config',
-    async (_e, patch: ServerConfigPatch): Promise<ServerStatus> => {
-      saveServerConfig(patch)
-      await restartServer()
-      return getServerStatus()
-    }
-  )
+  ipcMain.handle('server:config', async (_e, patch: ServerConfigPatch): Promise<ServerStatus> => {
+    saveServerConfig(patch)
+    await restartServer()
+    return getServerStatus()
+  })
 }

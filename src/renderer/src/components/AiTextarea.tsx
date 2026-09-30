@@ -1,14 +1,14 @@
 import {
+  type ChangeEvent,
   memo,
+  type SyntheticEvent,
   useCallback,
   useEffect,
   useRef,
-  useState,
-  type ChangeEvent,
-  type SyntheticEvent
+  useState
 } from 'react'
-import { Button, Input, Textarea } from './ui'
 import { chatStream } from '../lib/ipc'
+import { Button, Input, Textarea } from './ui'
 
 type AiMode = 'idle' | 'input' | 'generating' | 'preview'
 
@@ -64,6 +64,7 @@ export function AiTextarea({
   modeRef.current = mode
   onChangeRef.current = onChange
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
     const el = previewRef.current
     if (el) el.scrollTop = el.scrollHeight
@@ -78,12 +79,12 @@ export function AiTextarea({
     []
   )
 
-  const clearFlush = (): void => {
+  const clearFlush = useCallback((): void => {
     if (flushTimer.current) {
       clearTimeout(flushTimer.current)
       flushTimer.current = null
     }
-  }
+  }, [])
 
   const flushResult = (): void => {
     clearFlush()
@@ -91,11 +92,11 @@ export function AiTextarea({
     setResult(resultRef.current)
   }
 
-  const clearResult = (): void => {
+  const clearResult = useCallback((): void => {
     clearFlush()
     resultRef.current = ''
     setResult('')
-  }
+  }, [clearFlush])
 
   const onDelta = (t: string): void => {
     resultRef.current += t
@@ -116,20 +117,23 @@ export function AiTextarea({
     setInstruction('')
   }
 
-  const handleChange = useCallback((e: ChangeEvent<HTMLTextAreaElement>): void => {
-    if (modeRef.current === 'generating') return
-    if (modeRef.current !== 'idle') {
-      abortRef.current?.()
-      abortRef.current = null
-      setMode('idle')
-      clearResult()
-      setError(null)
-      setInstruction('')
-    }
-    selRef.current = null
-    setSelection(null)
-    onChangeRef.current(e.target.value)
-  }, [])
+  const handleChange = useCallback(
+    (e: ChangeEvent<HTMLTextAreaElement>): void => {
+      if (modeRef.current === 'generating') return
+      if (modeRef.current !== 'idle') {
+        abortRef.current?.()
+        abortRef.current = null
+        setMode('idle')
+        clearResult()
+        setError(null)
+        setInstruction('')
+      }
+      selRef.current = null
+      setSelection(null)
+      onChangeRef.current(e.target.value)
+    },
+    [clearResult]
+  )
 
   const handleSelect = useCallback((e: SyntheticEvent<HTMLTextAreaElement>): void => {
     if (modeRef.current !== 'idle') return
@@ -247,6 +251,7 @@ export function AiTextarea({
           <div className="flex flex-wrap gap-1.5">
             {QUICK_CHIPS.map((c) => (
               <button
+                type="button"
                 key={c}
                 onClick={() => runAi(c)}
                 className="cursor-pointer rounded-full bg-zinc-800 px-2.5 py-0.5 text-[11px] text-zinc-400 transition-colors hover:bg-zinc-700 hover:text-zinc-200"

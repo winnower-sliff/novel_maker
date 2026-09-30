@@ -1,11 +1,16 @@
-import type { GraphNodeKind, ProjectGraph, ProjectGraphEdge, ProjectGraphNode } from '../shared/types'
 import { splitTags } from '../shared/tags'
+import type {
+  GraphNodeKind,
+  ProjectGraph,
+  ProjectGraphEdge,
+  ProjectGraphNode
+} from '../shared/types'
 import * as store from './store'
 
 /** 解析 [[目标]] 与 [[目标|关系]]，返回 {名字 → 关系(可空)} */
 function extractLinks(text: string): Map<string, string> {
   const out = new Map<string, string>()
-  for (const m of text.matchAll(/\[\[([^\[\]|]+)(?:\|([^\[\]]+))?\]\]/g)) {
+  for (const m of text.matchAll(/\[\[([^[\]|]+)(?:\|([^[\]]+))?\]\]/g)) {
     const name = m[1].trim()
     if (name && !out.has(name)) out.set(name, (m[2] ?? '').trim())
   }

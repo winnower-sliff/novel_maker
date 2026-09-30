@@ -1,5 +1,5 @@
-import type { BuiltContext, ContextPart, OutlineItem, WorldbuildEntry } from '../shared/types'
 import { splitTags } from '../shared/tags'
+import type { BuiltContext, ContextPart, OutlineItem, WorldbuildEntry } from '../shared/types'
 import { semanticSearch } from './embedding'
 import * as store from './store'
 
@@ -21,7 +21,7 @@ function part(name: string, detail: string, text: string): ContextPart {
 
 function extractLinkTargets(text: string): Set<string> {
   const out = new Set<string>()
-  for (const m of text.matchAll(/\[\[([^\[\]|]+)(?:\|[^\[\]]*)?\]\]/g)) {
+  for (const m of text.matchAll(/\[\[([^[\]|]+)(?:\|[^[\]]*)?\]\]/g)) {
     const name = m[1].trim()
     if (name) out.add(name)
   }
@@ -64,7 +64,12 @@ function renderWorldbuildFull(projectId: string): { text: string; detail: string
  */
 async function pickWorldbuildSubgraph(
   projectId: string,
-  seeds: { prevChapterContent: string; currentSynopsis: string; nextSynopsis: string; query: string }
+  seeds: {
+    prevChapterContent: string
+    currentSynopsis: string
+    nextSynopsis: string
+    query: string
+  }
 ): Promise<{ text: string; detail: string } | null> {
   const entries = store.listWorldbuild(projectId)
   if (entries.length < WB_SUBGRAPH_THRESHOLD) return null
@@ -174,7 +179,10 @@ function renderCharactersFull(projectId: string): { text: string; detail: string
       return state ? `${head}\n${c.card}\n【当前状态】\n${state}` : `${head}\n${c.card}`
     })
     .join('\n\n')
-  return { text, detail: `${list.length} 卡（全文${list.some((c) => c.state.trim()) ? '含动态状态' : ''}）` }
+  return {
+    text,
+    detail: `${list.length} 卡（全文${list.some((c) => c.state.trim()) ? '含动态状态' : ''}）`
+  }
 }
 
 function renderCharactersSlim(projectId: string): { text: string; detail: string } {
@@ -184,7 +192,10 @@ function renderCharactersSlim(projectId: string): { text: string; detail: string
   return { text, detail: `${list.length} 人（仅名单）` }
 }
 
-function renderRecentSummaries(projectId: string, beforeOutlineId: string): { text: string; detail: string; count: number } {
+function renderRecentSummaries(
+  projectId: string,
+  beforeOutlineId: string
+): { text: string; detail: string; count: number } {
   const outlines = store.listOutlines(projectId)
   const idx = outlines.findIndex((o) => o.id === beforeOutlineId)
   if (idx <= 0) return { text: '', detail: '无', count: 0 }
@@ -231,16 +242,24 @@ function renderRecentSummaries(projectId: string, beforeOutlineId: string): { te
     }
     return { text: '', detail: '无', count: 0 }
   }
-  const text = ledger.length > 0 ? `${blocks.join('\n\n')}\n\n【硬账台账（上一章末，数字必须衔接）】\n${ledger.join('；')}` : blocks.join('\n\n')
-  return { text, detail: `最近 ${used} 章摘要${ledger.length > 0 ? '（含硬账）' : ''}`, count: used }
+  const text =
+    ledger.length > 0
+      ? `${blocks.join('\n\n')}\n\n【硬账台账（上一章末，数字必须衔接）】\n${ledger.join('；')}`
+      : blocks.join('\n\n')
+  return {
+    text,
+    detail: `最近 ${used} 章摘要${ledger.length > 0 ? '（含硬账）' : ''}`,
+    count: used
+  }
 }
 
-function renderVolumeSummaries(projectId: string, currentVolume: number): { text: string; detail: string } {
+function renderVolumeSummaries(
+  projectId: string,
+  currentVolume: number
+): { text: string; detail: string } {
   const all = store.listVolumeSummaries(projectId).filter((v) => v.volume < currentVolume)
   if (all.length === 0) return { text: '', detail: '无' }
-  const text = all
-    .map((v) => `【第 ${v.volume} 卷摘要】\n${v.summary}`)
-    .join('\n\n')
+  const text = all.map((v) => `【第 ${v.volume} 卷摘要】\n${v.summary}`).join('\n\n')
   return { text, detail: `前 ${all.length} 卷` }
 }
 
@@ -264,9 +283,7 @@ export async function buildChapterContext(
   outlineId: string,
   wordTarget?: number
 ): Promise<BuiltContext> {
-  const project = store
-    .listProjects()
-    .find((p) => p.id === projectId)
+  const project = store.listProjects().find((p) => p.id === projectId)
   const outlines = store.listOutlines(projectId)
   const idx = outlines.findIndex((o) => o.id === outlineId)
   if (!project || idx < 0) throw new Error('章节不存在')
@@ -284,9 +301,7 @@ export async function buildChapterContext(
   const prevChapterContent = prevChapter ? prevChapter.content : ''
 
   const outlineText = [
-    prev
-      ? `上一章（第${prev.chapterNo}章 ${prev.title}）梗概：${prev.synopsis}`
-      : '本章为开篇',
+    prev ? `上一章（第${prev.chapterNo}章 ${prev.title}）梗概：${prev.synopsis}` : '本章为开篇',
     `本章：第${current.chapterNo}章 ${current.title}\n梗概：${current.synopsis}${renderOutlineMeta(current) ? `\n${renderOutlineMeta(current)}` : ''}`,
     next
       ? `下一章预告（第${next.chapterNo}章 ${next.title}）：${next.synopsis}${renderOutlineMeta(next) ? `\n${renderOutlineMeta(next)}` : ''}`
@@ -322,15 +337,17 @@ export async function buildChapterContext(
     wb = renderWorldbuildSlim(projectId)
   }
 
-  const sections: Array<[string, string]> = ([
-    ['【作品风格】', styleText],
-    ['【前卷摘要（远期前情）】', volumeSummaries.text],
-    ['【世界观设定】', wb.text],
-    ['【人物卡（含动态状态）】', ch.text],
-    ['【前情摘要】', summaries.text],
-    ['【伏笔台账（未回收）】', foreshadows.text],
-    ['【本章大纲】', outlineText]
-  ] as Array<[string, string]>).filter(([, text]) => text.trim().length > 0)
+  const sections: Array<[string, string]> = (
+    [
+      ['【作品风格】', styleText],
+      ['【前卷摘要（远期前情）】', volumeSummaries.text],
+      ['【世界观设定】', wb.text],
+      ['【人物卡（含动态状态）】', ch.text],
+      ['【前情摘要】', summaries.text],
+      ['【伏笔台账（未回收）】', foreshadows.text],
+      ['【本章大纲】', outlineText]
+    ] as Array<[string, string]>
+  ).filter(([, text]) => text.trim().length > 0)
 
   const system = sections.map(([head, text]) => `${head}\n${text}`).join('\n\n')
   const words = wordTarget && wordTarget > 0 ? wordTarget : 2700
