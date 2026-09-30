@@ -1,7 +1,9 @@
 import type { Project } from '@shared/types'
-import { type ReactNode, useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { type ReactNode, useState } from 'react'
 import { Badge, Button, Card, Input, Label, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 import { openWizard } from '../lib/wizardStore'
 
 interface Props {
@@ -26,40 +28,31 @@ interface Guide {
 }
 
 export default function Projects({ currentProjectId, onSwitch, onNavigate }: Props) {
-  const [projects, setProjects] = useState<Project[]>([])
+  const queryClient = useQueryClient()
+  const { data: projects = [] } = useQuery(queries.projects())
+  const { data: wb = [] } = useQuery(queries.worldbuild(currentProjectId))
+  const { data: cs = [] } = useQuery(queries.characters(currentProjectId))
+  const { data: os = [] } = useQuery(queries.outlines(currentProjectId))
+  const { data: br = [] } = useQuery(queries.chapterBriefs(currentProjectId))
+  const guide: Guide | null = currentProjectId
+    ? {
+        worldbuild: wb.length,
+        characters: cs.length,
+        outlines: os.length,
+        written: br.filter((b) => b.hasDraft).length
+      }
+    : null
   const [creating, setCreating] = useState(false)
   const [title, setTitle] = useState('')
   const [genre, setGenre] = useState('')
   const [targetWords, setTargetWords] = useState('')
   const [styleGuide, setStyleGuide] = useState('')
   const [editForm, setEditForm] = useState<EditForm | null>(null)
-  const [guide, setGuide] = useState<Guide | null>(null)
 
-  const load = (): void => {
-    void window.api.novel.projects().then(setProjects)
+  const reload = (): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.projects })
+    void queryClient.invalidateQueries({ queryKey: qk.novel })
   }
-
-  useEffect(load, [])
-
-  useEffect(() => {
-    if (!currentProjectId) {
-      setGuide(null)
-      return
-    }
-    void Promise.all([
-      window.api.novel.worldbuild(currentProjectId),
-      window.api.novel.characters(currentProjectId),
-      window.api.novel.outlines(currentProjectId),
-      window.api.novel.chapterBriefs(currentProjectId)
-    ]).then(([wb, cs, os, br]) => {
-      setGuide({
-        worldbuild: wb.length,
-        characters: cs.length,
-        outlines: os.length,
-        written: br.filter((b) => b.hasDraft).length
-      })
-    })
-  }, [currentProjectId])
 
   const create = (): void => {
     if (!title.trim()) return
@@ -76,7 +69,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
         setGenre('')
         setTargetWords('')
         setStyleGuide('')
-        load()
+        reload()
         onSwitch(p.id)
         openWizard(p.id)
       })
@@ -94,7 +87,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
       })
       .then(() => {
         setEditForm(null)
-        load()
+        reload()
       })
       .catch((err: unknown) => window.alert(`保存失败：${(err as Error).message}`))
   }
@@ -103,7 +96,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
     if (!window.confirm(`确认删除项目「${p.title}」？其大纲/人物/世界观/章节将一并删除。`)) return
     void window.api.novel.projectDelete(p.id).then(() => {
       if (p.id === currentProjectId) onSwitch('')
-      load()
+      reload()
     })
   }
 

@@ -1,8 +1,10 @@
 import type { OutlineItem, OutlineStatus } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { EmptyGuide } from '../components/EmptyGuide'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 
 const STATUS: Array<{
   value: OutlineStatus
@@ -52,7 +54,9 @@ export default function Outline({
   projectId: string
   onNavigate: Navigate
 }) {
-  const [items, setItems] = useState<OutlineItem[]>([])
+  const queryClient = useQueryClient()
+  const { data: items = [] } = useQuery(queries.outlines(projectId))
+  const { data: volSummaryList = [] } = useQuery(queries.volumeSummaries(projectId))
   const [edit, setEdit] = useState<EditState | null>(null)
   const [genOpen, setGenOpen] = useState(false)
   const [idea, setIdea] = useState('')
@@ -65,25 +69,23 @@ export default function Outline({
   const [genNotice, setGenNotice] = useState('')
   const genRequestId = useRef<string | null>(null)
   const [volNotice, setVolNotice] = useState('')
-  const [volSummaries, setVolSummaries] = useState<Record<number, string>>({})
+  const volSummaries = useMemo(() => {
+    const map: Record<number, string> = {}
+    for (const v of volSummaryList) map[v.volume] = v.summary
+    return map
+  }, [volSummaryList])
   const [openVolumeSummary, setOpenVolumeSummary] = useState<number | null>(null)
   const volSummaryRequestId = useRef<string | null>(null)
 
   const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.novel.outlines(projectId).then(setItems)
-    void window.api.novel.volumeSummaries(projectId).then((list) => {
-      const map: Record<number, string> = {}
-      for (const v of list) map[v.volume] = v.summary
-      setVolSummaries(map)
-    })
-  }, [projectId])
+    void queryClient.invalidateQueries({ queryKey: qk.outlines(projectId) })
+    void queryClient.invalidateQueries({ queryKey: qk.volumeSummaries(projectId) })
+  }, [projectId, queryClient])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
-    setItems([])
     setEdit(null)
-    load()
-  }, [load])
+  }, [projectId])
 
   useEffect(() => {
     const offDelta = window.api.llm.onDelta((id, text) => {
@@ -108,7 +110,6 @@ export default function Outline({
           setGenNotice(parts.join('，'))
         }
         load()
-        void window.api.novel.outlines(projectId).then(setItems)
         return
       }
       if (id === volSummaryRequestId.current) {
@@ -136,7 +137,7 @@ export default function Outline({
       offDone()
       offError()
     }
-  }, [load, projectId])
+  }, [load])
 
   const volumes = useMemo(() => {
     const map = new Map<number, OutlineItem[]>()

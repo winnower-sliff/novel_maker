@@ -1,11 +1,13 @@
 import { providerPreset } from '@shared/providers'
-import type { Project, SettingsView, UsageStats } from '@shared/types'
+import { useQuery } from '@tanstack/react-query'
 import { type ReactElement, useCallback, useEffect, useState } from 'react'
 import { CreationWizard } from './components/CreationWizard'
 import { Toaster } from './components/Toaster'
 import { markAgentSeen, useAgentNavBadge } from './lib/agentUiStore'
 import { fmtTokens } from './lib/format'
 import type { Navigate, Page } from './lib/nav'
+import { qk, queries } from './lib/queries'
+import { queryClient } from './lib/queryClient'
 import { useWbGenNavBadge } from './lib/wbGenStore'
 import Agent from './pages/Agent'
 import Characters from './pages/Characters'
@@ -252,48 +254,53 @@ export default function App() {
   const [page, setPage] = useState<Page>('projects')
   const [writingFocus, setWritingFocus] = useState<string | null>(null)
   const [graphFocus, setGraphFocus] = useState<string | null>(null)
-  const [stats, setStats] = useState<UsageStats | null>(null)
-  const [cfg, setCfg] = useState<SettingsView | null>(null)
-  const [currentProject, setCurrentProject] = useState<Project | null>(null)
-  const [projectsList, setProjectsList] = useState<Project[]>([])
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const wbBadge = useWbGenNavBadge()
   const agentBadge = useAgentNavBadge()
 
-  const refresh = useCallback(() => {
-    void window.api.usage.stats().then(setStats)
-    void window.api.settings.get().then((s) => {
-      setCfg(s)
-      void window.api.novel.projects().then((projects) => {
-        setProjectsList(projects)
-        setCurrentProject(
-          s.currentProjectId ? (projects.find((p) => p.id === s.currentProjectId) ?? null) : null
-        )
-      })
-    })
-  }, [])
+  const statsQ = useQuery({ ...queries.usageStats(), refetchInterval: 30_000 })
+  const settingsQ = useQuery(queries.settings())
+  const projectsQ = useQuery(queries.projects())
 
+  const stats = statsQ.data ?? null
+  const cfg = settingsQ.data ?? null
+  const projectsList = projectsQ.data ?? []
+  const currentProject = cfg?.currentProjectId
+    ? (projectsList.find((p) => p.id === cfg.currentProjectId) ?? null)
+    : null
+
+  // 事件驱动的跨页失效：LLM 流完成 → 小说数据域 + 额度；agent 完成 → 全量失效
   useEffect(() => {
-    refresh()
-    const timer = setInterval(refresh, 30_000)
-    const offDone = window.api.llm.onDone(() => refresh())
-    const offError = window.api.llm.onError(() => refresh())
-    const offAgentDone = window.api.agent.onDone(() => refresh())
+    const offDone = window.api.llm.onDone((_rid, p) => {
+      void queryClient.invalidateQueries({ queryKey: qk.novel })
+      void queryClient.invalidateQueries({ queryKey: qk.usageStats })
+      void queryClient.invalidateQueries({ queryKey: qk.usageList(200) })
+      if (p.action === 'chapter' || p.action === 'summary') {
+        void queryClient.invalidateQueries({
+          queryKey: qk.chapterBriefs(cfg?.currentProjectId ?? '')
+        })
+      }
+    })
+    const offError = window.api.llm.onError(() => {
+      void queryClient.invalidateQueries({ queryKey: qk.usageStats })
+    })
+    const offAgentDone = window.api.agent.onDone(() => {
+      void queryClient.invalidateQueries()
+    })
     return () => {
-      clearInterval(timer)
       offDone()
       offError()
       offAgentDone()
     }
-  }, [refresh])
+  }, [cfg?.currentProjectId])
 
-  const switchProject = useCallback(
-    (id: string) => {
-      void window.api.settings.save({ currentProjectId: id }).then(() => refresh())
-    },
-    [refresh]
-  )
+  const switchProject = useCallback((id: string) => {
+    void window.api.settings.save({ currentProjectId: id }).then(() => {
+      void queryClient.invalidateQueries({ queryKey: qk.settings })
+      void queryClient.invalidateQueries({ queryKey: qk.projects })
+    })
+  }, [])
 
   const navigate = useCallback<Navigate>(
     (target, focusOutlineId, graphNodeId) => {

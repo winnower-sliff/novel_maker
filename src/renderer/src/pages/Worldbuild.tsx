@@ -1,5 +1,6 @@
 import { splitTags } from '@shared/tags'
 import type { Character, WorldbuildEntry } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import {
   Fragment,
   type KeyboardEvent,
@@ -19,6 +20,7 @@ import { type GraphEdgeData, type GraphNodeData, RelationGraph } from '../compon
 import { Button, Card, Input, Label, Select } from '../components/ui'
 import { WbGenOverlay } from '../components/WbGenOverlay'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 import { pushToast } from '../lib/toastStore'
 import {
   markEntrySeen,
@@ -191,9 +193,10 @@ export default function Worldbuild({
   projectId: string
   onNavigate: Navigate
 }) {
-  const [entries, setEntries] = useState<WorldbuildEntry[]>([])
-  const [characters, setCharacters] = useState<Character[]>([])
-  const [types, setTypes] = useState<string[]>([])
+  const queryClient = useQueryClient()
+  const { data: entries = [] } = useQuery(queries.worldbuild(projectId))
+  const { data: characters = [] } = useQuery(queries.characters(projectId))
+  const { data: types = [] } = useQuery(queries.worldbuildTypes(projectId))
   const [filter, setFilter] = useState('全部')
   const [tagFilter, setTagFilter] = useState<string | null>(null)
   const [tagExpanded, setTagExpanded] = useState(false)
@@ -223,17 +226,14 @@ export default function Worldbuild({
   const revisedEntryIdList = useRevisedEntryIds(projectId)
   const savedSeq = useWbSavedSeq()
 
-  const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.novel.worldbuild(projectId).then(setEntries)
-    void window.api.novel.characters(projectId).then(setCharacters)
-    void window.api.novel.worldbuildTypes(projectId).then(setTypes)
-  }, [projectId])
+  const load = (): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.worldbuild(projectId) })
+    void queryClient.invalidateQueries({ queryKey: qk.characters(projectId) })
+    void queryClient.invalidateQueries({ queryKey: qk.worldbuildTypes(projectId) })
+  }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
-    setEntries([])
-    setCharacters([])
-    setTypes([])
     setFilter('全部')
     setTagFilter(null)
     setTagExpanded(false)
@@ -247,12 +247,12 @@ export default function Worldbuild({
     setSelectMode(false)
     setSelectedIds(new Set())
     setActionOpen(false)
-    load()
-  }, [load])
+  }, [projectId])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: savedSeq 仅作触发信号，load 每渲染重建
   useEffect(() => {
     if (savedSeq > 0) load()
-  }, [savedSeq, load])
+  }, [savedSeq])
 
   useEffect(() => {
     if (!actionOpen) return
@@ -527,8 +527,8 @@ export default function Worldbuild({
     } else {
       void window.api.novel
         .worldbuildTypeCreate(projectId, category)
-        .then((list) => {
-          setTypes(list)
+        .then(() => {
+          void queryClient.invalidateQueries({ queryKey: qk.worldbuildTypes(projectId) })
           pushToast('success', `已新建类型「${category}」`)
           doSave(category)
         })
@@ -562,8 +562,8 @@ export default function Worldbuild({
     if (!name) return
     void window.api.novel
       .worldbuildTypeCreate(projectId, name)
-      .then((list) => {
-        setTypes(list)
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: qk.worldbuildTypes(projectId) })
         pushToast('success', `已新建类型「${name}」`)
       })
       .catch((err: unknown) => {
@@ -581,8 +581,8 @@ export default function Worldbuild({
     if (count > 0) return
     void window.api.novel
       .worldbuildTypeDelete(projectId, name)
-      .then((list) => {
-        setTypes(list)
+      .then(() => {
+        void queryClient.invalidateQueries({ queryKey: qk.worldbuildTypes(projectId) })
         if (filter === name) setFilter('全部')
         pushToast('success', `已删除类型「${name}」`)
       })

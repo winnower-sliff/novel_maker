@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { create } from 'zustand'
 
 export interface AgentNavBadge {
   tone: 'running' | 'confirming' | 'done' | 'error'
@@ -9,34 +9,38 @@ interface AgentUiState {
   running: boolean
   confirming: boolean
   ended: { at: number; ok: boolean } | null
+  seenAt: number
+  set: (patch: Partial<Omit<AgentUiState, 'seenAt' | 'set' | 'markSeen'>>) => void
+  markSeen: () => void
 }
 
-let state: AgentUiState = { running: false, confirming: false, ended: null }
-const listeners = new Set<() => void>()
-
-function emit(): void {
-  for (const l of listeners) l()
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
-}
+export const useAgentUiStore = create<AgentUiState>((set, get) => ({
+  running: false,
+  confirming: false,
+  ended: null,
+  seenAt: 0,
+  set: (patch) => {
+    const cur = get()
+    const next = {
+      running: patch.running ?? cur.running,
+      confirming: patch.confirming ?? cur.confirming,
+      ended: patch.ended !== undefined ? patch.ended : cur.ended
+    }
+    if (next.running && next.ended) next.ended = null
+    set(next)
+  },
+  markSeen: () => {
+    if (!get().ended) return
+    set({ ended: null })
+  }
+}))
 
 export function setAgentUi(patch: Partial<AgentUiState>): void {
-  state = {
-    running: patch.running ?? state.running,
-    confirming: patch.confirming ?? state.confirming,
-    ended: patch.ended !== undefined ? patch.ended : state.ended
-  }
-  if (state.running && state.ended) state = { ...state, ended: null }
-  emit()
+  useAgentUiStore.getState().set(patch)
 }
 
 export function markAgentSeen(): void {
-  if (!state.ended) return
-  state = { ...state, ended: null }
-  emit()
+  useAgentUiStore.getState().markSeen()
 }
 
 const BADGES: Record<AgentNavBadge['tone'], AgentNavBadge> = {
@@ -46,13 +50,11 @@ const BADGES: Record<AgentNavBadge['tone'], AgentNavBadge> = {
   error: { tone: 'error', pulse: false }
 }
 
-function aggregateBadge(): AgentNavBadge | null {
-  if (state.confirming) return BADGES.confirming
-  if (state.running) return BADGES.running
-  if (state.ended) return state.ended.ok ? BADGES.done : BADGES.error
-  return null
-}
-
 export function useAgentNavBadge(): AgentNavBadge | null {
-  return useSyncExternalStore(subscribe, aggregateBadge)
+  return useAgentUiStore((s) => {
+    if (s.confirming) return BADGES.confirming
+    if (s.running) return BADGES.running
+    if (s.ended) return s.ended.ok ? BADGES.done : BADGES.error
+    return null
+  })
 }

@@ -1,3 +1,4 @@
+import type { AgentToolCallEvent, AgentToolResultEvent } from '@shared/contract'
 import type {
   AgentDonePayload,
   AgentSession,
@@ -7,13 +8,14 @@ import type {
   ModelProbeResult,
   SettingsView
 } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import type { AgentToolCallEvent, AgentToolResultEvent } from '../../../preload/index'
 import { Markdown } from '../components/Markdown'
 import { Badge, Button, Card, Select, Textarea } from '../components/ui'
 import { makeSessionTitle, toolLabel, toolSummary, turnsToMessages } from '../lib/agentTurns'
 import { setAgentUi } from '../lib/agentUiStore'
 import { fmtDuration, fmtRelative, fmtTokens } from '../lib/format'
+import { qk, queries } from '../lib/queries'
 
 type AssistantTurn = Extract<AgentTurn, { role: 'assistant' }>
 
@@ -149,7 +151,8 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [probe, setProbe] = useState<ModelProbeResult | null>(null)
   const [model, setModel] = useState('')
-  const [sessions, setSessions] = useState<AgentSessionBrief[]>([])
+  const queryClient = useQueryClient()
+  const { data: sessions = [] } = useQuery(queries.agentSessions(projectId))
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [turns, setTurns] = useState<AgentTurn[]>([])
   const [input, setInput] = useState('')
@@ -188,9 +191,12 @@ export default function Agent({ projectId }: { projectId: string }) {
     [applyTurns]
   )
 
-  const refreshSessions = useCallback((pid: string): void => {
-    void window.api.agent.sessions(pid).then(setSessions)
-  }, [])
+  const refreshSessions = useCallback(
+    (pid: string): void => {
+      void queryClient.invalidateQueries({ queryKey: qk.agentSessions(pid) })
+    },
+    [queryClient]
+  )
 
   const persist = useCallback(
     (sid: string, finalTurns: AgentTurn[]): void => {
@@ -234,8 +240,8 @@ export default function Agent({ projectId }: { projectId: string }) {
         setProbe(null)
       }
     })()
-    void window.api.agent.sessions(projectId).then((list) => {
-      setSessions(list)
+    void queryClient.invalidateQueries({ queryKey: qk.agentSessions(projectId) }).then(() => {
+      const list = queryClient.getQueryData(qk.agentSessions(projectId)) as AgentSessionBrief[]
       if (list.length > 0) {
         void window.api.agent.sessionLoad(list[0].id).then((session) => {
           if (!session) return
@@ -252,7 +258,7 @@ export default function Agent({ projectId }: { projectId: string }) {
       const sid = sessionIdRef.current
       if (sid && turnsRef.current.length > 0) persist(sid, finalizeTurns(turnsRef.current))
     }
-  }, [projectId, applyTurns, setSession, persist])
+  }, [projectId, applyTurns, setSession, persist, queryClient])
 
   useEffect(() => {
     const offDelta = window.api.agent.onDelta((id, text) => {

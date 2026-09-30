@@ -1,10 +1,12 @@
-import type { ChapterBrief, ContextPart, ReviewResult } from '@shared/types'
+import type { ContextPart, ReviewResult } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { DiffView } from '../components/DiffView'
 import { Badge, Button, Card, Label, Select, Textarea } from '../components/ui'
 import { fmtDuration, fmtTokens } from '../lib/format'
 import { type DonePayload, runPipeline } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 import { openWizard } from '../lib/wizardStore'
 
 interface ChapterDoneData {
@@ -79,7 +81,8 @@ interface Props {
 }
 
 export default function Writing({ projectId, onNavigate, focusOutlineId, onFocusConsumed }: Props) {
-  const [briefs, setBriefs] = useState<ChapterBrief[]>([])
+  const queryClient = useQueryClient()
+  const { data: briefs = [] } = useQuery(queries.chapterBriefs(projectId))
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [content, setContent] = useState('')
   const [dirty, setDirty] = useState(false)
@@ -118,9 +121,8 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const selected = briefs.find((b) => b.id === selectedId) ?? null
 
   const loadBriefs = useCallback((): void => {
-    if (!projectId) return
-    void window.api.novel.chapterBriefs(projectId).then(setBriefs)
-  }, [projectId])
+    void queryClient.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
+  }, [projectId, queryClient])
 
   const openChapter = useCallback((outlineId: string): void => {
     setSelectedId(outlineId)
@@ -139,15 +141,14 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     })
   }, [])
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
-    setBriefs([])
     setSelectedId(null)
     setContent('')
     setBatch(null)
     resumeRef.current = null
     polishedRef.current = false
-    loadBriefs()
-  }, [loadBriefs])
+  }, [projectId])
 
   useEffect(() => {
     if (!focusOutlineId || briefs.length === 0) return

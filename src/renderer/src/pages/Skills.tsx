@@ -1,45 +1,43 @@
-import type { SkillFile, SkillMeta } from '@shared/types'
+import type { SkillFile } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Badge, Button, Card, Textarea } from '../components/ui'
+import { qk, queries } from '../lib/queries'
 
 export default function Skills() {
-  const [list, setList] = useState<SkillMeta[]>([])
-  const [current, setCurrent] = useState<SkillFile | null>(null)
+  const queryClient = useQueryClient()
+  const { data: list = [] } = useQuery(queries.skills())
+  const [selected, setSelected] = useState<string | null>(null)
+  const currentQ = useQuery({
+    queryKey: ['skills', 'get', selected],
+    queryFn: () => window.api.skills.get(selected as string),
+    enabled: !!selected
+  })
   const [draft, setDraft] = useState('')
   const [dirty, setDirty] = useState(false)
   const [savedAt, setSavedAt] = useState(0)
+  const current: SkillFile | null = currentQ.data ?? null
 
-  const load = (selectFilename?: string): void => {
-    void window.api.skills.list().then((l) => {
-      setList(l)
-      const target = selectFilename ? l.find((s) => s.filename === selectFilename) : l[0]
-      if (target) void openSkill(target.filename)
-      else {
-        setCurrent(null)
-        setDraft('')
-      }
-    })
-  }
-
-  const openSkill = (filename: string): void => {
-    void window.api.skills.get(filename).then((f) => {
-      setCurrent(f)
-      setDraft(f?.raw ?? '')
-      setDirty(false)
-    })
-  }
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅挂载执行一次；load 引用不稳定，故意不进 deps
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅在切换文件时重置草稿，避免后台 refetch 覆盖编辑中的内容
   useEffect(() => {
-    load()
-  }, [])
+    if (current) {
+      setDraft(current.raw)
+      setDirty(false)
+    }
+  }, [current?.filename])
+
+  const reloadList = (selectFilename?: string): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.skills })
+    if (selectFilename) setSelected(selectFilename)
+    else if (!list.some((s) => s.filename === selected)) setSelected(null)
+  }
 
   const save = (): void => {
     if (!current) return
     void window.api.skills.save(current.filename, draft).then(() => {
       setDirty(false)
       setSavedAt(Date.now())
-      load(current.filename)
+      reloadList(current.filename)
     })
   }
 
@@ -48,13 +46,16 @@ export default function Skills() {
     if (!name) return
     const safe = name.trim().replace(/[\\/:*?"<>|]/g, '-')
     const template = `---\nname: ${safe}\ndescription: 描述与触发词\n---\n\n# 指令内容`
-    void window.api.skills.save(`${safe}.md`, template).then(() => load(`${safe}.md`))
+    void window.api.skills.save(`${safe}.md`, template).then(() => reloadList(`${safe}.md`))
   }
 
   const remove = (): void => {
     if (!current) return
     if (!window.confirm(`删除技能「${current.name}」？`)) return
-    void window.api.skills.delete(current.filename).then(() => load())
+    void window.api.skills.delete(current.filename).then(() => {
+      setSelected(null)
+      reloadList()
+    })
   }
 
   return (
@@ -71,7 +72,7 @@ export default function Skills() {
             <button
               type="button"
               key={s.filename}
-              onClick={() => openSkill(s.filename)}
+              onClick={() => setSelected(s.filename)}
               className={`mb-1 w-full cursor-pointer rounded-md px-3 py-2 text-left transition-colors ${
                 current?.filename === s.filename ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
               }`}

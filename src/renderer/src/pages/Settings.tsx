@@ -6,10 +6,12 @@ import {
   PURPOSES,
   type SettingsView
 } from '@shared/types'
-import { useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useRef, useState } from 'react'
 import { ServerPanel } from '../components/ServerPanel'
 import { Badge, Button, Card, Input, Label, Select } from '../components/ui'
 import { purposeLabel } from '../lib/format'
+import { qk, queries } from '../lib/queries'
 
 const EMPTY_PROFILE: ProviderProfile = {
   baseUrl: '',
@@ -31,14 +33,17 @@ export default function Settings() {
   const [probeResult, setProbeResult] = useState<ModelProbeResult | null>(null)
   const [probeError, setProbeError] = useState('')
 
+  const queryClient = useQueryClient()
+  const { data: settingsData } = useQuery(queries.settings())
+  const seededRef = useRef(false)
   useEffect(() => {
-    void window.api.settings.get().then((s) => {
-      setView(s)
-      setProvider(s.provider)
-      setDrafts(s.profiles)
-      setQuota5h(String(s.quota5hPrompts))
-    })
-  }, [])
+    if (!settingsData || seededRef.current) return
+    seededRef.current = true
+    setView(settingsData)
+    setProvider(settingsData.provider)
+    setDrafts(settingsData.profiles)
+    setQuota5h(String(settingsData.quota5hPrompts))
+  }, [settingsData])
 
   const preset = providerPreset(provider)
   const active = drafts?.[provider] ?? EMPTY_PROFILE
@@ -101,6 +106,7 @@ export default function Settings() {
         setDrafts(s.profiles)
         setApiKey('')
         setSavedAt(Date.now())
+        void queryClient.invalidateQueries({ queryKey: qk.settings })
       })
       .finally(() => setSaving(false))
   }

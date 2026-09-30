@@ -1,4 +1,4 @@
-import { useSyncExternalStore } from 'react'
+import { create } from 'zustand'
 
 export type ToastTone = 'success' | 'error'
 
@@ -8,33 +8,32 @@ export interface ToastItem {
   text: string
 }
 
-let toasts: ToastItem[] = []
-let nextId = 1
-const listeners = new Set<() => void>()
-
-function emit(): void {
-  listeners.forEach((l) => {
-    l()
-  })
+interface ToastState {
+  toasts: ToastItem[]
+  push: (tone: ToastTone, text: string) => void
+  dismiss: (id: number) => void
 }
 
+let nextId = 1
+
+export const useToastStore = create<ToastState>((set) => ({
+  toasts: [],
+  push: (tone, text) => {
+    const item: ToastItem = { id: nextId++, tone, text }
+    set((s) => ({ toasts: [...s.toasts, item] }))
+    setTimeout(() => useToastStore.getState().dismiss(item.id), 4000)
+  },
+  dismiss: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) }))
+}))
+
 export function pushToast(tone: ToastTone, text: string): void {
-  const item: ToastItem = { id: nextId++, tone, text }
-  toasts = [...toasts, item]
-  emit()
-  setTimeout(() => dismissToast(item.id), 4000)
+  useToastStore.getState().push(tone, text)
 }
 
 export function dismissToast(id: number): void {
-  toasts = toasts.filter((t) => t.id !== id)
-  emit()
-}
-
-function subscribe(listener: () => void): () => void {
-  listeners.add(listener)
-  return () => listeners.delete(listener)
+  useToastStore.getState().dismiss(id)
 }
 
 export function useToasts(): ToastItem[] {
-  return useSyncExternalStore(subscribe, () => toasts)
+  return useToastStore((s) => s.toasts)
 }

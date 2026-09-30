@@ -1,9 +1,11 @@
 import type { Character } from '@shared/types'
-import { useCallback, useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
 import { AiTextarea } from '../components/AiTextarea'
 import { Badge, Button, Card, Input, Label } from '../components/ui'
 import { runPipeline } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 import { pushToast } from '../lib/toastStore'
 import { openWizard } from '../lib/wizardStore'
 
@@ -25,7 +27,8 @@ export default function Characters({
   projectId: string
   onNavigate: Navigate
 }) {
-  const [list, setList] = useState<Character[]>([])
+  const queryClient = useQueryClient()
+  const { data: list = [] } = useQuery(queries.characters(projectId))
   const [edit, setEdit] = useState<EditState>(EMPTY)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [genOpen, setGenOpen] = useState(false)
@@ -36,17 +39,15 @@ export default function Characters({
   const [genOutput, setGenOutput] = useState('')
   const [revisedIds, setRevisedIds] = useState<string[]>([])
 
-  const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.novel.characters(projectId).then(setList)
-  }, [projectId])
+  const load = (): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.characters(projectId) })
+  }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
-    setList([])
     setEdit(EMPTY)
     setSelectedId(null)
-    load()
-  }, [load])
+  }, [projectId])
 
   if (!projectId) {
     return (
@@ -113,8 +114,10 @@ export default function Characters({
         load()
         if (d?.characterId) {
           setSelectedId(d.characterId)
-          void window.api.novel.characters(projectId).then((cs) => {
-            const c = cs.find((x) => x.id === d.characterId)
+          void queryClient.invalidateQueries({ queryKey: qk.characters(projectId) }).then(() => {
+            const c = (queryClient.getQueryData(qk.characters(projectId)) as Character[]).find(
+              (x) => x.id === d.characterId
+            )
             if (c)
               setEdit({
                 id: c.id,

@@ -1,9 +1,11 @@
 import type { Character, GraphNodeKind, ProjectGraph, WorldbuildEntry } from '@shared/types'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { PreviewPanel } from '../components/PreviewPanel'
 import { type GraphEdgeData, type GraphNodeData, RelationGraph } from '../components/RelationGraph'
 import { Button } from '../components/ui'
 import type { Navigate } from '../lib/nav'
+import { queries } from '../lib/queries'
 
 const KIND_LABELS: Record<GraphNodeKind, string> = {
   character: '人物',
@@ -49,9 +51,10 @@ export default function GraphPage({
   focusNodeId?: string | null
   onFocusConsumed?: () => void
 }) {
-  const [graph, setGraph] = useState<ProjectGraph | null>(null)
-  const [entries, setEntries] = useState<WorldbuildEntry[]>([])
-  const [characters, setCharacters] = useState<Character[]>([])
+  const _queryClient = useQueryClient()
+  const { data: graph = null } = useQuery(queries.graph(projectId))
+  const { data: entries = [] } = useQuery(queries.worldbuild(projectId))
+  const { data: characters = [] } = useQuery(queries.characters(projectId))
   const [preview, setPreview] = useState<Preview>(null)
   const [activeId, setActiveId] = useState<string | null>(null)
   const [centerSignal, setCenterSignal] = useState(0)
@@ -66,23 +69,10 @@ export default function GraphPage({
   const [showDangling, setShowDangling] = useState(false)
   const autoClusterRef = useRef(false)
 
-  const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.graph.project(projectId).then(setGraph)
-    void window.api.novel.worldbuild(projectId).then(setEntries)
-    void window.api.novel.characters(projectId).then(setCharacters)
-  }, [projectId])
-
+  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
     setFocus(null)
-    load()
-    const offAgent = window.api.agent.onDone(() => load())
-    const offLlm = window.api.llm.onDone(() => load())
-    return () => {
-      offAgent()
-      offLlm()
-    }
-  }, [load])
+  }, [projectId])
 
   useEffect(() => {
     if (!graph || autoClusterRef.current) return

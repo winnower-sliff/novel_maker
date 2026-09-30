@@ -1,7 +1,7 @@
-import type { UsageRecord, UsageStats } from '@shared/types'
-import { useEffect, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { Card } from '../components/ui'
 import { fmtDuration, fmtTime, fmtTokens, purposeLabel } from '../lib/format'
+import { queries } from '../lib/queries'
 
 function QuotaBar({ used, limit }: { used: number; limit: number }) {
   if (limit <= 0) return null
@@ -68,24 +68,13 @@ function GroupTable({
 }
 
 export default function Usage() {
-  const [stats, setStats] = useState<UsageStats | null>(null)
-  const [records, setRecords] = useState<UsageRecord[]>([])
-  const [quota, setQuota] = useState(0)
-  const [loading, setLoading] = useState(true)
-
-  useEffect(() => {
-    void Promise.all([
-      window.api.usage.stats(),
-      window.api.usage.list(200),
-      window.api.settings.get()
-    ])
-      .then(([s, r, cfg]) => {
-        setStats(s)
-        setRecords(r)
-        setQuota(cfg.quota5hPrompts)
-      })
-      .finally(() => setLoading(false))
-  }, [])
+  const statsQ = useQuery(queries.usageStats())
+  const recordsQ = useQuery(queries.usageList(200))
+  const settingsQ = useQuery(queries.settings())
+  const stats = statsQ.data ?? null
+  const records = recordsQ.data ?? []
+  const quota = settingsQ.data?.quota5hPrompts ?? 0
+  const loading = statsQ.isPending || recordsQ.isPending
 
   const maxDayTotal = stats
     ? Math.max(1, ...stats.byDay.map((d) => d.inputTokens + d.outputTokens))

@@ -1,7 +1,9 @@
 import type { Foreshadow } from '@shared/types'
-import { useCallback, useEffect, useState } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useState } from 'react'
 import { Badge, Button, Card, Input, Label, Select } from '../components/ui'
 import type { Navigate } from '../lib/nav'
+import { qk, queries } from '../lib/queries'
 
 export default function Foreshadows({
   projectId,
@@ -10,22 +12,17 @@ export default function Foreshadows({
   projectId: string
   onNavigate: Navigate
 }) {
-  const [list, setList] = useState<Foreshadow[]>([])
+  const queryClient = useQueryClient()
+  const { data: list = [] } = useQuery(queries.foreshadows(projectId))
   const [content, setContent] = useState('')
   const [planted, setPlanted] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editPlanned, setEditPlanned] = useState('')
   const [editPriority, setEditPriority] = useState('')
 
-  const load = useCallback((): void => {
-    if (!projectId) return
-    void window.api.novel.foreshadows(projectId).then(setList)
-  }, [projectId])
-
-  useEffect(() => {
-    setList([])
-    load()
-  }, [load])
+  const load = (): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.foreshadows(projectId) })
+  }
 
   if (!projectId) {
     return (
