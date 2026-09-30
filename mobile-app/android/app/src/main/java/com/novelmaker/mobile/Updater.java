@@ -113,11 +113,21 @@ public final class Updater {
         return version;
     }
 
-    /** 首启动把 APK 内置资源拷到 filesDir/bundle（幂等） */
+    /**
+     * 首启动把 APK 内置资源拷到 filesDir/bundle（幂等）。
+     * APK 覆盖安装后本地 bundle 仍是旧版：对比内置 index.html 与本地，
+     * 不一致则清掉本地 bundle 重拷，并清 version 记录让更新检查重新对齐服务器。
+     */
     public static void ensureLocalBundle(Context ctx) {
         try {
             File bundleDir = new File(ctx.getFilesDir(), "bundle");
-            if (new File(bundleDir, "index.html").exists()) return;
+            if (new File(bundleDir, "index.html").exists()) {
+                String embedded = readAssetText(ctx, "public/index.html");
+                String local = readTextFile(new File(bundleDir, "index.html"));
+                if (embedded == null || embedded.equals(local)) return;
+                deleteRecursively(bundleDir);
+                prefs(ctx).edit().remove("version").apply();
+            }
             deleteRecursively(bundleDir);
             copyAssetDir(ctx, "public", bundleDir);
             prefs(ctx).edit().remove("version").apply();
@@ -167,15 +177,31 @@ public final class Updater {
         return conn;
     }
 
+    private static String readTextFile(File f) throws IOException {
+        try (FileInputStream in = new FileInputStream(f)) {
+            return drainStream(in);
+        }
+    }
+
+    private static String readAssetText(Context ctx, String path) throws IOException {
+        try (InputStream in = ctx.getAssets().open(path)) {
+            return drainStream(in);
+        }
+    }
+
+    private static String drainStream(InputStream in) throws IOException {
+        ByteArrayOutputStream bos = new ByteArrayOutputStream();
+        byte[] buf = new byte[8192];
+        int n;
+        while ((n = in.read(buf)) > 0) bos.write(buf, 0, n);
+        return new String(bos.toByteArray(), StandardCharsets.UTF_8);
+    }
+
     private static String readAll(HttpURLConnection conn) throws IOException {
         InputStream in = conn.getErrorStream() != null ? conn.getErrorStream() : conn.getInputStream();
-        ByteArrayOutputStream bos = new ByteArrayOutputStream();
         try (InputStream is = in) {
-            byte[] buf = new byte[4096];
-            int n;
-            while ((n = is.read(buf)) > 0) bos.write(buf, 0, n);
+            return drainStream(is);
         }
-        return new String(bos.toByteArray(), StandardCharsets.UTF_8);
     }
 
     private static void copyAssetDir(Context ctx, String assetPath, File dest) throws IOException {
