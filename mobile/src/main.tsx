@@ -21,3 +21,6 @@ createRoot(document.getElementById('root') as HTMLElement).render(
     </QueryClientProvider>
   </StrictMode>
 )
+
+// Android 原生更新层轮询此标记：渲染完成才揭覆盖层
+;(window as unknown as Record<string, unknown>).__NM_READY__ = true

@@ -103,10 +103,18 @@ export function installBridge(): void {
 export async function fetchMobileVersion(conn: {
   baseUrl: string
   token: string
-}): Promise<{ version: string | null; buildAt: string | null }> {
+}): Promise<{
+  version: string | null
+  buildAt: string | null
+  files: Array<{ path: string; size: number }>
+}> {
   const res = await fetch(`${conn.baseUrl}/api/mobile/version`, {
     headers: { 'x-nm-token': conn.token }
   })
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
-  return (await res.json()) as { version: string | null; buildAt: string | null }
+  return (await res.json()) as {
+    version: string | null
+    buildAt: string | null
+    files: Array<{ path: string; size: number }>
+  }
 }

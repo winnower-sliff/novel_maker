@@ -1,9 +1,9 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { Badge, Button, Card, Spinner } from '@mobile/components/ui'
 import { fetchMobileVersion } from '@mobile/lib/bridge'
 import { useConnStore } from '@mobile/lib/conn'
-import { fmtTokens } from '@mobile/lib/format'
+import { fmtRelative, fmtTokens } from '@mobile/lib/format'
 
 declare const __APP_VERSION__: string
 
@@ -11,14 +11,45 @@ type UpdateState =
   | { kind: 'idle' }
   | { kind: 'checking' }
   | { kind: 'latest'; version: string }
-  | { kind: 'available'; version: string }
+  | { kind: 'available'; version: string; fileCount: number; totalBytes: number }
   | { kind: 'server-none' }
   | { kind: 'error'; message: string }
+
+interface LastUpdate {
+  ok: boolean
+  version: string | null
+  files: number
+  bytes: number
+  durationMs: number
+  error: string | null
+  at: number
+}
+
+function fmtBytes(n: number): string {
+  if (n >= 1024 * 1024) return `${(n / 1048576).toFixed(1)} MB`
+  if (n >= 1024) return `${(n / 1024).toFixed(0)} KB`
+  return `${n} B`
+}
+
+function readLastUpdate(): LastUpdate | null {
+  try {
+    const raw = localStorage.getItem('nm_last_update')
+    return raw ? (JSON.parse(raw) as LastUpdate) : null
+  } catch {
+    return null
+  }
+}
 
 export default function More() {
   const conn = useConnStore((s) => s.conn)
   const setConn = useConnStore((s) => s.setConn)
   const [update, setUpdate] = useState<UpdateState>({ kind: 'idle' })
+  const [lastUpdate, setLastUpdate] = useState<LastUpdate | null>(readLastUpdate)
+
+  // 回到此页时刷新「上次启动更新」
+  useEffect(() => {
+    setLastUpdate(readLastUpdate())
+  }, [])
 
   const { data: usage } = useQuery({
     queryKey: ['usage', 'stats'],
@@ -36,7 +67,12 @@ export default function More() {
       } else if (remote.version === __APP_VERSION__) {
         setUpdate({ kind: 'latest', version: remote.version })
       } else {
-        setUpdate({ kind: 'available', version: remote.version })
+        setUpdate({
+          kind: 'available',
+          version: remote.version,
+          fileCount: remote.files.length,
+          totalBytes: remote.files.reduce((s, f) => s + f.size, 0)
+        })
       }
     } catch (err) {
       setUpdate({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -65,7 +101,7 @@ export default function More() {
           <Badge>v{__APP_VERSION__}</Badge>
         </div>
         <p className="mt-1.5 text-[11px] leading-4 text-zinc-500">
-          界面资源从电脑静默更新，无需重新安装 APP。电脑端运行 mobile:bundle 后，这里即可检查到新版本。
+          每次启动 APP 时自动检查并下载新版界面，下载完成后自动应用。电脑端运行 mobile:bundle 发布新包即可。
         </p>
         <div className="mt-3 flex items-center gap-2">
           <Button
@@ -81,7 +117,8 @@ export default function More() {
           )}
           {update.kind === 'available' && (
             <span className="text-xs text-amber-400">
-              发现新版本 v{update.version}，重启 APP 后生效
+              发现新版本 v{update.version} · {update.fileCount} 个文件 · 共 {fmtBytes(update.totalBytes)}
+              ，下次启动自动应用
             </span>
           )}
           {update.kind === 'server-none' && (
@@ -92,6 +129,32 @@ export default function More() {
           )}
         </div>
       </Card>
+
+      {lastUpdate && (
+        <Card className="p-4">
+          <div className="flex items-center justify-between">
+            <div className="text-sm font-medium text-zinc-200">上次启动更新</div>
+            <span className="text-[11px] text-zinc-600">{fmtRelative(lastUpdate.at)}</span>
+          </div>
+          {lastUpdate.ok ? (
+            <div className="mt-2 text-xs leading-5 text-zinc-400">
+              <span className="text-emerald-400">成功</span>
+              {lastUpdate.version && <> · v{lastUpdate.version}</>}
+              {lastUpdate.files > 0 && (
+                <>
+                  {' '}
+                  · {lastUpdate.files} 个文件 · {fmtBytes(lastUpdate.bytes)}
+                </>
+              )}
+              {lastUpdate.durationMs > 0 && <> · {(lastUpdate.durationMs / 1000).toFixed(1)}s</>}
+            </div>
+          ) : (
+            <div className="mt-2 text-xs leading-5 text-red-300">
+              失败{lastUpdate.error ? `：${lastUpdate.error}` : ''}
+            </div>
+          )}
+        </Card>
+      )}
 
       {usage && (
         <Card className="p-4">
