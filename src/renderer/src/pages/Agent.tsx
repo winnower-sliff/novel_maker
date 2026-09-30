@@ -235,7 +235,7 @@ export default function Agent({ projectId }: { projectId: string }) {
         })()
       )
       try {
-        setProbe(await window.api.models.probe())
+        setProbe(await window.api.models.probe({}))
       } catch {
         setProbe(null)
       }

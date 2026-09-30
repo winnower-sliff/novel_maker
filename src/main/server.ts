@@ -353,6 +353,7 @@ function handleEvents(req: IncomingMessage, res: ServerResponse): void {
   }
   req.on('close', cleanup)
   res.on('close', cleanup)
+  res.on('error', cleanup)
 }
 
 function broadcast(channel: string, requestId: string, ...args: unknown[]): void {

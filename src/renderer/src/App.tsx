@@ -258,8 +258,19 @@ export default function App() {
   const [graphFocus, setGraphFocus] = useState<string | null>(null)
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
+  const [sseDown, setSseDown] = useState(false)
   const wbBadge = useWbGenNavBadge()
   const agentBadge = useAgentNavBadge()
+
+  // 浏览器环境监听 SSE 连接状态，断连时全局横幅提示
+  useEffect(() => {
+    if (!window.__NM_WEB__) return
+    const onState = (e: Event): void => {
+      setSseDown((e as CustomEvent<string>).detail !== 'open')
+    }
+    window.addEventListener('nm-sse-state', onState)
+    return () => window.removeEventListener('nm-sse-state', onState)
+  }, [])
 
   const statsQ = useQuery({ ...queries.usageStats(), refetchInterval: 30_000 })
   const settingsQ = useQuery(queries.settings())
@@ -357,6 +368,12 @@ export default function App() {
     <div className="flex h-full flex-col">
       <Toaster />
       <CreationWizard onNavigate={navigate} />
+      {sseDown && (
+        <div className="flex shrink-0 items-center justify-center gap-2 bg-amber-600/90 px-3 py-1.5 text-xs text-white">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-white" aria-hidden="true" />
+          与服务器的连接已中断，正在重连…生成进度可能无法实时显示
+        </div>
+      )}
       <header className="flex min-h-12 shrink-0 items-center gap-2 border-b border-zinc-800 bg-zinc-900/95 px-3 pt-[env(safe-area-inset-top)] md:hidden">
         <button
           type="button"

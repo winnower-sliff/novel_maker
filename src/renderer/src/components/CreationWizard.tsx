@@ -10,6 +10,42 @@ import { Badge, Button, Input, Label, Textarea } from './ui'
 const STEP_LABELS = ['设定确认', '世界观', '人物', '大纲', '完成']
 const STEP_LABELS_SHORT = ['设定', '世界观', '人物', '大纲', '完成']
 
+// 向导草稿存档：随 project.wizardPlan 落库，刷新/换端后可恢复
+interface WizardPlanSave {
+  draftText: string
+  wbBrief: string
+  wbCats: string[]
+  wbCount: number
+  chars: PremiseDraftCharacter[]
+  outlineIdea: string
+  outlineCount: number
+  volume: number
+  startNo: number
+  step: number
+}
+
+function parsePlan(raw: string | undefined): WizardPlanSave | null {
+  if (!raw) return null
+  try {
+    const v = JSON.parse(raw) as Partial<WizardPlanSave> | null
+    if (!v || typeof v !== 'object') return null
+    return {
+      draftText: v.draftText ?? '',
+      wbBrief: v.wbBrief ?? '',
+      wbCats: Array.isArray(v.wbCats) ? v.wbCats : [],
+      wbCount: typeof v.wbCount === 'number' ? v.wbCount : 8,
+      chars: Array.isArray(v.chars) ? v.chars : [],
+      outlineIdea: v.outlineIdea ?? '',
+      outlineCount: typeof v.outlineCount === 'number' ? v.outlineCount : 20,
+      volume: typeof v.volume === 'number' ? v.volume : 1,
+      startNo: typeof v.startNo === 'number' ? v.startNo : 1,
+      step: typeof v.step === 'number' ? Math.min(4, Math.max(0, v.step)) : 1
+    }
+  } catch {
+    return null
+  }
+}
+
 function StreamBox({ text, className }: { text: string; className: string }) {
   const ref = useRef<HTMLPreElement>(null)
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
@@ -107,26 +143,46 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
     outlineAbortRef.current = null
     setFinalCounts(null)
     setExisting(null)
-    void window.api.novel
-      .projects()
-      .then((ps) => setProject(ps.find((p) => p.id === projectId) ?? null))
-      .catch(() => {})
-    void window.api.novel
-      .worldbuildTypes(projectId)
-      .then(setTypeOptions)
-      .catch(() => {})
     void Promise.all([
+      window.api.novel.projects(),
       window.api.novel.worldbuild(projectId),
       window.api.novel.characters(projectId),
       window.api.novel.outlines(projectId)
     ])
-      .then(([wb, cs, ol]) => {
+      .then(([ps, wb, cs, ol]) => {
+        const p = ps.find((x) => x.id === projectId) ?? null
+        setProject(p)
         const counts = { wb: wb.length, char: cs.length, ol: ol.length }
         setExisting(counts)
+        const saved = parsePlan(p?.wizardPlan)
+        if (saved) {
+          setDraftDelta(saved.draftText)
+          setWbBrief(saved.wbBrief)
+          setWbCats(saved.wbCats)
+          setWbCount(saved.wbCount)
+          setChars(saved.chars)
+          setOutlineIdea(saved.outlineIdea)
+          setOutlineCount(saved.outlineCount)
+          setVolume(saved.volume)
+          setStartNo(saved.startNo)
+        }
         setStep(
-          initialStep ?? (counts.wb === 0 ? 0 : counts.char === 0 ? 2 : counts.ol === 0 ? 3 : 4)
+          initialStep ??
+            (saved
+              ? saved.step
+              : counts.wb === 0
+                ? 0
+                : counts.char === 0
+                  ? 2
+                  : counts.ol === 0
+                    ? 3
+                    : 4)
         )
       })
+      .catch(() => {})
+    void window.api.novel
+      .worldbuildTypes(projectId)
+      .then(setTypeOptions)
       .catch(() => {})
   }, [open, projectId, initialStep])
 
@@ -165,8 +221,35 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
     outlineAbortRef.current = null
   }
 
+  // 草稿落库：关闭时保存（完成向导则清空），起草完成后立即保存。
+  // patch 用于在 setState 未生效的闭包里显式传入最新值
+  const savePlan = (patch: Partial<WizardPlanSave> = {}, clear = false): void => {
+    if (!projectId) return
+    if (clear) {
+      void window.api.novel.projectUpdate(projectId, { wizardPlan: '' }).catch(() => {})
+      return
+    }
+    const payload: WizardPlanSave = {
+      draftText: patch.draftText ?? draftDelta,
+      wbBrief: patch.wbBrief ?? wbBrief,
+      wbCats: patch.wbCats ?? wbCats,
+      wbCount: patch.wbCount ?? wbCount,
+      chars: patch.chars ?? chars,
+      outlineIdea: patch.outlineIdea ?? outlineIdea,
+      outlineCount: patch.outlineCount ?? outlineCount,
+      volume: patch.volume ?? volume,
+      startNo: patch.startNo ?? startNo,
+      step: patch.step ?? step
+    }
+    void window.api.novel
+      .projectUpdate(projectId, { wizardPlan: JSON.stringify(payload) })
+      .catch(() => {})
+  }
+
   const handleClose = (): void => {
     abortAll()
+    if (step >= 4) savePlan(undefined, true)
+    else savePlan()
     closeWizard()
   }
 
@@ -184,9 +267,11 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
     setDraftBusy(true)
     setDraftError(null)
     setDraftDelta('')
-    const { done, abort } = startPipeline('premiseDraft', { projectId }, (t) =>
+    let acc = ''
+    const { done, abort } = startPipeline('premiseDraft', { projectId }, (t) => {
+      acc += t
       setDraftDelta((v) => v + t)
-    )
+    })
     draftAbortRef.current = abort
     try {
       const payload = await done
@@ -194,6 +279,16 @@ export function CreationWizard({ onNavigate }: CreationWizardProps) {
       applyPlan(plan)
       setTypeOptions((prev) => Array.from(new Set([...prev, ...plan.worldbuildCategories])))
       setStep(1)
+      savePlan({
+        draftText: acc,
+        wbBrief: plan.worldbuildBrief,
+        wbCats: plan.worldbuildCategories,
+        wbCount: plan.worldbuildCount,
+        chars: plan.characters,
+        outlineIdea: plan.outlineIdea,
+        outlineCount: plan.outlineCount,
+        step: 1
+      })
     } catch (e) {
       setDraftError(e instanceof Error ? e.message : String(e))
     } finally {

@@ -158,4 +158,8 @@ function migrate(d: DatabaseSync): void {
     d.exec("ALTER TABLE foreshadows ADD COLUMN planned_resolve TEXT DEFAULT ''")
     d.exec("ALTER TABLE foreshadows ADD COLUMN priority TEXT DEFAULT ''")
   }
+  const projCols = d.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>
+  if (!projCols.some((c) => c.name === 'wizard_plan')) {
+    d.exec("ALTER TABLE projects ADD COLUMN wizard_plan TEXT DEFAULT ''")
+  }
 }

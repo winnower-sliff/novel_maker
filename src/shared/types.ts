@@ -167,6 +167,7 @@ export interface Project {
   styleGuide: string
   targetWords: number
   status: string
+  wizardPlan: string
   createdAt: number
   updatedAt: number
 }

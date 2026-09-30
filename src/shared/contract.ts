@@ -105,7 +105,8 @@ export const ProjectInputSchema = z.object({
   title: z.string(),
   genre: z.string().optional(),
   styleGuide: z.string().optional(),
-  targetWords: z.number().optional()
+  targetWords: z.number().optional(),
+  wizardPlan: z.string().optional()
 })
 
 export const CharacterInputSchema = z.object({

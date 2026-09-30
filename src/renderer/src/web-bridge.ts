@@ -17,6 +17,12 @@ type EventListener = (...args: never[]) => void
 const listeners = new Map<string, Set<EventListener>>()
 let source: EventSource | null = null
 let redirecting = false
+let reconnectDelay = 1000
+let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+
+function emitState(state: 'open' | 'connecting' | 'closed'): void {
+  window.dispatchEvent(new CustomEvent('nm-sse-state', { detail: state }))
+}
 
 function on(channel: string, cb: EventListener): () => void {
   let set = listeners.get(channel)
@@ -36,9 +42,24 @@ function redirectToLogin(): void {
   window.location.href = '/login'
 }
 
+function scheduleReconnect(): void {
+  if (reconnectTimer) return
+  emitState('connecting')
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = null
+    ensureSource()
+  }, reconnectDelay)
+  reconnectDelay = Math.min(reconnectDelay * 2, 15_000)
+}
+
 function ensureSource(): void {
   if (source) return
+  emitState('connecting')
   source = new EventSource('/api/events')
+  source.onopen = () => {
+    reconnectDelay = 1000
+    emitState('open')
+  }
   source.onmessage = (ev: MessageEvent<string>) => {
     try {
       const data = JSON.parse(ev.data) as {
@@ -54,6 +75,7 @@ function ensureSource(): void {
     }
   }
   source.onerror = () => {
+    // 会话失效跳登录；否则按退避重建。CLOSED 状态浏览器不会自动重连，必须手动拉起
     void fetch('/api/session')
       .then((r) => r.json() as Promise<{ authenticated?: boolean }>)
       .then((s) => {
@@ -61,6 +83,12 @@ function ensureSource(): void {
       })
       .catch(() => {
         /* 网络暂不可用时保持重连 */
+      })
+      .finally(() => {
+        if (source && source.readyState === EventSource.CLOSED) {
+          source = null
+        }
+        scheduleReconnect()
       })
   }
 }

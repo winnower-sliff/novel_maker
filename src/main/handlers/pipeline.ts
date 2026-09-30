@@ -240,6 +240,8 @@ export const pipelineHandlers = {
           continueOnMaxTokens: 3
         })
       }
+      default:
+        throw new Error(`未知的流水线动作: ${String(action)}`)
     }
   }
 } satisfies PartialHandlerTable

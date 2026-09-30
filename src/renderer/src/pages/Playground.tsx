@@ -33,7 +33,7 @@ export default function Playground() {
         })()
       )
       try {
-        const p = await window.api.models.probe()
+        const p = await window.api.models.probe({})
         setProbe(p)
       } catch {
         setProbe(null)
