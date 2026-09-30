@@ -1,0 +1,11 @@
+{
+  "appId": "com.novelmaker.mobile",
+  "appName": "Novel Maker",
+  "webDir": "www",
+  "android": {
+    "allowMixedContent": true
+  },
+  "server": {
+    "androidScheme": "https"
+  }
+}

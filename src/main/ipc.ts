@@ -18,12 +18,15 @@ function electronSink(win: WebContents): EventSink {
 export function registerIpc(): void {
   const tables = { ...sharedHandlers, ...ipcOnlyHandlers } as unknown as Record<string, Handler>
   for (const [channel, handler] of Object.entries(tables)) {
-    ipcMain.handle(channel, (e, ...args: unknown[]) =>
-      (handler as (ctx: { sink: EventSink }, ...a: unknown[]) => unknown)(
+    console.log('[IPC-DBG]', channel, String(handler).slice(0, 80))
+    ipcMain.handle(channel, (e, ...args: unknown[]) => {
+      console.log('[IPC-CALL]', channel, JSON.stringify(args).slice(0, 120))
+      // handler 契约：第二参是契约元组（ArgsOf<C>），由调用方解构，不能 spread
+      return (handler as (ctx: { sink: EventSink }, a: unknown[]) => unknown)(
         { sink: electronSink(e.sender) },
-        ...args
+        args
       )
-    )
+    })
   }
 
   ipcMain.handle('server:config', async (_e, patch: Parameters<typeof saveServerConfig>[0]) => {

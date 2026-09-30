@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto'
-import { createReadStream, existsSync, statSync } from 'node:fs'
+import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import {
   createServer,
   request as httpRequest,
@@ -10,6 +10,7 @@ import {
 import { connect } from 'node:net'
 import { networkInterfaces } from 'node:os'
 import { extname, join, normalize, resolve } from 'node:path'
+import { app } from 'electron'
 import { invokeContract } from '../shared/contract'
 import type { ExportFormat } from '../shared/types'
 import type { EventSink } from './eventSink'
@@ -109,7 +110,8 @@ function parseCookies(req: IncomingMessage): Record<string, string> {
 function isAuthed(req: IncomingMessage): boolean {
   const config = loadServerConfig()
   if (!config.passwordHash) return isLoopback(req)
-  const token = parseCookies(req)[SESSION_COOKIE]
+  // APK WebView 源与服务器跨站，SameSite cookie 不可用，移动端改用 token header/query
+  const token = parseCookies(req)[SESSION_COOKIE] ?? reqToken(req)
   if (!token) return false
   const expires = sessions.get(token)
   if (!expires) return false
@@ -120,11 +122,54 @@ function isAuthed(req: IncomingMessage): boolean {
   return true
 }
 
-function json(res: ServerResponse, status: number, body: unknown): void {
+function reqToken(req: IncomingMessage): string | null {
+  const header = req.headers['x-nm-token']
+  if (typeof header === 'string' && header) return header
+  const query = new URL(req.url ?? '/', 'http://localhost').searchParams.get('token')
+  return query ?? null
+}
+
+function mobileRoot(): string {
+  return join(app.getPath('userData'), 'mobile')
+}
+
+interface MobileManifest {
+  version: string
+  buildAt: string
+  files: Array<{ path: string; hash: string; size: number }>
+}
+
+function readMobileManifest(): MobileManifest | null {
+  try {
+    const raw = readFileSync(join(mobileRoot(), 'manifest.json'), 'utf-8')
+    const parsed = JSON.parse(raw) as MobileManifest
+    if (!parsed?.version || !Array.isArray(parsed.files)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function corsHeaders(req: IncomingMessage): Record<string, string> {
+  const origin = req.headers.origin
+  const headers: Record<string, string> = {
+    'access-control-allow-headers': 'content-type, x-nm-token',
+    'access-control-allow-methods': 'GET, POST, OPTIONS'
+  }
+  if (origin) {
+    headers['access-control-allow-origin'] = origin
+    headers.vary = 'Origin'
+    headers['access-control-allow-credentials'] = 'true'
+  }
+  return headers
+}
+
+function json(res: ServerResponse, status: number, body: unknown, req?: IncomingMessage): void {
   const text = JSON.stringify(body ?? null)
   res.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
-    'cache-control': 'no-store'
+    'cache-control': 'no-store',
+    ...(req ? corsHeaders(req) : {})
   })
   res.end(text)
 }
@@ -284,14 +329,15 @@ async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<v
 
 function handleEvents(req: IncomingMessage, res: ServerResponse): void {
   if (!isAuthed(req)) {
-    json(res, 401, { error: '未登录' })
+    json(res, 401, { error: '未登录' }, req)
     return
   }
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
     connection: 'keep-alive',
-    'x-accel-buffering': 'no'
+    'x-accel-buffering': 'no',
+    ...corsHeaders(req)
   })
   res.write(': connected\n\n')
   const id = ++sseSeq
@@ -328,12 +374,12 @@ async function handleInvoke(
   channel: string
 ): Promise<void> {
   if (!isAuthed(req)) {
-    json(res, 401, { error: '未登录' })
+    json(res, 401, { error: '未登录' }, req)
     return
   }
   const contractEntry = invokeContract[channel as keyof typeof invokeContract]
   if (!contractEntry) {
-    json(res, 404, { error: `未知接口: ${channel}` })
+    json(res, 404, { error: `未知接口: ${channel}` }, req)
     return
   }
   try {
@@ -343,25 +389,26 @@ async function handleInvoke(
     if (!parsed.success) {
       const issue = parsed.error.issues[0]
       const where = issue?.path?.length ? `${issue.path.join('.')}: ` : ''
-      json(res, 400, { error: `参数校验失败 ${where}${issue?.message ?? '格式不合法'}` })
+      json(res, 400, { error: `参数校验失败 ${where}${issue?.message ?? '格式不合法'}` }, req)
       return
     }
     const handler = sharedHandlers[channel as keyof typeof sharedHandlers]
+    // handler 契约：第二参是契约元组（ArgsOf<C>），由调用方解构，不能 spread
     const result = await Promise.resolve(
-      (handler as (ctx: { sink: EventSink }, ...a: unknown[]) => unknown)(
+      (handler as (ctx: { sink: EventSink }, a: unknown[]) => unknown)(
         { sink: webSink },
-        ...parsed.data
+        parsed.data
       )
     )
-    json(res, 200, { result })
+    json(res, 200, { result }, req)
   } catch (err) {
-    json(res, 400, { error: (err as Error)?.message ?? String(err) })
+    json(res, 400, { error: (err as Error)?.message ?? String(err) }, req)
   }
 }
 
 async function handleExport(req: IncomingMessage, res: ServerResponse): Promise<void> {
   if (!isAuthed(req)) {
-    json(res, 401, { error: '未登录' })
+    json(res, 401, { error: '未登录' }, req)
     return
   }
   try {
@@ -377,16 +424,92 @@ async function handleExport(req: IncomingMessage, res: ServerResponse): Promise<
       'content-type': built.mime,
       'content-length': built.data.length,
       'x-words': String(built.words),
-      'content-disposition': `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`
+      'content-disposition': `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`,
+      ...corsHeaders(req)
     })
     res.end(built.data)
   } catch (err) {
-    json(res, 400, { error: (err as Error)?.message ?? String(err) })
+    json(res, 400, { error: (err as Error)?.message ?? String(err) }, req)
   }
+}
+
+async function handleMobileAuth(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  const ip = req.socket.remoteAddress ?? 'unknown'
+  const now = Date.now()
+  const record = loginAttempts.get(ip)
+  if (record && record.resetAt > now && record.count >= LOGIN_MAX_ATTEMPTS) {
+    json(res, 429, { error: '尝试次数过多，请稍后再试' }, req)
+    return
+  }
+  const body = (await readJsonBody(req)) as { password?: string } | null
+  const password = typeof body?.password === 'string' ? body.password : ''
+  const config = loadServerConfig()
+  if (!config.passwordHash) {
+    json(res, 403, { error: '服务器尚未设置访问密码，请在桌面端设置后再试' }, req)
+    return
+  }
+  if (!verifyPassword(password, config.passwordSalt, config.passwordHash)) {
+    const next =
+      record && record.resetAt > now
+        ? { count: record.count + 1, resetAt: record.resetAt }
+        : { count: 1, resetAt: now + LOGIN_WINDOW_MS }
+    loginAttempts.set(ip, next)
+    json(res, 401, { error: '密码错误' }, req)
+    return
+  }
+  loginAttempts.delete(ip)
+  const token = randomBytes(32).toString('hex')
+  sessions.set(token, now + SESSION_TTL_MS)
+  json(res, 200, { token }, req)
+}
+
+async function handleMobileVersion(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!isAuthed(req)) {
+    json(res, 401, { error: '未登录' }, req)
+    return
+  }
+  const manifest = readMobileManifest()
+  if (!manifest) {
+    json(res, 200, { version: null, buildAt: null, files: [] }, req)
+    return
+  }
+  json(res, 200, manifest, req)
+}
+
+function handleMobileFile(req: IncomingMessage, res: ServerResponse, url: URL): void {
+  if (!isAuthed(req)) {
+    json(res, 401, { error: '未登录' }, req)
+    return
+  }
+  const manifest = readMobileManifest()
+  const rel = url.searchParams.get('path') ?? ''
+  const entry = manifest?.files.find((f) => f.path === rel)
+  if (!manifest || !entry) {
+    json(res, 404, { error: '文件不存在' }, req)
+    return
+  }
+  const full = join(mobileRoot(), 'files', normalize(entry.path))
+  if (!full.startsWith(resolve(join(mobileRoot(), 'files'))) || !existsSync(full)) {
+    json(res, 404, { error: '文件不存在' }, req)
+    return
+  }
+  res.writeHead(200, {
+    'content-type': MIME[extname(full).toLowerCase()] ?? 'application/octet-stream',
+    'content-length': statSync(full).size,
+    etag: `"${entry.hash}"`,
+    'x-content-type-options': 'nosniff',
+    ...corsHeaders(req)
+  })
+  createReadStream(full).pipe(res)
 }
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const path = url.pathname
+  if (req.method === 'OPTIONS') {
+    res.writeHead(204, { 'access-control-max-age': '86400', ...corsHeaders(req) })
+    res.end()
+    return
+  }
   if (path === '/api/login' && req.method === 'POST') return handleLogin(req, res)
   if (path === '/api/logout' && req.method === 'POST') {
     const token = parseCookies(req)[SESSION_COOKIE]
@@ -404,6 +527,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   }
   if (path === '/api/events' && req.method === 'GET') return handleEvents(req, res)
   if (path === '/api/export' && req.method === 'POST') return handleExport(req, res)
+  if (path === '/api/mobile/auth' && req.method === 'POST') return handleMobileAuth(req, res)
+  if (path === '/api/mobile/version' && req.method === 'GET') return handleMobileVersion(req, res)
+  if (path === '/api/mobile/file' && req.method === 'GET') return handleMobileFile(req, res, url)
   if (path.startsWith('/api/invoke/') && req.method === 'POST') {
     return handleInvoke(req, res, decodeURIComponent(path.slice('/api/invoke/'.length)))
   }
