@@ -7,6 +7,9 @@ export interface Conn {
 
 const KEY = 'nm_conn'
 
+/** 家里电脑的 Tailscale 地址（APK 专用预设，改端口时在连接页可改） */
+export const DEFAULT_BASE_URL = 'http://100.100.62.8:3910'
+
 export function loadConn(): Conn | null {
   try {
     const raw = localStorage.getItem(KEY)

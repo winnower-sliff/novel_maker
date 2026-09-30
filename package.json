@@ -14,6 +14,7 @@
     "lint:fix": "biome check --write src mobile",
     "mobile:build": "vite build --config mobile/vite.config.ts",
     "mobile:bundle": "node scripts/pack-mobile.mjs",
+    "apk": "node scripts/build-apk.mjs",
     "dist": "electron-vite build && electron-builder --win"
   },
   "build": {

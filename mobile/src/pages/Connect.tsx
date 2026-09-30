@@ -1,10 +1,13 @@
 import { useState } from 'react'
+import { DEFAULT_BASE_URL } from '@mobile/lib/conn'
 import { useConnStore } from '@mobile/lib/conn'
 import { Button, Card, Input } from '@mobile/components/ui'
 
 export default function Connect() {
   const setConn = useConnStore((s) => s.setConn)
-  const [baseUrl, setBaseUrl] = useState(() => localStorage.getItem('nm_last_base') ?? '')
+  const [baseUrl, setBaseUrl] = useState(
+    () => localStorage.getItem('nm_last_base') ?? DEFAULT_BASE_URL
+  )
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
@@ -39,16 +42,16 @@ export default function Connect() {
       <Card className="w-full max-w-sm p-5">
         <h1 className="text-lg font-semibold text-zinc-100">Novel Maker</h1>
         <p className="mt-1 text-xs leading-5 text-zinc-500">
-          连接家里电脑（Tailscale IP + 电脑端设置的端口）。首次使用需在桌面端「设置 · 手机访问」里开启服务器并设置访问密码。
+          连接家里电脑。请确保电脑端 Tailscale 已开启，且桌面端设置过访问密码。
         </p>
         <div className="mt-4 space-y-3">
           <Input
             value={baseUrl}
             onChange={(e) => setBaseUrl(e.target.value)}
-            placeholder="http://100.x.x.x:8787"
             inputMode="url"
             autoCapitalize="off"
             autoCorrect="off"
+            className="font-mono text-xs text-zinc-500"
           />
           <Input
             type="password"
