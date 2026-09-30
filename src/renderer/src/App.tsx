@@ -1,6 +1,6 @@
 import { providerPreset } from '@shared/providers'
 import { useQuery } from '@tanstack/react-query'
-import { Suspense, lazy, type ReactElement, useCallback, useEffect, useState } from 'react'
+import { lazy, type ReactElement, Suspense, useCallback, useEffect, useState } from 'react'
 import { CreationWizard } from './components/CreationWizard'
 import { Toaster } from './components/Toaster'
 import { markAgentSeen, useAgentNavBadge } from './lib/agentUiStore'
@@ -21,6 +21,7 @@ import Usage from './pages/Usage'
 import Worldbuild from './pages/Worldbuild'
 
 const GraphPage = lazy(() => import('./pages/GraphPage'))
+
 import Writing from './pages/Writing'
 
 interface NavItem {
