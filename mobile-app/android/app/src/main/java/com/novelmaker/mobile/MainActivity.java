@@ -32,6 +32,7 @@ public class MainActivity extends BridgeActivity {
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
+        registerPlugin(AppRestartPlugin.class);
         Updater.ensureLocalBundle(this);
         super.onCreate(savedInstanceState);
         buildOverlay();

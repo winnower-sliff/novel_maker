@@ -4,6 +4,7 @@ import { Badge, Button, Card, Spinner } from '@mobile/components/ui'
 import { fetchMobileVersion } from '@mobile/lib/bridge'
 import { useConnStore } from '@mobile/lib/conn'
 import { fmtRelative, fmtTokens } from '@mobile/lib/format'
+import { restartApp } from '@mobile/lib/restart'
 
 declare const __APP_VERSION__: string
 
@@ -116,10 +117,16 @@ export default function More() {
             <span className="text-xs text-emerald-400">已是最新（{update.version}）</span>
           )}
           {update.kind === 'available' && (
-            <span className="text-xs text-amber-400">
-              发现新版本 v{update.version} · {update.fileCount} 个文件 · 共 {fmtBytes(update.totalBytes)}
-              ，下次启动自动应用
-            </span>
+            <>
+              <span className="text-xs text-amber-400">
+                发现新版本 v{update.version} · {update.fileCount} 个文件 · 共{' '}
+                {fmtBytes(update.totalBytes)}
+                ，重启后自动下载应用
+              </span>
+              <Button className="px-3 py-1.5 text-xs" onClick={restartApp}>
+                重启并更新
+              </Button>
+            </>
           )}
           {update.kind === 'server-none' && (
             <span className="text-xs text-zinc-500">电脑端还没有部署过界面包</span>
