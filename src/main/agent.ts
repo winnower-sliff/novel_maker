@@ -1,3 +1,4 @@
+import type { EventChannels, EventContract } from '../shared/contract'
 import { splitTags } from '../shared/tags'
 import type {
   AgentDonePayload,
@@ -1116,8 +1117,12 @@ export async function runAgent(opts: {
   signal: AbortSignal
 }): Promise<AgentDonePayload> {
   const { sink, requestId, projectId, signal } = opts
-  const send = (channel: string, ...args: unknown[]): void => {
-    if (!sink.isClosed()) sink.send(channel, requestId, ...args)
+  const send = <C extends EventChannels>(
+    channel: C,
+    ...rest: EventContract[C] extends [unknown, ...infer R] ? R : never
+  ): void => {
+    if (!sink.isClosed())
+      sink.send(channel, ...([requestId, ...rest] as unknown as EventContract[C]))
   }
 
   const auth = await resolveRequestAuth('agent')

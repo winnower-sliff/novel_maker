@@ -10,6 +10,7 @@ import {
 import { connect } from 'node:net'
 import { networkInterfaces } from 'node:os'
 import { extname, join, normalize, resolve } from 'node:path'
+import { invokeContract } from '../shared/contract'
 import type { ExportFormat } from '../shared/types'
 import type { EventSink } from './eventSink'
 import { buildExport } from './export'
@@ -330,15 +331,28 @@ async function handleInvoke(
     json(res, 401, { error: '未登录' })
     return
   }
-  const handler = sharedHandlers[channel]
-  if (!handler) {
+  const contractEntry = invokeContract[channel as keyof typeof invokeContract]
+  if (!contractEntry) {
     json(res, 404, { error: `未知接口: ${channel}` })
     return
   }
   try {
     const body = (await readJsonBody(req)) as { args?: unknown[] } | undefined
-    const args = Array.isArray(body?.args) ? body!.args : []
-    const result = await Promise.resolve(handler({ sink: webSink }, ...args))
+    const rawArgs = Array.isArray(body?.args) ? body.args : []
+    const parsed = contractEntry.args.safeParse(rawArgs)
+    if (!parsed.success) {
+      const issue = parsed.error.issues[0]
+      const where = issue?.path?.length ? `${issue.path.join('.')}: ` : ''
+      json(res, 400, { error: `参数校验失败 ${where}${issue?.message ?? '格式不合法'}` })
+      return
+    }
+    const handler = sharedHandlers[channel as keyof typeof sharedHandlers]
+    const result = await Promise.resolve(
+      (handler as (ctx: { sink: EventSink }, ...a: unknown[]) => unknown)(
+        { sink: webSink },
+        ...parsed.data
+      )
+    )
     json(res, 200, { result })
   } catch (err) {
     json(res, 400, { error: (err as Error)?.message ?? String(err) })
