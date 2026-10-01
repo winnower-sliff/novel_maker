@@ -1,6 +1,6 @@
 import type { PremiseDraftCharacter, PremiseDraftResult, Project } from '@shared/types'
 import type { ComponentType, InputHTMLAttributes, ReactNode, TextareaHTMLAttributes } from 'react'
-import { useEffect, useRef, useState } from 'react'
+import { Fragment, useEffect, useRef, useState } from 'react'
 import type { Navigate } from '../renderer/src/lib/nav'
 import { OverlayCard } from './OverlayCard'
 import { startPipeline } from './pipeline'
@@ -27,7 +27,6 @@ export interface WizardUi {
 }
 
 const STEP_LABELS = ['设定确认', '世界观', '人物', '大纲', '完成']
-const STEP_LABELS_SHORT = ['设定', '世界观', '人物', '大纲', '完成']
 
 // 向导草稿存档：随 project.wizardPlan 落库，刷新/换端后可恢复
 interface WizardPlanSave {
@@ -477,6 +476,26 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
     onNavigate(page)
   }
 
+  // footer 统一导航：前台阻塞型生成（人物队列/大纲/起草）中锁定，后台型（世界观）允许离开
+  const navLocked = draftBusy || charRunning || outlineBusy
+  const nextLabel = step === 4 ? '进入写作台' : step === 0 && !drafted ? '先起草或跳过' : '下一步'
+  const nextDisabled = navLocked || (step === 0 && !drafted)
+  const goNext = (): void => {
+    if (nextDisabled) return
+    if (step === 4) {
+      handleClose()
+      onNavigate('writing')
+      return
+    }
+    const n = step + 1
+    setStep(n)
+    if (step === 0) savePlan({ step: n })
+  }
+  const goPrev = (): void => {
+    if (step <= 0 || navLocked) return
+    setStep(step - 1)
+  }
+
   if (!open || !projectId) return null
 
   return (
@@ -484,38 +503,67 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
       open={open}
       onClose={handleClose}
       title="创作向导"
-      widthClass="max-w-2xl"
+      widthClass="max-w-3xl"
+      fullscreenOnMobile
       footer={
-        <div className="flex items-center justify-between">
+        <div className="flex flex-1 items-center justify-between gap-2">
           <span className="text-xs text-zinc-500">
             第 {step + 1}/{STEP_LABELS.length} 步 · {STEP_LABELS[step]}
           </span>
-          <Button variant="ghost" onClick={handleClose}>
-            关闭
-          </Button>
+          <div className="flex items-center gap-2">
+            {step > 0 && (
+              <Button variant="ghost" onClick={goPrev} disabled={navLocked}>
+                上一步
+              </Button>
+            )}
+            <Button onClick={goNext} disabled={nextDisabled}>
+              {nextLabel}
+            </Button>
+          </div>
         </div>
       }
     >
       <div className="space-y-4">
-        <div className="flex items-center gap-1">
+        <div className="flex items-center px-1">
           {STEP_LABELS.map((label, i) => (
-            <button
-              type="button"
-              key={label}
-              disabled={i >= step}
-              onClick={() => setStep(i)}
-              className={`flex-1 cursor-pointer rounded px-1 py-1 text-center text-[10px] transition-colors disabled:cursor-default sm:text-xs ${
-                i === step
-                  ? 'bg-amber-600/20 font-medium text-amber-300'
-                  : i < step
-                    ? 'text-emerald-400 hover:bg-zinc-800'
-                    : 'text-zinc-600'
-              }`}
-            >
-              {i < step ? '✓ ' : `${i + 1}. `}
-              <span className="hidden sm:inline">{label}</span>
-              <span className="sm:hidden">{STEP_LABELS_SHORT[i]}</span>
-            </button>
+            <Fragment key={label}>
+              {i > 0 && (
+                <div
+                  className={`mx-1 h-px flex-1 transition-colors sm:mx-2 ${
+                    i <= step ? 'bg-amber-500/40' : 'bg-zinc-700'
+                  }`}
+                />
+              )}
+              <button
+                type="button"
+                disabled={i >= step || draftBusy}
+                onClick={() => setStep(i)}
+                className="flex shrink-0 items-center gap-1.5 disabled:cursor-default"
+              >
+                <span
+                  className={`flex h-6 w-6 items-center justify-center rounded-full border text-[10px] transition-colors sm:h-7 sm:w-7 sm:text-xs ${
+                    i === step
+                      ? 'border-amber-500 bg-amber-600/20 font-semibold text-amber-300'
+                      : i < step
+                        ? 'border-emerald-500/50 bg-emerald-500/10 text-emerald-400'
+                        : 'border-zinc-700 text-zinc-600'
+                  }`}
+                >
+                  {i < step ? '✓' : i + 1}
+                </span>
+                <span
+                  className={`hidden text-xs transition-colors sm:inline ${
+                    i === step
+                      ? 'font-medium text-amber-300'
+                      : i < step
+                        ? 'text-zinc-400'
+                        : 'text-zinc-600'
+                  }`}
+                >
+                  {label}
+                </span>
+              </button>
+            </Fragment>
           ))}
         </div>
 
@@ -562,14 +610,6 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
                   }}
                 />
                 <div className="flex items-center gap-2">
-                  <Button
-                    onClick={() => {
-                      setStep(1)
-                      savePlan({ step: 1 })
-                    }}
-                  >
-                    确认，进入下一步
-                  </Button>
                   <Button variant="ghost" onClick={() => setDrafted(false)}>
                     重新起草
                   </Button>
@@ -662,9 +702,6 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
               <Button onClick={startWorldbuild} disabled={!wbBrief.trim() || wbRunning}>
                 {wbRunning ? '生成中…' : wbStarted ? '再次生成' : '开始生成世界观'}
               </Button>
-              <Button variant="ghost" onClick={() => setStep(2)}>
-                {wbStarted || (existing?.wb ?? 0) > 0 ? '下一步' : '跳过这步'}
-              </Button>
             </div>
             <p className="text-xs text-zinc-500">
               世界观在后台流式生成入库，可先继续后续步骤，进度见侧栏「世界观」badge。
@@ -690,7 +727,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
                 ＋ 添加
               </button>
             </div>
-            <div className="max-h-56 space-y-2 overflow-y-auto pr-1">
+            <div className="max-h-56 space-y-2 overflow-y-auto pr-1 sm:max-h-72">
               {chars.map((c, i) => {
                 const done = c.name.trim() !== '' && charDoneNames.includes(c.name.trim())
                 const busy = charRunning && charIndex === i
@@ -737,7 +774,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
                 </div>
               )}
             </div>
-            {charRunning && <StreamBox text={charDelta} className="h-24 shrink-0" />}
+            {charRunning && <StreamBox text={charDelta} className="h-20 shrink-0 sm:h-24" />}
             {charError && (
               <div className="flex items-center gap-2 text-xs text-red-400">
                 <span className="truncate">{charError}</span>
@@ -756,9 +793,6 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
                   : charDoneNames.length > 0
                     ? '重新生成全部'
                     : '开始生成'}
-              </Button>
-              <Button variant="ghost" onClick={() => setStep(3)} disabled={charRunning}>
-                {charDoneNames.length > 0 || (existing?.char ?? 0) > 0 ? '下一步' : '跳过这步'}
               </Button>
             </div>
           </div>
@@ -815,7 +849,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
               </div>
             </div>
             {(outlineBusy || outlineDelta) && (
-              <StreamBox text={outlineDelta} className="h-32 shrink-0" />
+              <StreamBox text={outlineDelta} className="h-28 shrink-0 sm:h-32" />
             )}
             {outlineError && (
               <div className="flex items-center gap-2 text-xs text-red-400">
@@ -831,9 +865,6 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
                 disabled={outlineBusy || !outlineIdea.trim()}
               >
                 {outlineDone ? '重新生成' : outlineBusy ? '生成中…' : '生成大纲并导入'}
-              </Button>
-              <Button variant="ghost" onClick={() => setStep(4)} disabled={outlineBusy}>
-                {outlineDone || (existing?.ol ?? 0) > 0 ? '下一步' : '跳过这步'}
               </Button>
             </div>
             {outlineDone && (
@@ -865,14 +896,6 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
               项目已就绪。之后可随时从项目页的「创作路线」继续完善任意板块。
             </p>
             <div className="flex flex-wrap gap-2">
-              <Button
-                onClick={() => {
-                  handleClose()
-                  onNavigate('writing')
-                }}
-              >
-                进入写作台
-              </Button>
               {(['worldbuild', 'characters', 'outline'] as const).map((page) => (
                 <Button key={page} variant="ghost" onClick={() => goto(page)}>
                   去{page === 'worldbuild' ? '世界观' : page === 'characters' ? '人物' : '大纲'}

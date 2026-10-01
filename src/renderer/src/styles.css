@@ -1,5 +1,8 @@
 @import "tailwindcss";
 
+/* Tailwind v4 自动源检测不覆盖 src/wizard（Vite root 之外），显式纳入扫描 */
+@source "../../wizard";
+
 :root {
   color-scheme: dark;
 }
