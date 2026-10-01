@@ -7,8 +7,18 @@ android {
         applicationId "com.novelmaker.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        // 版本由 build-apk.mjs 生成 version.properties 注入（时间戳），缺省回退 1.0
+        def verName = '1.0'
+        def verCode = 1
+        def verFile = rootProject.file('version.properties')
+        if (verFile.exists()) {
+            def verProps = new Properties()
+            verFile.withInputStream { verProps.load(it) }
+            if (verProps.getProperty('versionName')) verName = verProps.getProperty('versionName')
+            if (verProps.getProperty('versionCode')) verCode = verProps.getProperty('versionCode').toInteger()
+        }
+        versionCode verCode
+        versionName verName
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.

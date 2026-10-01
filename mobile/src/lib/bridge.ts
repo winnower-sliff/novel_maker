@@ -99,14 +99,14 @@ export function installBridge(): void {
   window.api = buildApi(transport)
 }
 
-/** 供设置页「检查更新」使用：带 token 拉取电脑端 bundle 版本清单 */
+/** 供「APP 更新」检查使用：带 token 拉取电脑端 APK 版本清单 */
 export async function fetchMobileVersion(conn: {
   baseUrl: string
   token: string
 }): Promise<{
   version: string | null
   buildAt: string | null
-  files: Array<{ path: string; size: number }>
+  apk?: { version: string; path: string; size: number }
 }> {
   const res = await fetch(`${conn.baseUrl}/api/mobile/version`, {
     headers: { 'x-nm-token': conn.token }
@@ -115,6 +115,6 @@ export async function fetchMobileVersion(conn: {
   return (await res.json()) as {
     version: string | null
     buildAt: string | null
-    files: Array<{ path: string; size: number }>
+    apk?: { version: string; path: string; size: number }
   }
 }

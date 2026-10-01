@@ -136,6 +136,7 @@ function mobileRoot(): string {
 interface MobileManifest {
   version: string
   buildAt: string
+  apk?: { version: string; path: string; size: number }
   files: Array<{ path: string; hash: string; size: number }>
 }
 

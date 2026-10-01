@@ -9,3 +9,4 @@ dev.log
 .playwright-mcp/
 dist-mobile/
 NovelMaker.apk
+mobile-app/android/version.properties
