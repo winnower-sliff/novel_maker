@@ -13,6 +13,7 @@ type ApkState =
   | { kind: 'available'; version: string; size: number }
   | { kind: 'downloading'; done: number; total: number }
   | { kind: 'ready' }
+  | { kind: 'grant' }
   | { kind: 'server-none' }
   | { kind: 'error'; message: string }
 
@@ -57,6 +58,17 @@ export default function More() {
     }
   }
 
+  const installApk = async (): Promise<void> => {
+    if (!updater) return
+    try {
+      const r = await updater.install()
+      if (r?.needsGrant) setApkState({ kind: 'grant' })
+      else setApkState({ kind: 'ready' })
+    } catch (err) {
+      setApkState({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
   const downloadApk = async (): Promise<void> => {
     if (!conn || !updater) return
     setApkState({ kind: 'downloading', done: 0, total: 0 })
@@ -70,7 +82,7 @@ export default function More() {
       })
       await listener.remove()
       setApkState({ kind: 'ready' })
-      await updater.install()
+      await installApk()
     } catch (err) {
       setApkState({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
     }
@@ -151,7 +163,22 @@ export default function More() {
                 </div>
               )}
               {apkState.kind === 'ready' && (
-                <span className="text-xs text-emerald-400">下载完成，请在系统安装提示中确认</span>
+                <>
+                  <span className="text-xs text-emerald-400">下载完成</span>
+                  <Button className="px-3 py-1.5 text-xs" onClick={() => void installApk()}>
+                    立即安装
+                  </Button>
+                </>
+              )}
+              {apkState.kind === 'grant' && (
+                <>
+                  <span className="text-xs text-amber-400">
+                    请在授权页允许「安装未知应用」，返回后点安装
+                  </span>
+                  <Button className="px-3 py-1.5 text-xs" onClick={() => void installApk()}>
+                    立即安装
+                  </Button>
+                </>
               )}
               {apkState.kind === 'server-none' && (
                 <span className="text-xs text-zinc-500">电脑端还没有部署过 APK</span>

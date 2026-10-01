@@ -92,17 +92,31 @@ public class ApkUpdaterPlugin extends Plugin {
     @PluginMethod
     public void install(PluginCall call) {
         try {
-            File apk = new File(getContext().getCacheDir(), "NovelMaker.apk");
+            android.app.Activity activity = getBridge().getActivity();
+            android.content.Context ctx = getContext();
+            File apk = new File(ctx.getCacheDir(), "NovelMaker.apk");
             if (!apk.isFile()) {
                 call.reject("APK 未下载");
                 return;
             }
+            // Android 8+ 未授予「安装未知应用」时系统安装器不会弹出，先跳授权页
+            if (android.os.Build.VERSION.SDK_INT >= 26
+                    && !ctx.getPackageManager().canRequestPackageInstalls()) {
+                Intent grant = new Intent(
+                        android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + ctx.getPackageName()));
+                activity.startActivity(grant);
+                JSObject r = new JSObject();
+                r.put("needsGrant", true);
+                call.resolve(r);
+                return;
+            }
             Uri uri = FileProvider.getUriForFile(
-                    getContext(), getContext().getPackageName() + ".fileprovider", apk);
+                    ctx, ctx.getPackageName() + ".fileprovider", apk);
             Intent intent = new Intent(Intent.ACTION_VIEW);
             intent.setDataAndType(uri, "application/vnd.android.package-archive");
-            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
-            getContext().startActivity(intent);
+            intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            activity.startActivity(intent);
             call.resolve();
         } catch (Exception e) {
             call.reject(e.getMessage() != null ? e.getMessage() : e.toString());

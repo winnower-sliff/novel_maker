@@ -11,6 +11,11 @@ body,
   height: 100dvh;
 }
 
+html {
+  /* WebView 背景（capacitor backgroundColor 之外的双保险：overscroll/首帧不露白） */
+  background: #09090b;
+}
+
 body {
   margin: 0;
   background: #09090b;

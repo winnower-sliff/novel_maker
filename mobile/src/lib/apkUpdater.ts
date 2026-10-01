@@ -7,7 +7,7 @@ import { registerPlugin } from '@capacitor/core'
 interface ApkUpdaterPlugin {
   getVersion(): Promise<{ version: string; versionCode: number }>
   download(opts: { url: string; token: string }): Promise<{ path: string; size: number }>
-  install(): Promise<void>
+  install(): Promise<void | { needsGrant?: boolean }>
   addListener(
     event: 'progress',
     cb: (data: { done: number; total: number }) => void
@@ -25,4 +25,9 @@ export function apkUpdater(): ApkUpdaterPlugin | null {
 export interface ApkProgress {
   done: number
   total: number
+}
+
+/** install() 的结果：needsGrant=true 表示已跳转「安装未知应用」授权页 */
+export interface InstallResult {
+  needsGrant?: boolean
 }
