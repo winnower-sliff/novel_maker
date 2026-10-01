@@ -20,6 +20,7 @@
   },
   "include": [
     "src/renderer/src/**/*",
+    "src/wizard/**/*",
     "src/preload/index.ts",
     "src/shared/**/*"
   ]
