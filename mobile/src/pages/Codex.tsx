@@ -1,10 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
-import { Badge, Button, Empty, Input, Spinner, Textarea } from '@mobile/components/ui'
+import { useEffect, useState } from 'react'
+import { Badge, Button, Empty, Input, Label, Spinner, Textarea } from '@mobile/components/ui'
 import { openWizard, useWizard } from '@wizard/wizardStore'
 import type { Character, Foreshadow, OutlineItem, WorldbuildEntry } from '@shared/types'
 
-type Section = 'characters' | 'world' | 'outline' | 'foreshadow'
+export type Section = 'characters' | 'world' | 'outline' | 'foreshadow'
 
 const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'characters', label: '人物' },
@@ -13,9 +13,23 @@ const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'foreshadow', label: '伏笔' }
 ]
 
-export default function Codex({ projectId }: { projectId: string }) {
+export default function Codex({
+  projectId,
+  jumpSection,
+  onJumpConsumed
+}: {
+  projectId: string
+  jumpSection?: Section | null
+  onJumpConsumed?: () => void
+}) {
   const [open, setOpen] = useState<Section | null>(null)
   const wizard = useWizard()
+
+  useEffect(() => {
+    if (!jumpSection) return
+    setOpen(jumpSection)
+    onJumpConsumed?.()
+  }, [jumpSection, onJumpConsumed])
 
   if (!projectId) return <Empty text="请先在「书架」选择项目" />
 
@@ -144,8 +158,6 @@ function DetailShell({
   )
 }
 
-const label = 'mb-1 block text-xs text-zinc-500'
-
 function Characters({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
   const { data: list = [], isLoading } = useQuery({
@@ -221,26 +233,26 @@ function CharacterEditor({
       onBack={onBack}
       bar={<EditBar dirty={dirty} saving={saving} onSave={() => void save()} />}
     >
-      <div>
-        <span className={label}>姓名</span>
+      <Label>
+        姓名
         <Input value={name} onChange={(e) => setName(e.target.value)} />
-      </div>
-      <div>
-        <span className={label}>身份</span>
+      </Label>
+      <Label>
+        身份
         <Input value={role} onChange={(e) => setRole(e.target.value)} />
-      </div>
-      <div>
-        <span className={label}>标签（空格分隔）</span>
+      </Label>
+      <Label>
+        标签（空格分隔）
         <Input value={tags} onChange={(e) => setTags(e.target.value)} />
-      </div>
-      <div>
-        <span className={label}>人物卡</span>
+      </Label>
+      <Label>
+        人物卡
         <Textarea rows={10} value={card} onChange={(e) => setCard(e.target.value)} />
-      </div>
-      <div>
-        <span className={label}>当前状态（动态）</span>
+      </Label>
+      <Label>
+        当前状态（动态）
         <Textarea rows={5} value={state} onChange={(e) => setState(e.target.value)} />
-      </div>
+      </Label>
     </DetailShell>
   )
 }
@@ -333,18 +345,18 @@ function WorldEditor({
       onBack={onBack}
       bar={<EditBar dirty={dirty} saving={saving} onSave={() => void save()} />}
     >
-      <div>
-        <span className={label}>标题</span>
+      <Label>
+        标题
         <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-      </div>
-      <div>
-        <span className={label}>标签</span>
+      </Label>
+      <Label>
+        标签
         <Input value={tags} onChange={(e) => setTags(e.target.value)} />
-      </div>
-      <div>
-        <span className={label}>内容</span>
+      </Label>
+      <Label>
+        内容
         <Textarea rows={14} value={content} onChange={(e) => setContent(e.target.value)} />
-      </div>
+      </Label>
     </DetailShell>
   )
 }
@@ -454,14 +466,14 @@ function OutlineEditor({
           </div>
         )}
       </div>
-      <div>
-        <span className={label}>标题</span>
+      <Label>
+        标题
         <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-      </div>
-      <div>
-        <span className={label}>梗概</span>
+      </Label>
+      <Label>
+        梗概
         <Textarea rows={8} value={synopsis} onChange={(e) => setSynopsis(e.target.value)} />
-      </div>
+      </Label>
     </DetailShell>
   )
 }
@@ -500,12 +512,8 @@ function Foreshadows({ projectId }: { projectId: string }) {
           sub={`埋设 ${f.plantedChapter || '?'}${f.plannedResolve ? ` · 计划回收 ${f.plannedResolve}` : ''}`}
           right={
             <Badge
-              className={
-                f.status === 'resolved'
-                  ? 'bg-emerald-600/15 text-emerald-400'
-                  : f.status === 'abandoned'
-                    ? 'bg-zinc-700 text-zinc-400'
-                    : 'bg-amber-600/15 text-amber-400'
+              tone={
+                f.status === 'resolved' ? 'green' : f.status === 'abandoned' ? 'default' : 'amber'
               }
             >
               {f.status}
@@ -559,12 +567,12 @@ function ForeshadowEditor({
       onBack={onBack}
       bar={<EditBar dirty={dirty} saving={saving} onSave={() => void save()} />}
     >
-      <div>
-        <span className={label}>内容</span>
+      <Label>
+        内容
         <Textarea rows={4} value={content} onChange={(e) => setContent(e.target.value)} />
-      </div>
+      </Label>
       <div>
-        <span className={label}>状态</span>
+        <Label>状态</Label>
         <div className="flex gap-1.5">
           {FORESHADOW_STATUS.map((s) => (
             <button
@@ -580,10 +588,10 @@ function ForeshadowEditor({
           ))}
         </div>
       </div>
-      <div>
-        <span className={label}>计划回收于（章节描述）</span>
+      <Label>
+        计划回收于（章节描述）
         <Input value={plannedResolve} onChange={(e) => setPlannedResolve(e.target.value)} />
-      </div>
+      </Label>
       <div className="rounded-lg bg-zinc-900 p-2.5 text-xs text-zinc-500">
         埋设于 {item.plantedChapter || '（未记录）'}
         {item.resolvedChapter ? ` · 已回收于 ${item.resolvedChapter}` : ''}

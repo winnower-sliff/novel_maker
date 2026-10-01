@@ -1,11 +1,12 @@
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
-import Book from '@mobile/pages/Book'
+import { useCallback, useState } from 'react'
+import Book, { type BookNavRequest } from '@mobile/pages/Book'
 import Connect from '@mobile/pages/Connect'
 import More from '@mobile/pages/More'
 import Shelf from '@mobile/pages/Shelf'
 import { MobileToaster, WizardHost } from '@mobile/components/WizardHost'
 import { useConnStore } from '@mobile/lib/conn'
+import type { Page as NavPage } from '@renderer/lib/nav'
 
 type Page = 'shelf' | 'more'
 
@@ -18,6 +19,25 @@ export default function App() {
   const conn = useConnStore((s) => s.conn)
   const [page, setPage] = useState<Page>('shelf')
   const [bookId, setBookId] = useState<string | null>(null)
+  const [bookNav, setBookNav] = useState<BookNavRequest | null>(null)
+  const consumeBookNav = useCallback(() => setBookNav(null), [])
+
+  // 向导 step4 导航映射：写作台→write tab；板块→codex tab 并展开对应 section
+  const handleWizardNav = useCallback(
+    (dest: NavPage) => {
+      const map: Partial<Record<NavPage, { tab: BookNavRequest['tab']; section?: BookNavRequest['section'] }>> = {
+        writing: { tab: 'write' },
+        worldbuild: { tab: 'codex', section: 'world' },
+        characters: { tab: 'codex', section: 'characters' },
+        outline: { tab: 'codex', section: 'outline' },
+        foreshadows: { tab: 'codex', section: 'foreshadow' }
+      }
+      const target = map[dest]
+      if (!target) return
+      setBookNav({ ...target, nonce: Date.now() })
+    },
+    []
+  )
   const { data: projects } = useQuery({
     queryKey: ['novel', 'projects'],
     queryFn: () => window.api.novel.projects(),
@@ -30,7 +50,13 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       {bookId && book ? (
-        <Book projectId={bookId} title={book.title} onClose={() => setBookId(null)} />
+        <Book
+          projectId={bookId}
+          title={book.title}
+          onClose={() => setBookId(null)}
+          navRequest={bookNav}
+          onNavConsumed={consumeBookNav}
+        />
       ) : (
         <>
           <main className="min-h-0 flex-1 overflow-y-auto">
@@ -54,7 +80,7 @@ export default function App() {
           </nav>
         </>
       )}
-      <WizardHost />
+      <WizardHost onNavigate={handleWizardNav} />
       <MobileToaster />
     </div>
   )

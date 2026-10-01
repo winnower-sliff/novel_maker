@@ -1,10 +1,17 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import AgentChat from '@mobile/pages/AgentChat'
-import Codex from '@mobile/pages/Codex'
+import Codex, { type Section } from '@mobile/pages/Codex'
 import Write from '@mobile/pages/Write'
 import { Button } from '@mobile/components/ui'
 
 type BookTab = 'write' | 'codex' | 'agent'
+
+/** 向导等外部入口触发的跳转请求；nonce 保证同一目标可重复触发 */
+export interface BookNavRequest {
+  tab: BookTab
+  section?: Section
+  nonce: number
+}
 
 const TABS: Array<{ key: BookTab; label: string }> = [
   { key: 'write', label: '写作' },
@@ -15,13 +22,25 @@ const TABS: Array<{ key: BookTab; label: string }> = [
 export default function Book({
   projectId,
   title,
-  onClose
+  onClose,
+  navRequest,
+  onNavConsumed
 }: {
   projectId: string
   title: string
   onClose: () => void
+  navRequest: BookNavRequest | null
+  onNavConsumed: () => void
 }) {
   const [tab, setTab] = useState<BookTab>('write')
+  const [pendingSection, setPendingSection] = useState<Section | null>(null)
+
+  useEffect(() => {
+    if (!navRequest) return
+    setTab(navRequest.tab)
+    setPendingSection(navRequest.section ?? null)
+    onNavConsumed()
+  }, [navRequest, onNavConsumed])
 
   return (
     <div className="flex h-full flex-col">
@@ -52,7 +71,13 @@ export default function Book({
       </div>
       <main className="min-h-0 flex-1 overflow-hidden">
         {tab === 'write' && <Write projectId={projectId} />}
-        {tab === 'codex' && <Codex projectId={projectId} />}
+        {tab === 'codex' && (
+          <Codex
+            projectId={projectId}
+            jumpSection={pendingSection}
+            onJumpConsumed={() => setPendingSection(null)}
+          />
+        )}
         {tab === 'agent' && <AgentChat projectId={projectId} />}
       </main>
     </div>

@@ -727,7 +727,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
                 ＋ 添加
               </button>
             </div>
-            <div className="max-h-56 space-y-2 overflow-y-auto pr-1 sm:max-h-72">
+            <div className="space-y-2 sm:max-h-72 sm:overflow-y-auto sm:pr-1">
               {chars.map((c, i) => {
                 const done = c.name.trim() !== '' && charDoneNames.includes(c.name.trim())
                 const busy = charRunning && charIndex === i

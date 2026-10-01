@@ -7,6 +7,8 @@ html,
 body,
 #root {
   height: 100%;
+  /* 动态视口兜底：安卓地址栏收展时 100% 不随之更新，导致底部被裁切 */
+  height: 100dvh;
 }
 
 body {

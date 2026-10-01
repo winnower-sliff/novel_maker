@@ -49,10 +49,37 @@ export function Card({ className = '', children }: { className?: string; childre
   )
 }
 
-export function Badge({ className = '', children }: { className?: string; children: React.ReactNode }) {
+export function Label({
+  className = '',
+  children
+}: {
+  className?: string
+  children?: React.ReactNode
+}) {
+  return <label className={`mb-1 block text-xs text-zinc-500 ${className}`}>{children}</label>
+}
+
+type BadgeTone = 'default' | 'amber' | 'green' | 'red'
+
+const BADGE_TONES: Record<BadgeTone, string> = {
+  default: 'bg-zinc-800 text-zinc-400',
+  amber: 'bg-amber-600/15 text-amber-400',
+  green: 'bg-emerald-600/15 text-emerald-400',
+  red: 'bg-red-600/15 text-red-400'
+}
+
+export function Badge({
+  className = '',
+  tone = 'default',
+  children
+}: {
+  className?: string
+  tone?: BadgeTone
+  children?: React.ReactNode
+}) {
   return (
     <span
-      className={`inline-flex shrink-0 items-center rounded-full bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-400 ${className}`}
+      className={`inline-flex shrink-0 items-center rounded-full px-2 py-0.5 text-[11px] ${BADGE_TONES[tone]} ${className}`}
     >
       {children}
     </span>

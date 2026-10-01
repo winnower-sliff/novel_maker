@@ -1,16 +1,16 @@
 import { CreationWizard } from '@wizard/CreationWizard'
 import { useToasts } from '@wizard/toastStore'
-import { Badge, Button, Input, Label, Textarea } from '@renderer/components/ui'
+import { Badge, Button, Input, Label, Textarea } from '@mobile/components/ui'
 import type { WizardUi } from '@wizard/CreationWizard'
 import type { Navigate } from '@renderer/lib/nav'
 
-// 与桌面同一份 UI 基础组件，保证向导功能与观感完全一致
-const wizardUi = { Badge, Button, Input, Label, Textarea } as WizardUi
+// 手机端注入 mobile/ui（与 App 其他页同源观感），组件契约与 WizardUi 对齐，无需强转
+const wizardUi: WizardUi = { Badge, Button, Input, Label, Textarea }
 
 const noopNavigate: Navigate = () => {}
 
-export function WizardHost() {
-  return <CreationWizard onNavigate={noopNavigate} ui={wizardUi} />
+export function WizardHost({ onNavigate }: { onNavigate?: Navigate }) {
+  return <CreationWizard onNavigate={onNavigate ?? noopNavigate} ui={wizardUi} />
 }
 
 /** 极简 Toast：读共享 toastStore，桌面 Toaster 的等价物 */
