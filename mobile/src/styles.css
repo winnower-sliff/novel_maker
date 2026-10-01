@@ -1,7 +1,7 @@
 @import "tailwindcss";
 
-/* Tailwind v4 自动源检测不覆盖 src/wizard，显式纳入扫描（向导在手机端渲染） */
-@source "../../wizard";
+/* Tailwind v4 自动源检测不覆盖 src/wizard，显式纳入扫描（相对本文件：mobile/src/../../src/wizard） */
+@source "../../src/wizard";
 
 html,
 body,

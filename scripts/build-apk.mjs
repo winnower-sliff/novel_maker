@@ -20,7 +20,11 @@ try {
     join(root, 'mobile-app', 'android', 'version.properties'),
     `versionName=${version}\nversionCode=${versionCode}\n`
   )
-  sh('npx vite build', join(root, 'mobile'))
+  // 必须以仓库根为 cwd 跑并显式指 config：Tailwind v4 扫描 base 跟随 cwd，
+  // 在 mobile/ 下跑会漏扫 src/wizard（向导类全缺→弹窗白框样式失效）
+  sh('npx vite build --config mobile/vite.config.ts', root)
+  // 哨兵校验：@source 路径错配/cwd 漂移会让整源类静默缺失（白框教训），构建期拦截
+  sh('node scripts/check-tailwind-classes.mjs dist-mobile/assets --mobile', root)
   sh('node scripts/sync-bundle.mjs', join(root, 'mobile-app'))
   sh('npx cap sync android', join(root, 'mobile-app'))
   sh('gradlew.bat assembleDebug --console=plain -q', join(root, 'mobile-app', 'android'))

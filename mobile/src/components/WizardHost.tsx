@@ -4,7 +4,7 @@ import { Badge, Button, Input, Label, Textarea } from '@mobile/components/ui'
 import type { WizardUi } from '@wizard/CreationWizard'
 import type { Navigate } from '@renderer/lib/nav'
 
-// 手机端注入 mobile/ui（与 App 其他页同源观感），组件契约与 WizardUi 对齐，无需强转
+// 手机端统一注入 mobile/ui（与 Codex 等页同源观感），组件契约与 WizardUi 对齐，无需强转
 const wizardUi: WizardUi = { Badge, Button, Input, Label, Textarea }
 
 const noopNavigate: Navigate = () => {}

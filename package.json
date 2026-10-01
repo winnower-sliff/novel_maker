@@ -17,39 +17,7 @@
     "apk": "node scripts/build-apk.mjs",
     "dist": "electron-vite build && electron-builder --win"
   },
-  "build": {
-    "appId": "com.novelmaker.app",
-    "productName": "Novel Maker",
-    "directories": {
-      "output": "dist"
-    },
-    "files": [
-      "out/**",
-      "resources/**"
-    ],
-    "asarUnpack": [
-      "node_modules/@huggingface/transformers/**",
-      "node_modules/onnxruntime-node/**",
-      "node_modules/onnxruntime-web/**",
-      "node_modules/sharp/**"
-    ],
-    "win": {
-      "target": [
-        {
-          "target": "nsis",
-          "arch": [
-            "x64"
-          ]
-        }
-      ]
-    },
-    "nsis": {
-      "oneClick": false,
-      "allowToChangeInstallationDirectory": true,
-      "language": "2052",
-      "artifactName": "${productName}-${version}-setup.${ext}"
-    }
-  },
+  "build": "electron-vite build && node scripts/check-tailwind-classes.mjs out/renderer/assets",
   "dependencies": {
     "@capacitor/core": "^8.5.2",
     "@huggingface/transformers": "^4.3.0",
