@@ -9,7 +9,9 @@ export default defineConfig({
   resolve: {
     alias: {
       '@shared': resolve(__dirname, '../src/shared'),
-      '@mobile': resolve(__dirname, './src')
+      '@mobile': resolve(__dirname, './src'),
+      '@wizard': resolve(__dirname, '../src/wizard'),
+      '@renderer': resolve(__dirname, '../src/renderer/src')
     }
   },
   build: {

@@ -1,11 +1,12 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { Badge, Button, Empty, Input, Spinner, Textarea } from '@mobile/components/ui'
+import { openWizard, useWizard } from '@wizard/wizardStore'
 import type { Character, Foreshadow, OutlineItem, WorldbuildEntry } from '@shared/types'
 
-type Tab = 'characters' | 'world' | 'outline' | 'foreshadow'
+type Section = 'characters' | 'world' | 'outline' | 'foreshadow'
 
-const TABS: Array<{ key: Tab; label: string }> = [
+const SECTIONS: Array<{ key: Section; label: string }> = [
   { key: 'characters', label: '人物' },
   { key: 'world', label: '世界观' },
   { key: 'outline', label: '大纲' },
@@ -13,33 +14,54 @@ const TABS: Array<{ key: Tab; label: string }> = [
 ]
 
 export default function Codex({ projectId }: { projectId: string }) {
-  const [tab, setTab] = useState<Tab>('characters')
+  const [open, setOpen] = useState<Section | null>(null)
+  const wizard = useWizard()
 
   if (!projectId) return <Empty text="请先在「书架」选择项目" />
 
   return (
-    <div className="flex h-full flex-col">
-      <div className="flex border-b border-zinc-800 bg-zinc-950/95">
-        {TABS.map((t) => (
-          <button
-            type="button"
-            key={t.key}
-            onClick={() => setTab(t.key)}
-            className={`flex-1 cursor-pointer py-2.5 text-sm ${
-              tab === t.key
-                ? 'border-b-2 border-amber-500 font-medium text-amber-400'
-                : 'text-zinc-500'
-            }`}
+    <div className="h-full overflow-y-auto p-3">
+      <div className="mb-3 rounded-xl border border-amber-700/40 bg-gradient-to-b from-amber-950/40 to-zinc-900/60 p-4">
+        <div className="text-sm font-semibold text-amber-300">创作向导</div>
+        <p className="mt-1 text-[11px] leading-4 text-zinc-400">
+          从一句话想法开始：确认设定 → 生成世界观 → 生成人物 → 生成大纲。桌面与手机进度互通。
+        </p>
+        <div className="mt-2.5 flex items-center gap-2">
+          <Button
+            className="px-3.5 py-1.5 text-xs"
+            onClick={() => openWizard(projectId)}
           >
-            {t.label}
-          </button>
-        ))}
+            {wizard.open && wizard.projectId === projectId ? '回到向导' : '打开创作向导'}
+          </Button>
+        </div>
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
-        {tab === 'characters' && <Characters projectId={projectId} />}
-        {tab === 'world' && <World projectId={projectId} />}
-        {tab === 'outline' && <Outline projectId={projectId} />}
-        {tab === 'foreshadow' && <Foreshadows projectId={projectId} />}
+
+      <div className="space-y-2">
+        {SECTIONS.map((sec) => {
+          const expanded = open === sec.key
+          return (
+            <div key={sec.key} className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900/60">
+              <button
+                type="button"
+                onClick={() => setOpen(expanded ? null : sec.key)}
+                className="flex w-full cursor-pointer items-center justify-between px-4 py-3 text-left"
+              >
+                <span className={`text-sm font-medium ${expanded ? 'text-amber-400' : 'text-zinc-200'}`}>
+                  {sec.label}
+                </span>
+                <span className="text-xs text-zinc-600">{expanded ? '收起 ▲' : '展开 ▼'}</span>
+              </button>
+              {expanded && (
+                <div className="border-t border-zinc-800 p-2.5">
+                  {sec.key === 'characters' && <Characters projectId={projectId} />}
+                  {sec.key === 'world' && <World projectId={projectId} />}
+                  {sec.key === 'outline' && <Outline projectId={projectId} />}
+                  {sec.key === 'foreshadow' && <Foreshadows projectId={projectId} />}
+                </div>
+              )}
+            </div>
+          )
+        })}
       </div>
     </div>
   )

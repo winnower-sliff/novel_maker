@@ -14,8 +14,10 @@
     "types": ["vite/client"],
     "paths": {
       "@shared/*": ["../src/shared/*"],
-      "@mobile/*": ["./src/*"]
+      "@mobile/*": ["./src/*"],
+      "@wizard/*": ["../src/wizard/*"],
+      "@renderer/*": ["../src/renderer/src/*"]
     }
   },
-  "include": ["src", "vite.config.ts", "../src/shared/**/*.ts"]
+  "include": ["src", "vite.config.ts", "../src/shared/**/*.ts", "../src/wizard/**/*.ts*"]
 }

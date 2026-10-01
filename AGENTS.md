@@ -14,6 +14,7 @@
 - `src/preload/index.ts` contextBridge 暴露 `window.api`（含 `api.agent`、`api.graph`、`api.server`）
 - `src/renderer/src/web-bridge.ts`：**同源浏览器适配器**，在 `main.tsx` 首行 import；若 `window.api` 不存在（非 Electron）则用 `fetch /api/invoke/:channel` + 单例 `EventSource('/api/events')` 实现完整 `Api`，业务代码零改动。Electron 下 preload 已注入故直接跳过；`window.__NM_WEB__` 标记浏览器环境（设置页用它隐藏服务器配置）
 - `src/renderer/` React + Tailwind v4；**数据层 = TanStack Query**（`lib/queries.ts` 的 qk 前缀 key + queries 工厂；写后按前缀 invalidate；App.tsx 挂 llm:done/agent:done 全局失效），**UI 态 = zustand**（toastStore/agentUiStore/wizardStore/wbGenStore，外部命令式走 `store.getState()`）；QueryClientProvider 在 main.tsx；编辑器正文类有脏状态的数据**不要**转 query 自动 refetch；响应式：
+- `src/wizard/` 桌面/移动共用的向导共享包（平铺：CreationWizard/wizardStore/wbGenStore/toastStore/OverlayCard/pipeline 等）；renderer 侧留壳文件 re-export 保持旧 import 路径；CreationWizard 经 `WizardUi` 接口注入 UI 基础组件（Input/Textarea/Badge 等）实现两端换肤；**新顶层目录必须同步加进 tsconfig include**（见坑 28）
 - 用户数据在 Electron `userData` 目录：`settings.json`、`agent_sessions.json`、`usage_log.jsonl`、`data/novel.db`、`skills/*.md`
 
 ## 踩坑记录
@@ -45,6 +46,8 @@
 26. **手机 APP 架构（2026-09）**：瘦客户端——APK（Capacitor 壳 `mobile-app/`）加载本地 web bundle（`mobile/` 独立 vite 应用，build 到 `dist-mobile/`），经 Tailscale 调电脑端内嵌服务器；**Tailscale IP 写死在 `mobile/src/lib/conn.ts` 的 DEFAULT_BASE_URL**（100.100.62.8:3910，连接页可改），`npm run apk` 一键构建并部署（vite build→pack-mobile 部署电脑端→sync-bundle→cap sync→assembleDebug→拷为根目录 NovelMaker.apk）；鉴权用 `x-nm-token` header / `?token=`（APK WebView 跨站 SameSite cookie 不可用），token 由 `POST /api/mobile/auth`（密码换 token）签发；静默更新走 `GET /api/mobile/version`（manifest.json 每请求重读，pack-mobile 写完即生效）+ `GET /api/mobile/file?path=`（manifest 白名单防穿越）；原生 MainActivity 在 onResume 读 WebView localStorage 的 `nm_conn` 存 SharedPreferences 供原生更新请求用，更新下载到 bundle-staging 原子切换 filesDir/bundle，**不自动 reload**（重启生效，避免打断编辑）。
 
 27. **浏览器端「无响应」先查 SSE 生命周期**（2026-09 实锤）：web-bridge 的 EventSource `onerror` 后若 readyState===CLOSED，浏览器**不会自动重连**——invoke 照常成功但 llm:delta/done 永远收不到，表象是手机端永远「生成中」+流式框空白（Electron IPC 路径此时完全健康，极易误判为主进程问题）。现有防御三层：web-bridge 指数退避重连（1s→15s，reconnectTimer 防重入）+ `nm-sse-state` CustomEvent 驱动 App.tsx 断连横幅（仅 `window.__NM_WEB__`）+ lib/ipc.ts `subscribeStream` 300s 看门狗兜底解除 busy。排查时用 usage_log 判断请求是否真发出：有记录+UI 无响应=SSE 断；无记录=请求没发出（auth/契约层）。
+28. **新增顶层目录必须同步 tsconfig include**：`src/wizard/` 迁出后若 tsconfig.json（三套都要看）include 没加，该目录文件完全脱离 typecheck——坏 import/类型错误全部假绿，只在 vite 运行时才炸。新建顶层目录后第一时间检查所有 tsconfig 的 include。
+29. **起 dev 实例的命令绝不能长挂**：即使 `Start-Process npm.cmd` 已脱离 shell，若同一条 bash 命令里还串了探测/等待（`&& sleep` 链），命令超时被杀时**级联杀掉刚起的 dev 实例**。正确姿势：起实例的命令立即返回，端口/日志探测用独立的短命令轮询。
 
 ## 约定
 - API Key 仅存主进程（safeStorage，按 provider 分别保存），渲染进程只拿到掩码；LLM 调用统一走主进程（Electron 经 IPC，浏览器经密码鉴权的内嵌 HTTP），provider 鉴权统一走 `getLlmAuth()`（Ollama 无需真实 Key，用占位符）；带 purpose 的请求一律经 `resolveRequestAuth(purpose)` 解析（跨 provider 路由 + 未配置回退）。
