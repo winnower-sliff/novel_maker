@@ -126,13 +126,42 @@ function PlanCard({ plan }: { plan: PremiseDraftResult }) {
 interface CreationWizardProps {
   onNavigate: Navigate
   ui: WizardUi
+  /** 移动端注入：向导打开时注册 Android 返回键处理器，关闭时回调 null 注销；桌面不传则无返回键接管 */
+  onBackHandler?: (handler: (() => void) | null) => void
+  /** 创建/修改项目元数据后回调：created 时调用方应切换当前项目（桌面 onSwitch / 手机 setBookId） */
+  onChanged?: (id: string, kind: 'created' | 'updated') => void
 }
 
-export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
+const EMPTY_FORM = { title: '', genre: '', targetWords: '', styleGuide: '' }
+type ProjectForm = typeof EMPTY_FORM
+
+function seedForm(p: Project): ProjectForm {
+  return {
+    title: p.title,
+    genre: p.genre,
+    targetWords: p.targetWords > 0 ? String(p.targetWords) : '',
+    styleGuide: p.styleGuide
+  }
+}
+
+export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: CreationWizardProps) {
   const { Badge, Button, Input, Label, Textarea } = ui
-  const { open, projectId, step: initialStep } = useWizard()
+  const { open, projectId, initialStep, step, setStep } = useWizard()
   const [project, setProject] = useState<Project | null>(null)
-  const [step, setStep] = useState(0)
+  // 创建模式：projectId=null 打开，projectCreate 成功后本地绑定新 id，后续步骤原样复用
+  const [createdId, setCreatedId] = useState<string | null>(null)
+  const effectiveId = projectId ?? createdId
+  const needCreate = !effectiveId
+
+  const [form, setForm] = useState<ProjectForm>(EMPTY_FORM)
+  const [metaBusy, setMetaBusy] = useState(false)
+  const [metaError, setMetaError] = useState<string | null>(null)
+  const metaDirty =
+    project != null &&
+    (form.title.trim() !== project.title ||
+      form.genre.trim() !== project.genre ||
+      (Number.parseInt(form.targetWords, 10) || 0) !== project.targetWords ||
+      form.styleGuide.trim() !== project.styleGuide)
 
   const [draftBusy, setDraftBusy] = useState(false)
   const [draftDelta, setDraftDelta] = useState('')
@@ -147,8 +176,8 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
   const [wbResult, setWbResult] = useState<string | null>(null)
   const wbBeforeRef = useRef<number | null>(null)
   const [typeOptions, setTypeOptions] = useState<string[]>([])
-  const wbTasks = useWbGenTasks(projectId ?? '')
-  const wbLive = useWbLiveEntries(projectId ?? '')
+  const wbTasks = useWbGenTasks(effectiveId ?? '')
+  const wbLive = useWbLiveEntries(effectiveId ?? '')
   const wbRunning = wbTasks.length > 0
   const wbTask = wbTasks[0] ?? null
 
@@ -175,10 +204,18 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
   )
   const [existing, setExisting] = useState<{ wb: number; char: number; ol: number } | null>(null)
 
+  // 仅在打开瞬间重置创建态；effectiveId null→id（创建成功）不得清掉 createdId
   useEffect(() => {
-    if (!open || !projectId) return
+    if (open) setCreatedId(null)
+  }, [open])
+
+  useEffect(() => {
+    if (!open) return
     setProject(null)
     setStep(0)
+    setForm(EMPTY_FORM)
+    setMetaBusy(false)
+    setMetaError(null)
     setDraftBusy(false)
     setDraftDelta('')
     setDraftError(null)
@@ -208,15 +245,17 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
     outlineAbortRef.current = null
     setFinalCounts(null)
     setExisting(null)
+    if (!effectiveId) return
     void Promise.all([
       window.api.novel.projects(),
-      window.api.novel.worldbuild(projectId),
-      window.api.novel.characters(projectId),
-      window.api.novel.outlines(projectId)
+      window.api.novel.worldbuild(effectiveId),
+      window.api.novel.characters(effectiveId),
+      window.api.novel.outlines(effectiveId)
     ])
       .then(([ps, wb, cs, ol]) => {
-        const p = ps.find((x) => x.id === projectId) ?? null
+        const p = ps.find((x) => x.id === effectiveId) ?? null
         setProject(p)
+        if (p) setForm(seedForm(p))
         const counts = { wb: wb.length, char: cs.length, ol: ol.length }
         setExisting(counts)
         const saved = parsePlan(p?.wizardPlan)
@@ -247,26 +286,26 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
       })
       .catch(() => {})
     void window.api.novel
-      .worldbuildTypes(projectId)
+      .worldbuildTypes(effectiveId)
       .then(setTypeOptions)
       .catch(() => {})
-  }, [open, projectId, initialStep])
+  }, [open, effectiveId, initialStep, setStep])
 
   useEffect(() => {
-    if (step !== 4 || !projectId) return
+    if (step !== 4 || !effectiveId) return
     void Promise.all([
-      window.api.novel.worldbuild(projectId),
-      window.api.novel.characters(projectId),
-      window.api.novel.outlines(projectId)
+      window.api.novel.worldbuild(effectiveId),
+      window.api.novel.characters(effectiveId),
+      window.api.novel.outlines(effectiveId)
     ])
       .then(([wb, cs, ol]) => setFinalCounts({ wb: wb.length, char: cs.length, ol: ol.length }))
       .catch(() => {})
-  }, [step, projectId])
+  }, [step, effectiveId])
 
   useEffect(() => {
-    if (!wbStarted || wbRunning || !projectId) return
+    if (!wbStarted || wbRunning || !effectiveId) return
     void window.api.novel
-      .worldbuild(projectId)
+      .worldbuild(effectiveId)
       .then((l) => {
         const before = wbBeforeRef.current
         if (before === null) return
@@ -276,7 +315,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
         )
       })
       .catch(() => {})
-  }, [wbStarted, wbRunning, projectId])
+  }, [wbStarted, wbRunning, effectiveId])
 
   const abortAll = (): void => {
     draftAbortRef.current?.()
@@ -290,9 +329,9 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
   // 草稿落库：关闭时保存（完成向导则清空），起草完成后立即保存。
   // patch 用于在 setState 未生效的闭包里显式传入最新值
   const savePlan = (patch: Partial<WizardPlanSave> = {}, clear = false): void => {
-    if (!projectId) return
+    if (!effectiveId) return
     if (clear) {
-      void window.api.novel.projectUpdate(projectId, { wizardPlan: '' }).catch(() => {})
+      void window.api.novel.projectUpdate(effectiveId, { wizardPlan: '' }).catch(() => {})
       return
     }
     const payload: WizardPlanSave = {
@@ -308,8 +347,50 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
       step: patch.step ?? step
     }
     void window.api.novel
-      .projectUpdate(projectId, { wizardPlan: JSON.stringify(payload) })
+      .projectUpdate(effectiveId, { wizardPlan: JSON.stringify(payload) })
       .catch(() => {})
+  }
+
+  /** 创建模式提交：成功后本地绑定新 id（effectiveId 生效），并向调用方通知切换当前项目 */
+  const createProject = (): void => {
+    const t = form.title.trim()
+    if (!t || metaBusy) return
+    setMetaBusy(true)
+    setMetaError(null)
+    void window.api.novel
+      .projectCreate({
+        title: t,
+        genre: form.genre.trim(),
+        styleGuide: form.styleGuide.trim(),
+        targetWords: Number.parseInt(form.targetWords, 10) || 0
+      })
+      .then((p) => {
+        setCreatedId(p.id)
+        onChanged?.(p.id, 'created')
+      })
+      .catch((e: unknown) => setMetaError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setMetaBusy(false))
+  }
+
+  /** 已有项目：step0 表单显式保存元数据修改（非自动保存，防误改） */
+  const saveMeta = (): void => {
+    if (!effectiveId || !form.title.trim() || metaBusy) return
+    setMetaBusy(true)
+    setMetaError(null)
+    const payload = {
+      title: form.title.trim(),
+      genre: form.genre.trim(),
+      styleGuide: form.styleGuide.trim(),
+      targetWords: Number.parseInt(form.targetWords, 10) || 0
+    }
+    void window.api.novel
+      .projectUpdate(effectiveId, payload)
+      .then(() => {
+        setProject((prev) => (prev ? { ...prev, ...payload } : prev))
+        onChanged?.(effectiveId, 'updated')
+      })
+      .catch((e: unknown) => setMetaError(e instanceof Error ? e.message : String(e)))
+      .finally(() => setMetaBusy(false))
   }
 
   const handleClose = (): void => {
@@ -329,12 +410,12 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
   }
 
   const runDraft = async (): Promise<void> => {
-    if (!projectId) return
+    if (!effectiveId) return
     setDraftBusy(true)
     setDraftError(null)
     setDraftDelta('')
     let acc = ''
-    const { done, abort } = startPipeline('premiseDraft', { projectId }, (t) => {
+    const { done, abort } = startPipeline('premiseDraft', { projectId: effectiveId }, (t) => {
       acc += t
       setDraftDelta((v) => v + t)
     })
@@ -380,17 +461,17 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
   }
 
   const startWorldbuild = (): void => {
-    if (!projectId || !wbBrief.trim() || wbRunning) return
+    if (!effectiveId || !wbBrief.trim() || wbRunning) return
     const count = Number(wbCount)
     setWbResult(null)
     void window.api.novel
-      .worldbuild(projectId)
+      .worldbuild(effectiveId)
       .then((l) => {
         wbBeforeRef.current = l.length
       })
       .catch(() => {})
     startGen({
-      projectId,
+      projectId: effectiveId,
       categories: wbCats,
       title: '',
       brief: wbBrief.trim(),
@@ -400,7 +481,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
   }
 
   const runCharQueue = async (from: number): Promise<void> => {
-    if (!projectId) return
+    if (!effectiveId) return
     setCharRunning(true)
     setCharError(null)
     for (let i = from; i < chars.length; i++) {
@@ -410,7 +491,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
       setCharDelta('')
       const { done, abort } = startPipeline(
         'character',
-        { projectId, name: c.name.trim(), brief: c.brief.trim() },
+        { projectId: effectiveId, name: c.name.trim(), brief: c.brief.trim() },
         (t) => setCharDelta((v) => v + t)
       )
       charAbortRef.current = abort
@@ -442,7 +523,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
   }
 
   const runOutline = async (): Promise<void> => {
-    if (!projectId || !outlineIdea.trim()) return
+    if (!effectiveId || !outlineIdea.trim()) return
     setOutlineBusy(true)
     setOutlineError(null)
     setOutlineDelta('')
@@ -451,7 +532,7 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
     const { done, abort } = startPipeline(
       'outline',
       {
-        projectId,
+        projectId: effectiveId,
         idea: outlineIdea.trim(),
         volume: Number(volume) || 1,
         startNo: Number(startNo) || 1,
@@ -478,7 +559,14 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
 
   // footer 统一导航：前台阻塞型生成（人物队列/大纲/起草）中锁定，后台型（世界观）允许离开
   const navLocked = draftBusy || charRunning || outlineBusy
-  const nextLabel = step === 4 ? '进入写作台' : step === 0 && !drafted ? '先起草或跳过' : '下一步'
+  const nextLabel =
+    step === 4
+      ? '进入写作台'
+      : step === 0 && needCreate
+        ? '先创建项目'
+        : step === 0 && !drafted
+          ? '先起草或跳过'
+          : '下一步'
   const nextDisabled = navLocked || (step === 0 && !drafted)
   const goNext = (): void => {
     if (nextDisabled) return
@@ -496,7 +584,25 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
     setStep(step - 1)
   }
 
-  if (!open || !projectId) return null
+  // Android 返回键：step>0 且未锁定 → 上一步；否则等价关闭（中止生成+存草稿）
+  const backImplRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    backImplRef.current = () => {
+      if (step > 0 && !navLocked) setStep(step - 1)
+      else handleClose()
+    }
+  })
+  useEffect(() => {
+    if (!onBackHandler) return
+    if (!open) {
+      onBackHandler(null)
+      return
+    }
+    onBackHandler(() => backImplRef.current())
+    return () => onBackHandler(null)
+  }, [open, onBackHandler])
+
+  if (!open) return null
 
   return (
     <OverlayCard
@@ -569,71 +675,123 @@ export function CreationWizard({ onNavigate, ui }: CreationWizardProps) {
 
         {step === 0 && (
           <div className="space-y-3">
-            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 text-sm">
-              <div className="font-medium text-zinc-100">{project?.title ?? '…'}</div>
-              <div className="mt-1 flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-zinc-500">
-                {project?.genre && <span>题材：{project.genre}</span>}
-                {project?.targetWords ? <span>目标字数：{project.targetWords}</span> : null}
-              </div>
-              {project?.styleGuide && (
-                <div className="mt-1 line-clamp-2 text-xs text-zinc-500">
-                  风格：{project.styleGuide}
+            <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+              <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-2">
+                <div>
+                  <Label>书名 *</Label>
+                  <Input
+                    value={form.title}
+                    onChange={(e) => setForm({ ...form, title: e.target.value })}
+                    placeholder="例：凡人修仙传"
+                  />
                 </div>
-              )}
-            </div>
-            {draftBusy && (
-              <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 p-3 text-xs text-amber-200">
-                <div className="flex items-center gap-2">
-                  <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
-                  AI 正在起草创作方案（世界观方向 / 核心人物 / 第一卷创意）…
+                <div>
+                  <Label>题材</Label>
+                  <Input
+                    value={form.genre}
+                    onChange={(e) => setForm({ ...form, genre: e.target.value })}
+                    placeholder="仙侠/都市/科幻…"
+                  />
                 </div>
-                {draftDelta && (
-                  <details className="mt-2">
-                    <summary className="cursor-pointer select-none text-amber-300/70 hover:text-amber-200">
-                      查看原始输出
-                    </summary>
-                    <StreamBox text={draftDelta} className="mt-1.5 h-28" />
-                  </details>
-                )}
               </div>
-            )}
-            {!draftBusy && drafted && (
-              <>
-                <PlanCard
-                  plan={{
-                    worldbuildBrief: wbBrief,
-                    worldbuildCategories: wbCats,
-                    worldbuildCount: wbCount,
-                    characters: chars,
-                    outlineIdea,
-                    outlineCount
-                  }}
+              <div>
+                <Label>目标字数</Label>
+                <Input
+                  type="number"
+                  value={form.targetWords}
+                  onChange={(e) => setForm({ ...form, targetWords: e.target.value })}
+                  placeholder="例：2000000"
+                  className="w-full sm:w-40"
                 />
-                <div className="flex items-center gap-2">
-                  <Button variant="ghost" onClick={() => setDrafted(false)}>
-                    重新起草
+              </div>
+              <div>
+                <Label>风格指南（会注入每次生成的 system）</Label>
+                <Textarea
+                  rows={3}
+                  style={{ resize: 'vertical' }}
+                  value={form.styleGuide}
+                  onChange={(e) => setForm({ ...form, styleGuide: e.target.value })}
+                  placeholder="文风参照、叙事视角、禁忌词、爽点偏好…"
+                />
+              </div>
+              <div className="flex items-center gap-2">
+                {needCreate ? (
+                  <Button onClick={createProject} disabled={!form.title.trim() || metaBusy}>
+                    {metaBusy ? '创建中…' : '创建项目'}
                   </Button>
-                </div>
-              </>
-            )}
-            {!draftBusy && !drafted && (
+                ) : metaDirty ? (
+                  <Button onClick={saveMeta} disabled={!form.title.trim() || metaBusy}>
+                    {metaBusy ? '保存中…' : '保存修改'}
+                  </Button>
+                ) : null}
+                {metaError && <span className="text-xs text-red-400">{metaError}</span>}
+              </div>
+            </div>
+            {needCreate ? (
+              <p className="text-xs text-zinc-500">
+                填写基本信息创建项目后，即可用 AI 起草创作方案，或跳过手动填写后续设定。
+              </p>
+            ) : (
               <>
-                {draftError && <div className="text-xs text-red-400">{draftError}</div>}
-                <div className="flex items-center gap-2">
-                  <Button onClick={() => void runDraft()} disabled={draftBusy || !projectId}>
-                    AI 起草创作方案
-                  </Button>
-                  <Button variant="ghost" onClick={skipDraft} disabled={draftBusy}>
-                    跳过，手动填写
-                  </Button>
-                </div>
+                {draftBusy && (
+                  <div className="rounded-lg border border-amber-800/40 bg-amber-950/20 p-3 text-xs text-amber-200">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-amber-400" />
+                      AI 正在起草创作方案（世界观方向 / 核心人物 / 第一卷创意）…
+                    </div>
+                    {draftDelta && (
+                      <details className="mt-2">
+                        <summary className="cursor-pointer select-none text-amber-300/70 hover:text-amber-200">
+                          查看原始输出
+                        </summary>
+                        <StreamBox text={draftDelta} className="mt-1.5 h-28" />
+                      </details>
+                    )}
+                  </div>
+                )}
+                {!draftBusy && drafted && (
+                  <>
+                    <PlanCard
+                      plan={{
+                        worldbuildBrief: wbBrief,
+                        worldbuildCategories: wbCats,
+                        worldbuildCount: wbCount,
+                        characters: chars,
+                        outlineIdea,
+                        outlineCount
+                      }}
+                    />
+                    <div className="flex items-center gap-2">
+                      <Button variant="ghost" onClick={() => setDrafted(false)}>
+                        重新起草
+                      </Button>
+                    </div>
+                  </>
+                )}
+                {!draftBusy && !drafted && (
+                  <>
+                    {draftError && <div className="text-xs text-red-400">{draftError}</div>}
+                    <div className="flex items-center gap-2">
+                      <Button onClick={() => void runDraft()} disabled={draftBusy || needCreate}>
+                        AI 起草创作方案
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        onClick={skipDraft}
+                        disabled={draftBusy || needCreate}
+                      >
+                        跳过，手动填写
+                      </Button>
+                    </div>
+                  </>
+                )}
+                <p className="text-xs text-zinc-500">
+                  {existing && existing.wb + existing.char + existing.ol > 0
+                    ? `检测到项目已有内容（世界观 ${existing.wb} 条 / 人物 ${existing.char} 张 / 大纲 ${existing.ol} 章），起草会衔接补全而非重复生成。`
+                    : 'AI 将根据书名与题材，起草世界观方向、核心人物清单与第一卷故事创意，生成后可逐项修改。'}
+                </p>
               </>
             )}
-            <p className="text-xs text-zinc-500">
-              {existing && existing.wb + existing.char + existing.ol > 0
-                ? `检测到项目已有内容（世界观 ${existing.wb} 条 / 人物 ${existing.char} 张 / 大纲 ${existing.ol} 章），起草会衔接补全而非重复生成。`
-                : 'AI 将根据书名与题材，起草世界观方向、核心人物清单与第一卷故事创意，生成后可逐项修改。'}
-            </p>
           </div>
         )}
 

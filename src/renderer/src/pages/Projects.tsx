@@ -1,6 +1,6 @@
 import type { Project } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { type ReactNode, useState } from 'react'
+import { useState } from 'react'
 import { Badge, Button, Card, Input, Label, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
@@ -42,38 +42,11 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
         written: br.filter((b) => b.hasDraft).length
       }
     : null
-  const [creating, setCreating] = useState(false)
-  const [title, setTitle] = useState('')
-  const [genre, setGenre] = useState('')
-  const [targetWords, setTargetWords] = useState('')
-  const [styleGuide, setStyleGuide] = useState('')
   const [editForm, setEditForm] = useState<EditForm | null>(null)
 
   const reload = (): void => {
     void queryClient.invalidateQueries({ queryKey: qk.projects })
     void queryClient.invalidateQueries({ queryKey: qk.novel })
-  }
-
-  const create = (): void => {
-    if (!title.trim()) return
-    void window.api.novel
-      .projectCreate({
-        title: title.trim(),
-        genre: genre.trim(),
-        styleGuide: styleGuide.trim(),
-        targetWords: parseInt(targetWords, 10) || 0
-      })
-      .then((p) => {
-        setCreating(false)
-        setTitle('')
-        setGenre('')
-        setTargetWords('')
-        setStyleGuide('')
-        reload()
-        onSwitch(p.id)
-        openWizard(p.id)
-      })
-      .catch((err: unknown) => window.alert(`创建失败：${(err as Error).message}`))
   }
 
   const saveEdit = (): void => {
@@ -110,48 +83,12 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
       })
   }
 
-  const newProjectForm = (buttonLabel: string): ReactNode => (
-    <Card className="space-y-4 p-4 md:p-5">
-      <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-        <div>
-          <Label>书名 *</Label>
-          <Input
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder="例：凡人修仙传"
-          />
-        </div>
-        <div>
-          <Label>题材</Label>
-          <Input
-            value={genre}
-            onChange={(e) => setGenre(e.target.value)}
-            placeholder="仙侠/都市/科幻…"
-          />
-        </div>
-      </div>
-      <div>
-        <Label>目标字数</Label>
-        <Input
-          type="number"
-          value={targetWords}
-          onChange={(e) => setTargetWords(e.target.value)}
-          placeholder="例：2000000"
-          className="w-full sm:w-48"
-        />
-      </div>
-      <div>
-        <Label>风格指南（会注入每次生成的 system）</Label>
-        <Textarea
-          rows={4}
-          value={styleGuide}
-          onChange={(e) => setStyleGuide(e.target.value)}
-          placeholder="文风参照、叙事视角、禁忌词、爽点偏好…"
-        />
-      </div>
-      <Button onClick={create} disabled={!title.trim()}>
-        {buttonLabel}
-      </Button>
+  const newProjectCard = (
+    <Card className="space-y-3 p-5 text-center">
+      <p className="text-xs text-zinc-500">
+        通过创作向导新建：填写基本信息 → AI 起草方案 → 世界观 / 人物 / 大纲
+      </p>
+      <Button onClick={() => openWizard(null)}>＋ 新建项目</Button>
     </Card>
   )
 
@@ -174,7 +111,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
             <h1 className="mt-3 text-xl font-semibold text-zinc-100">开始创作</h1>
             <p className="mt-1 text-xs text-zinc-600">新建一本小说，或从下方打开最近的项目</p>
           </div>
-          {newProjectForm('创建并打开')}
+          {newProjectCard}
           {projects.length > 0 && (
             <Card>
               <div className="border-b border-zinc-800 px-4 py-2.5 text-sm font-medium text-zinc-200">
@@ -242,10 +179,8 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
         <h1 className="text-lg font-semibold text-zinc-100">
           项目 · {projects.find((p) => p.id === currentProjectId)?.title ?? ''}
         </h1>
-        <Button onClick={() => setCreating((v) => !v)}>{creating ? '取消' : '新建项目'}</Button>
+        <Button onClick={() => openWizard(null)}>新建项目</Button>
       </div>
-
-      {creating && newProjectForm('创建并打开')}
 
       {editForm && (
         <Card className="space-y-4 p-4 md:p-5">

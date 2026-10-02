@@ -1,3 +1,5 @@
+import { useCallback, useEffect, useRef } from 'react'
+import { registerBackHandler } from '@mobile/lib/backHandler'
 import { CreationWizard } from '@wizard/CreationWizard'
 import { useToasts } from '@wizard/toastStore'
 import { Badge, Button, Input, Label, Textarea } from '@mobile/components/ui'
@@ -9,8 +11,33 @@ const wizardUi: WizardUi = { Badge, Button, Input, Label, Textarea }
 
 const noopNavigate: Navigate = () => {}
 
-export function WizardHost({ onNavigate }: { onNavigate?: Navigate }) {
-  return <CreationWizard onNavigate={onNavigate ?? noopNavigate} ui={wizardUi} />
+export function WizardHost({
+  onNavigate,
+  onChanged
+}: {
+  onNavigate?: Navigate
+  onChanged?: (id: string, kind: 'created' | 'updated') => void
+}) {
+  const unsubRef = useRef<(() => void) | null>(null)
+  const registerBack = useCallback((h: (() => void) | null) => {
+    unsubRef.current?.()
+    unsubRef.current = null
+    if (h) unsubRef.current = registerBackHandler(h)
+  }, [])
+  useEffect(
+    () => () => {
+      unsubRef.current?.()
+    },
+    []
+  )
+  return (
+    <CreationWizard
+      onNavigate={onNavigate ?? noopNavigate}
+      ui={wizardUi}
+      onBackHandler={registerBack}
+      onChanged={onChanged}
+    />
+  )
 }
 
 /** 极简 Toast：读共享 toastStore，桌面 Toaster 的等价物 */

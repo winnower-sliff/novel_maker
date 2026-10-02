@@ -367,7 +367,13 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <Toaster />
-      <CreationWizard onNavigate={navigate} />
+      <CreationWizard
+        onNavigate={navigate}
+        onChanged={(id, kind) => {
+          if (kind === 'created') switchProject(id)
+          else void queryClient.invalidateQueries({ queryKey: qk.projects })
+        }}
+      />
       {sseDown && (
         <div className="flex shrink-0 items-center justify-center gap-2 bg-amber-600/90 px-3 py-1.5 text-xs text-white">
           <span className="h-2 w-2 animate-pulse rounded-full bg-white" aria-hidden="true" />

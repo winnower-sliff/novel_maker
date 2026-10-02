@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query'
-import { Empty } from '@mobile/components/ui'
+import { Button, Empty } from '@mobile/components/ui'
 import { fmtRelative, fmtWords } from '@mobile/lib/format'
 import type { Project } from '@shared/types'
 
@@ -57,20 +57,43 @@ function Cover({ project, onOpen }: { project: Project; onOpen: (id: string) => 
   )
 }
 
-export default function Shelf({ onOpen }: { onOpen: (id: string) => void }) {
+export default function Shelf({
+  onOpen,
+  onCreate
+}: {
+  onOpen: (id: string) => void
+  onCreate: () => void
+}) {
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ['novel', 'projects'],
     queryFn: () => window.api.novel.projects()
   })
 
   if (isLoading) return <Empty text="加载中…" />
-  if (projects.length === 0) return <Empty text="电脑端还没有项目，请先在桌面端创建" />
+  if (projects.length === 0)
+    return (
+      <div className="flex h-full flex-col items-center justify-center gap-3 p-8 text-center">
+        <div className="text-4xl">📚</div>
+        <p className="text-sm text-zinc-500">书架还是空的，创建你的第一本小说吧</p>
+        <Button onClick={onCreate}>＋ 新建项目</Button>
+      </div>
+    )
 
   return (
-    <div className="grid grid-cols-2 gap-3 p-3">
-      {projects.map((p) => (
-        <Cover key={p.id} project={p} onOpen={onOpen} />
-      ))}
+    <div className="relative">
+      <div className="grid grid-cols-2 gap-3 p-3">
+        {projects.map((p) => (
+          <Cover key={p.id} project={p} onOpen={onOpen} />
+        ))}
+      </div>
+      <button
+        type="button"
+        aria-label="新建项目"
+        onClick={onCreate}
+        className="fixed bottom-20 right-4 z-20 flex h-12 w-12 cursor-pointer items-center justify-center rounded-full bg-amber-600 text-2xl leading-none text-white shadow-lg shadow-black/40 transition-transform active:scale-95"
+      >
+        ＋
+      </button>
     </div>
   )
 }
