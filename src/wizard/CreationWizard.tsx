@@ -153,8 +153,9 @@ function PlanCard({ plan }: { plan: PremiseDraftResult }) {
       <PlanSection label={`核心人物 · ${charList.length} 名`}>
         {charList.length > 0 ? (
           <ul className="space-y-1.5">
-            {charList.map((c) => (
-              <li key={c.name} className="text-xs leading-relaxed">
+            {charList.map((c, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: 只读展示列表，库中可存在同名人物卡，index 才是稳定身份
+              <li key={`${c.name}-${i}`} className="text-xs leading-relaxed">
                 <span className="font-medium text-zinc-100">{c.name}</span>
                 {c.brief.trim() && <span className="text-zinc-400">　{c.brief}</span>}
               </li>
@@ -249,6 +250,8 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
   const [outlineDone, setOutlineDone] = useState(false)
   const [outlineResult, setOutlineResult] = useState<string | null>(null)
   const outlineAbortRef = useRef<(() => void) | null>(null)
+  // 上次恢复/保存的存档：savePlan 合并基线，防当前空 state 覆盖好档
+  const savedPlanRef = useRef<WizardPlanSave | null>(null)
 
   const [finalCounts, setFinalCounts] = useState<{ wb: number; char: number; ol: number } | null>(
     null
@@ -297,6 +300,7 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
     outlineAbortRef.current = null
     setFinalCounts(null)
     setExisting(null)
+    savedPlanRef.current = null
     if (!effectiveId) return
     void Promise.all([
       window.api.novel.projects(),
@@ -311,18 +315,35 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
         const counts = { wb: wb.length, char: cs.length, ol: ol.length }
         setExisting(counts)
         const saved = parsePlan(p?.wizardPlan)
-        if (saved) {
-          setDraftDelta(saved.draftText)
-          setDrafted(saved.wbBrief.trim().length > 0)
-          setWbBrief(saved.wbBrief)
-          setWbCats(saved.wbCats)
-          setWbCount(saved.wbCount)
-          setChars(saved.chars)
-          setOutlineIdea(saved.outlineIdea)
-          setOutlineCount(saved.outlineCount)
-          setVolume(saved.volume)
-          setStartNo(saved.startNo)
+        // 库数据回填：存档字段缺失（换端/存档损坏）时以项目库为准，已生成的进度不丢
+        const merged: WizardPlanSave = saved ?? {
+          draftText: '',
+          wbBrief: '',
+          wbCats: [],
+          wbCount: 8,
+          chars: [],
+          outlineIdea: '',
+          outlineCount: 20,
+          volume: 1,
+          startNo: 1,
+          step: 0
         }
+        if (merged.wbCats.length === 0 && wb.length > 0)
+          merged.wbCats = Array.from(new Set(wb.map((w) => w.category)))
+        if (!merged.chars.some((c) => c.name.trim()) && cs.length > 0)
+          merged.chars = cs.map((c) => ({ name: c.name, brief: c.role }))
+        savedPlanRef.current = merged
+        setDraftDelta(merged.draftText)
+        // 库里已有任何内容即视为过设定页，不强制重新起草
+        setDrafted(merged.wbBrief.trim().length > 0 || counts.wb + counts.char + counts.ol > 0)
+        setWbBrief(merged.wbBrief)
+        setWbCats(merged.wbCats)
+        setWbCount(merged.wbCount)
+        setChars(merged.chars)
+        setOutlineIdea(merged.outlineIdea)
+        setOutlineCount(merged.outlineCount)
+        setVolume(merged.volume)
+        setStartNo(merged.startNo)
         setStep(
           initialStep ??
             (saved
@@ -379,20 +400,22 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
   }
 
   // 草稿落库：关闭时保存（完成向导则清空），起草完成后立即保存。
-  // patch 用于在 setState 未生效的闭包里显式传入最新值
+  // patch 用于在 setState 未生效的闭包里显式传入最新值；
+  // 内容字段空时回落上次存档，避免空 state（恢复失败/未起草）把好档覆盖成空
   const savePlan = (patch: Partial<WizardPlanSave> = {}, clear = false): void => {
     if (!effectiveId) return
     if (clear) {
       void window.api.novel.projectUpdate(effectiveId, { wizardPlan: '' }).catch(() => {})
       return
     }
+    const last = savedPlanRef.current
     const payload: WizardPlanSave = {
-      draftText: patch.draftText ?? draftDelta,
-      wbBrief: patch.wbBrief ?? wbBrief,
-      wbCats: patch.wbCats ?? wbCats,
+      draftText: patch.draftText ?? (draftDelta || last?.draftText || ''),
+      wbBrief: patch.wbBrief ?? (wbBrief || last?.wbBrief || ''),
+      wbCats: patch.wbCats ?? (wbCats.length > 0 ? wbCats : (last?.wbCats ?? [])),
       wbCount: patch.wbCount ?? wbCount,
-      chars: patch.chars ?? chars,
-      outlineIdea: patch.outlineIdea ?? outlineIdea,
+      chars: patch.chars ?? (chars.some((c) => c.name.trim()) ? chars : (last?.chars ?? [])),
+      outlineIdea: patch.outlineIdea ?? (outlineIdea || last?.outlineIdea || ''),
       outlineCount: patch.outlineCount ?? outlineCount,
       volume: patch.volume ?? volume,
       startNo: patch.startNo ?? startNo,
@@ -400,6 +423,9 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
     }
     void window.api.novel
       .projectUpdate(effectiveId, { wizardPlan: JSON.stringify(payload) })
+      .then(() => {
+        savedPlanRef.current = payload
+      })
       .catch(() => {})
   }
 
@@ -505,7 +531,9 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
       outlineIdea: '',
       outlineCount: 20
     })
+    setDrafted(true)
     setStep(1)
+    savePlan({ step: 1, wbBrief: '', chars: [{ name: '', brief: '' }] })
   }
 
   const toggleCat = (c: string): void => {
@@ -647,11 +675,12 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
     }
     const n = step + 1
     setStep(n)
-    if (step === 0) savePlan({ step: n })
+    savePlan({ step: n })
   }
   const goPrev = (): void => {
     if (step <= 0 || navLocked) return
     setStep(step - 1)
+    savePlan({ step: step - 1 })
   }
 
   // Android 返回键：step>0 且未锁定 → 上一步；否则等价关闭（中止生成+存草稿）
@@ -1069,7 +1098,6 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
                   input={Input}
                   value={outlineCount}
                   min={1}
-                  max={40}
                   onChange={setOutlineCount}
                   disabled={outlineBusy}
                   className="w-20"
