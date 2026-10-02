@@ -53,18 +53,25 @@ export default function More() {
     setApkState({ kind: 'checking' })
     try {
       const remote = await fetchMobileVersion(conn)
-      const current = (await updater.getVersion()).version
+      const cur = await updater.getVersion()
       if (!remote.apk) {
         setApkState({ kind: 'server-none' })
-      } else if (remote.apk.version === current) {
-        setApkState({ kind: 'latest', buildAt: remote.buildAt })
       } else {
-        setApkState({
-          kind: 'available',
-          version: remote.apk.version,
-          size: remote.apk.size,
-          buildAt: remote.buildAt
-        })
+        // 新旧判定以 versionCode（int，分钟级 epoch，单调递增）为准；
+        // versionName 相等不算最新——纯 semver 多次构建不变，仅凭它会漏更新
+        const isNewer = remote.apk.versionCode
+          ? remote.apk.versionCode > cur.versionCode
+          : remote.apk.version !== cur.version
+        if (!isNewer) {
+          setApkState({ kind: 'latest', buildAt: remote.buildAt })
+        } else {
+          setApkState({
+            kind: 'available',
+            version: remote.apk.version,
+            size: remote.apk.size,
+            buildAt: remote.buildAt
+          })
+        }
       }
     } catch (err) {
       setApkState({ kind: 'error', message: err instanceof Error ? err.message : String(err) })

@@ -106,7 +106,7 @@ export async function fetchMobileVersion(conn: {
 }): Promise<{
   version: string | null
   buildAt: string | null
-  apk?: { version: string; path: string; size: number }
+  apk?: { version: string; versionCode?: number; path: string; size: number }
 }> {
   const res = await fetch(`${conn.baseUrl}/api/mobile/version`, {
     headers: { 'x-nm-token': conn.token }
@@ -115,6 +115,6 @@ export async function fetchMobileVersion(conn: {
   return (await res.json()) as {
     version: string | null
     buildAt: string | null
-    apk?: { version: string; path: string; size: number }
+    apk?: { version: string; versionCode?: number; path: string; size: number }
   }
 }

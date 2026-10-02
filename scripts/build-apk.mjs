@@ -14,12 +14,18 @@ const sh = (cmd, cwd) => {
 const version = process.argv[2] ?? JSON.parse(await readFile(join(root, 'package.json'), 'utf-8')).version
 // versionCode 必须是 int：用分钟级 epoch（单调递增且不溢出）
 const versionCode = String(Math.floor(Date.now() / 60000))
+// versionName 追加构建时间戳：手机端「检查更新」靠 versionName/versionCode 区分新旧包，
+// 纯 semver（如 1.0.0）多次构建不变会让旧机误判「已是最新」而拉不到新包
+const p2 = (n) => String(n).padStart(2, '0')
+const d = new Date()
+const stamp = `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}`
+const versionName = `${version}-${stamp}`
 
 try {
   // 版本注入：gradle 读 version.properties
   await writeFile(
     join(root, 'mobile-app', 'android', 'version.properties'),
-    `versionName=${version}\nversionCode=${versionCode}\n`
+    `versionName=${versionName}\nversionCode=${versionCode}\n`
   )
   // 必须以仓库根为 cwd 跑并显式指 config：Tailwind v4 扫描 base 跟随 cwd，
   // 在 mobile/ 下跑会漏扫 src/wizard（向导类全缺→弹窗白框样式失效）
@@ -32,8 +38,8 @@ try {
   const apk = join(root, 'mobile-app', 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk')
   await copyFile(apk, join(root, 'NovelMaker.apk'))
   // APK 部署为电脑端更新源（manifest.apk），手机端「APP 更新」自动下载安装
-  sh(`node scripts/pack-mobile.mjs --apk "${apk}" --apk-version ${version}`, root)
-  console.log(`\n[apk] 完成 v${version} → NovelMaker.apk（项目根目录），并已部署为更新源`)
+  sh(`node scripts/pack-mobile.mjs --apk "${apk}" --apk-version ${versionName} --apk-code ${versionCode}`, root)
+  console.log(`\n[apk] 完成 v${versionName} → NovelMaker.apk（项目根目录），并已部署为更新源`)
 } catch (err) {
   console.error('[apk] failed:', err.message)
   process.exit(1)

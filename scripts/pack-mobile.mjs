@@ -23,8 +23,9 @@ function arg(name) {
 async function main() {
   const apkSrc = arg('apk')
   const version = arg('apk-version')
+  const versionCode = Number(arg('apk-code')) || 0
   if (!apkSrc || !version) {
-    console.error('[pack-mobile] 用法: node scripts/pack-mobile.mjs --apk <NovelMaker.apk> --apk-version <semver>')
+    console.error('[pack-mobile] 用法: node scripts/pack-mobile.mjs --apk <NovelMaker.apk> --apk-version <version> [--apk-code <int>]')
     process.exit(1)
   }
 
@@ -40,7 +41,7 @@ async function main() {
   const manifest = {
     version,
     buildAt: new Date().toISOString(),
-    apk: { version, path: rel, size: buf.length },
+    apk: { version, versionCode, path: rel, size: buf.length },
     files: [
       { path: rel, hash: createHash('sha256').update(buf).digest('hex'), size: buf.length }
     ]
