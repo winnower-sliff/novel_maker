@@ -1,5 +1,5 @@
-// 一键出 APK：构建 mobile web → 打进 APK（时间戳版本号）→ 部署 APK 到电脑端（更新源）→ 拷到项目根
-import { copyFile, writeFile } from 'node:fs/promises'
+// 一键出 APK：构建 mobile web → 打进 APK（semver 版本）→ 部署 APK 到电脑端（更新源）→ 拷到项目根
+import { copyFile, readFile, writeFile } from 'node:fs/promises'
 import { execSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -10,7 +10,8 @@ const sh = (cmd, cwd) => {
   execSync(cmd, { cwd, stdio: 'inherit', shell: true })
 }
 
-const version = process.argv[2] ?? new Date().toISOString().slice(0, 16).replace(/[-:T]/g, '')
+// semver 单一事实源：根 package.json 的 version 字段
+const version = process.argv[2] ?? JSON.parse(await readFile(join(root, 'package.json'), 'utf-8')).version
 // versionCode 必须是 int：用分钟级 epoch（单调递增且不溢出）
 const versionCode = String(Math.floor(Date.now() / 60000))
 

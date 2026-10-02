@@ -9,13 +9,21 @@ import { fmtTokens } from '@mobile/lib/format'
 type ApkState =
   | { kind: 'idle' }
   | { kind: 'checking' }
-  | { kind: 'latest' }
-  | { kind: 'available'; version: string; size: number }
+  | { kind: 'latest'; buildAt: string | null }
+  | { kind: 'available'; version: string; size: number; buildAt: string | null }
   | { kind: 'downloading'; done: number; total: number }
   | { kind: 'ready' }
   | { kind: 'grant' }
   | { kind: 'server-none' }
   | { kind: 'error'; message: string }
+
+function fmtBuildAt(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const pad = (n: number): string => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}`
+}
 
 function fmtBytes(n: number): string {
   if (n >= 1024 * 1024) return `${(n / 1048576).toFixed(1)} MB`
@@ -49,9 +57,14 @@ export default function More() {
       if (!remote.apk) {
         setApkState({ kind: 'server-none' })
       } else if (remote.apk.version === current) {
-        setApkState({ kind: 'latest' })
+        setApkState({ kind: 'latest', buildAt: remote.buildAt })
       } else {
-        setApkState({ kind: 'available', version: remote.apk.version, size: remote.apk.size })
+        setApkState({
+          kind: 'available',
+          version: remote.apk.version,
+          size: remote.apk.size,
+          buildAt: remote.buildAt
+        })
       }
     } catch (err) {
       setApkState({ kind: 'error', message: err instanceof Error ? err.message : String(err) })
@@ -130,12 +143,16 @@ export default function More() {
                 )}
               </Button>
               {apkState.kind === 'latest' && (
-                <span className="text-xs text-emerald-400">已是最新</span>
+                <span className="text-xs text-emerald-400">
+                  已是最新{fmtBuildAt(apkState.buildAt) && ` · 构建于 ${fmtBuildAt(apkState.buildAt)}`}
+                </span>
               )}
               {apkState.kind === 'available' && (
                 <>
                   <span className="text-xs text-amber-400">
-                    新版 v{apkState.version} · {fmtBytes(apkState.size)}
+                    新版 v{apkState.version}
+                    {fmtBuildAt(apkState.buildAt) && ` · ${fmtBuildAt(apkState.buildAt)}`} ·{' '}
+                    {fmtBytes(apkState.size)}
                   </span>
                   <Button className="px-3 py-1.5 text-xs" onClick={() => void downloadApk()}>
                     下载并安装

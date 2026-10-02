@@ -24,7 +24,7 @@ async function main() {
   const apkSrc = arg('apk')
   const version = arg('apk-version')
   if (!apkSrc || !version) {
-    console.error('[pack-mobile] 用法: node scripts/pack-mobile.mjs --apk <NovelMaker.apk> --apk-version <YYYYMMDDHHmm>')
+    console.error('[pack-mobile] 用法: node scripts/pack-mobile.mjs --apk <NovelMaker.apk> --apk-version <semver>')
     process.exit(1)
   }
 
