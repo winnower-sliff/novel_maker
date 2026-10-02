@@ -80,6 +80,54 @@ function StreamBox({ text, className }: { text: string; className: string }) {
   )
 }
 
+/** 扫描大纲流文本中已配平的章节对象，取标题做实时进度（坏对象/半截对象忽略） */
+function scanOutlineProgress(text: string): { count: number; lastTitles: string[] } {
+  const titles: string[] = []
+  let depth = 0
+  let inStr = false
+  let esc = false
+  let start = -1
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') inStr = true
+    else if (ch === '{') {
+      if (depth === 0) start = i
+      depth++
+    } else if (ch === '}') {
+      depth--
+      if (depth === 0 && start >= 0) {
+        try {
+          const obj = JSON.parse(text.slice(start, i + 1)) as { title?: unknown }
+          if (obj && typeof obj.title === 'string') titles.push(obj.title)
+        } catch {
+          // 解析失败的单个对象直接跳过
+        }
+        start = -1
+      }
+    }
+  }
+  return { count: titles.length, lastTitles: titles.slice(-3) }
+}
+
+/** 大纲生成进度框：与世界观生成进度框同款式（不裸露原始流） */
+function OutlineProgress({ text }: { text: string }) {
+  const prog = scanOutlineProgress(text)
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
+      <div className="text-amber-300">{prog.count > 0 ? `生成中 · 已解析 ${prog.count} 章` : '生成中'}</div>
+      {prog.lastTitles.length > 0 && (
+        <div className="mt-1 truncate text-zinc-500">{prog.lastTitles.join(' / ')}</div>
+      )}
+    </div>
+  )
+}
+
 function PlanSection({ label, children }: { label: string; children: ReactNode }) {
   return (
     <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
@@ -1104,9 +1152,7 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
                 />
               </div>
             </div>
-            {(outlineBusy || outlineDelta) && (
-              <StreamBox text={outlineDelta} className="h-28 shrink-0 sm:h-32" />
-            )}
+            {outlineBusy && <OutlineProgress text={outlineDelta} />}
             {outlineError && (
               <div className="flex items-center gap-2 text-xs text-red-400">
                 <span className="truncate">{outlineError}</span>
