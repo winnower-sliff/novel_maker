@@ -89,6 +89,56 @@ function PlanSection({ label, children }: { label: string; children: ReactNode }
   )
 }
 
+/** 受控数字输入：内部保留原始字符串，允许清空/中间态，blur 时才 clamp 规范化——避免 Number('')=0 回填卡死 */
+function NumberField({
+  input: Input,
+  value,
+  min = 1,
+  max,
+  disabled,
+  className,
+  onChange
+}: {
+  input: WizardUi['Input']
+  value: number
+  min?: number
+  max?: number
+  disabled?: boolean
+  className?: string
+  onChange: (n: number) => void
+}) {
+  const [raw, setRaw] = useState(String(value))
+  useEffect(() => {
+    // 输入中的中间态（'12.'、'0100'）数值与 value 相等时不打断；仅存档恢复/applyPlan 类外部变更才重写
+    setRaw((prev) => (Number(prev) === value ? prev : String(value)))
+  }, [value])
+  const clamp = (n: number): number => {
+    if (!Number.isFinite(n)) return min
+    const low = Math.max(min, n)
+    return max === undefined ? low : Math.min(max, low)
+  }
+  return (
+    <Input
+      type="number"
+      min={min}
+      max={max}
+      value={raw}
+      disabled={disabled}
+      className={className}
+      onChange={(e) => {
+        setRaw(e.target.value)
+        const n = Number(e.target.value)
+        if (e.target.value.trim() !== '' && Number.isFinite(n)) onChange(clamp(n))
+      }}
+      onBlur={() => {
+        const n = clamp(Number(raw))
+        setRaw(String(n))
+        onChange(n)
+      }}
+    />
+  )
+}
+
 function PlanCard({ plan }: { plan: PremiseDraftResult }) {
   const charList = plan.characters.filter((c) => c.name.trim())
   return (
@@ -197,6 +247,7 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
   const [outlineDelta, setOutlineDelta] = useState('')
   const [outlineError, setOutlineError] = useState<string | null>(null)
   const [outlineDone, setOutlineDone] = useState(false)
+  const [outlineResult, setOutlineResult] = useState<string | null>(null)
   const outlineAbortRef = useRef<(() => void) | null>(null)
 
   const [finalCounts, setFinalCounts] = useState<{ wb: number; char: number; ol: number } | null>(
@@ -242,6 +293,7 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
     setOutlineDelta('')
     setOutlineError(null)
     setOutlineDone(false)
+    setOutlineResult(null)
     outlineAbortRef.current = null
     setFinalCounts(null)
     setExisting(null)
@@ -528,6 +580,7 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
     setOutlineError(null)
     setOutlineDelta('')
     setOutlineDone(false)
+    setOutlineResult(null)
     const count = Number(outlineCount)
     const { done, abort } = startPipeline(
       'outline',
@@ -536,14 +589,31 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
         idea: outlineIdea.trim(),
         volume: Number(volume) || 1,
         startNo: Number(startNo) || 1,
-        count: Number.isFinite(count) && count >= 1 ? Math.floor(count) : 20
+        count: Number.isFinite(count) && count >= 1 ? Math.floor(count) : 20,
+        allowUpdate: true
       },
       (t) => setOutlineDelta((v) => v + t)
     )
     outlineAbortRef.current = abort
     try {
-      await done
-      setOutlineDone(true)
+      const r = (await done).data as {
+        created: number
+        updated: number
+        skipped: number
+        parsed: boolean
+      }
+      if (!r.parsed) {
+        setOutlineError('AI 输出无法解析为章节列表，请重试或调整创意描述')
+      } else if (r.created + r.updated === 0) {
+        setOutlineError('AI 未输出有效章节，请重试或调整创意描述')
+      } else {
+        setOutlineResult(
+          `已导入：新建 ${r.created} 章${r.updated ? ` · 更新 ${r.updated} 章` : ''}${
+            r.skipped ? ` · 跳过 ${r.skipped} 章（章节号已存在）` : ''
+          }`
+        )
+        setOutlineDone(true)
+      }
     } catch (e) {
       setOutlineError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -829,12 +899,12 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
             </div>
             <div className="flex items-center gap-2 text-xs">
               <span className="shrink-0 text-zinc-500">条目数</span>
-              <Input
-                type="number"
+              <NumberField
+                input={Input}
+                value={wbCount}
                 min={1}
                 max={12}
-                value={wbCount}
-                onChange={(e) => setWbCount(Number(e.target.value))}
+                onChange={setWbCount}
                 disabled={wbStarted}
                 className="w-20"
               />
@@ -973,34 +1043,34 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
             <div className="flex flex-wrap items-center gap-4 text-xs">
               <div className="flex items-center gap-2">
                 <span className="shrink-0 text-zinc-500">卷号</span>
-                <Input
-                  type="number"
-                  min={1}
+                <NumberField
+                  input={Input}
                   value={volume}
-                  onChange={(e) => setVolume(Number(e.target.value))}
+                  min={1}
+                  onChange={setVolume}
                   disabled={outlineBusy}
                   className="w-20"
                 />
               </div>
               <div className="flex items-center gap-2">
                 <span className="shrink-0 text-zinc-500">起始章号</span>
-                <Input
-                  type="number"
-                  min={1}
+                <NumberField
+                  input={Input}
                   value={startNo}
-                  onChange={(e) => setStartNo(Number(e.target.value))}
+                  min={1}
+                  onChange={setStartNo}
                   disabled={outlineBusy}
                   className="w-20"
                 />
               </div>
               <div className="flex items-center gap-2">
                 <span className="shrink-0 text-zinc-500">章数</span>
-                <Input
-                  type="number"
+                <NumberField
+                  input={Input}
+                  value={outlineCount}
                   min={1}
                   max={40}
-                  value={outlineCount}
-                  onChange={(e) => setOutlineCount(Number(e.target.value))}
+                  onChange={setOutlineCount}
                   disabled={outlineBusy}
                   className="w-20"
                 />
@@ -1025,11 +1095,7 @@ export function CreationWizard({ onNavigate, ui, onBackHandler, onChanged }: Cre
                 {outlineDone ? '重新生成' : outlineBusy ? '生成中…' : '生成大纲并导入'}
               </Button>
             </div>
-            {outlineDone && (
-              <p className="text-xs text-emerald-400">
-                大纲已导入，可在大纲页继续调整或生成更多卷。
-              </p>
-            )}
+            {outlineResult && <p className="text-xs text-emerald-400">{outlineResult}</p>}
           </div>
         )}
 
