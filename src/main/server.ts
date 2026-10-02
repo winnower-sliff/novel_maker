@@ -16,13 +16,15 @@ import type { ExportFormat } from '../shared/types'
 import type { EventSink } from './eventSink'
 import { buildExport } from './export'
 import { sharedHandlers } from './handlers'
+import { addSession, hasSession, removeSession } from './serverSessions'
 import { setServerStatus } from './serverState'
 import { loadServerConfig, verifyPassword } from './settings'
 
 const MAX_BODY = 64 * 1024 * 1024
-const SESSION_TTL_MS = 7 * 24 * 60 * 60 * 1000
 const LOGIN_WINDOW_MS = 5 * 60 * 1000
 const LOGIN_MAX_ATTEMPTS = 10
+// 会话永久有效（改密码时全作废），cookie Max-Age 给 10 年
+const COOKIE_MAX_AGE_S = 315360000
 const SESSION_COOKIE = 'nm_session'
 
 const MIME: Record<string, string> = {
@@ -43,7 +45,6 @@ const MIME: Record<string, string> = {
   '.map': 'application/json; charset=utf-8'
 }
 
-const sessions = new Map<string, number>()
 const loginAttempts = new Map<string, { count: number; resetAt: number }>()
 
 let server: Server | null = null
@@ -113,13 +114,7 @@ function isAuthed(req: IncomingMessage): boolean {
   // APK WebView 源与服务器跨站，SameSite cookie 不可用，移动端改用 token header/query
   const token = parseCookies(req)[SESSION_COOKIE] ?? reqToken(req)
   if (!token) return false
-  const expires = sessions.get(token)
-  if (!expires) return false
-  if (expires < Date.now()) {
-    sessions.delete(token)
-    return false
-  }
-  return true
+  return hasSession(token)
 }
 
 function reqToken(req: IncomingMessage): string | null {
@@ -320,10 +315,10 @@ async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<v
   }
   loginAttempts.delete(ip)
   const token = randomBytes(32).toString('hex')
-  sessions.set(token, now + SESSION_TTL_MS)
+  addSession(token)
   res.writeHead(302, {
     location: '/',
-    'set-cookie': `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${SESSION_TTL_MS / 1000}`
+    'set-cookie': `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE_S}`
   })
   res.end()
 }
@@ -461,7 +456,7 @@ async function handleMobileAuth(req: IncomingMessage, res: ServerResponse): Prom
   }
   loginAttempts.delete(ip)
   const token = randomBytes(32).toString('hex')
-  sessions.set(token, now + SESSION_TTL_MS)
+  addSession(token)
   json(res, 200, { token }, req)
 }
 
@@ -515,7 +510,7 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (path === '/api/login' && req.method === 'POST') return handleLogin(req, res)
   if (path === '/api/logout' && req.method === 'POST') {
     const token = parseCookies(req)[SESSION_COOKIE]
-    if (token) sessions.delete(token)
+    if (token) removeSession(token)
     res.writeHead(302, {
       location: '/login',
       'set-cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`

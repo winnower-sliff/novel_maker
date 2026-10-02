@@ -12,6 +12,7 @@ import type {
   SettingsPatch,
   SettingsView
 } from '../shared/types'
+import { clearSessions } from './serverSessions'
 
 interface KeyPair {
   apiKeyEnc?: string
@@ -172,6 +173,8 @@ export function saveServerConfig(patch: {
     server.port = Math.min(65535, Math.max(1, Math.floor(patch.port)))
   }
   if (patch.password !== undefined) {
+    // 密码变更（含清除）→ 旧 token 全作废，各端需重新登录
+    clearSessions()
     if (patch.password) {
       const { salt, hash } = hashPassword(patch.password)
       server.passwordSalt = salt
