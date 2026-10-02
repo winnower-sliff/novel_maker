@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useBackHandler } from '@mobile/lib/backHandler'
 import { chatStream } from '@mobile/lib/stream'
 import { Button, Input, Spinner } from './ui'
 
@@ -175,6 +176,21 @@ export function AiBar({ value, onChange, textareaRef, disabled }: Props) {
 
   const chips = action === 'rewrite' ? REWRITE_CHIPS : CONTINUE_CHIPS
   const busy = mode === 'generating'
+
+  // 抽屉打开时接管返回键：生成中→中止并关闭；预览未采用→确认丢弃；输入态→直接关闭
+  useBackHandler(
+    () => {
+      if (mode === 'generating') {
+        abortedRef.current = true
+        reset()
+        return
+      }
+      if (mode === 'preview' && resultRef.current.trim() && !window.confirm('结果尚未采用，确定丢弃？'))
+        return
+      reset()
+    },
+    mode !== 'idle'
+  )
 
   return (
     <>

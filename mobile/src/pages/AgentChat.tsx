@@ -8,6 +8,7 @@ import type {
 } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
+import { useBackHandler } from '@mobile/lib/backHandler'
 import { Markdown } from '@mobile/components/Markdown'
 import { Badge, Button, Empty, Textarea } from '@mobile/components/ui'
 import { fmtRelative } from '@mobile/lib/format'
@@ -35,6 +36,8 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
+  // 会话选择器打开时，返回键先关闭它
+  useBackHandler(useCallback(() => setPickerOpen(false), []), pickerOpen)
   const requestIdRef = useRef<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const sessionCreatedAtRef = useRef<number>(Date.now())

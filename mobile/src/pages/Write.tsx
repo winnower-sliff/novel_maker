@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AiBar } from '@mobile/components/AiBar'
+import { useBackHandler } from '@mobile/lib/backHandler'
 import { Badge, Button, Empty, Spinner } from '@mobile/components/ui'
 import { fmtWords } from '@mobile/lib/format'
 import type { ChapterBrief } from '@shared/types'
@@ -153,10 +154,17 @@ function ChapterEditor({
 
   const words = content.replace(/\s/g, '').length
 
+  // 返回键与 UI 返回按钮同语义：有未保存改动先确认，避免静默丢稿
+  const leave = useCallback((): void => {
+    if (dirty && !window.confirm('有未保存的改动，确定离开？')) return
+    onBack()
+  }, [dirty, onBack])
+  useBackHandler(leave)
+
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-950/95 px-2 py-2">
-        <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={onBack}>
+        <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={leave}>
           ← 返回
         </Button>
         <div className="min-w-0 flex-1 text-center">

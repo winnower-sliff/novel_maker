@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { useBackHandler } from '@mobile/lib/backHandler'
 import AgentChat from '@mobile/pages/AgentChat'
 import Codex, { type Section } from '@mobile/pages/Codex'
 import Write from '@mobile/pages/Write'
@@ -34,6 +35,10 @@ export default function Book({
 }) {
   const [tab, setTab] = useState<BookTab>('write')
   const [pendingSection, setPendingSection] = useState<Section | null>(null)
+
+  // Book 内子视图（Codex section/编辑器、章节编辑器、向导、AiBar）各自注册返回键；
+  // 都没注册（栈里只剩 Book）时，返回键回书架
+  useBackHandler(onClose)
 
   useEffect(() => {
     if (!navRequest) return

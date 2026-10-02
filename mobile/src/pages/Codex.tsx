@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
+import { useBackHandler } from '@mobile/lib/backHandler'
 import { Badge, Button, Empty, Input, Label, Spinner, Textarea } from '@mobile/components/ui'
 import { openWizard, useWizard } from '@wizard/wizardStore'
 import type { Character, Foreshadow, OutlineItem, WorldbuildEntry } from '@shared/types'
@@ -24,6 +25,12 @@ export default function Codex({
 }) {
   const [open, setOpen] = useState<Section | null>(null)
   const wizard = useWizard()
+
+  // 已展开 section 时，返回键先收起 section，再退到书架
+  useBackHandler(
+    useCallback(() => setOpen(null), []),
+    open !== null
+  )
 
   useEffect(() => {
     if (!jumpSection) return
@@ -133,18 +140,26 @@ function EditBar({
 function DetailShell({
   title,
   onBack,
+  dirty,
   children,
   bar
 }: {
   title: string
   onBack: () => void
+  dirty?: boolean
   children: React.ReactNode
   bar?: React.ReactNode
 }) {
+  // 编辑器返回键与 UI 返回按钮同语义：有未保存修改先确认
+  const leave = useCallback((): void => {
+    if (dirty && !window.confirm('有未保存的修改，确定离开？')) return
+    onBack()
+  }, [dirty, onBack])
+  useBackHandler(leave)
   return (
     <div className="flex h-full flex-col">
       <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-950/95 px-2 py-2">
-        <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={onBack}>
+        <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={leave}>
           ← 返回
         </Button>
         <div className="min-w-0 flex-1 truncate text-center text-sm font-medium text-zinc-200">
@@ -231,6 +246,7 @@ function CharacterEditor({
     <DetailShell
       title={character.name}
       onBack={onBack}
+      dirty={dirty}
       bar={<EditBar dirty={dirty} saving={saving} onSave={() => void save()} />}
     >
       <Label>
@@ -343,6 +359,7 @@ function WorldEditor({
     <DetailShell
       title={entry.title}
       onBack={onBack}
+      dirty={dirty}
       bar={<EditBar dirty={dirty} saving={saving} onSave={() => void save()} />}
     >
       <Label>
@@ -441,6 +458,7 @@ function OutlineEditor({
     <DetailShell
       title={`第${item.chapterNo}章大纲`}
       onBack={onBack}
+      dirty={dirty}
       bar={<EditBar dirty={dirty} saving={saving} onSave={() => void save()} />}
     >
       <div className="grid grid-cols-2 gap-2 text-xs">
@@ -565,6 +583,7 @@ function ForeshadowEditor({
     <DetailShell
       title="伏笔"
       onBack={onBack}
+      dirty={dirty}
       bar={<EditBar dirty={dirty} saving={saving} onSave={() => void save()} />}
     >
       <Label>
