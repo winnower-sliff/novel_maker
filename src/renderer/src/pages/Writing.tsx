@@ -16,6 +16,7 @@ import {
   type LintReport,
   markRunConsumed,
   patchBatch,
+  suggestBatchRange,
   useWriteRunStore,
   type WriteBusy
 } from '../lib/writeRunStore'
@@ -133,6 +134,14 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const [batchTo, setBatchTo] = useState('')
   const [pauseEach, setPauseEach] = useState(false)
   const polishedRef = useRef(false)
+  // 打开批量面板时自动预填推荐范围（首个未写章 → 最后一章），批量进行中不打扰
+  useEffect(() => {
+    if (!batchOpen || batch?.running) return
+    const range = suggestBatchRange(briefs)
+    if (!range) return
+    setBatchFrom(range.from)
+    setBatchTo(range.to)
+  }, [batchOpen, batch?.running, briefs])
   // 侧栏章节按每 20 章分段，折叠态记录「卷:段」key
   const [collapsedSegs, setCollapsedSegs] = useState<Set<string>>(new Set())
 

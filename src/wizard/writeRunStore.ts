@@ -1,7 +1,7 @@
 // 写作页运行态全局容器：批量自动写作与单章生成的进度/结果全部存放于此，
 // 组件（桌面 Writing / 手机 Write）切走再回来不丢进度，生成在模块级闭包中继续。
 // 事件桥在本模块首次使用时挂一次 llm 订阅，按 requestId 路由，不依赖任何组件存活。
-import type { ContextPart, ReviewResult } from '@shared/types'
+import type { ChapterBrief, ContextPart, ReviewResult } from '@shared/types'
 import { create } from 'zustand'
 import { fmtTokens } from '../renderer/src/lib/format'
 import type { DonePayload } from '../renderer/src/lib/ipc'
@@ -113,6 +113,13 @@ export const useWriteRunStore = create<WriteRunStore>(() => ({
 }))
 
 const S = useWriteRunStore
+
+/** 自动写作推荐范围：起章=第一个没有正文的章，止章=最后一个有大纲的章；无未写章返回 null */
+export function suggestBatchRange(briefs: ChapterBrief[]): { from: string; to: string } | null {
+  const firstUnwritten = briefs.find((b) => !b.hasDraft)
+  if (!firstUnwritten || briefs.length === 0) return null
+  return { from: firstUnwritten.id, to: briefs[briefs.length - 1].id }
+}
 
 export function patchBatch(p: Partial<WriteBatchState>): void {
   S.setState((s) => (s.batch ? { batch: { ...s.batch, ...p } } : s))

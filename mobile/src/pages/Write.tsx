@@ -4,7 +4,7 @@ import { AiBar } from '@mobile/components/AiBar'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { Badge, Button, Empty, Spinner } from '@mobile/components/ui'
 import { fmtWords } from '@mobile/lib/format'
-import { appendBatchLog, patchBatch, useWriteRunStore } from '../../../src/wizard/writeRunStore'
+import { appendBatchLog, patchBatch, suggestBatchRange, useWriteRunStore } from '../../../src/wizard/writeRunStore'
 import type { ChapterBrief } from '@shared/types'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -30,6 +30,15 @@ function AutoWritePanel({
   const state = useWriteRunStore((s) =>
     s.batch && s.batch.projectId === projectId ? s.batch : null
   )
+
+  // 挂载即预填推荐范围（首个未写章 → 最后一章）；批量进行中不打扰
+  useEffect(() => {
+    if (state?.running) return
+    const range = suggestBatchRange(briefs)
+    if (!range) return
+    setFrom(range.from)
+    setTo(range.to)
+  }, [state?.running, briefs])
 
   const push = appendBatchLog
 
