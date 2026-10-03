@@ -120,7 +120,9 @@ function OutlineProgress({ text }: { text: string }) {
   const prog = scanOutlineProgress(text)
   return (
     <div className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
-      <div className="text-amber-300">{prog.count > 0 ? `生成中 · 已解析 ${prog.count} 章` : '生成中'}</div>
+      <div className="text-amber-300">
+        {prog.count > 0 ? `生成中 · 已解析 ${prog.count} 章` : '生成中'}
+      </div>
       {prog.lastTitles.length > 0 && (
         <div className="mt-1 truncate text-zinc-500">{prog.lastTitles.join(' / ')}</div>
       )}

@@ -8,6 +8,17 @@ import { type DonePayload, runPipeline } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
 import { openWizard } from '../lib/wizardStore'
+import {
+  appendBatchLog,
+  beginChapterRun,
+  type CheckIssue,
+  ensureWriteRunBridge,
+  type LintReport,
+  markRunConsumed,
+  patchBatch,
+  useWriteRunStore,
+  type WriteBusy
+} from '../lib/writeRunStore'
 
 interface ChapterDoneData {
   chapterId?: string
@@ -33,37 +44,6 @@ interface StateSyncDoneData {
   error?: string
 }
 
-interface CheckIssue {
-  type: string
-  quote: string
-  issue: string
-  fix: string
-}
-
-interface LintIssue {
-  rule: string
-  level: 'major' | 'minor'
-  quote: string
-  advice: string
-}
-
-interface LintReport {
-  issues: LintIssue[]
-  score: number
-  pass: boolean
-  wordCount: number
-  targetWords: number | null
-}
-
-interface BatchState {
-  running: boolean
-  paused: boolean
-  done: number
-  total: number
-  currentNo: number
-  log: string[]
-}
-
 interface AlignRevision {
   outlineId: string
   volume: number
@@ -81,13 +61,49 @@ const STATUS_BADGE: Record<string, { label: string; tone: 'default' | 'amber' | 
   polished: { label: '已润色', tone: 'green' }
 }
 
-type Busy = 'chapter' | 'summary' | 'polish' | 'expand' | 'check' | 'review' | 'stateSync' | null
-
 interface Props {
   projectId: string
   onNavigate: Navigate
   focusOutlineId: string | null
   onFocusConsumed: () => void
+}
+
+// —— 运行态 setter（模块级，稳定引用；落点 writeRunStore）——
+const setBusy = (b: WriteBusy): void => {
+  useWriteRunStore.setState({ busy: b })
+}
+const setNotice = (m: string): void => {
+  useWriteRunStore.setState({ notice: m })
+}
+const setLastUsage = (p: DonePayload | null): void => {
+  useWriteRunStore.setState({ lastUsage: p })
+}
+const setCtxPreview = (v: ContextPart[] | null): void => {
+  useWriteRunStore.setState({ ctxPreview: v })
+}
+const setCheckResult = (v: { issues: CheckIssue[]; parsed: boolean } | null): void => {
+  useWriteRunStore.setState({ checkResult: v })
+}
+const setLintReport = (v: LintReport | null): void => {
+  useWriteRunStore.setState({ lintReport: v })
+}
+const setReviewResult = (v: ReviewResult | null): void => {
+  useWriteRunStore.setState({ reviewResult: v })
+}
+const setCandidate = (v: { kind: 'polish' | 'expand'; text: string } | null): void => {
+  useWriteRunStore.setState({ candidate: v })
+}
+const setCandidateSet = (
+  v: {
+    list: Array<{ text: string; score: number; wordCount: number; issues: number; pass: boolean }>
+    winnerIndex: number
+    selectedIndex: number
+  } | null
+): void => {
+  useWriteRunStore.setState({ candidateSet: v })
+}
+const setBatchOpen = (v: boolean | ((prev: boolean) => boolean)): void => {
+  useWriteRunStore.setState((s) => ({ batchOpen: typeof v === 'function' ? v(s.batchOpen) : v }))
 }
 
 export default function Writing({ projectId, onNavigate, focusOutlineId, onFocusConsumed }: Props) {
@@ -96,39 +112,29 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [content, setContent] = useState('')
   const [dirty, setDirty] = useState(false)
-  const [busy, setBusy] = useState<Busy>(null)
-  const [notice, setNotice] = useState('')
-  const [lastUsage, setLastUsage] = useState<DonePayload | null>(null)
-  const [ctxPreview, setCtxPreview] = useState<ContextPart[] | null>(null)
-  const [checkResult, setCheckResult] = useState<{ issues: CheckIssue[]; parsed: boolean } | null>(
-    null
+  // 运行态全部在 writeRunStore：切走页面/切章后生成照跑，回来进度可回看
+  const busy = useWriteRunStore((s) => s.busy)
+  const notice = useWriteRunStore((s) => s.notice)
+  const lastUsage = useWriteRunStore((s) => s.lastUsage)
+  const candidate = useWriteRunStore((s) => s.candidate)
+  const candidateSet = useWriteRunStore((s) => s.candidateSet)
+  const lintReport = useWriteRunStore((s) => s.lintReport)
+  const checkResult = useWriteRunStore((s) => s.checkResult)
+  const reviewResult = useWriteRunStore((s) => s.reviewResult)
+  const ctxPreview = useWriteRunStore((s) => s.ctxPreview)
+  const run = useWriteRunStore((s) => s.run)
+  const batch = useWriteRunStore((s) =>
+    s.batch && s.batch.projectId === projectId ? s.batch : null
   )
-  const [lintReport, setLintReport] = useState<LintReport | null>(null)
-  const [reviewResult, setReviewResult] = useState<ReviewResult | null>(null)
-  const [candidate, setCandidate] = useState<{ kind: 'polish' | 'expand'; text: string } | null>(
-    null
-  )
+  const batchOpen = useWriteRunStore((s) => s.batchOpen)
   const [wordTarget, setWordTarget] = useState('2700')
   const [candidateCount, setCandidateCount] = useState('0')
-  const [candidateSet, setCandidateSet] = useState<{
-    list: Array<{ text: string; score: number; wordCount: number; issues: number; pass: boolean }>
-    winnerIndex: number
-    selectedIndex: number
-  } | null>(null)
-  const candidateRef = useRef('')
-  const [batchOpen, setBatchOpen] = useState(false)
   const [batchFrom, setBatchFrom] = useState('')
   const [batchTo, setBatchTo] = useState('')
   const [pauseEach, setPauseEach] = useState(false)
-  const [batch, setBatch] = useState<BatchState | null>(null)
+  const polishedRef = useRef(false)
   // 侧栏章节按每 20 章分段，折叠态记录「卷:段」key
   const [collapsedSegs, setCollapsedSegs] = useState<Set<string>>(new Set())
-  const requestIdRef = useRef<string | null>(null)
-  const streamTargetRef = useRef<'editor' | 'candidate'>('editor')
-  const polishedRef = useRef(false)
-  const batchStopRef = useRef(false)
-  const batchAbortRef = useRef<string | null>(null)
-  const resumeRef = useRef<string[] | null>(null)
 
   const selected = briefs.find((b) => b.id === selectedId) ?? null
 
@@ -145,7 +151,6 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     setReviewResult(null)
     setCandidate(null)
     setCandidateSet(null)
-    candidateRef.current = ''
     polishedRef.current = false
     void window.api.novel.chapter(outlineId).then((c) => {
       setContent(c?.content ?? '')
@@ -157,8 +162,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   useEffect(() => {
     setSelectedId(null)
     setContent('')
-    setBatch(null)
-    resumeRef.current = null
+    useWriteRunStore.setState({ batch: null, resumeIds: null, batchStop: false })
     polishedRef.current = false
   }, [projectId])
 
@@ -168,79 +172,31 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     onFocusConsumed()
   }, [focusOutlineId, briefs, openChapter, onFocusConsumed])
 
+  // 挂全局 llm 事件桥（幂等）：事件处理不随组件卸载而消失
   useEffect(() => {
-    const offDelta = window.api.llm.onDelta((id, text) => {
-      if (id !== requestIdRef.current) return
-      if (streamTargetRef.current === 'candidate') {
-        candidateRef.current += text
-        setCandidate((prev) => (prev ? { ...prev, text: prev.text + text } : null))
-      } else {
-        setContent((prev) => prev + text)
-      }
-    })
-    const offDone = window.api.llm.onDone((id, payload) => {
-      if (id !== requestIdRef.current) return
-      setLastUsage(payload)
-      const d = payload.data as ChapterDoneData & SummaryDoneData
-      if (payload.action === 'chapter') {
-        setBusy(null)
-        setDirty(false)
-        polishedRef.current = false
-        const lint = (payload.data as { lint?: LintReport }).lint ?? null
-        setLintReport(lint)
-        const cand = payload.data as {
-          candidateMode?: boolean
-          winnerIndex?: number
-          candidates?: Array<{
-            text: string
-            score: number
-            wordCount: number
-            issues: number
-            pass: boolean
-          }>
-        }
-        if (cand.candidateMode && cand.candidates && cand.candidates.length > 0) {
-          const wi = cand.winnerIndex ?? 0
-          setCandidateSet({ list: cand.candidates, winnerIndex: wi, selectedIndex: wi })
-          setContent(cand.candidates[wi].text)
-          setDirty(false)
-        }
-        setNotice(
-          d?.error
-            ? `生成完成但保存失败：${d.error}`
-            : cand.candidateMode
-              ? `已生成 ${cand.candidates?.length ?? 0} 个候选，最优第 ${(cand.winnerIndex ?? 0) + 1} 个（已存入编辑器，可在对比卡中切换）`
-              : `初稿完成：${d?.wordCount ?? 0} 字 · 上下文约 ${fmtTokens(d?.contextTokens ?? 0)} tokens${
-                  lint && !lint.pass ? ` · 硬闸 ${lint.issues.length} 项待处理` : ''
-                }`
-        )
-        setCtxPreview(d?.contextParts ?? null)
-        loadBriefs()
-      } else if (payload.action === 'polish' || payload.action === 'expand') {
-        setBusy(null)
-        setCandidate({ kind: payload.action, text: candidateRef.current })
-        setNotice(
-          payload.action === 'polish'
-            ? '润色稿已生成：在下方 diff 视图逐块取舍后应用（不会直接覆盖原稿）'
-            : '扩写稿已生成：在下方 diff 视图逐块取舍后应用（不会直接覆盖原稿）'
-        )
-      }
-    })
-    const offError = window.api.llm.onError((id, message) => {
-      if (id !== requestIdRef.current) return
-      setBusy(null)
-      setNotice(`出错：${message}`)
-    })
-    const offNotice = window.api.llm.onNotice((_id, message) => {
-      setNotice(message)
-    })
-    return () => {
-      offDelta()
-      offDone()
-      offError()
-      offNotice()
+    ensureWriteRunBridge()
+  }, [])
+
+  // 单章流完成后按章消费：组件在场时回填编辑器（polish/expand 候选直接由桥写入 store 渲染）
+  const runId = run?.chapterId
+  const runFinished = run?.finished
+  const runConsumed = run?.consumed
+  const runKind = run?.kind
+  const runEditorText = run?.editorText
+  useEffect(() => {
+    if (!runFinished || runConsumed || runId !== selectedId) return
+    if (runKind === 'chapter') {
+      setContent(runEditorText ?? '')
+      setDirty(false)
     }
-  }, [loadBriefs])
+    markRunConsumed()
+  }, [runFinished, runConsumed, runId, runKind, runEditorText, selectedId])
+
+  // 单章初稿流式进行中：编辑器实时跟随 store 累积文本（切走再回来也能看到已生成的部分）
+  useEffect(() => {
+    if (runFinished || runKind !== 'chapter' || runId !== selectedId) return
+    setContent(runEditorText ?? '')
+  }, [runFinished, runKind, runId, runEditorText, selectedId])
 
   if (!projectId) {
     return (
@@ -256,27 +212,22 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     params?: Record<string, unknown>
   ): void => {
     if (!selectedId || busy || batch?.running) return
-    if (action === 'chapter') {
-      setContent('')
-    } else {
-      candidateRef.current = ''
-      setCandidate(null)
-    }
-    streamTargetRef.current = action === 'chapter' ? 'editor' : 'candidate'
     setNotice('')
     setCtxPreview(null)
     setCheckResult(null)
     setLintReport(null)
     setReviewResult(null)
     if (action === 'chapter') setCandidateSet(null)
+    setCandidate(null)
     setBusy(action)
+    beginChapterRun(projectId, selectedId, action)
     void window.api.pipeline
       .run(action, { outlineId: selectedId, ...params })
       .then((id) => {
-        requestIdRef.current = id
+        useWriteRunStore.setState((s) => (s.run ? { run: { ...s.run, requestId: id } } : s))
       })
       .catch((err: unknown) => {
-        setBusy(null)
+        useWriteRunStore.setState({ busy: null, run: null })
         setNotice((err as Error).message)
       })
   }
@@ -317,7 +268,6 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     setDirty(true)
     if (candidate?.kind === 'polish') polishedRef.current = true
     setCandidate(null)
-    candidateRef.current = ''
     setNotice('已应用修订（未保存，点「保存」落盘）')
   }
 
@@ -530,25 +480,36 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   }
 
   const runBatchList = async (ids: string[]): Promise<void> => {
-    batchStopRef.current = false
-    setBatch({ running: true, paused: false, done: 0, total: ids.length, currentNo: 0, log: [] })
+    useWriteRunStore.setState({
+      batchStop: false,
+      batchAbortId: null,
+      batch: {
+        projectId,
+        running: true,
+        paused: false,
+        done: 0,
+        total: ids.length,
+        currentNo: 0,
+        log: []
+      }
+    })
     const results: boolean[] = []
     let consecutiveFail = 0
-    const appendLog = (line: string): void =>
-      setBatch((prev) => (prev ? { ...prev, log: [...prev.log, line] } : prev))
+    const appendLog = appendBatchLog
 
     for (let i = 0; i < ids.length; i++) {
-      if (batchStopRef.current) break
+      if (useWriteRunStore.getState().batchStop) break
       const brief = briefs.find((b) => b.id === ids[i])
       if (!brief) continue
-      setBatch((prev) => (prev ? { ...prev, currentNo: brief.chapterNo } : prev))
+      patchBatch({ currentNo: brief.chapterNo })
       appendLog(`第${brief.chapterNo}章 生成中…`)
       try {
-        batchAbortRef.current = await window.api.pipeline.run('chapter', {
+        const abortId = await window.api.pipeline.run('chapter', {
           outlineId: ids[i],
           wordTarget: parseInt(wordTarget, 10) || undefined,
           candidates: parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined
         })
+        useWriteRunStore.setState({ batchAbortId: abortId })
         const gen = await new Promise<DonePayload>((resolve, reject) => {
           const offs: Array<() => void> = []
           const cleanup = (): void =>
@@ -557,13 +518,13 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
             })
           offs.push(
             window.api.llm.onDone((rid, p) => {
-              if (rid === batchAbortRef.current) {
+              if (rid === useWriteRunStore.getState().batchAbortId) {
                 cleanup()
                 resolve(p)
               }
             }),
             window.api.llm.onError((rid, m) => {
-              if (rid === batchAbortRef.current) {
+              if (rid === useWriteRunStore.getState().batchAbortId) {
                 cleanup()
                 reject(new Error(m))
               }
@@ -571,7 +532,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
           )
         })
         const d = gen.data as ChapterDoneData
-        setBatch((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev))
+        patchBatch({ done: (useWriteRunStore.getState().batch?.done ?? 0) + 1 })
         appendLog(
           `第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字${d?.longMode ? `（长章 ${d.segments} 段）` : ''}`
         )
@@ -629,31 +590,24 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
           appendLog(
             `⚠ 熔断：连续 ${consecutiveFail} 章未过（近期 ${failIn10}/${window10.length}）——暂停批量，建议先排查根因`
           )
-          resumeRef.current = ids.slice(i + 1)
-          setBatch((prev) => (prev ? { ...prev, paused: true } : prev))
+          useWriteRunStore.setState({ resumeIds: ids.slice(i + 1) })
+          patchBatch({ paused: true })
           return
         }
 
-        if (pauseEach && i < ids.length - 1 && !batchStopRef.current) {
-          resumeRef.current = ids.slice(i + 1)
-          setBatch((prev) => (prev ? { ...prev, paused: true } : prev))
+        if (pauseEach && i < ids.length - 1 && !useWriteRunStore.getState().batchStop) {
+          useWriteRunStore.setState({ resumeIds: ids.slice(i + 1) })
+          patchBatch({ paused: true })
           return
         }
       } catch (err) {
-        setBatch((prev) =>
-          prev
-            ? {
-                ...prev,
-                running: false,
-                log: [...prev.log, `第${brief.chapterNo}章 失败：${(err as Error).message}`]
-              }
-            : prev
-        )
+        appendLog(`第${brief.chapterNo}章 失败：${(err as Error).message}`)
+        patchBatch({ running: false })
         return
       }
     }
     // 全部跑完（非中止/熔断）→ 附带自动对齐后续大纲
-    if (!batchStopRef.current && results.length === ids.length) {
+    if (!useWriteRunStore.getState().batchStop && results.length === ids.length) {
       appendLog('自动对齐后续大纲…')
       try {
         const n = await alignOutline(true)
@@ -666,7 +620,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         appendLog(`自动对齐失败：${(err as Error).message}`)
       }
     }
-    setBatch((prev) => (prev ? { ...prev, running: false } : prev))
+    patchBatch({ running: false })
   }
 
   const startBatch = (): void => {
@@ -679,15 +633,15 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   }
 
   const stopBatch = (): void => {
-    batchStopRef.current = true
-    resumeRef.current = null
-    if (batchAbortRef.current) void window.api.llm.abort(batchAbortRef.current)
-    setBatch((prev) => (prev ? { ...prev, running: false, paused: false } : prev))
+    const { batchAbortId } = useWriteRunStore.getState()
+    useWriteRunStore.setState({ batchStop: true, resumeIds: null })
+    if (batchAbortId) void window.api.llm.abort(batchAbortId)
+    patchBatch({ running: false, paused: false })
   }
 
   const resumeBatch = (): void => {
-    const ids = resumeRef.current
-    resumeRef.current = null
+    const ids = useWriteRunStore.getState().resumeIds
+    useWriteRunStore.setState({ resumeIds: null })
     if (ids && ids.length > 0) void runBatchList(ids)
   }
 
@@ -821,7 +775,8 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 <Button
                   variant="ghost"
                   onClick={() => {
-                    if (requestIdRef.current) void window.api.llm.abort(requestIdRef.current)
+                    const rid = useWriteRunStore.getState().run?.requestId
+                    if (rid) void window.api.llm.abort(rid)
                   }}
                   disabled={busy === null}
                 >
@@ -1058,7 +1013,6 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   onApply={applyCandidate}
                   onDiscard={() => {
                     setCandidate(null)
-                    candidateRef.current = ''
                     setNotice('已放弃修订稿')
                   }}
                 />
