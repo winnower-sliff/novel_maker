@@ -18,6 +18,7 @@ export async function applyAlignRevisions(
       chapterNo: r.chapterNo,
       title: r.title,
       synopsis: r.synopsis,
+      ...(r.scenes && r.scenes.length > 0 ? { scenes: r.scenes } : {}),
       hook: r.hook
     })
     applied += 1

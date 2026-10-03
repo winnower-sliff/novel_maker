@@ -136,6 +136,8 @@ export interface RunMeta {
   projectId?: string
   outlineId?: string
   action?: string
+  /** canonSync 等按卷跑的任务带卷号（迁移通知/预览挂起需要） */
+  volume?: number
 }
 
 /** 运行注册表条目（llm:poll/runtime:snapshot 补拉用）：断连期间 done/error 事件丢失时的结果快照 */
@@ -249,6 +251,7 @@ export interface OutlineItem {
   chapterNo: number
   title: string
   synopsis: string
+  scenes: string[]
   role: string
   suspense: string
   twist: number
@@ -294,6 +297,7 @@ export interface AlignRevision {
   chapterNo: number
   title: string
   synopsis: string
+  scenes?: string[]
   hook?: string
   reason?: string
 }
@@ -355,6 +359,26 @@ export interface WorldbuildPreviewEntry {
   tags: string[]
   content: string
   isNewType: boolean
+}
+
+/** canonSync：对已有世界观条目的修订建议（id 为原条目，确认后按 id 覆盖落库） */
+export interface CanonWorldUpdate {
+  id: string
+  title: string
+  category: string
+  tags: string[]
+  content: string
+}
+
+/** canonSync 管线 done payload.data：人物已自动落库，世界观进预览确认 */
+export interface CanonSyncResult {
+  savedCharacters: {
+    characterId?: string
+    name: string
+    revised: Array<{ id: string; name: string }>
+  }
+  worldNew: WorldbuildPreviewEntry[]
+  worldUpdates: CanonWorldUpdate[]
 }
 
 export type ExportFormat = 'txt' | 'md' | 'docx'

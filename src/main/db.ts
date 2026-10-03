@@ -149,6 +149,9 @@ function migrate(d: DatabaseSync): void {
     d.exec("ALTER TABLE outlines ADD COLUMN hook TEXT DEFAULT ''")
     d.exec("ALTER TABLE outlines ADD COLUMN foreshadow_ops TEXT DEFAULT ''")
   }
+  if (!outlineCols.some((c) => c.name === 'scenes')) {
+    d.exec("ALTER TABLE outlines ADD COLUMN scenes TEXT DEFAULT '[]'")
+  }
   const charCols = d.prepare('PRAGMA table_info(characters)').all() as Array<{ name: string }>
   if (!charCols.some((c) => c.name === 'state')) {
     d.exec("ALTER TABLE characters ADD COLUMN state TEXT DEFAULT ''")

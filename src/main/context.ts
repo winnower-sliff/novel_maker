@@ -300,9 +300,15 @@ export async function buildChapterContext(
   const prevChapter = prev ? store.getChapterByOutline(prev.id) : null
   const prevChapterContent = prevChapter ? prevChapter.content : ''
 
+  const scenesText =
+    current.scenes.length > 0
+      ? `场景序列（按本章顺序展开）：\n${current.scenes.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
+      : ''
+
   const outlineText = [
     prev ? `上一章（第${prev.chapterNo}章 ${prev.title}）梗概：${prev.synopsis}` : '本章为开篇',
     `本章：第${current.chapterNo}章 ${current.title}\n梗概：${current.synopsis}${renderOutlineMeta(current) ? `\n${renderOutlineMeta(current)}` : ''}`,
+    scenesText,
     next
       ? `下一章预告（第${next.chapterNo}章 ${next.title}）：${next.synopsis}${renderOutlineMeta(next) ? `\n${renderOutlineMeta(next)}` : ''}`
       : ''

@@ -52,7 +52,7 @@ export function outlineUserPrompt(p: OutlineGenParams, b: OutlineBatch | null): 
     ? `本次生成第 ${p.volume} 卷、第 ${b.start} 章至第 ${b.start + b.count - 1} 章的大纲（本批共 ${b.count} 章；全卷计划生成第 ${b.totalStart} 章至第 ${b.totalStart + b.total - 1} 章共 ${b.total} 章，分批生成中，后续批次将自动续写）。严格按约定的 JSON 数组格式只输出本批章节，不要输出其他内容。`
     : `请生成第 ${p.volume} 卷、第 ${p.startNo} 章到第 ${p.startNo + p.count - 1} 章的大纲（共 ${p.count} 章），严格按约定的 JSON 数组格式输出，不要输出其他内容。`
   const rulesNote = p.rules?.trim()
-    ? '\n硬性节奏规则区中的每一条都必须落实到具体章节，不得省略或合并。'
+    ? '\n硬性节奏规则区中的每一条都必须落实到具体章节，不得省略或合并；规则要求的剧情必须写成对应章 scenes 里的具体场景，禁止只在 synopsis 点名。'
     : ''
   const tailNote = b?.prevTail
     ? `\n\n【已生成的前文（本批须自然衔接，不得重复已有章节）】\n${b.prevTail}`
@@ -91,7 +91,7 @@ export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): 
     openFore &&
       `【未回收伏笔台账（规划新章节时应安排合理回收点，并在对应章节的 foreshadow_ops 中写明）】\n${openFore}`,
     p.rules?.trim() &&
-      `【硬性节奏规则（用户制定，逐章严格执行，优先级高于下方结构原则与核心创意；每条规则须映射到具体章号并在该章 synopsis 中体现对应内容；规则中的绝对章号若超出本次生成范围（第 ${p.startNo}~${p.startNo + p.count - 1} 章），将其要求顺延或并入范围内相近章节执行，不得因超出范围而整体忽略）】\n${p.rules.trim()}`,
+      `【硬性节奏规则（用户制定，逐章严格执行，优先级高于下方结构原则与核心创意；每条规则须映射到具体章号，并把规则要求的剧情写成该章 scenes 中的具体场景，禁止只在 synopsis 点名；规则中的绝对章号若超出本次生成范围（第 ${p.startNo}~${p.startNo + p.count - 1} 章），将其要求顺延或并入范围内相近章节执行，不得因超出范围而整体忽略）】\n${p.rules.trim()}`,
     outlineCtx &&
       (p.allowUpdate
         ? `【第 ${p.volume} 卷已有大纲（新章节须与之自然衔接；若新创意要求调整已有章节，可在结果中输出该章的修订条目——volume 与 chapter_no 与原章保持一致，synopsis 为融合后的完整修订梗概，该修订会覆盖更新原章梗概，无必要时不要修订）】\n${outlineCtx}`
@@ -105,8 +105,8 @@ export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): 
     system,
     messages: [{ role: 'user', content: user }],
     maxTokens: batch
-      ? Math.max(16384, batch.count * 1400)
-      : Math.min(65536, Math.max(16384, p.count * 1400)),
+      ? Math.max(16384, batch.count * 2000)
+      : Math.min(65536, Math.max(16384, p.count * 2000)),
     temperature: 0.7,
     purpose: 'outline'
   }
@@ -309,6 +309,12 @@ export function applyOutlineResult(
     const key = `${volume}:${chapterNo}`
     const hit = existing.get(key)
     const meta = {
+      scenes: Array.isArray(r.scenes)
+        ? (r.scenes as unknown[])
+            .filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+            .map((s) => s.trim().slice(0, 120))
+            .slice(0, 6)
+        : undefined,
       role: typeof r.role === 'string' ? r.role.slice(0, 40) : undefined,
       suspense: typeof r.suspense === 'string' ? r.suspense.slice(0, 20) : undefined,
       twist: Number.isFinite(Number(r.twist))
@@ -444,7 +450,7 @@ export function applySummaryResult(
 const ALIGN_SYSTEM = [
   '你是小说项目的连续性编辑。给定「已写章节的实际剧情」与「后续未写章节的大纲梗概」，检查后续大纲是否与已写剧情脱节（人物状态不符、伏笔悬空、情节矛盾、节奏断裂），仅对需要修订的章节输出修订条目。',
   '严格输出 JSON 数组，不要 markdown 代码块、不要解释文字：',
-  '[{"chapter_no":9,"synopsis":"修订后的完整章节梗概（含本章目标/关键冲突/结尾钩子，120字内）","hook":"结尾钩子（可选）","reason":"修订原因一句话"}]',
+  '[{"chapter_no":9,"synopsis":"修订后的完整章节梗概（一句话纯剧情概要，50字内，禁止背景解说/前情回顾/解说腔）","scenes":["修订后的场景序列（可选，2-4条「人物+动作/冲突」场景句；该章剧情因修订而变化时才给出，省略则保留原场景）"],"hook":"结尾钩子（可选）","reason":"修订原因一句话"}]',
   '要求：',
   '- 只输出确实需要修订的章节；与已写剧情衔接良好的章节不要输出',
   '- synopsis 必须是修订后的完整梗概（不是增量说明），并与前后章自然衔接',
@@ -514,6 +520,12 @@ export function parseAlignResult(
       chapterNo: hit.chapterNo,
       title: hit.title,
       synopsis: synopsis.slice(0, 1000),
+      scenes: Array.isArray(r.scenes)
+        ? (r.scenes as unknown[])
+            .filter((s): s is string => typeof s === 'string' && s.trim() !== '')
+            .map((s) => s.trim().slice(0, 120))
+            .slice(0, 6)
+        : undefined,
       hook: typeof r.hook === 'string' ? r.hook.slice(0, 120) : undefined,
       reason: typeof r.reason === 'string' ? r.reason.slice(0, 200) : undefined
     })

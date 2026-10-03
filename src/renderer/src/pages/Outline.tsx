@@ -100,6 +100,14 @@ export default function Outline({
   const [alignNotice, setAlignNotice] = useState('')
   const [alignRevisions, setAlignRevisions] = useState<AlignRevision[] | null>(null)
   const [alignSkip, setAlignSkip] = useState<Set<string>>(new Set())
+  const [openScenes, setOpenScenes] = useState<Set<string>>(new Set())
+  const toggleScenes = (id: string): void =>
+    setOpenScenes((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
 
   const startAlign = (): void => {
     setAlignBusy(true)
@@ -386,6 +394,12 @@ export default function Outline({
                   {r.reason && <span className="text-amber-400/80">{r.reason}</span>}
                 </label>
                 <div className="mt-1 whitespace-pre-wrap text-zinc-400">{r.synopsis}</div>
+                {r.scenes && r.scenes.length > 0 && (
+                  <div className="mt-1 text-xs text-zinc-500">
+                    场景：
+                    {r.scenes.join(' / ')}
+                  </div>
+                )}
                 {r.hook && <div className="mt-0.5 text-zinc-500">钩子：{r.hook}</div>}
               </div>
             )
@@ -584,7 +598,7 @@ export default function Outline({
                       setGenNotice('AI 输出无法解析为章节列表，请调整创意后重试')
                     else if (r.rewriting > 0)
                       setGenNotice(
-                        `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已开始自动重写该卷 ${r.rewriting} 章正文，进度见写作页`
+                        `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已开始自动重写该卷 ${r.rewriting} 章正文，进度见写作页${r.foreRemoved ? `；已删除埋于本卷的旧伏笔 ${r.foreRemoved} 条` : ''}`
                       )
                     else {
                       const parts = [`已导入 ${r.created} 章`]
@@ -842,6 +856,25 @@ export default function Outline({
                     <div className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
                       {it.synopsis}
                     </div>
+                    {it.scenes.length > 0 && (
+                      <div className="mt-1">
+                        <button
+                          type="button"
+                          onClick={() => toggleScenes(it.id)}
+                          className="cursor-pointer text-[11px] text-zinc-500 hover:text-zinc-300"
+                        >
+                          {openScenes.has(it.id) ? '▾' : '▸'} 场景（{it.scenes.length}）
+                        </button>
+                        {openScenes.has(it.id) && (
+                          <ol className="mt-0.5 list-decimal space-y-0.5 pl-5 text-[11px] leading-5 text-zinc-500">
+                            {it.scenes.map((sc, i) => (
+                              // biome-ignore lint/suspicious/noArrayIndexKey: 静态序号列表，顺序即身份
+                              <li key={i}>{sc}</li>
+                            ))}
+                          </ol>
+                        )}
+                      </div>
+                    )}
                     {chips.length > 0 && (
                       <div className="mt-1.5 flex flex-wrap gap-1.5 text-[10px] text-zinc-500">
                         {chips.map(([k, v]) => (

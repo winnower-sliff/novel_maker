@@ -7,6 +7,7 @@ import {
   applySummaryResult,
   applyVolumeSummaryResult,
   buildAlignRequest,
+  buildCanonSyncRequest,
   buildChapterRequest,
   buildCharacterRequest,
   buildCharacterRosterRequest,
@@ -26,6 +27,7 @@ import {
   outlineBatchTail,
   outlineUserPrompt,
   parseAlignResult,
+  parseCanonSyncResult,
   parseCharacterCards,
   parseCharacterRoster,
   parseCheckResult,
@@ -359,6 +361,25 @@ export const pipelineHandlers = {
             afterDone: (r) => ({ roster: parseCharacterRoster(r.text) })
           }
         )
+      }
+      case 'canonSync': {
+        const params = PIPELINE_PARAM_SCHEMAS.canonSync.parse(rawParams)
+        return startStream(ctx.sink, buildCanonSyncRequest(params.projectId, params.volume), {
+          action,
+          meta: { projectId: params.projectId, volume: params.volume },
+          afterDone: (r) => {
+            const parsed = parseCanonSyncResult(params.projectId, r.text)
+            // 人物（含修订卡）自动落库；世界观进预览由用户确认
+            const saved = parsed.characters
+              ? saveParsedCharacters(params.projectId, parsed.characters, '')
+              : { characterId: undefined, name: '', revised: [] }
+            return {
+              savedCharacters: saved,
+              worldNew: parsed.worldNew,
+              worldUpdates: parsed.worldUpdates
+            }
+          }
+        })
       }
       case 'worldbuild': {
         const params = PIPELINE_PARAM_SCHEMAS.worldbuild.parse(rawParams)

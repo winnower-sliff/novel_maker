@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+import { fireCanonSync } from './canonStore'
 import { startPipeline } from './pipeline'
 import { loadProjectPlan, saveProjectPlan } from './wizardPlan'
 
@@ -10,6 +11,8 @@ export interface VolumeGenResult {
   skipped: number
   /** 触发全卷重写时：已开始批量重写的章数（0 = 未触发批量） */
   rewriting: number
+  /** 全卷重写时直接删除的「埋于本卷」未回收伏笔条数 */
+  foreRemoved: number
 }
 
 export interface VolumeGenOpts {
@@ -174,7 +177,9 @@ export function generateVolume(opts: VolumeGenOpts): {
       skipped: number
       parsed: boolean
     }
-    if (!r.parsed || r.created + r.updated === 0) return { ...r, rewriting: 0 }
+    if (!r.parsed || r.created + r.updated === 0) return { ...r, rewriting: 0, foreRemoved: 0 }
+    // 反向闭环：新大纲导入成功后自动同步世界观与人物（后台运行，不阻塞批量重写）
+    fireCanonSync(projectId, volume)
     // 参数记忆：写回 volumePlans，下次重生成预填
     await rememberVolumePlan(projectId, volume, {
       idea,
@@ -183,12 +188,29 @@ export function generateVolume(opts: VolumeGenOpts): {
       rules: opts.rules?.trim() || undefined
     })
     let rewriting = 0
+    let foreRemoved = 0
     if (hasWritten) {
       const old = await oldVolPromise
       const fresh = await window.api.novel.outlines(projectId)
       const newNos = new Set(fresh.filter((o) => o.volume === volume).map((o) => o.chapterNo))
       for (const o of old.filter((x) => x.volume === volume && !newNos.has(x.chapterNo))) {
         await window.api.novel.outlineDelete(o.id)
+      }
+      // 旧稿伏笔随之废弃：埋于本卷章号范围的未回收伏笔直接删除（正文已全新重写，台账引用的剧情线不复存在）
+      const volNos = old.filter((x) => x.volume === volume).map((x) => x.chapterNo)
+      if (volNos.length > 0) {
+        const lo = Math.min(...volNos)
+        const hi = Math.max(...volNos)
+        const fores = await window.api.novel.foreshadows(projectId)
+        for (const f of fores) {
+          if (f.status !== 'open') continue
+          const m = /第(\d+)章/.exec(f.plantedChapter ?? '')
+          const no = m ? Number(m[1]) : NaN
+          if (no >= lo && no <= hi) {
+            await window.api.novel.foreshadowDelete(f.id)
+            foreRemoved++
+          }
+        }
       }
       const volIds = (await window.api.novel.outlines(projectId))
         .filter((o) => o.volume === volume)
@@ -204,7 +226,8 @@ export function generateVolume(opts: VolumeGenOpts): {
       created: r.created,
       updated: r.updated,
       skipped: r.skipped,
-      rewriting
+      rewriting,
+      foreRemoved
     }
   }
   return { done: finish(), abort }

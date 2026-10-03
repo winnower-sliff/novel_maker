@@ -1,12 +1,13 @@
 // 中央同步器：根治「UI 状态依赖事件推送到达」类 bug（SSE 在手机 WebView 上不可靠：
 // 熄屏冻结/切后台断连/重连时序）。原则=「推为加速、拉为兜底」——
-// 事件到达照常更新，但任何丢失的事件都会在触发时机（回前台/SSE 重连/10s 定期）
+// 事件到达照常更新，但任何丢失的事件都会在触发时机（回前台/SSE 重连/活跃 10s、空闲 60s 定期）
 // 被 runtime:snapshot 拉取纠正。组件只读 store，不关心事件是否到达。
 
-import type { RuntimeSnapshot } from '@shared/types'
+import type { CanonSyncResult, RuntimeSnapshot } from '@shared/types'
 import type { DonePayload } from '../preload/index'
 import { qk } from '../renderer/src/lib/queries'
 import { queryClient } from '../renderer/src/lib/queryClient'
+import { ingestCanonSync } from './canonStore'
 import { notify } from './notify'
 import { pollPending } from './pipeline'
 import { pushToast } from './toastStore'
@@ -20,9 +21,12 @@ import {
 } from './writeRunStore'
 
 const POLL_MS = 10_000
+/** 空闲期降频拉取：本地看似无任务，也可能存在「另一端启动/响应丢失未落 store」的任务 */
+const IDLE_POLL_MS = 60_000
 
 let ready = false
 let lastTickAt = 0
+let lastPullAt = 0
 /** 上次快照中各 run/batch 的状态：检测迁移用（首次不通知，避免历史完成重复打扰） */
 const lastRunStatus = new Map<string, string>()
 const lastBatchRunning = new Map<string, boolean>()
@@ -109,6 +113,17 @@ function applySnapshot(snap: RuntimeSnapshot): void {
         pushToast('success', '检测到后台大纲生成任务，完成后会自动导入')
       }
     }
+    // 刷新后仍在跑的设定同步（canonSync）：提示 + 登记持续轮询（完成时由迁移检测 ingest 预览）
+    const orphanCanon = snap.runs.find(
+      (r) => r.status === 'running' && r.meta?.action === 'canonSync' && r.meta?.projectId
+    )
+    if (orphanCanon) {
+      watchedRuns.add(orphanCanon.id)
+      if (!outlineHinted.has(orphanCanon.id)) {
+        outlineHinted.add(orphanCanon.id)
+        pushToast('success', '检测到后台设定同步任务，完成后会提示确认')
+      }
+    }
   }
 
   // —— run 完成迁移通知（章节类 + 大纲类）——
@@ -126,6 +141,10 @@ function applySnapshot(snap: RuntimeSnapshot): void {
         if (r.status === 'done') fire('大纲生成完成', '新大纲已导入', 'success', missed)
         else fire('大纲生成失败', r.error ?? '未知错误', 'error', missed)
         void queryClient.invalidateQueries({ queryKey: qk.outlines(m.projectId) })
+      } else if (m?.action === 'canonSync' && m.projectId && r.status === 'done') {
+        // 设定同步在后台完成：结果 ingest（挂预览/纯人物 toast，防重与文案由 canonStore 统一处理）；失败按共识静默
+        const d = (r.donePayload as DonePayload | undefined)?.data as CanonSyncResult | undefined
+        if (d) ingestCanonSync(m.projectId, r.meta?.volume ?? 0, d)
       }
     }
     lastRunStatus.set(r.id, r.status)
@@ -151,8 +170,10 @@ function tick(force = false): void {
       (st.run !== null && !st.run.finished) ||
       watchedRuns.size > 0 ||
       pollPending()
-    if (!localActive) return
+    // 空闲期不完全跳过：降频兜底拉取，否则「本地无记录的进行中任务」永远无法被发现
+    if (!localActive && Date.now() - lastPullAt < IDLE_POLL_MS) return
   }
+  lastPullAt = Date.now()
   void api.runtime
     .snapshot()
     .then((snap) => {
@@ -178,8 +199,7 @@ export function ensureRuntimeSync(): void {
     if (e.detail === 'open') onWake()
   }) as EventListener)
 
-  // 定时器常开：无活跃任务时 tick(false) 只做本地检查，开销接近零；
-  // 有任务时自动进入 10s 兜底轮询，无需任务启动方显式登记
+  // 定时器常开：活跃任务 10s 兜底轮询；空闲期降频 60s 拉一次（发现响应丢失/跨端启动的任务）
   setInterval(() => tick(false), POLL_MS)
   // 启动即拉一次：刷新/重开页面后恢复在途任务显示
   tick(true)

@@ -3,6 +3,7 @@
  * 保持既有 `from './pipeline'` 导入路径不变。
  */
 
+export * from './canon'
 export * from './chapter'
 export * from './character'
 export * from './outline'

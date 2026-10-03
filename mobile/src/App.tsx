@@ -8,8 +8,10 @@ import Connect from '@mobile/pages/Connect'
 import More from '@mobile/pages/More'
 import Shelf from '@mobile/pages/Shelf'
 import { MobileToaster } from '@mobile/components/MobileToaster'
+import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { useConnStore } from '@mobile/lib/conn'
 import { pushToast } from '@wizard/toastStore'
+import { CanonPreviewPanel } from '@wizard/CanonPreviewPanel'
 import { ensureRuntimeSync } from '@wizard/runtimeSync'
 
 type Page = 'shelf' | 'more'
@@ -116,6 +118,7 @@ export default function App() {
           </nav>
         </>
       )}
+      <CanonPreviewPanel ui={mobileWizardUi} />
       <MobileToaster />
     </div>
   )

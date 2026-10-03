@@ -1,9 +1,11 @@
 import { providerPreset } from '@shared/providers'
 import { useQuery } from '@tanstack/react-query'
 import { lazy, type ReactElement, Suspense, useCallback, useEffect, useState } from 'react'
+import { CanonPreviewPanel } from '../../wizard/CanonPreviewPanel'
 import { ensureRuntimeSync } from '../../wizard/runtimeSync'
 import { Toaster } from './components/Toaster'
 import { markAgentSeen, useAgentNavBadge } from './lib/agentUiStore'
+import { desktopWizardUi } from './lib/desktopWizardUi'
 import { fmtTokens } from './lib/format'
 import type { Navigate, Page } from './lib/nav'
 import { qk, queries } from './lib/queries'
@@ -406,6 +408,7 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
+      <CanonPreviewPanel ui={desktopWizardUi} />
       <Toaster />
       {sseDown && (
         <div className="flex shrink-0 items-center justify-center gap-2 bg-amber-600/90 px-3 py-1.5 text-xs text-white">

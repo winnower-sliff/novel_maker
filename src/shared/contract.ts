@@ -79,6 +79,7 @@ export const PIPELINE_ACTIONS = [
   'character',
   'characterRoster',
   'worldbuild',
+  'canonSync',
   'premiseDraft'
 ] as const
 export type PipelineAction = (typeof PIPELINE_ACTIONS)[number]
@@ -298,7 +299,8 @@ export const PIPELINE_PARAM_SCHEMAS = {
     count: z.number().optional(),
     note: z.string().optional()
   }),
-  worldbuild: WorldbuildGenParamsSchema
+  worldbuild: WorldbuildGenParamsSchema,
+  canonSync: z.object({ projectId: z.string(), volume: z.number() })
 } satisfies Record<PipelineAction, z.ZodTypeAny>
 
 // ── 输入类型（types.ts 从这里再导出以兼容旧 import 路径） ───────────────────

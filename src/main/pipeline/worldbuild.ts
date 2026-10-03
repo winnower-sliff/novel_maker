@@ -287,7 +287,7 @@ function linkMissingTags(entries: WorldbuildPreviewEntry[], existingTitles: Set<
   }
 }
 
-function normalizeWorldbuildParsed(
+export function normalizeWorldbuildParsed(
   projectId: string,
   parsed: ParsedWorldbuildEntry[],
   opts?: { newTypeBudget?: number }

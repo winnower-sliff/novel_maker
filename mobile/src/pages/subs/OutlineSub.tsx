@@ -30,6 +30,15 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const [editId, setEditId] = useState<string | null>(null)
   const editing = outlines.find((o) => o.id === editId) ?? null
   const [feditId, setFeditId] = useState<string | null>(null)
+  const [openScenes, setOpenScenes] = useState<Set<string>>(new Set())
+  const toggleScenes = (id: string): void => {
+    setOpenScenes((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   // —— 生成区 ——
   const [plan, setPlan] = useState<WizardPlanFull | null>(null)
@@ -126,7 +135,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
       }
       if (r.rewriting > 0) {
         setResult(
-          `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已开始自动重写该卷 ${r.rewriting} 章正文，进度见「写作」子页`
+          `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已开始自动重写该卷 ${r.rewriting} 章正文，进度见「写作」子页${r.foreRemoved ? `；已删除埋于本卷的旧伏笔 ${r.foreRemoved} 条` : ''}`
         )
       } else {
         setResult(
@@ -349,14 +358,51 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
               <div className="space-y-1.5">
                 {sorted
                   .filter((o) => o.volume === vol)
-                  .map((o) => (
-                    <Row
-                      key={o.id}
-                      title={`第${o.chapterNo}章 ${o.title || '（未命名）'}`}
-                      sub={o.synopsis}
-                      onClick={() => setEditId(o.id)}
-                    />
-                  ))}
+                  .map((o) => {
+                    const scenesOpen = openScenes.has(o.id)
+                    return (
+                      <div
+                        key={o.id}
+                        role="button"
+                        tabIndex={0}
+                        className="cursor-pointer rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 active:bg-zinc-900"
+                        onClick={() => setEditId(o.id)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') setEditId(o.id)
+                        }}
+                      >
+                        <div className="truncate text-sm text-zinc-200">
+                          第{o.chapterNo}章 {o.title || '（未命名）'}
+                        </div>
+                        <div className="mt-0.5 line-clamp-2 text-xs leading-4 text-zinc-500">
+                          {o.synopsis}
+                        </div>
+                        {o.scenes.length > 0 && (
+                          <button
+                            type="button"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              toggleScenes(o.id)
+                            }}
+                            className="mt-1.5 flex cursor-pointer items-center gap-1 text-[11px] text-zinc-500 active:text-zinc-300"
+                          >
+                            <span className={`transition-transform ${scenesOpen ? 'rotate-90' : ''}`}>
+                              ▸
+                            </span>
+                            场景（{o.scenes.length}）
+                          </button>
+                        )}
+                        {scenesOpen && o.scenes.length > 0 && (
+                          <ol className="mt-1 list-decimal space-y-0.5 pl-4 text-[11px] leading-4 text-zinc-400">
+                            {o.scenes.map((s, i) => (
+                              // biome-ignore lint/suspicious/noArrayIndexKey: 场景句无稳定 id，顺序即身份
+                              <li key={i}>{s}</li>
+                            ))}
+                          </ol>
+                        )}
+                      </div>
+                    )
+                  })}
               </div>
             </div>
           ))
@@ -381,8 +427,11 @@ function OutlineEditor({
 }) {
   const [title, setTitle] = useState(item.title)
   const [synopsis, setSynopsis] = useState(item.synopsis)
+  const [scenes, setScenes] = useState(item.scenes.join('\n'))
   const [saving, setSaving] = useState(false)
-  const dirty = title !== item.title || synopsis !== item.synopsis
+  const scenesJoined = item.scenes.join('\n')
+  const dirty =
+    title !== item.title || synopsis !== item.synopsis || scenes !== scenesJoined
 
   const save = async (): Promise<void> => {
     setSaving(true)
@@ -393,7 +442,8 @@ function OutlineEditor({
         volume: item.volume,
         chapterNo: item.chapterNo,
         title,
-        synopsis
+        synopsis,
+        scenes: scenes.split('\n').map((s) => s.trim()).filter(Boolean)
       })
       onSaved()
       onBack()
@@ -439,6 +489,10 @@ function OutlineEditor({
       <Label>
         梗概
         <Textarea rows={8} value={synopsis} onChange={(e) => setSynopsis(e.target.value)} />
+      </Label>
+      <Label>
+        场景（每行一条「人物+动作/冲突」，写章时按序注入）
+        <Textarea rows={4} value={scenes} onChange={(e) => setScenes(e.target.value)} />
       </Label>
     </DetailShell>
   )
