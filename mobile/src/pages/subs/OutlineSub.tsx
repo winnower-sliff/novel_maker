@@ -1,13 +1,14 @@
 import { Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   deriveStartNo,
   generateRulesRefine,
   generateVolume,
   generateVolumeIdea,
-  rememberVolumePlan
+  rememberVolumePlan,
+  useOutlineRunActive
 } from '@wizard/volumeGen'
 import { NumberField, OutlineProgress } from '@wizard/widgets'
 import { loadProjectPlan, type WizardPlanFull } from '@wizard/wizardPlan'
@@ -35,14 +36,16 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const [volume, setVolume] = useState(1)
   const [count, setCount] = useState(20)
   const [idea, setIdea] = useState('')
-  const [busy, setBusy] = useState(false)
+  const [localBusy, setLocalBusy] = useState(false)
   const [ideaBusy, setIdeaBusy] = useState(false)
   const [rules, setRules] = useState('')
   const [rulesBusy, setRulesBusy] = useState(false)
   const [delta, setDelta] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
-  const abortRef = useRef<(() => void) | null>(null)
+  // busy = 本地生成 || 后台在途 run（切页/刷新后生成继续，重挂时恢复 busy 态防重复触发）
+  const outlineActive = useOutlineRunActive(projectId)
+  const busy = localBusy || outlineActive
 
   useEffect(() => {
     let alive = true
@@ -58,13 +61,6 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
       alive = false
     }
   }, [projectId])
-
-  useEffect(
-    () => () => {
-      abortRef.current?.()
-    },
-    []
-  )
 
   const sorted = [...outlines].sort((a, b) => a.volume - b.volume || a.chapterNo - b.chapterNo)
   const volumes = [...new Set(sorted.map((o) => o.volume))]
@@ -108,11 +104,11 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
       )
     )
       return
-    setBusy(true)
+    setLocalBusy(true)
     setError(null)
     setResult(null)
     setDelta('')
-    const { done, abort } = generateVolume({
+    const { done } = generateVolume({
       projectId,
       volume,
       idea: idea.trim(),
@@ -122,7 +118,6 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
       hasWritten: targetWritten,
       onDelta: (t) => setDelta((v) => v + t)
     })
-    abortRef.current = abort
     try {
       const r = await done
       if (!r.parsed || r.created + r.updated === 0) {
@@ -145,8 +140,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
-      abortRef.current = null
-      setBusy(false)
+      setLocalBusy(false)
     }
   }
 
@@ -217,15 +211,14 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
               setError(null)
               setResult(null)
               setDelta('')
-              const { done, abort } = generateVolumeIdea({
+              const { done } = generateVolumeIdea({
                 projectId,
                 volume,
                 idea: idea.trim(),
                 rules: rules.trim() || undefined,
                 onDelta: (t) => setDelta((v) => v + t)
               })
-              abortRef.current = abort
-              void done
+                        void done
                 .then((text) => {
                   setIdea(text)
                   void rememberVolumePlan(projectId, volume, {
@@ -236,7 +229,6 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                 })
                 .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                 .finally(() => {
-                  abortRef.current = null
                   setIdeaBusy(false)
                 })
             }}
@@ -269,14 +261,13 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
               setError(null)
               setResult(null)
               setDelta('')
-              const { done, abort } = generateRulesRefine({
+              const { done } = generateRulesRefine({
                 projectId,
                 volume,
                 rules: rules.trim(),
                 onDelta: (t) => setDelta((v) => v + t)
               })
-              abortRef.current = abort
-              void done
+                        void done
                 .then((text) => {
                   setRules(text)
                   void rememberVolumePlan(projectId, volume, {
@@ -287,7 +278,6 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                 })
                 .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
                 .finally(() => {
-                  abortRef.current = null
                   setRulesBusy(false)
                 })
             }}
@@ -314,7 +304,10 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           <Label>章数</Label>
           <NumberField input={Input} value={count} min={1} onChange={setCount} disabled={busy} className="w-full" />
         </div>
-        {busy && <OutlineProgress text={delta} />}
+        {localBusy && <OutlineProgress text={delta} />}
+        {outlineActive && !localBusy && (
+          <div className="text-xs text-amber-400">后台大纲生成中，完成后会自动导入（可离开此页）</div>
+        )}
         {error && <div className="text-xs text-red-400">{error}</div>}
         {result && !busy && <div className="text-xs text-emerald-400">{result}</div>}
         <div className="flex items-center gap-2">
@@ -326,7 +319,13 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
               targetWritten ? 'bg-red-800/80 text-red-50' : 'bg-amber-600 text-white'
             }`}
           >
-            {busy ? '生成中…' : targetWritten ? `重写第 ${volume} 卷（大纲+正文）` : `生成第 ${volume} 卷大纲`}
+            {localBusy
+              ? '生成中…'
+              : outlineActive
+                ? '后台生成中…'
+                : targetWritten
+                  ? `重写第 ${volume} 卷（大纲+正文）`
+                  : `生成第 ${volume} 卷大纲`}
           </button>
           {targetWritten && (
             <span className="text-[11px] text-zinc-500">该卷已有 {volWritten(volume)} 章正文，重写将全卷覆盖</span>

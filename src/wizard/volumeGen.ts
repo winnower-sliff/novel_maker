@@ -1,3 +1,4 @@
+import { useEffect, useState } from 'react'
 import { startPipeline } from './pipeline'
 import { loadProjectPlan, saveProjectPlan } from './wizardPlan'
 
@@ -51,6 +52,46 @@ export function deriveStartNo(
 ): number {
   const volNos = items.filter((o) => o.volume === volume).map((o) => o.chapterNo)
   return volNos.length > 0 ? Math.min(...volNos) : Math.max(0, ...items.map((o) => o.chapterNo)) + 1
+}
+
+/**
+ * 该项目是否有在途的大纲生成 run（主进程视角）。
+ * 页面切走/刷新后生成照常在后台跑（主进程 afterDone 落库）；
+ * 组件重挂时据此恢复「生成中」busy 态，避免用户重复触发导致两个 run 并行互踩。
+ * 完成通知与 outlines 缓存失效由中央同步器（runtimeSync）负责，这里只管 busy 态。
+ */
+export function useOutlineRunActive(projectId: string | null): boolean {
+  const [active, setActive] = useState(false)
+  useEffect(() => {
+    if (!projectId) {
+      setActive(false)
+      return
+    }
+    let stopped = false
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const check = (): void => {
+      void window.api.runtime
+        .snapshot()
+        .then((snap) => {
+          if (stopped) return
+          const running = snap.runs.some(
+            (r) =>
+              r.status === 'running' &&
+              r.meta?.action === 'outline' &&
+              r.meta?.projectId === projectId
+          )
+          setActive(running)
+          if (running) timer = setTimeout(check, 5000)
+        })
+        .catch(() => {})
+    }
+    void check()
+    return () => {
+      stopped = true
+      if (timer) clearTimeout(timer)
+    }
+  }, [projectId])
+  return active
 }
 
 /**

@@ -7,7 +7,8 @@ import {
   generateRulesRefine,
   generateVolume,
   generateVolumeIdea,
-  rememberVolumePlan
+  rememberVolumePlan,
+  useOutlineRunActive
 } from '../../../wizard/volumeGen'
 import { NumberField } from '../../../wizard/widgets'
 import { loadProjectPlan, type WizardPlanFull } from '../../../wizard/wizardPlan'
@@ -75,6 +76,9 @@ export default function Outline({
   const [volume, setVolume] = useState(1)
   const [count, setCount] = useState(30)
   const [generating, setGenerating] = useState(false)
+  // 后台在途 outline run（切页/刷新后生成继续，重挂时恢复禁用态防重复触发）
+  const outlineActive = useOutlineRunActive(projectId)
+  const genBusy = generating || outlineActive
   const [genOutput, setGenOutput] = useState('')
   const [ideaBusy, setIdeaBusy] = useState(false)
   const ideaAbortRef = useRef<(() => void) | null>(null)
@@ -400,7 +404,7 @@ export default function Outline({
                 <button
                   key={v}
                   type="button"
-                  disabled={generating}
+                  disabled={genBusy}
                   onClick={() => setVolume(v)}
                   className={`rounded-full px-3 py-1 text-xs transition-colors disabled:cursor-default disabled:opacity-50 ${
                     active
@@ -420,7 +424,7 @@ export default function Outline({
             })}
             <button
               type="button"
-              disabled={generating}
+              disabled={genBusy}
               onClick={() => setVolume(nextVol)}
               className={`rounded-full px-3 py-1 text-xs transition-colors disabled:cursor-default disabled:opacity-50 ${
                 volume === nextVol
@@ -440,7 +444,7 @@ export default function Outline({
               <Button
                 variant="ghost"
                 className="shrink-0 px-2 py-1 text-xs"
-                disabled={generating || ideaBusy || !idea.trim()}
+                disabled={genBusy || ideaBusy || !idea.trim()}
                 onClick={() => {
                   setIdeaBusy(true)
                   setGenNotice('')
@@ -478,7 +482,7 @@ export default function Outline({
               value={idea}
               onChange={(e) => setIdea(e.target.value)}
               placeholder="例：末法时代最后一位炼丹师重生都市，靠一手丹术搅动风云…（也可写简短要求，点「AI 扩写成创意」补全）"
-              disabled={generating}
+              disabled={genBusy}
             />
           </div>
           <div>
@@ -490,7 +494,7 @@ export default function Outline({
               <Button
                 variant="ghost"
                 className="shrink-0 px-2 py-1 text-xs"
-                disabled={rulesBusy || generating || !rules.trim()}
+                disabled={rulesBusy || genBusy || !rules.trim()}
                 onClick={() => {
                   setRulesBusy(true)
                   setGenNotice('')
@@ -529,7 +533,7 @@ export default function Outline({
               placeholder={
                 '例：\n每 3~6 章插入一段独立的色情小故事\n每 10 章安排一个单元小故事收尾'
               }
-              disabled={generating}
+              disabled={genBusy}
             />
           </div>
           <div className="max-w-48">
@@ -539,7 +543,7 @@ export default function Outline({
               value={count}
               min={1}
               onChange={setCount}
-              disabled={generating}
+              disabled={genBusy}
             />
           </div>
           {targetWritten && (
@@ -551,7 +555,7 @@ export default function Outline({
           <div className="flex items-center gap-3">
             <Button
               variant={targetWritten ? 'danger' : 'primary'}
-              disabled={generating || ideaBusy || rulesBusy || !idea.trim()}
+              disabled={genBusy || ideaBusy || rulesBusy || !idea.trim()}
               onClick={() => {
                 if (
                   targetWritten &&
@@ -601,9 +605,11 @@ export default function Outline({
             >
               {generating
                 ? '生成中…'
-                : targetWritten
-                  ? `重写第 ${volume} 卷（大纲+正文）`
-                  : `生成第 ${volume} 卷大纲`}
+                : outlineActive
+                  ? '后台生成中…'
+                  : targetWritten
+                    ? `重写第 ${volume} 卷（大纲+正文）`
+                    : `生成第 ${volume} 卷大纲`}
             </Button>
             {(generating || ideaBusy || rulesBusy) && (
               <Button
@@ -616,6 +622,11 @@ export default function Outline({
               >
                 中断
               </Button>
+            )}
+            {outlineActive && !generating && (
+              <span className="text-xs text-amber-600">
+                后台大纲生成中，完成后自动导入（可离开此页）
+              </span>
             )}
             {genNotice && <span className="text-xs text-zinc-400">{genNotice}</span>}
           </div>
