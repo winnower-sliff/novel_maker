@@ -3,6 +3,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type AlignRevision, applyAlignRevisions } from '../../../wizard/outlineAlign'
 import {
+  deriveStartNo,
   generateRulesRefine,
   generateVolume,
   generateVolumeIdea,
@@ -72,7 +73,6 @@ export default function Outline({
   const [plan, setPlan] = useState<WizardPlanFull | null>(null)
   const [idea, setIdea] = useState('')
   const [volume, setVolume] = useState(1)
-  const [startNo, setStartNo] = useState(1)
   const [count, setCount] = useState(30)
   const [generating, setGenerating] = useState(false)
   const [genOutput, setGenOutput] = useState('')
@@ -148,24 +148,19 @@ export default function Outline({
     }
   }, [projectId])
 
-  // 换卷时按 volumePlans 预填该卷上次生成参数；无记忆则按库推默认值
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 预填只在卷号或存档变化时执行，items 仅为推导默认值
+  // 换卷时按 volumePlans 预填该卷上次生成参数；无记忆则清空（起始章号生成时全自动推导）
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 预填只在卷号或存档变化时执行
   useEffect(() => {
     if (generating) return
     const memo = plan?.volumePlans?.[String(volume)]
     if (memo) {
       setIdea(memo.idea)
-      setStartNo(memo.startNo)
       setCount(memo.count)
       setRules(memo.rules ?? '')
       return
     }
-    const volNos = items.filter((o) => o.volume === volume).map((o) => o.chapterNo)
-    const nextStart =
-      volNos.length > 0 ? Math.min(...volNos) : Math.max(0, ...items.map((o) => o.chapterNo)) + 1
     setIdea('')
     setRules('')
-    setStartNo(nextStart)
   }, [volume, plan])
 
   const volWritten = (vol: number): number =>
@@ -233,6 +228,17 @@ export default function Outline({
     }
     return [...map.entries()].sort((a, b) => a[0] - b[0])
   }, [items])
+
+  // 生成区卷选择条：库内卷号 ∪ 记忆卷号；「下一卷」= 最大卷号 + 1
+  const chipVols = useMemo(() => {
+    const set = new Set<number>(volumes.map(([v]) => v))
+    for (const k of Object.keys(plan?.volumePlans ?? {})) {
+      const n = Number(k)
+      if (Number.isInteger(n) && n >= 1) set.add(n)
+    }
+    return [...set].sort((a, b) => a - b)
+  }, [volumes, plan])
+  const nextVol = chipVols.length > 0 ? chipVols[chipVols.length - 1] + 1 : 1
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {}
@@ -385,9 +391,50 @@ export default function Outline({
 
       {genOpen && (
         <Card className="space-y-3 p-4">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="mr-1 text-xs text-zinc-500">选择卷</span>
+            {chipVols.map((v) => {
+              const w = volWritten(v)
+              const active = v === volume
+              return (
+                <button
+                  key={v}
+                  type="button"
+                  disabled={generating}
+                  onClick={() => setVolume(v)}
+                  className={`rounded-full px-3 py-1 text-xs transition-colors disabled:cursor-default disabled:opacity-50 ${
+                    active
+                      ? 'bg-amber-600 font-medium text-white'
+                      : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
+                  }`}
+                >
+                  第 {v} 卷
+                  {w > 0 && (
+                    <span className={active ? ' text-amber-100' : ' text-zinc-500'}>
+                      {' '}
+                      · 已写{w}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+            <button
+              type="button"
+              disabled={generating}
+              onClick={() => setVolume(nextVol)}
+              className={`rounded-full px-3 py-1 text-xs transition-colors disabled:cursor-default disabled:opacity-50 ${
+                volume === nextVol
+                  ? 'bg-amber-600 font-medium text-white'
+                  : 'border border-dashed border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
+              }`}
+            >
+              ＋ 第 {nextVol} 卷
+            </button>
+          </div>
           <div>
             <div className="flex items-center justify-between gap-2">
               <Label>
+                第 {volume} 卷 ·
                 核心创意（题材、主角、金手指、主线冲突；已有世界观/人物会自动作为上下文）
               </Label>
               <Button
@@ -410,7 +457,6 @@ export default function Outline({
                       setIdea(text)
                       void rememberVolumePlan(projectId, volume, {
                         idea: text,
-                        startNo,
                         count: Math.max(1, Math.floor(count) || 30),
                         rules: rules.trim() || undefined
                       })
@@ -438,7 +484,8 @@ export default function Outline({
           <div>
             <div className="flex items-center justify-between gap-2">
               <Label>
-                节奏与硬性要求（每行一条，原样透传给大纲生成、逐章严格执行，不经 AI 改写）
+                第 {volume} 卷 · 节奏与硬性要求（每行一条，原样透传给大纲生成、逐章严格执行，不经 AI
+                改写）
               </Label>
               <Button
                 variant="ghost"
@@ -459,7 +506,6 @@ export default function Outline({
                       setRules(text)
                       void rememberVolumePlan(projectId, volume, {
                         idea,
-                        startNo,
                         count: Math.max(1, Math.floor(count) || 30),
                         rules: text
                       })
@@ -486,37 +532,15 @@ export default function Outline({
               disabled={generating}
             />
           </div>
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-            <div>
-              <Label>卷号</Label>
-              <NumberField
-                input={Input}
-                value={volume}
-                min={1}
-                onChange={setVolume}
-                disabled={generating}
-              />
-            </div>
-            <div>
-              <Label>起始章号</Label>
-              <NumberField
-                input={Input}
-                value={startNo}
-                min={1}
-                onChange={setStartNo}
-                disabled={generating}
-              />
-            </div>
-            <div>
-              <Label>生成章数</Label>
-              <NumberField
-                input={Input}
-                value={count}
-                min={1}
-                onChange={setCount}
-                disabled={generating}
-              />
-            </div>
+          <div className="max-w-48">
+            <Label>生成章数</Label>
+            <NumberField
+              input={Input}
+              value={count}
+              min={1}
+              onChange={setCount}
+              disabled={generating}
+            />
           </div>
           {targetWritten && (
             <p className="text-xs text-amber-400/90">
@@ -544,7 +568,7 @@ export default function Outline({
                   volume,
                   idea: idea.trim(),
                   rules: rules.trim() || undefined,
-                  startNo,
+                  startNo: deriveStartNo(volume, items),
                   count: Math.max(1, Math.floor(count) || 30),
                   hasWritten: targetWritten,
                   onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-2000))
@@ -579,7 +603,7 @@ export default function Outline({
                 ? '生成中…'
                 : targetWritten
                   ? `重写第 ${volume} 卷（大纲+正文）`
-                  : '生成并导入'}
+                  : `生成第 ${volume} 卷大纲`}
             </Button>
             {(generating || ideaBusy || rulesBusy) && (
               <Button

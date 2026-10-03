@@ -20,7 +20,8 @@ export interface WizardPlanSave {
 /** 每卷大纲生成参数记忆：key = 卷号字符串，重新生成时预填上次的设定 */
 export interface VolumePlan {
   idea: string
-  startNo: number
+  /** 起始章号已全自动推导（重写=该卷最小章号，新卷=全库最大章号+1），旧记忆仍保留此值 */
+  startNo?: number
   count: number
   /** 节奏与硬性要求（原样透传给大纲生成，不经 AI 改写） */
   rules?: string

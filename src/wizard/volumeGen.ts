@@ -28,16 +28,29 @@ export interface VolumeGenOpts {
 export async function rememberVolumePlan(
   projectId: string,
   volume: number,
-  plan: { idea: string; startNo: number; count: number; rules?: string }
+  plan: { idea: string; startNo?: number; count: number; rules?: string }
 ): Promise<void> {
   const cur = await loadProjectPlan(projectId)
   const prev = cur?.volumePlans?.[String(volume)]
   await saveProjectPlan(projectId, {
     volumePlans: {
       ...(cur?.volumePlans ?? {}),
-      [String(volume)]: { ...plan, rules: plan.rules ?? prev?.rules }
+      [String(volume)]: {
+        ...plan,
+        startNo: plan.startNo ?? prev?.startNo,
+        rules: plan.rules ?? prev?.rules
+      }
     }
   })
+}
+
+/** 起始章号全自动推导：重写已有卷 = 该卷最小章号；新卷 = 全库最大章号 + 1 */
+export function deriveStartNo(
+  volume: number,
+  items: Array<{ volume: number; chapterNo: number }>
+): number {
+  const volNos = items.filter((o) => o.volume === volume).map((o) => o.chapterNo)
+  return volNos.length > 0 ? Math.min(...volNos) : Math.max(0, ...items.map((o) => o.chapterNo)) + 1
 }
 
 /**

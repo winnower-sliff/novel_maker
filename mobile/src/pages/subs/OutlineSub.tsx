@@ -3,6 +3,7 @@ import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import {
+  deriveStartNo,
   generateRulesRefine,
   generateVolume,
   generateVolumeIdea,
@@ -32,7 +33,6 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   // —— 生成区 ——
   const [plan, setPlan] = useState<WizardPlanFull | null>(null)
   const [volume, setVolume] = useState(1)
-  const [startNo, setStartNo] = useState(1)
   const [count, setCount] = useState(20)
   const [idea, setIdea] = useState('')
   const [busy, setBusy] = useState(false)
@@ -69,24 +69,30 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const sorted = [...outlines].sort((a, b) => a.volume - b.volume || a.chapterNo - b.chapterNo)
   const volumes = [...new Set(sorted.map((o) => o.volume))]
 
-  // 换卷时按 volumePlans 预填该卷上次生成参数；无记忆则按库推默认值
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 预填只在卷号或存档变化时执行，sorted/outlines 仅为推导默认值
+  // 生成区卷选择条：库内卷号 ∪ 记忆卷号；「下一卷」= 最大卷号 + 1
+  const chipVols = (() => {
+    const set = new Set<number>(volumes)
+    for (const k of Object.keys(plan?.volumePlans ?? {})) {
+      const n = Number(k)
+      if (Number.isInteger(n) && n >= 1) set.add(n)
+    }
+    return [...set].sort((a, b) => a - b)
+  })()
+  const nextVol = chipVols.length > 0 ? chipVols[chipVols.length - 1] + 1 : 1
+
+  // 换卷时按 volumePlans 预填该卷上次生成参数；无记忆则清空（起始章号生成时全自动推导）
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 预填只在卷号或存档变化时执行
   useEffect(() => {
     if (busy) return
     const memo = plan?.volumePlans?.[String(volume)]
     if (memo) {
       setIdea(memo.idea)
-      setStartNo(memo.startNo)
       setCount(memo.count)
       setRules(memo.rules ?? '')
       return
     }
-    const volNos = sorted.filter((o) => o.volume === volume).map((o) => o.chapterNo)
-    const nextStart =
-      volNos.length > 0 ? Math.min(...volNos) : Math.max(0, ...outlines.map((o) => o.chapterNo)) + 1
     setIdea('')
     setRules('')
-    setStartNo(nextStart)
   }, [volume, plan])
 
   const volWritten = (vol: number): number =>
@@ -111,7 +117,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
       volume,
       idea: idea.trim(),
       rules: rules.trim() || undefined,
-      startNo,
+      startNo: deriveStartNo(volume, outlines),
       count: count >= 1 ? Math.floor(count) : 20,
       hasWritten: targetWritten,
       onDelta: (t) => setDelta((v) => v + t)
@@ -166,8 +172,43 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   return (
     <div className="h-full overflow-y-auto p-3">
       <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="mr-0.5 text-xs text-zinc-500">选择卷</span>
+          {chipVols.map((v) => {
+            const w = volWritten(v)
+            const active = v === volume
+            return (
+              <button
+                key={v}
+                type="button"
+                disabled={busy}
+                onClick={() => setVolume(v)}
+                className={`rounded-full px-3 py-1.5 text-xs disabled:cursor-default disabled:opacity-50 ${
+                  active ? 'bg-amber-600 font-medium text-white' : 'bg-zinc-800 text-zinc-400'
+                }`}
+              >
+                第 {v} 卷
+                {w > 0 && (
+                  <span className={active ? ' text-amber-100' : ' text-zinc-500'}> · 已写{w}</span>
+                )}
+              </button>
+            )
+          })}
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setVolume(nextVol)}
+            className={`rounded-full px-3 py-1.5 text-xs disabled:cursor-default disabled:opacity-50 ${
+              volume === nextVol
+                ? 'bg-amber-600 font-medium text-white'
+                : 'border border-dashed border-zinc-700 text-zinc-400'
+            }`}
+          >
+            ＋ 第 {nextVol} 卷
+          </button>
+        </div>
         <div className="flex items-center justify-between gap-2">
-          <Label>本卷创意（描述这一卷要讲的故事）</Label>
+          <Label>第 {volume} 卷 · 本卷创意（描述这一卷要讲的故事）</Label>
           <button
             type="button"
             onClick={() => {
@@ -189,7 +230,6 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                   setIdea(text)
                   void rememberVolumePlan(projectId, volume, {
                     idea: text,
-                    startNo,
                     count: count >= 1 ? Math.floor(count) : 20,
                     rules: rules.trim() || undefined
                   })
@@ -220,7 +260,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           </pre>
         )}
         <div className="flex items-center justify-between gap-2">
-          <Label>节奏与硬性要求（每行一条，原样透传、逐章严格执行）</Label>
+          <Label>第 {volume} 卷 · 节奏与硬性要求（每行一条，原样透传、逐章严格执行）</Label>
           <button
             type="button"
             onClick={() => {
@@ -241,7 +281,6 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                   setRules(text)
                   void rememberVolumePlan(projectId, volume, {
                     idea,
-                    startNo,
                     count: count >= 1 ? Math.floor(count) : 20,
                     rules: text
                   })
@@ -271,19 +310,9 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
             {delta.slice(-400) || '优化中…'}
           </pre>
         )}
-        <div className="flex items-end gap-3 text-xs">
-          <div>
-            <Label>卷号</Label>
-            <NumberField input={Input} value={volume} min={1} onChange={setVolume} disabled={busy} className="w-20" />
-          </div>
-          <div>
-            <Label>起始章</Label>
-            <NumberField input={Input} value={startNo} min={1} onChange={setStartNo} disabled={busy} className="w-20" />
-          </div>
-          <div>
-            <Label>章数</Label>
-            <NumberField input={Input} value={count} min={1} onChange={setCount} disabled={busy} className="w-20" />
-          </div>
+        <div className="max-w-36">
+          <Label>章数</Label>
+          <NumberField input={Input} value={count} min={1} onChange={setCount} disabled={busy} className="w-full" />
         </div>
         {busy && <OutlineProgress text={delta} />}
         {error && <div className="text-xs text-red-400">{error}</div>}
