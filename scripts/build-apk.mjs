@@ -1,8 +1,9 @@
 // 一键出 APK：构建 mobile web → 打进 APK（semver 版本）→ 部署 APK 到电脑端（更新源）→ 拷到项目根
-import { copyFile, readFile, writeFile } from 'node:fs/promises'
+import { copyFile, writeFile } from 'node:fs/promises'
 import { execSync } from 'node:child_process'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { bumpVersion, ensureVersionTag } from './version.mjs'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
 const sh = (cmd, cwd) => {
@@ -10,8 +11,11 @@ const sh = (cmd, cwd) => {
   execSync(cmd, { cwd, stdio: 'inherit', shell: true })
 }
 
-// semver 单一事实源：根 package.json 的 version 字段
-const version = process.argv[2] ?? JSON.parse(await readFile(join(root, 'package.json'), 'utf-8')).version
+// semver 单一事实源：根 package.json 的 version 字段。
+// 手动传参（npm run apk -- 2.0.0）优先并补打基线 tag；否则按 Conventional Commits 自最新 v* tag 自动推进（scripts/version.mjs）
+const manualVersion = process.argv[2]
+const version = manualVersion ?? (await bumpVersion(root))
+if (manualVersion) ensureVersionTag(root, manualVersion)
 // versionCode 必须是 int：用分钟级 epoch（单调递增且不溢出）
 const versionCode = String(Math.floor(Date.now() / 60000))
 // versionName 追加构建时间戳：手机端「检查更新」靠 versionName/versionCode 区分新旧包，

@@ -263,7 +263,11 @@ export const pipelineHandlers = {
               // save=false：班底挑选模式，只回预览不落库（确认后由调用方显式保存）
               if (params.save === false)
                 return {
-                  preview: { main: parsed.main, mainTags: parsed.mainTags, revisions: parsed.revisions }
+                  preview: {
+                    main: parsed.main,
+                    mainTags: parsed.mainTags,
+                    revisions: parsed.revisions
+                  }
                 }
               return saveParsedCharacters(params.projectId, parsed, params.name ?? '')
             }

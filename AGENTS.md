@@ -7,6 +7,11 @@
 - `npm run dist` 打包 NSIS 安装包到 dist/（需先 `export ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/ ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`，否则国内下载 Electron/NSIS 会超时）
 - `npm run lint` / `npm run lint:fix`：Biome 检查/修复（lint+format 一体）；门禁 = typecheck + lint 双绿
 
+## 版本号
+- 根 `package.json` 的 `version` 是 semver 单一事实源。`npm run apk` 时经 `scripts/version.mjs` **按 Conventional Commits 自动推进**：自最新 `v*` git tag 以来，breaking（`!` 或 `BREAKING CHANGE`）→ major、`feat` → minor、`fix`/`perf` → patch，其余类型（chore/docs/refactor…）不升。
+- 每次推进自动打 `v<semver>` tag 作为下次基线；仓库无 tag 时首跑在当前 HEAD 建基线、本次不升版。手动 `npm run apk -- 2.0.0`（或直接跑 `node scripts/version.mjs`）可覆盖/单测，加 `--dry` 只算不写。
+- APK 的 `versionName = <semver>-<yyyymmddHHMM>`（时间戳保证同一 semver 多次构建仍唯一），`versionCode` = 分钟级 epoch 的 int（单调递增，手机端判新只看它，故改 semver 不影响更新检测）。
+
 ## 项目级 skill
 - `.opencode/skill/reload`：`reload`（=重启/重启项目/重启一下）= 完整重启 dev 实例 + 验证（3910/5173 监听、`nmtest123` 表单登录 302、远程可达）。详见其 SKILL.md。
 - `.opencode/skill/reviewer`：`reviewer`（=review/代码审查/审查一下）= 对代码改动产出分级审查报告（F 编号，含 typecheck+lint 门禁）；**每完成一次编码工作后必须自动调用它审查本次改动**，报告确认后按编号修复。详见其 SKILL.md。
@@ -56,6 +61,8 @@
 31. **`@source` 路径相对所在 CSS 文件解析，抄错深度=静默失效**（2026-10 白框事故终局）：`mobile/src/styles.css` 曾照抄 renderer 的 `@source "../../wizard"`——从 `mobile/src/` 出发指向项目根的**上一级**（不存在），Tailwind 不报错、向导类全缺，APK 里向导弹窗白框+样式裸奔。正确写法 `@source "../../src/wizard"`。同族坑：`build-apk.mjs` 若以 `mobile/` 为 cwd 跑 vite build，扫描 base 跟随 cwd 也会漏扫（已改为根 cwd + 显式 `--config mobile/vite.config.ts`）。**防线**：`scripts/check-tailwind-classes.mjs` 哨兵校验（每扫描源一个代表类，缺失即构建失败），已接入 `npm run build`（桌面 out/renderer/assets，默认组）与 `npm run apk`（dist-mobile/assets，`--mobile` 组）；新增扫描源时须在脚本里补对应哨兵类。
 32. **渲染端 hooks 必须在所有 early return 之前**（2026-10 手机黑屏实锤）：mobile Write.tsx 曾把 `useWriteListStore` 两个 hook 放在 `if (selected) return <ChapterEditor/>` 之后，点进章节该次渲染少声明 2 个 hook → React 抛 "Rendered fewer hooks than expected"，Android WebView 表现为**整页黑屏卡死且无任何报错 UI**。判据：点进子视图瞬间黑屏、桌面/日志无明显异常，先查 hook 声明顺序。
 33. **章节状态链是「chapters.status 落后、outlines.status 才是新」**（2026-10）：writeBatch 初稿/返修只把 chapters.status 写成 draft/polished，摘要后才升 outlines.status；桌面单章流只存 draft。手机徽章若优先显示 chapterStatus 会把已写章显示成「草稿」——用 `briefBadgeStatus()`（chapterStatus 仅 polished/approved 才采信，否则回退 outline status）。`raiseChapterStatus()`（store.ts，rank 只升不降）供写链路同步双表。
+
+34. **版本号自动推进的边界（2026-10）**：`scripts/version.mjs` 按 Conventional Commits 自最新 `v*` tag 推进并自动打 tag（`npm run apk` 触发）。已知边界：①tag 打在 HEAD，而 `package.json` 的版本改动未必已提交，故 `vX.Y.Z` 指向的提交里版本号可能仍是旧值（可追溯性瑕疵，不影响基线计算）；②bump+tag 发生在构建之前，构建失败会留下「有 tag 无产物」；③`git log <tag>..HEAD` 在最新 tag 不在当前分支祖先链（多分支各自打 tag / 浅克隆）时会纳入无关提交致过度升版；④tag 已存在时**严格抛错**（不会静默写坏 package.json）；手动 `npm run apk -- X` 只补打基线 tag、不自动 bump。
 
 ## 约定
 - API Key 仅存主进程（safeStorage，按 provider 分别保存），渲染进程只拿到掩码；LLM 调用统一走主进程（Electron 经 IPC，浏览器经密码鉴权的内嵌 HTTP），provider 鉴权统一走 `getLlmAuth()`（Ollama 无需真实 Key，用占位符）；带 purpose 的请求一律经 `resolveRequestAuth(purpose)` 解析（跨 provider 路由 + 未配置回退）。
