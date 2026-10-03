@@ -49,6 +49,8 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
     chars && `【已有人物】\n${chars}`,
     openFore &&
       `【未回收伏笔台账（规划新章节时应安排合理回收点，并在对应章节的 foreshadow_ops 中写明）】\n${openFore}`,
+    p.rules?.trim() &&
+      `【硬性节奏规则（用户制定，逐章严格执行，优先级高于下方结构原则与核心创意；每条规则须映射到具体章号并在该章 synopsis 中体现对应内容）】\n${p.rules.trim()}`,
     outlineCtx &&
       (p.allowUpdate
         ? `【第 ${p.volume} 卷已有大纲（新章节须与之自然衔接；若新创意要求调整已有章节，可在结果中输出该章的修订条目——volume 与 chapter_no 与原章保持一致，synopsis 为融合后的完整修订梗概，该修订会覆盖更新原章梗概，无必要时不要修订）】\n${outlineCtx}`
@@ -56,7 +58,7 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
   ]
     .filter(Boolean)
     .join('\n\n')
-  const user = `核心创意：${p.idea}\n\n请生成第 ${p.volume} 卷、第 ${p.startNo} 章到第 ${p.startNo + p.count - 1} 章的大纲（共 ${p.count} 章），严格按约定的 JSON 数组格式输出，不要输出其他内容。`
+  const user = `核心创意：${p.idea}\n\n请生成第 ${p.volume} 卷、第 ${p.startNo} 章到第 ${p.startNo + p.count - 1} 章的大纲（共 ${p.count} 章），严格按约定的 JSON 数组格式输出，不要输出其他内容。${p.rules?.trim() ? '\n硬性节奏规则区中的每一条都必须落实到具体章节，不得省略或合并。' : ''}`
   return {
     model: '',
     system,
@@ -71,25 +73,28 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
 export function buildVolumeIdeaRequest(
   projectId: string,
   volume: number,
-  idea: string
+  idea: string,
+  rulesText?: string
 ): ChatParams {
   const req = idea.trim()
   if (!req) throw new Error('请先在创意框写下你对这一卷的要求')
-  const { project, wb, chars, outlineCtx, openFore } = collectOutlineMaterials(projectId, volume)
+  // 刻意不注入本卷已有大纲：idea 可持久化（volumePlans），起草创意时应忠于用户要求而非被旧大纲牵引
+  const { project, wb, chars, openFore } = collectOutlineMaterials(projectId, volume)
   const volSums = store
     .listVolumeSummaries(projectId)
     .sort((a, b) => a.volume - b.volume)
     .map((v) => `【第${v.volume}卷完成摘要】${v.summary.slice(0, 600)}`)
     .join('\n\n')
+  const rules = rulesText?.trim()
   const system = [
     '你是小说项目的卷策划。基于已有设定与前情，把用户的本卷要求扩写成一份可直接执行的卷创意。只输出一段纯文字，不要标题、列表、JSON 或任何解释。',
     '卷创意要求（200-300字）：写清这一卷要讲的故事——承接前情的起点、本卷主线冲突与阶段推进、关键人物的作用、本卷收束点与引向下卷的钩子；必须与已有世界观、人物关系咬合，合理安排未回收伏笔的回收或推进。',
+    rules &&
+      `【用户的硬性节奏规则（创意叙事必须与这些规则兼容，但不要在创意正文里复述规则本身）】\n${rules}`,
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
     wb && `【已有世界观】\n${wb}`,
     chars && `【已有人物】\n${chars}`,
     volSums && `【已完成各卷前情摘要】\n${volSums}`,
-    outlineCtx &&
-      `【第 ${volume} 卷已有大纲（扩写时应自然衔接并整合这些既有章节，不得与之矛盾）】\n${outlineCtx}`,
     openFore && `【未回收伏笔台账】\n${openFore}`
   ]
     .filter(Boolean)
@@ -100,6 +105,53 @@ export function buildVolumeIdeaRequest(
     messages: [{ role: 'user', content: `本卷要求：${req}\n\n请输出第 ${volume} 卷的卷创意。` }],
     maxTokens: 2048,
     temperature: 0.8,
+    purpose: 'outline'
+  }
+}
+
+/** 规则优化：把用户粗糙的节奏/硬性要求改写成详实可执行的规则清单（纯文本多行，用户确认后回填） */
+export function buildRulesRefineRequest(
+  projectId: string,
+  volume: number,
+  rules: string
+): ChatParams {
+  const raw = rules.trim()
+  if (!raw) throw new Error('请先在规则框写下你的要求')
+  const { project, wb, chars } = collectOutlineMaterials(projectId, volume)
+  const outlineCtx = store
+    .listOutlines(projectId)
+    .filter((o) => o.volume === volume)
+    .sort((a, b) => a.chapterNo - b.chapterNo)
+    .map((o) => `- 第${o.chapterNo}章《${o.title}》`)
+    .join('\n')
+  const system = [
+    '你是网文大纲的节奏策划。把用户粗糙的「节奏与硬性要求」改写成一份详实、无歧义、可直接逐章执行的规则清单。',
+    '输出格式：只输出规则清单本身，每行一条规则，不要编号以外的解释、不要 JSON、不要总结。',
+    '改写要求：',
+    '- 保留用户每条规则的原意与量化区间（如「每 3~6 章」不得改成固定值）；模糊表述给出明确的章号区间或分配方案（如「每 10 章一个小故事」→「第 10、20、30…章各安排一个独立的色情小故事，占本章主线之外 1/3 篇幅」）；',
+    '- 每条规则写清：触发章号/区间、内容要求、篇幅占比或呈现方式、与其他规则的优先级关系；',
+    '- 规则之间冲突时按用户书写顺序取舍并在该条末尾注明；可补 1-2 条使节奏更张弛有度的建议规则（标注「建议」）；',
+    '- 禁止删除或合并用户规则。'
+  ]
+    .filter(Boolean)
+    .join('\n')
+  const user = [
+    `【第 ${volume} 卷上下文（用于让规则贴合实际，不得改变规则原意）】`,
+    project?.styleGuide && `风格：${project.styleGuide.slice(0, 200)}`,
+    wb && `世界观条目：\n${wb.slice(0, 800)}`,
+    chars && `人物：\n${chars.slice(0, 500)}`,
+    outlineCtx && `本卷已有大纲章节：\n${outlineCtx}`,
+    '',
+    `【用户的原始规则】\n${raw}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: 2048,
+    temperature: 0.4,
     purpose: 'outline'
   }
 }

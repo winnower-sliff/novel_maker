@@ -22,6 +22,8 @@ export interface VolumePlan {
   idea: string
   startNo: number
   count: number
+  /** 节奏与硬性要求（原样透传给大纲生成，不经 AI 改写） */
+  rules?: string
 }
 
 export type WizardPlanFull = WizardPlanSave & { volumePlans?: Record<string, VolumePlan> }

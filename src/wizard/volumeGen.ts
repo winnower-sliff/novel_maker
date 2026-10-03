@@ -15,6 +15,8 @@ export interface VolumeGenOpts {
   projectId: string
   volume: number
   idea: string
+  /** 节奏与硬性要求（原样透传给大纲生成 prompt，逐章严格执行） */
+  rules?: string
   startNo: number
   count: number
   /** 该卷已有正文 → 重写语义：清孤儿章 + write:batchStart 全卷覆盖重写 */
@@ -26,11 +28,15 @@ export interface VolumeGenOpts {
 export async function rememberVolumePlan(
   projectId: string,
   volume: number,
-  plan: { idea: string; startNo: number; count: number }
+  plan: { idea: string; startNo: number; count: number; rules?: string }
 ): Promise<void> {
   const cur = await loadProjectPlan(projectId)
+  const prev = cur?.volumePlans?.[String(volume)]
   await saveProjectPlan(projectId, {
-    volumePlans: { ...(cur?.volumePlans ?? {}), [String(volume)]: plan }
+    volumePlans: {
+      ...(cur?.volumePlans ?? {}),
+      [String(volume)]: { ...plan, rules: plan.rules ?? prev?.rules }
+    }
   })
 }
 
@@ -42,11 +48,12 @@ export function generateVolumeIdea(opts: {
   projectId: string
   volume: number
   idea: string
+  rules?: string
   onDelta?: (t: string) => void
 }): { done: Promise<string>; abort: () => void } {
   const { done, abort } = startPipeline(
     'volumeIdea',
-    { projectId: opts.projectId, volume: opts.volume, idea: opts.idea },
+    { projectId: opts.projectId, volume: opts.volume, idea: opts.idea, rules: opts.rules },
     opts.onDelta
   )
   return {
@@ -54,6 +61,28 @@ export function generateVolumeIdea(opts: {
       const idea = (r.data as { idea?: string } | undefined)?.idea ?? ''
       if (!idea.trim()) throw new Error('AI 未输出有效卷创意，请重试')
       return idea
+    }),
+    abort
+  }
+}
+
+/** 规则优化（两端共用）：把规则框内的粗糙要求改详实，结果由调用方回填（用户确认后生效） */
+export function generateRulesRefine(opts: {
+  projectId: string
+  volume: number
+  rules: string
+  onDelta?: (t: string) => void
+}): { done: Promise<string>; abort: () => void } {
+  const { done, abort } = startPipeline(
+    'rulesRefine',
+    { projectId: opts.projectId, volume: opts.volume, rules: opts.rules },
+    opts.onDelta
+  )
+  return {
+    done: done.then((r) => {
+      const rules = (r.data as { rules?: string } | undefined)?.rules ?? ''
+      if (!rules.trim()) throw new Error('AI 未输出有效规则，请重试')
+      return rules
     }),
     abort
   }
@@ -73,7 +102,15 @@ export function generateVolume(opts: VolumeGenOpts): {
   const oldVolPromise = window.api.novel.outlines(projectId)
   const { done, abort } = startPipeline(
     'outline',
-    { projectId, idea, volume, startNo, count, allowUpdate: true },
+    {
+      projectId,
+      idea,
+      volume,
+      startNo,
+      count,
+      allowUpdate: true,
+      rules: opts.rules?.trim() || undefined
+    },
     onDelta
   )
   const finish = async (): Promise<VolumeGenResult> => {
@@ -85,7 +122,12 @@ export function generateVolume(opts: VolumeGenOpts): {
     }
     if (!r.parsed || r.created + r.updated === 0) return { ...r, rewriting: 0 }
     // 参数记忆：写回 volumePlans，下次重生成预填
-    await rememberVolumePlan(projectId, volume, { idea, startNo, count })
+    await rememberVolumePlan(projectId, volume, {
+      idea,
+      startNo,
+      count,
+      rules: opts.rules?.trim() || undefined
+    })
     let rewriting = 0
     if (hasWritten) {
       const old = await oldVolPromise

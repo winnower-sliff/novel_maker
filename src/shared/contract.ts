@@ -66,6 +66,7 @@ export type Purpose = (typeof PURPOSES)[number]
 export const PIPELINE_ACTIONS = [
   'outline',
   'volumeIdea',
+  'rulesRefine',
   'outlineAlign',
   'chapter',
   'summary',
@@ -207,7 +208,9 @@ export const OutlineGenParamsSchema = z.object({
   volume: z.number(),
   startNo: z.number(),
   count: z.number(),
-  allowUpdate: z.boolean().optional()
+  allowUpdate: z.boolean().optional(),
+  // 节奏与硬性要求（每行一条，原样透传给 prompt，逐章严格执行）
+  rules: z.string().optional()
 })
 
 export const SaveChapterInputSchema = z.object({
@@ -260,7 +263,13 @@ export const PIPELINE_PARAM_SCHEMAS = {
   volumeIdea: z.object({
     projectId: z.string(),
     volume: z.number(),
-    idea: z.string()
+    idea: z.string(),
+    rules: z.string().optional()
+  }),
+  rulesRefine: z.object({
+    projectId: z.string(),
+    volume: z.number(),
+    rules: z.string()
   }),
   outlineAlign: z.object({ projectId: z.string() }),
   chapter: z.object({

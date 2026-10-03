@@ -16,6 +16,7 @@ import {
   buildPolishRequest,
   buildPremiseDraftRequest,
   buildReviewRequest,
+  buildRulesRefineRequest,
   buildStateSyncRequest,
   buildSummaryRequest,
   buildVolumeIdeaRequest,
@@ -105,11 +106,23 @@ export const pipelineHandlers = {
         const params = PIPELINE_PARAM_SCHEMAS.volumeIdea.parse(rawParams)
         return startStream(
           ctx.sink,
-          buildVolumeIdeaRequest(params.projectId, params.volume, params.idea),
+          buildVolumeIdeaRequest(params.projectId, params.volume, params.idea, params.rules),
           {
             action,
             meta: { projectId: params.projectId },
             afterDone: (r) => ({ idea: r.text.trim() })
+          }
+        )
+      }
+      case 'rulesRefine': {
+        const params = PIPELINE_PARAM_SCHEMAS.rulesRefine.parse(rawParams)
+        return startStream(
+          ctx.sink,
+          buildRulesRefineRequest(params.projectId, params.volume, params.rules),
+          {
+            action,
+            meta: { projectId: params.projectId },
+            afterDone: (r) => ({ rules: r.text.trim() })
           }
         )
       }

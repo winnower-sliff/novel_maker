@@ -2,7 +2,12 @@ import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type AlignRevision, applyAlignRevisions } from '../../../wizard/outlineAlign'
-import { generateVolume, generateVolumeIdea, rememberVolumePlan } from '../../../wizard/volumeGen'
+import {
+  generateRulesRefine,
+  generateVolume,
+  generateVolumeIdea,
+  rememberVolumePlan
+} from '../../../wizard/volumeGen'
 import { NumberField } from '../../../wizard/widgets'
 import { loadProjectPlan, type WizardPlanFull } from '../../../wizard/wizardPlan'
 import { EmptyGuide } from '../components/EmptyGuide'
@@ -73,6 +78,9 @@ export default function Outline({
   const [genOutput, setGenOutput] = useState('')
   const [ideaBusy, setIdeaBusy] = useState(false)
   const ideaAbortRef = useRef<(() => void) | null>(null)
+  const [rules, setRules] = useState('')
+  const [rulesBusy, setRulesBusy] = useState(false)
+  const rulesAbortRef = useRef<(() => void) | null>(null)
   const [genNotice, setGenNotice] = useState('')
   const genAbortRef = useRef<(() => void) | null>(null)
   const [volNotice, setVolNotice] = useState('')
@@ -149,12 +157,14 @@ export default function Outline({
       setIdea(memo.idea)
       setStartNo(memo.startNo)
       setCount(memo.count)
+      setRules(memo.rules ?? '')
       return
     }
     const volNos = items.filter((o) => o.volume === volume).map((o) => o.chapterNo)
     const nextStart =
       volNos.length > 0 ? Math.min(...volNos) : Math.max(0, ...items.map((o) => o.chapterNo)) + 1
     setIdea('')
+    setRules('')
     setStartNo(nextStart)
   }, [volume, plan])
 
@@ -391,6 +401,7 @@ export default function Outline({
                     projectId,
                     volume,
                     idea: idea.trim(),
+                    rules: rules.trim() || undefined,
                     onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
                   })
                   ideaAbortRef.current = abort
@@ -400,7 +411,8 @@ export default function Outline({
                       void rememberVolumePlan(projectId, volume, {
                         idea: text,
                         startNo,
-                        count: Math.max(1, Math.floor(count) || 30)
+                        count: Math.max(1, Math.floor(count) || 30),
+                        rules: rules.trim() || undefined
                       })
                     })
                     .catch((err: unknown) => {
@@ -420,6 +432,57 @@ export default function Outline({
               value={idea}
               onChange={(e) => setIdea(e.target.value)}
               placeholder="例：末法时代最后一位炼丹师重生都市，靠一手丹术搅动风云…（也可写简短要求，点「AI 扩写成创意」补全）"
+              disabled={generating}
+            />
+          </div>
+          <div>
+            <div className="flex items-center justify-between gap-2">
+              <Label>
+                节奏与硬性要求（每行一条，原样透传给大纲生成、逐章严格执行，不经 AI 改写）
+              </Label>
+              <Button
+                variant="ghost"
+                className="shrink-0 px-2 py-1 text-xs"
+                disabled={rulesBusy || generating || !rules.trim()}
+                onClick={() => {
+                  setRulesBusy(true)
+                  setGenNotice('')
+                  const { done, abort } = generateRulesRefine({
+                    projectId,
+                    volume,
+                    rules: rules.trim(),
+                    onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
+                  })
+                  rulesAbortRef.current = abort
+                  done
+                    .then((text) => {
+                      setRules(text)
+                      void rememberVolumePlan(projectId, volume, {
+                        idea,
+                        startNo,
+                        count: Math.max(1, Math.floor(count) || 30),
+                        rules: text
+                      })
+                    })
+                    .catch((err: unknown) => {
+                      setGenNotice(`出错：${(err as Error).message}`)
+                    })
+                    .finally(() => {
+                      rulesAbortRef.current = null
+                      setRulesBusy(false)
+                    })
+                }}
+              >
+                {rulesBusy ? '优化中…' : 'AI 优化规则'}
+              </Button>
+            </div>
+            <Textarea
+              rows={2}
+              value={rules}
+              onChange={(e) => setRules(e.target.value)}
+              placeholder={
+                '例：\n每 3~6 章插入一段独立的色情小故事\n每 10 章安排一个单元小故事收尾'
+              }
               disabled={generating}
             />
           </div>
@@ -464,7 +527,7 @@ export default function Outline({
           <div className="flex items-center gap-3">
             <Button
               variant={targetWritten ? 'danger' : 'primary'}
-              disabled={generating || ideaBusy || !idea.trim()}
+              disabled={generating || ideaBusy || rulesBusy || !idea.trim()}
               onClick={() => {
                 if (
                   targetWritten &&
@@ -480,6 +543,7 @@ export default function Outline({
                   projectId,
                   volume,
                   idea: idea.trim(),
+                  rules: rules.trim() || undefined,
                   startNo,
                   count: Math.max(1, Math.floor(count) || 30),
                   hasWritten: targetWritten,
@@ -517,12 +581,13 @@ export default function Outline({
                   ? `重写第 ${volume} 卷（大纲+正文）`
                   : '生成并导入'}
             </Button>
-            {(generating || ideaBusy) && (
+            {(generating || ideaBusy || rulesBusy) && (
               <Button
                 variant="danger"
                 onClick={() => {
                   genAbortRef.current?.()
                   ideaAbortRef.current?.()
+                  rulesAbortRef.current?.()
                 }}
               >
                 中断
