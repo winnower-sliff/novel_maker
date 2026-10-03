@@ -2,7 +2,6 @@ import { providerPreset } from '@shared/providers'
 import { useQuery } from '@tanstack/react-query'
 import { lazy, type ReactElement, Suspense, useCallback, useEffect, useState } from 'react'
 import { ensureRuntimeSync } from '../../wizard/runtimeSync'
-import { CreationWizard } from './components/CreationWizard'
 import { Toaster } from './components/Toaster'
 import { markAgentSeen, useAgentNavBadge } from './lib/agentUiStore'
 import { fmtTokens } from './lib/format'
@@ -15,6 +14,7 @@ import Characters from './pages/Characters'
 import Foreshadows from './pages/Foreshadows'
 import Outline from './pages/Outline'
 import Playground from './pages/Playground'
+import PremisePage from './pages/Premise'
 import Projects from './pages/Projects'
 import Settings from './pages/Settings'
 import Skills from './pages/Skills'
@@ -38,10 +38,31 @@ const CREATIVE_PAGES: ReadonlySet<Page> = new Set([
   'outline',
   'characters',
   'worldbuild',
-  'foreshadows'
+  'foreshadows',
+  'premise'
 ])
 
 const GROUP_CREATIVE: NavItem[] = [
+  {
+    id: 'premise',
+    label: '基本设定',
+    icon: (
+      <svg
+        aria-hidden="true"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        className="h-4 w-4"
+      >
+        <path
+          d="M5 4.5h9.5a2 2 0 0 1 2 2V20H7a2 2 0 0 1-2-2V4.5ZM16.5 8H19a1 1 0 0 1 1 1v9a2 2 0 0 1-2 2h-1.5"
+          strokeLinecap="round"
+        />
+        <path d="M8 9h5M8 12.5h5" strokeLinecap="round" />
+      </svg>
+    )
+  },
   {
     id: 'agent',
     label: '智能体',
@@ -257,6 +278,8 @@ export default function App() {
   const [page, setPage] = useState<Page>('projects')
   const [writingFocus, setWritingFocus] = useState<string | null>(null)
   const [graphFocus, setGraphFocus] = useState<string | null>(null)
+  // 基本设定页新建模式（Projects「新建项目」进入；离开页面或创建完成后复位）
+  const [premiseCreate, setPremiseCreate] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [sseDown, setSseDown] = useState(false)
@@ -324,7 +347,9 @@ export default function App() {
   const navigate = useCallback<Navigate>(
     (target, focusOutlineId, graphNodeId) => {
       setNavOpen(false)
-      const blocked = cfg !== null && !cfg.currentProjectId && CREATIVE_PAGES.has(target)
+      // premise（基本设定）不放行闸：projectId=null 时它本身就是新建流程
+      const blocked =
+        cfg !== null && !cfg.currentProjectId && CREATIVE_PAGES.has(target) && target !== 'premise'
       const finalTarget = blocked ? 'projects' : target
       setPage(finalTarget)
       setWritingFocus(finalTarget === 'writing' ? (focusOutlineId ?? null) : null)
@@ -335,6 +360,11 @@ export default function App() {
 
   const clearGraphFocus = useCallback((): void => setGraphFocus(null), [])
   const clearWritingFocus = useCallback((): void => setWritingFocus(null), [])
+
+  // 离开基本设定页时退出新建模式
+  useEffect(() => {
+    if (page !== 'premise') setPremiseCreate(false)
+  }, [page])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
@@ -351,7 +381,10 @@ export default function App() {
       <button
         type="button"
         key={item.id}
-        onClick={() => navigate(item.id)}
+        onClick={() => {
+          if (item.id === 'premise') setPremiseCreate(false)
+          navigate(item.id)
+        }}
         className={`flex w-full cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
           page === item.id
             ? 'bg-zinc-800 font-medium text-zinc-100'
@@ -374,13 +407,6 @@ export default function App() {
   return (
     <div className="flex h-full flex-col">
       <Toaster />
-      <CreationWizard
-        onNavigate={navigate}
-        onChanged={(id, kind) => {
-          if (kind === 'created') switchProject(id)
-          else void queryClient.invalidateQueries({ queryKey: qk.projects })
-        }}
-      />
       {sseDown && (
         <div className="flex shrink-0 items-center justify-center gap-2 bg-amber-600/90 px-3 py-1.5 text-xs text-white">
           <span className="h-2 w-2 animate-pulse rounded-full bg-white" aria-hidden="true" />
@@ -573,6 +599,19 @@ export default function App() {
               currentProjectId={cfg?.currentProjectId ?? ''}
               onSwitch={switchProject}
               onNavigate={navigate}
+              onCreate={() => {
+                setPremiseCreate(true)
+                navigate('premise')
+              }}
+            />
+          )}
+          {page === 'premise' && (
+            <PremisePage
+              projectId={premiseCreate ? null : (currentProject?.id ?? null)}
+              onCreated={(id) => {
+                setPremiseCreate(false)
+                switchProject(id)
+              }}
             />
           )}
           <div className={page === 'agent' ? 'h-full' : 'hidden'}>

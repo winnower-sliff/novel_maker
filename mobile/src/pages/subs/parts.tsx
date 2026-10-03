@@ -3,7 +3,7 @@ import { Button, Spinner } from '@mobile/components/ui'
 import { useCallback } from 'react'
 import type { ReactNode } from 'react'
 
-/** 子页共用小件：列表行 / 保存条 / 全屏编辑壳（自 Codex 抽出，供各设定子页复用） */
+/** 子页共用小件：列表行 / 保存条 / 全屏编辑壳（设定类子页复用） */
 
 export function Row({
   title,

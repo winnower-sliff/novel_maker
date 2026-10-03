@@ -1,13 +1,16 @@
+import { joinChapterContent, splitChapterHeading } from '@shared/chapterContent'
+import { groupChapterSegments } from '@shared/chapterSegments'
 import type { ContextPart, ReviewResult } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from 'react'
+import { ChainBanner } from '../../../wizard/ChainBanner'
 import { DiffView } from '../components/DiffView'
 import { Badge, Button, Card, Label, Select, Textarea } from '../components/ui'
+import { desktopWizardUi } from '../lib/desktopWizardUi'
 import { fmtDuration, fmtTokens } from '../lib/format'
 import { type DonePayload, runPipeline } from '../lib/ipc'
 import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
-import { openWizard } from '../lib/wizardStore'
 import {
   beginChapterRun,
   type CheckIssue,
@@ -136,8 +139,10 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const queryClient = useQueryClient()
   const { data: briefs = [] } = useQuery(queries.chapterBriefs(projectId))
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [heading, setHeading] = useState('')
   const [content, setContent] = useState('')
   const [dirty, setDirty] = useState(false)
+  const [chainPrompt, setChainPrompt] = useState(false)
   // 运行态全部在 writeRunStore：切走页面/切章后生成照跑，回来进度可回看
   const busy = useWriteRunStore((s) => s.busy)
   const notice = useWriteRunStore((s) => s.notice)
@@ -172,6 +177,13 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
 
   const selected = briefs.find((b) => b.id === selectedId) ?? null
 
+  // 编辑器只持正文（body）；全量文本（含 `## 标题` 行）一律拆分后进入
+  const setFromFull = useCallback((full: string): void => {
+    const split = splitChapterHeading(full)
+    setHeading(split.heading)
+    setContent(split.body)
+  }, [])
+
   const loadBriefs = useCallback((): void => {
     void queryClient.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
   }, [projectId, queryClient])
@@ -200,18 +212,21 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
       setCandidate(null)
       setCandidateSet(null)
       polishedRef.current = false
+      setChainPrompt(false)
       void window.api.novel.chapter(outlineId).then((c) => {
-        setContent(c?.content ?? '')
+        setFromFull(c?.content ?? '')
         setDirty(false)
       })
     },
-    [clearFollowTimer]
+    [clearFollowTimer, setFromFull]
   )
 
   useEffect(() => {
     clearFollowTimer()
     setSelectedId(null)
+    setHeading('')
     setContent('')
+    setChainPrompt(false)
     useWriteRunStore.setState({ batch: null, resumeIds: null })
     polishedRef.current = false
     // 页面刷新后 store 清空：从主进程拉回在途/刚结束的批量进度
@@ -248,20 +263,29 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     clearFollowTimer()
     if (runKind === 'chapter') {
       if (runEditorText) {
-        setContent(runEditorText)
+        setFromFull(runEditorText)
         setDirty(false)
       } else {
         // 刷新恢复场景兜底：流式文本随旧页面丢失，但主进程完成时已落库，从 DB 重读
         void window.api.novel.chapter(runId).then((c) => {
           if (c?.content) {
-            setContent(c.content)
+            setFromFull(c.content)
             setDirty(false)
           }
         })
       }
     }
     markRunConsumed()
-  }, [runFinished, runConsumed, runId, runKind, runEditorText, selectedId, clearFollowTimer])
+  }, [
+    runFinished,
+    runConsumed,
+    runId,
+    runKind,
+    runEditorText,
+    selectedId,
+    clearFollowTimer,
+    setFromFull
+  ])
 
   useEffect(() => {
     if (runFinished || runKind !== 'chapter' || runId !== selectedId) return
@@ -269,9 +293,9 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     if (followTimerRef.current) return
     followTimerRef.current = setTimeout(() => {
       followTimerRef.current = null
-      setContent(followTextRef.current)
+      setFromFull(followTextRef.current)
     }, 300)
-  }, [runFinished, runKind, runId, runEditorText, selectedId])
+  }, [runFinished, runKind, runId, runEditorText, selectedId, setFromFull])
 
   if (!projectId) {
     return (
@@ -339,7 +363,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   }
 
   const applyCandidate = (text: string): void => {
-    setContent(text)
+    setFromFull(text)
     setDirty(true)
     if (candidate?.kind === 'polish') polishedRef.current = true
     setCandidate(null)
@@ -424,29 +448,36 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
 
   const saveDraft = (): void => {
     if (!selectedId) return
-    void window.api.novel.saveChapter({ outlineId: selectedId, projectId, content }).then(() => {
-      setDirty(false)
-      if (polishedRef.current && selected) {
-        polishedRef.current = false
-        void window.api.novel
-          .outlineSave({
-            id: selected.id,
-            projectId,
-            volume: selected.volume,
-            chapterNo: selected.chapterNo,
-            title: selected.title,
-            synopsis: selected.synopsis,
-            status: 'polished'
-          })
-          .then(() => {
-            setNotice('润色稿已保存（章节标记为已润色）')
-            loadBriefs()
-          })
-        return
-      }
-      setNotice('草稿已保存')
-      loadBriefs()
-    })
+    void window.api.novel
+      .saveChapter({
+        outlineId: selectedId,
+        projectId,
+        content: joinChapterContent(heading, content)
+      })
+      .then(() => {
+        setDirty(false)
+        setChainPrompt(true)
+        if (polishedRef.current && selected) {
+          polishedRef.current = false
+          void window.api.novel
+            .outlineSave({
+              id: selected.id,
+              projectId,
+              volume: selected.volume,
+              chapterNo: selected.chapterNo,
+              title: selected.title,
+              synopsis: selected.synopsis,
+              status: 'polished'
+            })
+            .then(() => {
+              setNotice('润色稿已保存（章节标记为已润色）')
+              loadBriefs()
+            })
+          return
+        }
+        setNotice('草稿已保存')
+        loadBriefs()
+      })
   }
 
   const finalize = (): void => {
@@ -475,7 +506,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         await window.api.novel.saveChapter({
           outlineId: selectedId,
           projectId,
-          content,
+          content: joinChapterContent(heading, content),
           status: 'written'
         })
         const payload = await runPipeline('summary', { outlineId: selectedId, finalize: true })
@@ -568,7 +599,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
 
   const wordCount = content.replace(/\s/g, '').length
   const status = selected ? STATUS_BADGE[selected.status] : null
-  const volumes = [...new Set(briefs.map((b) => b.volume))]
+  const volumeGroups = groupChapterSegments(briefs)
   const busyAny = busy !== null || (batch?.running ?? false)
 
   return (
@@ -578,17 +609,10 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
           章节（{briefs.length}）
         </div>
         <div className="flex-1 overflow-y-auto p-2">
-          {volumes.length === 0 && (
+          {volumeGroups.length === 0 && (
             <div className="space-y-1.5 p-4 text-center text-xs leading-5 text-zinc-600">
               <div>暂无大纲，先去生成章节列表</div>
               <div className="flex flex-col items-center gap-1.5">
-                <Button
-                  variant="ghost"
-                  className="px-2 py-1 text-xs"
-                  onClick={() => openWizard(projectId, 3)}
-                >
-                  用创作向导
-                </Button>
                 <Button
                   variant="ghost"
                   className="px-2 py-1 text-xs"
@@ -599,83 +623,71 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               </div>
             </div>
           )}
-          {volumes.map((vol) => {
-            const inVol = briefs.filter((b) => b.volume === vol)
-            // 每 20 章一段：段号 = floor((chapterNo-1)/20)
-            const segs = new Map<number, typeof inVol>()
-            for (const b of inVol) {
-              const seg = Math.floor((b.chapterNo - 1) / 20)
-              const list = segs.get(seg) ?? []
-              list.push(b)
-              segs.set(seg, list)
-            }
-            return (
-              <div key={vol} className="mb-2">
-                <div className="px-2 py-1 text-[10px] font-medium tracking-wider text-zinc-600">
-                  第 {vol} 卷
-                </div>
-                {[...segs.entries()]
-                  .sort((a, b) => a[0] - b[0])
-                  .map(([seg, list]) => {
-                    const key = `${vol}:${seg}`
-                    const from = list[0].chapterNo
-                    const to = list[list.length - 1].chapterNo
-                    const collapsed = collapsedSegs.has(key)
-                    const hasSelected = list.some((b) => b.id === selectedId)
-                    return (
-                      <div key={key}>
+          {volumeGroups.map(({ volume, segments }) => (
+            <div key={volume} className="mb-2">
+              <div className="px-2 py-1 text-[10px] font-medium tracking-wider text-zinc-600">
+                第 {volume} 卷
+              </div>
+              {segments.map((seg) => {
+                const key = `${volume}:${seg.segNo}`
+                const list = seg.chapters
+                const from = seg.from
+                const to = seg.to
+                const collapsed = collapsedSegs.has(key)
+                const hasSelected = list.some((b) => b.id === selectedId)
+                return (
+                  <div key={key}>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setCollapsedSegs((prev) => {
+                          const next = new Set(prev)
+                          if (next.has(key)) next.delete(key)
+                          else next.add(key)
+                          return next
+                        })
+                      }
+                      className="flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left text-[10px] text-zinc-500 hover:bg-zinc-800/50 hover:text-zinc-300"
+                    >
+                      <span className={`transition-transform ${collapsed ? '' : 'rotate-90'}`}>
+                        ▸
+                      </span>
+                      第 {from}-{to} 章
+                      <span className="ml-auto font-normal text-zinc-700">{list.length}</span>
+                    </button>
+                    {(!collapsed || hasSelected) &&
+                      list.map((b) => (
                         <button
                           type="button"
-                          onClick={() =>
-                            setCollapsedSegs((prev) => {
-                              const next = new Set(prev)
-                              if (next.has(key)) next.delete(key)
-                              else next.add(key)
-                              return next
-                            })
-                          }
-                          className="flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left text-[10px] text-zinc-500 hover:bg-zinc-800/50 hover:text-zinc-300"
+                          key={b.id}
+                          onClick={() => openChapter(b.id)}
+                          className={`mb-0.5 flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                            selectedId === b.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
+                          }`}
                         >
-                          <span className={`transition-transform ${collapsed ? '' : 'rotate-90'}`}>
-                            ▸
+                          <span className="w-7 shrink-0 text-right font-mono text-xs text-zinc-500">
+                            {b.chapterNo}
                           </span>
-                          第 {from}-{to} 章
-                          <span className="ml-auto font-normal text-zinc-700">{list.length}</span>
+                          <span
+                            className={`min-w-0 flex-1 truncate text-xs ${
+                              selectedId === b.id ? 'text-zinc-100' : 'text-zinc-300'
+                            }`}
+                          >
+                            {b.title || '未命名'}
+                          </span>
+                          <span
+                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                              b.hasDraft ? 'bg-emerald-500' : 'bg-zinc-700'
+                            }`}
+                            title={b.hasDraft ? `${b.wordCount} 字` : '未写'}
+                          />
                         </button>
-                        {(!collapsed || hasSelected) &&
-                          list.map((b) => (
-                            <button
-                              type="button"
-                              key={b.id}
-                              onClick={() => openChapter(b.id)}
-                              className={`mb-0.5 flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
-                                selectedId === b.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-                              }`}
-                            >
-                              <span className="w-7 shrink-0 text-right font-mono text-xs text-zinc-500">
-                                {b.chapterNo}
-                              </span>
-                              <span
-                                className={`min-w-0 flex-1 truncate text-xs ${
-                                  selectedId === b.id ? 'text-zinc-100' : 'text-zinc-300'
-                                }`}
-                              >
-                                {b.title || '未命名'}
-                              </span>
-                              <span
-                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                                  b.hasDraft ? 'bg-emerald-500' : 'bg-zinc-700'
-                                }`}
-                                title={b.hasDraft ? `${b.wordCount} 字` : '未写'}
-                              />
-                            </button>
-                          ))}
-                      </div>
-                    )
-                  })}
-              </div>
-            )
-          })}
+                      ))}
+                  </div>
+                )
+              })}
+            </div>
+          ))}
         </div>
       </Card>
 
@@ -806,6 +818,16 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               </div>
             </div>
 
+            {chainPrompt && selected && (
+              <ChainBanner
+                ui={desktopWizardUi}
+                projectId={projectId}
+                brief={selected}
+                briefs={briefs}
+                onDone={() => setChainPrompt(false)}
+              />
+            )}
+
             {batchOpen && (
               <div className="mb-3 rounded-md border border-zinc-800 bg-zinc-900 p-3">
                 <div className="grid grid-cols-2 items-end gap-3 md:grid-cols-12">
@@ -914,7 +936,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                     key={i}
                     onClick={() => {
                       setCandidateSet({ ...candidateSet, selectedIndex: i })
-                      setContent(c.text)
+                      setFromFull(c.text)
                       setDirty(true)
                     }}
                     className={`cursor-pointer rounded border px-2 py-0.5 ${

@@ -2,6 +2,9 @@ import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type AlignRevision, applyAlignRevisions } from '../../../wizard/outlineAlign'
+import { generateVolume } from '../../../wizard/volumeGen'
+import { NumberField } from '../../../wizard/widgets'
+import { loadProjectPlan, type WizardPlanFull } from '../../../wizard/wizardPlan'
 import { EmptyGuide } from '../components/EmptyGuide'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
@@ -58,17 +61,18 @@ export default function Outline({
   const queryClient = useQueryClient()
   const { data: items = [] } = useQuery(queries.outlines(projectId))
   const { data: volSummaryList = [] } = useQuery(queries.volumeSummaries(projectId))
+  const { data: briefs = [] } = useQuery(queries.chapterBriefs(projectId))
   const [edit, setEdit] = useState<EditState | null>(null)
   const [genOpen, setGenOpen] = useState(false)
+  const [plan, setPlan] = useState<WizardPlanFull | null>(null)
   const [idea, setIdea] = useState('')
-  const [volume, setVolume] = useState('1')
-  const [startNo, setStartNo] = useState('1')
-  const [count, setCount] = useState('30')
-  const [allowUpdate, setAllowUpdate] = useState(false)
+  const [volume, setVolume] = useState(1)
+  const [startNo, setStartNo] = useState(1)
+  const [count, setCount] = useState(30)
   const [generating, setGenerating] = useState(false)
   const [genOutput, setGenOutput] = useState('')
   const [genNotice, setGenNotice] = useState('')
-  const genRequestId = useRef<string | null>(null)
+  const genAbortRef = useRef<(() => void) | null>(null)
   const [volNotice, setVolNotice] = useState('')
   const volSummaries = useMemo(() => {
     const map: Record<number, string> = {}
@@ -120,30 +124,44 @@ export default function Outline({
   }, [projectId])
 
   useEffect(() => {
-    const offDelta = window.api.llm.onDelta((id, text) => {
-      if (id === genRequestId.current) setGenOutput((prev) => (prev + text).slice(-2000))
-    })
+    let alive = true
+    void loadProjectPlan(projectId)
+      .then((p) => {
+        if (!alive) return
+        setPlan(p)
+        setCount(p?.outlineCount ?? 30)
+        setIdea(p?.outlineIdea ?? '')
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [projectId])
+
+  // 换卷时按 volumePlans 预填该卷上次生成参数；无记忆则按库推默认值
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 预填只在卷号或存档变化时执行，items 仅为推导默认值
+  useEffect(() => {
+    if (generating) return
+    const memo = plan?.volumePlans?.[String(volume)]
+    if (memo) {
+      setIdea(memo.idea)
+      setStartNo(memo.startNo)
+      setCount(memo.count)
+      return
+    }
+    const volNos = items.filter((o) => o.volume === volume).map((o) => o.chapterNo)
+    const nextStart =
+      volNos.length > 0 ? Math.min(...volNos) : Math.max(0, ...items.map((o) => o.chapterNo)) + 1
+    setIdea('')
+    setStartNo(nextStart)
+  }, [volume, plan])
+
+  const volWritten = (vol: number): number =>
+    briefs.filter((b) => b.volume === vol && b.hasDraft).length
+  const targetWritten = briefs.some((b) => b.volume === volume && b.hasDraft)
+
+  useEffect(() => {
     const offDone = window.api.llm.onDone((id, payload) => {
-      if (id === genRequestId.current) {
-        setGenerating(false)
-        const d = payload.data as {
-          created?: number
-          updated?: number
-          skipped?: number
-          parsed?: boolean
-          error?: string
-        }
-        if (d?.error) setGenNotice(`解析失败：${d.error}`)
-        else if (!d?.parsed) setGenNotice('输出未解析出有效 JSON，请调整创意后重试')
-        else {
-          const parts = [`已导入 ${d.created} 章`]
-          if (d.updated) parts.push(`更新 ${d.updated} 章`)
-          if (d.skipped) parts.push(`跳过已存在 ${d.skipped} 章`)
-          setGenNotice(parts.join('，'))
-        }
-        load()
-        return
-      }
       if (id === volSummaryRequestId.current) {
         const d = payload.data as {
           volume?: number
@@ -181,10 +199,6 @@ export default function Outline({
       }
     })
     const offError = window.api.llm.onError((id, message) => {
-      if (id === genRequestId.current) {
-        setGenerating(false)
-        setGenNotice(`出错：${message}`)
-      }
       if (id === volSummaryRequestId.current) setVolNotice(`出错：${message}`)
       if (id === alignRequestId.current) {
         alignRequestId.current = null
@@ -193,7 +207,6 @@ export default function Outline({
       }
     })
     return () => {
-      offDelta()
       offDone()
       offError()
     }
@@ -373,74 +386,102 @@ export default function Outline({
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div>
               <Label>卷号</Label>
-              <Input
-                type="number"
+              <NumberField
+                input={Input}
                 value={volume}
-                onChange={(e) => setVolume(e.target.value)}
+                min={1}
+                onChange={setVolume}
                 disabled={generating}
               />
             </div>
             <div>
               <Label>起始章号</Label>
-              <Input
-                type="number"
+              <NumberField
+                input={Input}
                 value={startNo}
-                onChange={(e) => setStartNo(e.target.value)}
+                min={1}
+                onChange={setStartNo}
                 disabled={generating}
               />
             </div>
             <div>
               <Label>生成章数</Label>
-              <Input
-                type="number"
+              <NumberField
+                input={Input}
                 value={count}
-                onChange={(e) => setCount(e.target.value)}
+                min={1}
+                onChange={setCount}
                 disabled={generating}
               />
             </div>
           </div>
-          <label className="flex cursor-pointer items-center gap-1.5 text-xs text-zinc-400">
-            <input
-              type="checkbox"
-              checked={allowUpdate}
-              onChange={(e) => setAllowUpdate(e.target.checked)}
-              disabled={generating}
-              className="h-3.5 w-3.5 cursor-pointer accent-amber-600"
-            />
-            更新已存在章节（当前卷已有大纲会作为上下文；结果中同卷同章号的章节将覆盖更新其梗概，状态保留）
-          </label>
+          {targetWritten && (
+            <p className="text-xs text-amber-400/90">
+              第 {volume} 卷已有 {volWritten(volume)} 章正文——生成将按「全卷重写」执行：重生成大纲后
+              自动覆盖重写该卷全部章节正文（原稿不保留）。
+            </p>
+          )}
           <div className="flex items-center gap-3">
             <Button
+              variant={targetWritten ? 'danger' : 'primary'}
               disabled={generating || !idea.trim()}
               onClick={() => {
+                if (
+                  targetWritten &&
+                  !window.confirm(
+                    `第 ${volume} 卷已有 ${volWritten(volume)} 章正文。\n重写 = 重新生成该卷大纲 + 自动覆盖重写该卷全部章节正文，原稿不会保留。\n确定继续？`
+                  )
+                )
+                  return
                 setGenerating(true)
                 setGenOutput('')
                 setGenNotice('')
-                void window.api.pipeline
-                  .run('outline', {
-                    projectId,
-                    idea: idea.trim(),
-                    volume: parseInt(volume, 10) || 1,
-                    startNo: parseInt(startNo, 10) || 1,
-                    count: Math.min(60, Math.max(1, parseInt(count, 10) || 30)),
-                    allowUpdate: allowUpdate || undefined
-                  })
-                  .then((id) => {
-                    genRequestId.current = id
+                const { done, abort } = generateVolume({
+                  projectId,
+                  volume,
+                  idea: idea.trim(),
+                  startNo,
+                  count: Math.max(1, Math.floor(count) || 30),
+                  hasWritten: targetWritten,
+                  onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-2000))
+                })
+                genAbortRef.current = abort
+                done
+                  .then((r) => {
+                    if (!r.parsed || r.created + r.updated === 0)
+                      setGenNotice('AI 输出无法解析为章节列表，请调整创意后重试')
+                    else if (r.rewriting > 0)
+                      setGenNotice(
+                        `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已开始自动重写该卷 ${r.rewriting} 章正文，进度见写作页`
+                      )
+                    else {
+                      const parts = [`已导入 ${r.created} 章`]
+                      if (r.updated) parts.push(`更新 ${r.updated} 章`)
+                      if (r.skipped) parts.push(`跳过已存在 ${r.skipped} 章`)
+                      setGenNotice(parts.join('，'))
+                    }
+                    load()
                   })
                   .catch((err: unknown) => {
+                    setGenNotice(`出错：${(err as Error).message}`)
+                  })
+                  .finally(() => {
+                    genAbortRef.current = null
                     setGenerating(false)
-                    setGenNotice((err as Error).message)
                   })
               }}
             >
-              {generating ? '生成中…' : '生成并导入'}
+              {generating
+                ? '生成中…'
+                : targetWritten
+                  ? `重写第 ${volume} 卷（大纲+正文）`
+                  : '生成并导入'}
             </Button>
             {generating && (
               <Button
                 variant="danger"
                 onClick={() => {
-                  if (genRequestId.current) void window.api.llm.abort(genRequestId.current)
+                  genAbortRef.current?.()
                 }}
               >
                 中断
@@ -575,8 +616,7 @@ export default function Outline({
 
       {volumes.length === 0 && (
         <EmptyGuide
-          projectId={projectId}
-          wizardStep={3}
+          onNavigate={onNavigate}
           title="还没有大纲"
           desc="AI 依据核心创意一次性生成整卷章节大纲（含定位/悬念/反转/钩子/伏笔操作元数据），也可手动录入。"
         >

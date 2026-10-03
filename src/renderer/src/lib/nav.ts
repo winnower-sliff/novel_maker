@@ -1,5 +1,6 @@
 export type Page =
   | 'projects'
+  | 'premise'
   | 'agent'
   | 'graph'
   | 'writing'

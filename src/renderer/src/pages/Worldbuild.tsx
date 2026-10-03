@@ -598,10 +598,9 @@ export default function Worldbuild({
         (filter === '全部' && tagFilter === null && entries.length === 0 ? (
           <div className="col-span-full">
             <EmptyGuide
-              projectId={projectId}
-              wizardStep={1}
+              onNavigate={onNavigate}
               title="还没有世界观条目"
-              desc="力量体系、势力、地理等基础设定是大纲与写作的上文依据，建议最先建设。向导会按题材起草方向并批量生成条目。"
+              desc="力量体系、势力、地理等基础设定是大纲与写作的上文依据，建议最先建设。可先在基本设定起草方向，再回来批量生成条目。"
             >
               <Button variant="ghost" onClick={() => setGenOpen(true)}>
                 AI 生成…

@@ -4,7 +4,7 @@ import remarkGfm from 'remark-gfm'
 
 /**
  * 移动端精简 Markdown：wikilink 用预处理降级为加粗文本，
- * 不做 AST 插件与 hover 预览（触屏无 hover，编辑查看在 Codex 页完成）。
+ * 不做 AST 插件与 hover 预览（触屏无 hover，编辑查看在设定子页完成）。
  */
 
 const WIKI_LINK_RE = /\[\[([^[\]]+?)\]\]/g

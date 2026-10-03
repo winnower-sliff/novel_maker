@@ -2,9 +2,9 @@ import { Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { startPipeline } from '@wizard/pipeline'
+import { generateVolume } from '@wizard/volumeGen'
 import { NumberField, OutlineProgress } from '@wizard/widgets'
-import { loadProjectPlan, saveProjectPlan, type WizardPlanFull } from '@wizard/wizardPlan'
+import { loadProjectPlan, type WizardPlanFull } from '@wizard/wizardPlan'
 import type { Foreshadow, OutlineItem } from '@shared/types'
 
 const FORESHADOW_STATUS = ['planted', 'resolved', 'abandoned']
@@ -96,58 +96,26 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
     setError(null)
     setResult(null)
     setDelta('')
-    const oldVol = outlines.filter((o) => o.volume === volume)
-    const { done, abort } = startPipeline(
-      'outline',
-      {
-        projectId,
-        idea: idea.trim(),
-        volume,
-        startNo,
-        count: count >= 1 ? Math.floor(count) : 20,
-        allowUpdate: true
-      },
-      (t) => setDelta((v) => v + t)
-    )
+    const { done, abort } = generateVolume({
+      projectId,
+      volume,
+      idea: idea.trim(),
+      startNo,
+      count: count >= 1 ? Math.floor(count) : 20,
+      hasWritten: targetWritten,
+      onDelta: (t) => setDelta((v) => v + t)
+    })
     abortRef.current = abort
     try {
-      const r = (await done).data as {
-        created: number
-        updated: number
-        skipped: number
-        parsed: boolean
-      }
+      const r = await done
       if (!r.parsed || r.created + r.updated === 0) {
         setError('AI 输出无法解析为章节列表，请重试或调整创意描述')
         return
       }
-      // 参数记忆：写回 volumePlans（读-合并-写），下次重生成预填
-      const cur = await loadProjectPlan(projectId)
-      void saveProjectPlan(projectId, {
-        volumePlans: {
-          ...(cur?.volumePlans ?? {}),
-          [String(volume)]: { idea: idea.trim(), startNo, count }
-        }
-      })
-      if (targetWritten) {
-        // 全卷重写：清掉新范围外的孤儿章，再批量重写该卷正文（主进程管线）
-        const fresh = await window.api.novel.outlines(projectId)
-        const newNos = new Set(fresh.filter((o) => o.volume === volume).map((o) => o.chapterNo))
-        for (const o of oldVol.filter((x) => !newNos.has(x.chapterNo))) {
-          await window.api.novel.outlineDelete(o.id)
-        }
-        const volIds = (await window.api.novel.outlines(projectId))
-          .filter((o) => o.volume === volume)
-          .sort((a, b) => a.chapterNo - b.chapterNo)
-          .map((o) => o.id)
-        if (volIds.length > 0) {
-          await window.api.write.batchStart({ projectId, ids: volIds })
-          setResult(
-            `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已开始自动重写该卷 ${volIds.length} 章正文，进度见「写作」子页`
-          )
-        } else {
-          setResult(`大纲已重生成（新建 ${r.created} · 更新 ${r.updated}）`)
-        }
+      if (r.rewriting > 0) {
+        setResult(
+          `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已开始自动重写该卷 ${r.rewriting} 章正文，进度见「写作」子页`
+        )
       } else {
         setResult(
           `已导入：新建 ${r.created} 章${r.updated ? ` · 更新 ${r.updated} 章` : ''}${

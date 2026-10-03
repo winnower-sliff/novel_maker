@@ -4,12 +4,12 @@ import { useState } from 'react'
 import { Badge, Button, Card, Input, Label, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
-import { openWizard } from '../lib/wizardStore'
 
 interface Props {
   currentProjectId: string
   onSwitch: (id: string) => void
   onNavigate: Navigate
+  onCreate: () => void
 }
 
 interface EditForm {
@@ -27,7 +27,7 @@ interface Guide {
   written: number
 }
 
-export default function Projects({ currentProjectId, onSwitch, onNavigate }: Props) {
+export default function Projects({ currentProjectId, onSwitch, onNavigate, onCreate }: Props) {
   const queryClient = useQueryClient()
   const { data: projects = [] } = useQuery(queries.projects())
   const { data: wb = [] } = useQuery(queries.worldbuild(currentProjectId))
@@ -86,9 +86,9 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
   const newProjectCard = (
     <Card className="space-y-3 p-5 text-center">
       <p className="text-xs text-zinc-500">
-        通过创作向导新建：填写基本信息 → AI 起草方案 → 世界观 / 人物 / 大纲
+        新建：填写基本信息 → AI 起草方案 → 世界观 / 人物 / 大纲
       </p>
-      <Button onClick={() => openWizard(null)}>＋ 新建项目</Button>
+      <Button onClick={onCreate}>＋ 新建项目</Button>
     </Card>
   )
 
@@ -179,7 +179,7 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
         <h1 className="text-lg font-semibold text-zinc-100">
           项目 · {projects.find((p) => p.id === currentProjectId)?.title ?? ''}
         </h1>
-        <Button onClick={() => openWizard(null)}>新建项目</Button>
+        <Button onClick={onCreate}>新建项目</Button>
       </div>
 
       {editForm && (
@@ -235,8 +235,8 @@ export default function Projects({ currentProjectId, onSwitch, onNavigate }: Pro
             <span className="text-sm font-medium text-zinc-200">创作路线</span>
             <span className="text-xs text-zinc-600">建议按 1→4 顺序推进</span>
             <div className="ml-auto">
-              <Button variant="ghost" onClick={() => openWizard(currentProjectId)}>
-                创作向导
+              <Button variant="ghost" onClick={() => onNavigate('premise')}>
+                基本设定
               </Button>
             </div>
           </div>
