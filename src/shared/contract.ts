@@ -5,6 +5,7 @@ import type {
   AgentSession,
   AgentSessionBrief,
   AgentToolCall,
+  BatchSnapshot,
   BuiltContext,
   Chapter,
   ChapterBrief,
@@ -20,6 +21,7 @@ import type {
   OutlineItem,
   Project,
   ProjectGraph,
+  RunRecordPayload,
   SearchHit,
   ServerStatus,
   SettingsView,
@@ -340,6 +342,32 @@ export const invokeContract = {
 
   'llm:chat': { args: z.tuple([ChatParamsSchema]), ret: ret<string>() },
   'llm:abort': { args: z.tuple([z.string()]), ret: ret<void>() },
+  'llm:poll': {
+    args: z.tuple([z.object({ requestIds: z.array(z.string()) })]),
+    ret: ret<Record<string, RunRecordPayload>>()
+  },
+
+  'write:batchStart': {
+    args: z.tuple([
+      z.object({
+        projectId: z.string(),
+        ids: z.array(z.string()).optional(),
+        resume: z.boolean().optional(),
+        wordTarget: z.number().optional(),
+        candidates: z.number().optional(),
+        pauseEach: z.boolean().optional()
+      })
+    ]),
+    ret: ret<BatchSnapshot>()
+  },
+  'write:batchStop': {
+    args: z.tuple([z.object({ projectId: z.string() })]),
+    ret: ret<BatchSnapshot | null>()
+  },
+  'write:batchStatus': {
+    args: z.tuple([z.object({ projectId: z.string() })]),
+    ret: ret<BatchSnapshot | null>()
+  },
 
   'agent:run': { args: z.tuple([AgentRunParamsSchema]), ret: ret<string>() },
   'agent:abort': { args: z.tuple([z.string()]), ret: ret<void>() },
@@ -497,6 +525,7 @@ export interface EventContract {
   'agent:done': [requestId: string, payload: AgentDonePayload]
   'agent:error': [requestId: string, message: string]
   'agent:subEvent': [requestId: string, event: SubagentEvent]
+  'write:batch': [projectId: string, snapshot: BatchSnapshot]
 }
 
 export const EVENT_CHANNELS = [
@@ -509,7 +538,8 @@ export const EVENT_CHANNELS = [
   'agent:toolResult',
   'agent:done',
   'agent:error',
-  'agent:subEvent'
+  'agent:subEvent',
+  'write:batch'
 ] as const satisfies readonly (keyof EventContract)[]
 
 export type EventChannels = keyof EventContract & string
@@ -537,6 +567,7 @@ export interface Api {
   llm: {
     chat: InvokeFn<'llm:chat'>
     abort: InvokeFn<'llm:abort'>
+    poll: InvokeFn<'llm:poll'>
     onDelta: SubscribeFn<'llm:delta'>
     onDone: SubscribeFn<'llm:done'>
     onError: SubscribeFn<'llm:error'>
@@ -545,6 +576,12 @@ export interface Api {
   usage: {
     list: InvokeFn<'usage:list'>
     stats: InvokeFn<'usage:stats'>
+  }
+  write: {
+    batchStart: InvokeFn<'write:batchStart'>
+    batchStop: InvokeFn<'write:batchStop'>
+    batchStatus: InvokeFn<'write:batchStatus'>
+    onBatch: SubscribeFn<'write:batch'>
   }
   novel: {
     projects: InvokeFn<'novel:projects'>

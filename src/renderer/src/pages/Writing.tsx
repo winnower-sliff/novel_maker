@@ -9,28 +9,15 @@ import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
 import { openWizard } from '../lib/wizardStore'
 import {
-  appendBatchLog,
   beginChapterRun,
   type CheckIssue,
   ensureWriteRunBridge,
   type LintReport,
   markRunConsumed,
-  patchBatch,
   suggestBatchRange,
   useWriteRunStore,
   type WriteBusy
 } from '../lib/writeRunStore'
-
-interface ChapterDoneData {
-  chapterId?: string
-  wordCount?: number
-  contextParts?: ContextPart[]
-  contextTokens?: number
-  longMode?: boolean
-  segments?: number
-  lint?: LintReport
-  error?: string
-}
 
 interface SummaryDoneData {
   planted?: number
@@ -43,16 +30,6 @@ interface StateSyncDoneData {
   updated?: Array<{ id: string; name: string }>
   parsed?: boolean
   error?: string
-}
-
-interface AlignRevision {
-  outlineId: string
-  volume: number
-  chapterNo: number
-  title: string
-  synopsis: string
-  hook?: string
-  reason?: string
 }
 
 const STATUS_BADGE: Record<string, { label: string; tone: 'default' | 'amber' | 'green' }> = {
@@ -105,6 +82,54 @@ const setCandidateSet = (
 }
 const setBatchOpen = (v: boolean | ((prev: boolean) => boolean)): void => {
   useWriteRunStore.setState((s) => ({ batchOpen: typeof v === 'function' ? v(s.batchOpen) : v }))
+}
+
+function BatchProgressCard({
+  batch,
+  onStop,
+  onResume
+}: {
+  batch: NonNullable<ReturnType<typeof useWriteRunStore.getState>['batch']>
+  onStop: () => void
+  onResume: () => void
+}) {
+  return (
+    <div className="mb-3 rounded-md border border-zinc-800 bg-zinc-900 p-3">
+      <div className="flex items-center gap-3">
+        <span className="text-xs text-zinc-400">
+          自动写作进度：{batch.done}/{batch.total}
+          {batch.running && batch.currentNo > 0 ? ` · 第${batch.currentNo}章进行中` : ''}
+          {batch.paused ? ' · 已暂停待审' : ''}
+        </span>
+        <div className="ml-auto flex gap-2">
+          {batch.paused && (
+            <Button className="px-2 py-1 text-xs" onClick={onResume}>
+              继续剩余章节
+            </Button>
+          )}
+          {batch.running && (
+            <Button variant="danger" className="px-2 py-1 text-xs" onClick={onStop}>
+              停止
+            </Button>
+          )}
+        </div>
+      </div>
+      <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+        <div
+          className="h-full rounded-full bg-amber-600 transition-all"
+          style={{ width: `${batch.total > 0 ? (batch.done / batch.total) * 100 : 0}%` }}
+        />
+      </div>
+      {batch.log.length > 0 && (
+        <div className="mt-2 max-h-24 overflow-y-auto font-mono text-[10px] leading-4 text-zinc-500">
+          {batch.log.map((l, i) => (
+            // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
+            <div key={i}>{l}</div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
 export default function Writing({ projectId, onNavigate, focusOutlineId, onFocusConsumed }: Props) {
@@ -167,12 +192,21 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     })
   }, [])
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
     setSelectedId(null)
     setContent('')
-    useWriteRunStore.setState({ batch: null, resumeIds: null, batchStop: false })
+    useWriteRunStore.setState({ batch: null, resumeIds: null })
     polishedRef.current = false
+    // 页面刷新后 store 清空：从主进程拉回在途/刚结束的批量进度
+    const pid = projectId
+    void window.api.write
+      .batchStatus({ projectId: pid })
+      .then((snap) => {
+        if (snap && (snap.running || snap.paused || snap.done > 0)) {
+          useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
+        }
+      })
+      .catch(() => {})
   }, [projectId])
 
   useEffect(() => {
@@ -465,192 +499,32 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     ;(e.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open')
   }
 
-  /** 大纲对齐：AI 比对已写剧情与后续大纲，返回修订建议；auto=true 直接落库并返回修订数 */
-  const alignOutline = async (auto: boolean): Promise<number | AlignRevision[]> => {
-    const payload = await runPipeline('outlineAlign', { projectId })
-    const d = payload.data as { parsed?: boolean; revisions?: AlignRevision[]; error?: string }
-    if (d?.error) throw new Error(d.error)
-    if (!d?.parsed || !d.revisions) throw new Error('对齐结果解析失败')
-    if (!auto) return d.revisions
-    let n = 0
-    for (const r of d.revisions) {
-      await window.api.novel.outlineSave({
-        id: r.outlineId,
-        projectId,
-        volume: r.volume,
-        chapterNo: r.chapterNo,
-        title: r.title,
-        synopsis: r.synopsis,
-        hook: r.hook
-      })
-      n++
-    }
-    return n
-  }
-
-  const runBatchList = async (ids: string[]): Promise<void> => {
-    if (useWriteRunStore.getState().batch?.running) return
-    useWriteRunStore.setState({
-      batchStop: false,
-      batchAbortId: null,
-      batch: {
-        projectId,
-        running: true,
-        paused: false,
-        done: 0,
-        total: ids.length,
-        currentNo: 0,
-        log: []
-      }
-    })
-    const results: boolean[] = []
-    let consecutiveFail = 0
-    const appendLog = appendBatchLog
-
-    for (let i = 0; i < ids.length; i++) {
-      if (useWriteRunStore.getState().batchStop) break
-      const brief = briefs.find((b) => b.id === ids[i])
-      if (!brief) continue
-      patchBatch({ currentNo: brief.chapterNo })
-      appendLog(`第${brief.chapterNo}章 生成中…`)
-      try {
-        const myRid = await window.api.pipeline.run('chapter', {
-          outlineId: ids[i],
-          wordTarget: parseInt(wordTarget, 10) || undefined,
-          candidates: parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined
-        })
-        useWriteRunStore.setState({ batchAbortId: myRid })
-        const gen = await new Promise<DonePayload>((resolve, reject) => {
-          const offs: Array<() => void> = []
-          const cleanup = (): void =>
-            offs.forEach((o) => {
-              o()
-            })
-          offs.push(
-            window.api.llm.onDone((rid, p) => {
-              if (rid !== myRid) return
-              cleanup()
-              resolve(p)
-            }),
-            window.api.llm.onError((rid, m) => {
-              if (rid !== myRid) return
-              cleanup()
-              reject(new Error(m))
-            })
-          )
-        })
-        const d = gen.data as ChapterDoneData
-        patchBatch({ done: (useWriteRunStore.getState().batch?.done ?? 0) + 1 })
-        appendLog(
-          `第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字${d?.longMode ? `（长章 ${d.segments} 段）` : ''}`
-        )
-
-        // 硬闸判定 + 自动返修（一次）
-        let passed = d?.lint?.pass !== false
-        let repaired = false
-        if (!passed && d?.lint) {
-          const focus = d.lint.issues
-            .map((it) => `- ${it.rule}：${it.advice}${it.quote ? `（原文：${it.quote}）` : ''}`)
-            .join('\n')
-          appendLog(`第${brief.chapterNo}章 硬闸未过（${d.lint.issues.length} 项），自动返修…`)
-          repaired = true
-          try {
-            await runPipeline('polish', { outlineId: ids[i], focus, save: true })
-            const re = (await window.api.lint.run(ids[i])) as LintReport
-            passed = re.pass
-            appendLog(
-              passed
-                ? `第${brief.chapterNo}章 返修通过`
-                : `第${brief.chapterNo}章 返修仍未过 → 需人工`
-            )
-          } catch (err) {
-            appendLog(`第${brief.chapterNo}章 返修失败：${(err as Error).message}`)
-          }
-        }
-
-        try {
-          await runPipeline('summary', { outlineId: ids[i], finalize: false })
-          appendLog(`第${brief.chapterNo}章 ${passed ? '✓ 完成' : '⚠ 已写入（需人工）'}`)
-        } catch (err) {
-          appendLog(`第${brief.chapterNo}章 摘要失败：${(err as Error).message}`)
-        }
-        // 大纲状态自动流转：写完即标，不等手动定稿
-        try {
-          await window.api.novel.outlineSave({
-            id: ids[i],
-            projectId,
-            volume: brief.volume,
-            chapterNo: brief.chapterNo,
-            title: brief.title,
-            synopsis: brief.synopsis,
-            status: repaired && passed ? 'polished' : 'written'
-          })
-        } catch {
-          /* 状态流转失败不阻断批量 */
-        }
-        loadBriefs()
-
-        results.push(passed)
-        consecutiveFail = passed ? 0 : consecutiveFail + 1
-        const window10 = results.slice(-10)
-        const failIn10 = window10.filter((r) => !r).length
-        if (consecutiveFail >= 3 || (window10.length >= 10 && failIn10 >= 6)) {
-          appendLog(
-            `⚠ 熔断：连续 ${consecutiveFail} 章未过（近期 ${failIn10}/${window10.length}）——暂停批量，建议先排查根因`
-          )
-          useWriteRunStore.setState({ resumeIds: ids.slice(i + 1) })
-          patchBatch({ paused: true })
-          return
-        }
-
-        if (pauseEach && i < ids.length - 1 && !useWriteRunStore.getState().batchStop) {
-          useWriteRunStore.setState({ resumeIds: ids.slice(i + 1) })
-          patchBatch({ paused: true })
-          return
-        }
-      } catch (err) {
-        appendLog(`第${brief.chapterNo}章 失败：${(err as Error).message}`)
-        patchBatch({ running: false })
-        return
-      }
-    }
-    // 全部跑完（非中止/熔断）→ 附带自动对齐后续大纲
-    if (!useWriteRunStore.getState().batchStop && results.length === ids.length) {
-      appendLog('自动对齐后续大纲…')
-      try {
-        const n = await alignOutline(true)
-        appendLog(
-          typeof n === 'number' && n > 0
-            ? `自动对齐完成：已修订 ${n} 章大纲梗概`
-            : '自动对齐：后续大纲与已写剧情一致，无需修订'
-        )
-      } catch (err) {
-        appendLog(`自动对齐失败：${(err as Error).message}`)
-      }
-    }
-    patchBatch({ running: false })
-  }
-
+  /** 大纲对齐预览（大纲页）；批量内的自动对齐已移至主进程编排 */
   const startBatch = (): void => {
     const idxFrom = briefs.findIndex((b) => b.id === batchFrom)
     const idxTo = briefs.findIndex((b) => b.id === batchTo)
     if (idxFrom < 0 || idxTo < 0 || idxFrom > idxTo) return
     const ids = briefs.slice(idxFrom, idxTo + 1).map((b) => b.id)
     setBatchOpen(false)
-    void runBatchList(ids)
+    void window.api.write
+      .batchStart({
+        projectId,
+        ids,
+        wordTarget: parseInt(wordTarget, 10) || undefined,
+        candidates: parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined,
+        pauseEach
+      })
+      .catch((err: unknown) => setNotice(`启动失败：${(err as Error).message}`))
   }
 
   const stopBatch = (): void => {
-    const { batchAbortId } = useWriteRunStore.getState()
-    useWriteRunStore.setState({ batchStop: true, resumeIds: null })
-    if (batchAbortId) void window.api.llm.abort(batchAbortId)
-    patchBatch({ running: false, paused: false })
+    void window.api.write.batchStop({ projectId }).catch(() => {})
   }
 
   const resumeBatch = (): void => {
-    const ids = useWriteRunStore.getState().resumeIds
-    useWriteRunStore.setState({ resumeIds: null })
-    if (ids && ids.length > 0) void runBatchList(ids)
+    void window.api.write
+      .batchStart({ projectId, resume: true })
+      .catch((err: unknown) => setNotice(`继续失败：${(err as Error).message}`))
   }
 
   const wordCount = content.replace(/\s/g, '').length
@@ -955,43 +829,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               </div>
             )}
 
-            {batch && (
-              <div className="mb-3 rounded-md border border-zinc-800 bg-zinc-900 p-3">
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-zinc-400">
-                    自动写作进度：{batch.done}/{batch.total}
-                    {batch.running && batch.currentNo > 0 ? ` · 第${batch.currentNo}章进行中` : ''}
-                    {batch.paused ? ' · 已暂停待审' : ''}
-                  </span>
-                  <div className="ml-auto flex gap-2">
-                    {batch.paused && (
-                      <Button className="px-2 py-1 text-xs" onClick={resumeBatch}>
-                        继续剩余章节
-                      </Button>
-                    )}
-                    {batch.running && (
-                      <Button variant="danger" className="px-2 py-1 text-xs" onClick={stopBatch}>
-                        停止
-                      </Button>
-                    )}
-                  </div>
-                </div>
-                <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-zinc-800">
-                  <div
-                    className="h-full rounded-full bg-amber-600 transition-all"
-                    style={{ width: `${batch.total > 0 ? (batch.done / batch.total) * 100 : 0}%` }}
-                  />
-                </div>
-                {batch.log.length > 0 && (
-                  <div className="mt-2 max-h-24 overflow-y-auto font-mono text-[10px] leading-4 text-zinc-500">
-                    {batch.log.map((l, i) => (
-                      // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
-                      <div key={i}>{l}</div>
-                    ))}
-                  </div>
-                )}
-              </div>
-            )}
+            {batch && <BatchProgressCard batch={batch} onStop={stopBatch} onResume={resumeBatch} />}
 
             <Textarea
               className="min-h-[45vh] shrink-0 leading-8 md:min-h-[55vh]"
@@ -1220,6 +1058,11 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
           </>
         ) : (
           <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-zinc-600">
+            {batch && (
+              <div className="w-full max-w-md">
+                <BatchProgressCard batch={batch} onStop={stopBatch} onResume={resumeBatch} />
+              </div>
+            )}
             <span>左侧选择一章开始写作</span>
             <span className="text-xs">
               单章：AI 初稿 → 编辑 →

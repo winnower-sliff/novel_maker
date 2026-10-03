@@ -4,6 +4,7 @@ import type {
   ChatParams,
   ChatResult,
   PipelineAction,
+  RunRecordPayload,
   WorldbuildGenParams
 } from '../../shared/types'
 import { runAgent } from '../agent'
@@ -25,6 +26,52 @@ import { appendUsage } from '../usage'
 const activeRequests = new Map<string, AbortController>()
 const activeAgentRuns = new Map<string, AbortController>()
 
+/** 批量编排（主进程）等待单次生成完成的回调：error 为 null 表示成功 */
+export type SettleCb = (error: string | null, payload?: unknown) => void
+
+// 运行注册表：requestId → 结果快照。SSE/窗口断连期间 done/error 事件丢失时，
+// 渲染端经 llm:poll 补拉，避免 UI 永远卡「生成中」。完成后保留 10 分钟。
+type RunRecord = RunRecordPayload
+
+const runRecords = new Map<string, RunRecord>()
+const RECORD_TTL_MS = 10 * 60 * 1000
+
+function recordRunning(requestId: string, kind: RunRecord['kind']): void {
+  runRecords.set(requestId, { status: 'running', kind })
+}
+
+function recordDone(requestId: string, payload: unknown): void {
+  const prev = runRecords.get(requestId)
+  if (prev)
+    runRecords.set(requestId, {
+      ...prev,
+      status: 'done',
+      finishedAt: Date.now(),
+      donePayload: payload
+    })
+}
+
+function recordError(requestId: string, message: string): void {
+  const prev = runRecords.get(requestId)
+  if (prev)
+    runRecords.set(requestId, { ...prev, status: 'error', finishedAt: Date.now(), error: message })
+}
+
+export function pollRuns(requestIds: string[]): Record<string, RunRecord> {
+  const now = Date.now()
+  for (const [rid, rec] of runRecords) {
+    if (rec.status !== 'running' && rec.finishedAt && now - rec.finishedAt > RECORD_TTL_MS) {
+      runRecords.delete(rid)
+    }
+  }
+  const out: Record<string, RunRecord> = {}
+  for (const rid of requestIds) {
+    const rec = runRecords.get(rid)
+    if (rec) out[rid] = rec
+  }
+  return out
+}
+
 export { LONG_CHAPTER_THRESHOLD }
 
 export function abortLlmRequest(requestId: string): void {
@@ -42,6 +89,7 @@ export function startAgentRun(
   const requestId = randomUUID()
   const controller = new AbortController()
   activeAgentRuns.set(requestId, controller)
+  recordRunning(requestId, 'agent')
 
   void (async () => {
     let payload: Awaited<ReturnType<typeof runAgent>>
@@ -56,16 +104,18 @@ export function startAgentRun(
         signal: controller.signal
       })
     } catch (err) {
+      const message = controller.signal.aborted
+        ? '已停止'
+        : ((err as Error)?.message ?? String(err))
+      recordError(requestId, message)
       if (!sink.isClosed()) {
-        const message = controller.signal.aborted
-          ? '已停止'
-          : ((err as Error)?.message ?? String(err))
         sink.send('agent:error', requestId, message)
       }
       return
     } finally {
       activeAgentRuns.delete(requestId)
     }
+    recordDone(requestId, payload)
     if (!sink.isClosed()) sink.send('agent:done', requestId, payload)
   })()
 
@@ -90,11 +140,13 @@ export function startStream(
     action?: PipelineAction
     afterDone?: (result: ChatResult) => unknown
     continueOnMaxTokens?: number
+    onSettled?: SettleCb
   }
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
   activeRequests.set(requestId, controller)
+  recordRunning(requestId, 'llm')
 
   void (async () => {
     try {
@@ -180,23 +232,26 @@ export function startStream(
         dataError = (err as Error)?.message ?? String(err)
       }
 
-      if (!sink.isClosed()) {
-        sink.send('llm:done', requestId, {
-          usage: final.usage,
-          model: final.model,
-          stopReason: final.stopReason,
-          durationMs: totalMs,
-          headers: final.headers,
-          action: opts?.action,
-          data: dataError ? { error: dataError } : data
-        })
+      const donePayload = {
+        usage: final.usage,
+        model: final.model,
+        stopReason: final.stopReason,
+        durationMs: totalMs,
+        headers: final.headers,
+        action: opts?.action,
+        data: dataError ? { error: dataError } : data
       }
+      recordDone(requestId, donePayload)
+      opts?.onSettled?.(null, donePayload)
+      if (!sink.isClosed()) sink.send('llm:done', requestId, donePayload)
     } catch (err) {
+      const message =
+        err instanceof LlmError
+          ? `[${err.status ?? '网络'}] ${err.message}`
+          : ((err as Error)?.message ?? String(err))
+      recordError(requestId, message)
+      opts?.onSettled?.(message)
       if (!sink.isClosed()) {
-        const message =
-          err instanceof LlmError
-            ? `[${err.status ?? '网络'}] ${err.message}`
-            : ((err as Error)?.message ?? String(err))
         sink.send('llm:error', requestId, message)
       }
     } finally {
@@ -212,11 +267,13 @@ export function startLongChapterStream(
   sink: EventSink,
   projectId: string,
   outlineId: string,
-  wordTarget: number
+  wordTarget: number,
+  onSettled?: SettleCb
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
   activeRequests.set(requestId, controller)
+  recordRunning(requestId, 'llm')
 
   void (async () => {
     try {
@@ -237,30 +294,33 @@ export function startLongChapterStream(
         status: 'draft'
       })
       enqueueEmbedding(projectId, 'summary', outlineId, clean.slice(0, 1200))
-      if (!sink.isClosed()) {
-        sink.send('llm:done', requestId, {
-          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
-          model: '',
-          stopReason: 'end_turn',
-          durationMs: Date.now() - started,
-          headers: {},
-          action: 'chapter',
-          data: {
-            chapterId: chapter.id,
-            wordCount: chapter.wordCount,
-            longMode: true,
-            segments: result.plan.length,
-            lint: lintChapterReport(outlineId, clean)
-          }
-        })
+      const donePayload = {
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        model: '',
+        stopReason: 'end_turn',
+        durationMs: Date.now() - started,
+        headers: {},
+        action: 'chapter' as const,
+        data: {
+          chapterId: chapter.id,
+          wordCount: chapter.wordCount,
+          longMode: true,
+          segments: result.plan.length,
+          lint: lintChapterReport(outlineId, clean)
+        }
       }
+      recordDone(requestId, donePayload)
+      onSettled?.(null, donePayload)
+      if (!sink.isClosed()) sink.send('llm:done', requestId, donePayload)
     } catch (err) {
+      const message = controller.signal.aborted
+        ? '已停止'
+        : err instanceof LlmError
+          ? `[${err.status ?? '网络'}] ${err.message}`
+          : ((err as Error)?.message ?? String(err))
+      recordError(requestId, message)
+      onSettled?.(message)
       if (!sink.isClosed()) {
-        const message = controller.signal.aborted
-          ? '已停止'
-          : err instanceof LlmError
-            ? `[${err.status ?? '网络'}] ${err.message}`
-            : ((err as Error)?.message ?? String(err))
         sink.send('llm:error', requestId, message)
       }
     } finally {
@@ -277,11 +337,13 @@ export function startChapterCandidatesStream(
   projectId: string,
   outlineId: string,
   wordTarget: number,
-  candidates: number
+  candidates: number,
+  onSettled?: SettleCb
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
   activeRequests.set(requestId, controller)
+  recordRunning(requestId, 'llm')
 
   void (async () => {
     try {
@@ -305,37 +367,40 @@ export function startChapterCandidatesStream(
         status: 'draft'
       })
       enqueueEmbedding(projectId, 'summary', outlineId, clean.slice(0, 1200))
-      if (!sink.isClosed()) {
-        sink.send('llm:done', requestId, {
-          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
-          model: '',
-          stopReason: 'end_turn',
-          durationMs: Date.now() - started,
-          headers: {},
-          action: 'chapter',
-          data: {
-            chapterId: chapter.id,
-            wordCount: chapter.wordCount,
-            candidateMode: true,
-            winnerIndex: result.winnerIndex,
-            candidates: result.candidates.map((c) => ({
-              text: stripHtmlComments(c.text),
-              score: c.score,
-              wordCount: c.wordCount,
-              issues: c.lint.issues.length,
-              pass: c.lint.pass
-            })),
-            lint: winner.lint
-          }
-        })
+      const donePayload = {
+        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        model: '',
+        stopReason: 'end_turn',
+        durationMs: Date.now() - started,
+        headers: {},
+        action: 'chapter' as const,
+        data: {
+          chapterId: chapter.id,
+          wordCount: chapter.wordCount,
+          candidateMode: true,
+          winnerIndex: result.winnerIndex,
+          candidates: result.candidates.map((c) => ({
+            text: stripHtmlComments(c.text),
+            score: c.score,
+            wordCount: c.wordCount,
+            issues: c.lint.issues.length,
+            pass: c.lint.pass
+          })),
+          lint: winner.lint
+        }
       }
+      recordDone(requestId, donePayload)
+      onSettled?.(null, donePayload)
+      if (!sink.isClosed()) sink.send('llm:done', requestId, donePayload)
     } catch (err) {
+      const message = controller.signal.aborted
+        ? '已停止'
+        : err instanceof LlmError
+          ? `[${err.status ?? '网络'}] ${err.message}`
+          : ((err as Error)?.message ?? String(err))
+      recordError(requestId, message)
+      onSettled?.(message)
       if (!sink.isClosed()) {
-        const message = controller.signal.aborted
-          ? '已停止'
-          : err instanceof LlmError
-            ? `[${err.status ?? '网络'}] ${err.message}`
-            : ((err as Error)?.message ?? String(err))
         sink.send('llm:error', requestId, message)
       }
     } finally {

@@ -78,8 +78,6 @@ export interface ChapterRun {
 
 interface WriteRunStore {
   batch: WriteBatchState | null
-  batchStop: boolean
-  batchAbortId: string | null
   resumeIds: string[] | null
   batchOpen: boolean
   busy: WriteBusy
@@ -96,8 +94,6 @@ interface WriteRunStore {
 
 export const useWriteRunStore = create<WriteRunStore>(() => ({
   batch: null,
-  batchStop: false,
-  batchAbortId: null,
   resumeIds: null,
   batchOpen: false,
   busy: null,
@@ -182,19 +178,7 @@ export function ensureWriteRunBridge(): void {
   if (bridgeReady) return
   bridgeReady = true
 
-  window.api.llm.onDelta((id, text) => {
-    const { run } = S.getState()
-    if (!run || run.requestId !== id || run.finished) return
-    if (run.kind === 'chapter') {
-      S.setState((s) => (s.run ? { run: { ...s.run, editorText: s.run.editorText + text } } : s))
-    } else {
-      S.setState((s) =>
-        s.run ? { run: { ...s.run, candidateText: s.run.candidateText + text } } : s
-      )
-    }
-  })
-
-  window.api.llm.onDone((id, payload) => {
+  const handleRunDone = (id: string, payload: DonePayload): void => {
     const { run } = S.getState()
     if (!run || run.requestId !== id) return
     S.setState({ lastUsage: payload, busy: null, run: { ...run, finished: true } })
@@ -236,13 +220,72 @@ export function ensureWriteRunBridge(): void {
             : '扩写稿已生成：在下方 diff 视图逐块取舍后应用（不会直接覆盖原稿）'
       }))
     }
-  })
+  }
 
-  window.api.llm.onError((id, message) => {
+  const handleRunError = (id: string, message: string): void => {
     const { run } = S.getState()
     if (!run || run.requestId !== id) return
     S.setState({ busy: null, notice: `出错：${message}`, run: { ...run, finished: true } })
+  }
+
+  // 断连补拉：SSE 重连成功或页面回前台时查询在途单章 run 与批量的最新状态，
+  // 主进程已完成/已失败的合成对应处理（与真实事件同一条路径，保证编辑器回填不丢）
+  const pollRun = (): void => {
+    const { run, batch } = S.getState()
+    const rid = run?.requestId
+    if (run && rid && !run.finished) {
+      void window.api.llm
+        .poll({ requestIds: [rid] })
+        .then((recs) => {
+          const rec = recs[rid]
+          if (!rec || rec.status === 'running') return
+          if (rec.status === 'done') handleRunDone(rid, rec.donePayload as DonePayload)
+          else handleRunError(rid, rec.error ?? '生成失败')
+        })
+        .catch(() => {})
+    }
+    if (batch?.running) {
+      void window.api.write
+        .batchStatus({ projectId: batch.projectId })
+        .then((snap) => {
+          if (!snap) return
+          S.setState({ batch: snap, resumeIds: snap.resumeIds })
+        })
+        .catch(() => {})
+    }
+  }
+  window.addEventListener('nm-sse-state', ((e: CustomEvent<string>) => {
+    if (e.detail === 'open') pollRun()
+  }) as EventListener)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') pollRun()
   })
+
+  // 批量进度事件（主进程编排）：快照直接落 store；一轮跑完时失效章节列表
+  window.api.write.onBatch((projectId, snap) => {
+    const prev = S.getState().batch
+    const wasRunning = prev?.running ?? false
+    S.setState({ batch: snap, resumeIds: snap.resumeIds })
+    if (wasRunning && !snap.running) {
+      void queryClient.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
+    }
+  })
+
+  window.api.llm.onDelta((id, text) => {
+    const { run } = S.getState()
+    if (!run || run.requestId !== id || run.finished) return
+    if (run.kind === 'chapter') {
+      S.setState((s) => (s.run ? { run: { ...s.run, editorText: s.run.editorText + text } } : s))
+    } else {
+      S.setState((s) =>
+        s.run ? { run: { ...s.run, candidateText: s.run.candidateText + text } } : s
+      )
+    }
+  })
+
+  window.api.llm.onDone((id, payload) => handleRunDone(id, payload))
+
+  window.api.llm.onError((id, message) => handleRunError(id, message))
 
   window.api.llm.onNotice((_id, message) => {
     S.setState({ notice: message })

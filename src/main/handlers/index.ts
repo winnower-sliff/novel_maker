@@ -12,6 +12,7 @@ import { novelHandlers } from './novel'
 import { pipelineHandlers } from './pipeline'
 import { settingsHandlers } from './settings'
 import { toolHandlers } from './tools'
+import { writeHandlers } from './writeBatch'
 
 export const sharedHandlers: HandlerTable = {
   ...settingsHandlers,
@@ -19,7 +20,8 @@ export const sharedHandlers: HandlerTable = {
   ...agentHandlers,
   ...pipelineHandlers,
   ...novelHandlers,
-  ...toolHandlers
+  ...toolHandlers,
+  ...writeHandlers
 }
 
 export type { Handler, HandlerContext } from './context'

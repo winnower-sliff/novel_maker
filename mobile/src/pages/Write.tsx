@@ -4,7 +4,7 @@ import { AiBar } from '@mobile/components/AiBar'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { Badge, Button, Empty, Spinner } from '@mobile/components/ui'
 import { fmtWords } from '@mobile/lib/format'
-import { appendBatchLog, patchBatch, suggestBatchRange, useWriteRunStore } from '../../../src/wizard/writeRunStore'
+import { appendBatchLog, suggestBatchRange, useWriteRunStore } from '../../../src/wizard/writeRunStore'
 import type { ChapterBrief } from '@shared/types'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -43,10 +43,7 @@ function AutoWritePanel({
   const push = appendBatchLog
 
   const stop = (): void => {
-    const { batchAbortId } = useWriteRunStore.getState()
-    useWriteRunStore.setState({ batchStop: true })
-    if (batchAbortId) void window.api.llm.abort(batchAbortId)
-    patchBatch({ running: false })
+    void window.api.write.batchStop({ projectId }).catch(() => {})
   }
 
   const start = (): void => {
@@ -55,98 +52,11 @@ function AutoWritePanel({
     const iTo = briefs.findIndex((b) => b.id === to)
     if (iFrom < 0 || iTo < 0 || iFrom > iTo) return
     const ids = briefs.slice(iFrom, iTo + 1).map((b) => b.id)
-    useWriteRunStore.setState({
-      batchStop: false,
-      batchAbortId: null,
-      batch: {
-        projectId,
-        running: true,
-        paused: false,
-        done: 0,
-        total: ids.length,
-        currentNo: 0,
-        log: []
-      }
-    })
-    void (async () => {
-      for (let i = 0; i < ids.length; i++) {
-        if (useWriteRunStore.getState().batchStop) break
-        const brief = briefs.find((b) => b.id === ids[i])
-        if (!brief) continue
-        patchBatch({ currentNo: brief.chapterNo })
-        push(`第${brief.chapterNo}章 生成中…`)
-        try {
-          const myRid = await window.api.pipeline.run('chapter', { outlineId: ids[i] })
-          useWriteRunStore.setState({ batchAbortId: myRid })
-          const gen = await new Promise<{ data?: { wordCount?: number; lint?: { pass?: boolean; issues?: Array<{ rule: string; advice: string; quote?: string }> } } }>((resolve, reject) => {
-            const offs: Array<() => void> = []
-            const cleanup = (): void => offs.forEach((o) => o())
-            offs.push(
-              window.api.llm.onDone((rid, p) => {
-                if (rid !== myRid) return
-                cleanup()
-                resolve(p as { data?: { wordCount?: number; lint?: { pass?: boolean; issues?: Array<{ rule: string; advice: string; quote?: string }> } } })
-              }),
-              window.api.llm.onError((rid, m) => {
-                if (rid !== myRid) return
-                cleanup()
-                reject(new Error(m))
-              })
-            )
-          })
-          const d = gen.data
-          patchBatch({ done: (useWriteRunStore.getState().batch?.done ?? 0) + 1 })
-          push(`第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字`)
-          if (d?.lint && d.lint.pass === false && d.lint.issues) {
-            const focus = d.lint.issues
-              .map((it) => `- ${it.rule}：${it.advice}`)
-              .join('\n')
-            push(`第${brief.chapterNo}章 硬闸未过，自动返修…`)
-            await window.api.pipeline.run('polish', { outlineId: ids[i], focus, save: true })
-            push(`第${brief.chapterNo}章 返修完成`)
-          }
-          await window.api.pipeline
-            .run('summary', { outlineId: ids[i], finalize: false })
-            .then(() => push(`第${brief.chapterNo}章 摘要完成`))
-            .catch((err: Error) => push(`第${brief.chapterNo}章 摘要失败：${err.message}`))
-          await window.api.novel
-            .outlineSave({
-              id: ids[i],
-              projectId,
-              volume: brief.volume,
-              chapterNo: brief.chapterNo,
-              title: brief.title,
-              synopsis: brief.synopsis,
-              status: d?.lint && d.lint.pass === false ? 'polished' : 'written'
-            })
-            .catch(() => {})
-          onFinish()
-        } catch (err) {
-          push(`第${brief.chapterNo}章 失败：${(err as Error).message}，已停止`)
-          patchBatch({ running: false })
-          return
-        }
-      }
-      if (!useWriteRunStore.getState().batchStop) {
-        push('自动对齐后续大纲…')
-        try {
-          const alignId = await window.api.pipeline.run('outlineAlign', { projectId })
-          await new Promise<void>((resolve) => {
-            const off = window.api.llm.onDone((rid) => {
-              if (rid === alignId) {
-                off()
-                resolve()
-              }
-            })
-          })
-          push('对齐完成')
-        } catch {
-          push('对齐失败（可在大纲页重试）')
-        }
-      }
-      patchBatch({ running: false })
-      onFinish()
-    })()
+    // 编排在主进程：熄屏/切走后电脑端继续逐章写作，进度经 write:batch 事件回推
+    void window.api.write
+      .batchStart({ projectId, ids })
+      .then(() => onFinish())
+      .catch((err: Error) => push(`启动失败：${err.message}`))
   }
 
   const options = briefs.map((b) => (
@@ -223,6 +133,15 @@ export default function Write({ projectId }: { projectId: string }) {
   useEffect(() => {
     setSelectedId(null)
     useWriteRunStore.setState({ batchOpen: false })
+    // 页面刷新后 store 清空：从主进程拉回在途/刚结束的批量进度
+    void window.api.write
+      .batchStatus({ projectId })
+      .then((snap) => {
+        if (snap && (snap.running || snap.paused || snap.done > 0)) {
+          useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
+        }
+      })
+      .catch(() => {})
   }, [projectId])
 
   const selected = useMemo(

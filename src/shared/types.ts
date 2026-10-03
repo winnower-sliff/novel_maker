@@ -131,6 +131,27 @@ export interface ServerStatus {
   error: string | null
 }
 
+/** 运行注册表条目（llm:poll 补拉用）：断连期间 done/error 事件丢失时的结果快照 */
+export interface RunRecordPayload {
+  status: 'running' | 'done' | 'error'
+  kind: 'llm' | 'agent'
+  finishedAt?: number
+  donePayload?: unknown
+  error?: string
+}
+
+/** 批量自动写作进度快照（主进程编排，write:batch 事件/write:batchStatus 拉取） */
+export interface BatchSnapshot {
+  projectId: string
+  running: boolean
+  paused: boolean
+  done: number
+  total: number
+  currentNo: number
+  log: string[]
+  resumeIds: string[] | null
+}
+
 export interface ModelProbeResult {
   source: 'endpoint' | 'builtin'
   models: string[]
