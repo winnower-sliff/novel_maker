@@ -6,6 +6,7 @@ import {
   applyStateSyncResult,
   applySummaryResult,
   applyVolumeSummaryResult,
+  buildAlignRequest,
   buildChapterRequest,
   buildCharacterRequest,
   buildCheckRequest,
@@ -19,6 +20,7 @@ import {
   buildVolumeSummaryRequest,
   buildWorldbuildRequest,
   guessCharacterName,
+  parseAlignResult,
   parseCharacterCards,
   parseCheckResult,
   parsePremiseDraft,
@@ -50,6 +52,13 @@ export const pipelineHandlers = {
         return startStream(ctx.sink, buildOutlineRequest(params), {
           action,
           afterDone: (r) => applyOutlineResult(params, r.text)
+        })
+      }
+      case 'outlineAlign': {
+        const params = PIPELINE_PARAM_SCHEMAS.outlineAlign.parse(rawParams)
+        return startStream(ctx.sink, buildAlignRequest(params.projectId), {
+          action,
+          afterDone: (r) => parseAlignResult(params.projectId, r.text)
         })
       }
       case 'chapter': {

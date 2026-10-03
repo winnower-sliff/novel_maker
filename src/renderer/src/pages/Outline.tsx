@@ -76,6 +76,56 @@ export default function Outline({
   }, [volSummaryList])
   const [openVolumeSummary, setOpenVolumeSummary] = useState<number | null>(null)
   const volSummaryRequestId = useRef<string | null>(null)
+  const alignRequestId = useRef<string | null>(null)
+  const [alignBusy, setAlignBusy] = useState(false)
+  const [alignNotice, setAlignNotice] = useState('')
+  const [alignRevisions, setAlignRevisions] = useState<Array<{
+    outlineId: string
+    volume: number
+    chapterNo: number
+    title: string
+    synopsis: string
+    hook?: string
+    reason?: string
+  }> | null>(null)
+  const [alignSkip, setAlignSkip] = useState<Set<string>>(new Set())
+
+  const startAlign = (): void => {
+    setAlignBusy(true)
+    setAlignNotice('AI 正在对照已写剧情检查后续大纲…')
+    setAlignRevisions(null)
+    setAlignSkip(new Set())
+    void window.api.pipeline
+      .run('outlineAlign', { projectId })
+      .then((id) => {
+        alignRequestId.current = id
+      })
+      .catch((err: unknown) => {
+        setAlignBusy(false)
+        setAlignNotice(`出错：${(err as Error).message}`)
+      })
+  }
+
+  const applyAlign = (): void => {
+    if (!alignRevisions) return
+    const list = alignRevisions.filter((r) => !alignSkip.has(r.outlineId))
+    void (async () => {
+      for (const r of list) {
+        await window.api.novel.outlineSave({
+          id: r.outlineId,
+          projectId,
+          volume: r.volume,
+          chapterNo: r.chapterNo,
+          title: r.title,
+          synopsis: r.synopsis,
+          hook: r.hook
+        })
+      }
+      setAlignRevisions(null)
+      setAlignNotice(list.length > 0 ? `已修订 ${list.length} 章大纲` : '未选择任何修订')
+      load()
+    })()
+  }
 
   const load = useCallback((): void => {
     void queryClient.invalidateQueries({ queryKey: qk.outlines(projectId) })
@@ -123,6 +173,29 @@ export default function Outline({
         else if (!d?.parsed) setVolNotice('卷摘要解析失败，可重试')
         else setVolNotice(`第 ${d.volume} 卷摘要已生成（${d.summaryChars} 字）`)
         load()
+        return
+      }
+      if (id === alignRequestId.current) {
+        alignRequestId.current = null
+        setAlignBusy(false)
+        const d = payload.data as {
+          parsed?: boolean
+          revisions?: Array<{
+            outlineId: string
+            volume: number
+            chapterNo: number
+            title: string
+            synopsis: string
+            hook?: string
+            reason?: string
+          }>
+          error?: string
+        }
+        if (d?.error) setAlignNotice(`对齐失败：${d.error}`)
+        else if (!d?.parsed) setAlignNotice('对齐结果解析失败，可重试')
+        else if (!d.revisions || d.revisions.length === 0)
+          setAlignNotice('后续大纲与已写剧情一致，无需修订')
+        else setAlignRevisions(d.revisions)
       }
     })
     const offError = window.api.llm.onError((id, message) => {
@@ -131,6 +204,11 @@ export default function Outline({
         setGenNotice(`出错：${message}`)
       }
       if (id === volSummaryRequestId.current) setVolNotice(`出错：${message}`)
+      if (id === alignRequestId.current) {
+        alignRequestId.current = null
+        setAlignBusy(false)
+        setAlignNotice(`出错：${message}`)
+      }
     })
     return () => {
       offDelta()
@@ -213,6 +291,14 @@ export default function Outline({
             AI 生成大纲
           </Button>
           <Button
+            variant="ghost"
+            onClick={startAlign}
+            disabled={alignBusy || items.length === 0}
+            title="AI 对照已写章节的实际剧情，检查并修订后续未写章节的大纲梗概"
+          >
+            {alignBusy ? '对齐中…' : '对齐已写进展'}
+          </Button>
+          <Button
             onClick={() =>
               setEdit({
                 ...emptyEdit(),
@@ -225,6 +311,70 @@ export default function Outline({
           </Button>
         </div>
       </div>
+
+      {alignNotice && (
+        <div className="rounded-md border border-zinc-800 bg-zinc-900 px-4 py-2 text-xs text-zinc-400">
+          {alignNotice}
+        </div>
+      )}
+
+      {alignRevisions && alignRevisions.length > 0 && (
+        <Card className="space-y-2 p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-sm font-medium text-zinc-200">
+              大纲对齐建议（{alignRevisions.length} 章）
+            </span>
+            <span className="text-xs text-zinc-500">
+              勾选要应用的修订，确认后覆盖更新对应章节梗概
+            </span>
+            <Button
+              className="ml-auto"
+              onClick={applyAlign}
+              disabled={alignSkip.size === alignRevisions.length}
+            >
+              应用所选（{alignRevisions.length - alignSkip.size}）
+            </Button>
+            <Button variant="ghost" onClick={() => setAlignRevisions(null)}>
+              放弃
+            </Button>
+          </div>
+          {alignRevisions.map((r) => {
+            const skip = alignSkip.has(r.outlineId)
+            return (
+              <div
+                key={r.outlineId}
+                className={`rounded-md border p-2.5 text-xs leading-5 ${
+                  skip
+                    ? 'border-zinc-800 bg-zinc-950/40 opacity-50'
+                    : 'border-amber-900/40 bg-zinc-950'
+                }`}
+              >
+                <label className="flex cursor-pointer items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={!skip}
+                    onChange={(e) =>
+                      setAlignSkip((prev) => {
+                        const next = new Set(prev)
+                        if (e.target.checked) next.delete(r.outlineId)
+                        else next.add(r.outlineId)
+                        return next
+                      })
+                    }
+                    className="h-3.5 w-3.5 cursor-pointer accent-amber-600"
+                  />
+                  <span className="font-medium text-zinc-200">
+                    第 {r.chapterNo} 章《{r.title}》
+                  </span>
+                  {r.reason && <span className="text-amber-400/80">{r.reason}</span>}
+                </label>
+                <div className="mt-1 whitespace-pre-wrap text-zinc-400">{r.synopsis}</div>
+                {r.hook && <div className="mt-0.5 text-zinc-500">钩子：{r.hook}</div>}
+              </div>
+            )
+          })}
+        </Card>
+      )}
 
       {genOpen && (
         <Card className="space-y-3 p-4">

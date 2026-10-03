@@ -61,6 +61,7 @@ export type Purpose = (typeof PURPOSES)[number]
 
 export const PIPELINE_ACTIONS = [
   'outline',
+  'outlineAlign',
   'chapter',
   'summary',
   'polish',
@@ -248,6 +249,7 @@ export const PremiseDraftParamsSchema = z.object({ projectId: z.string() })
 export const PIPELINE_PARAM_SCHEMAS = {
   premiseDraft: z.object({ projectId: z.string() }),
   outline: OutlineGenParamsSchema,
+  outlineAlign: z.object({ projectId: z.string() }),
   chapter: z.object({
     outlineId: z.string(),
     wordTarget: z.number().optional(),

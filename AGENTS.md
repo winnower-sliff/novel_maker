@@ -57,3 +57,4 @@
 - 每次请求必须 appendUsage 记账（M2 额度展示依赖 ratelimit 头字段实测结果）。
 - 更新型写入语义：可选字段未传（undefined）保留原值，显式空串才清空（`store.saveWorldbuild/saveCharacter/saveOutline/saveForeshadow`）；AI 修订/agent 保存若没输出 tags 一律保留旧标签，避免只改正文时清空标签。
 - 世界观引用优先写 `[[目标|关系短语]]`（Obsidian alias 语法）：graph.ts 解析为类型化边、Markdown 组件显示关系短语、export 剥离为纯文本；裸 `[[目标]]` 仅作简单关联。改标题时 store 自动全局传播旧链接。
+- 测试收尾必须帮用户重启服务：实测套路杀掉测试 electron 实例后，用 `Start-Process npm.cmd -ArgumentList 'run','dev' -WorkingDirectory <root> -WindowStyle Hidden` 立即拉起用户日常 dev 服务（命令单独发、立即返回，不与探测串同一条命令），再独立轮询 3910 确认 UP；settings.json 已还原用户原密码后服务才可交付。

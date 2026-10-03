@@ -13,9 +13,190 @@ const STATUS_LABEL: Record<string, string> = {
   polished: '已返修'
 }
 
+interface AutoLog {
+  running: boolean
+  currentNo: number
+  done: number
+  total: number
+  lines: string[]
+}
+
+/** 简版自动写作：逐章 初稿→硬闸自动返修→摘要→大纲标记已写；失败即停；完成后自动对齐后续大纲 */
+function AutoWritePanel({
+  projectId,
+  briefs,
+  onFinish
+}: {
+  projectId: string
+  briefs: ChapterBrief[]
+  onFinish: () => void
+}) {
+  const [from, setFrom] = useState('')
+  const [to, setTo] = useState('')
+  const [state, setState] = useState<AutoLog | null>(null)
+  const stopRef = useRef(false)
+  const abortRef = useRef<string | null>(null)
+
+  const push = (line: string): void =>
+    setState((prev) => (prev ? { ...prev, lines: [...prev.lines, line] } : prev))
+
+  const stop = (): void => {
+    stopRef.current = true
+    if (abortRef.current) void window.api.llm.abort(abortRef.current)
+    setState((prev) => (prev ? { ...prev, running: false } : prev))
+  }
+
+  const start = (): void => {
+    const iFrom = briefs.findIndex((b) => b.id === from)
+    const iTo = briefs.findIndex((b) => b.id === to)
+    if (iFrom < 0 || iTo < 0 || iFrom > iTo) return
+    const ids = briefs.slice(iFrom, iTo + 1).map((b) => b.id)
+    stopRef.current = false
+    setState({ running: true, currentNo: 0, done: 0, total: ids.length, lines: [] })
+    void (async () => {
+      for (let i = 0; i < ids.length; i++) {
+        if (stopRef.current) break
+        const brief = briefs.find((b) => b.id === ids[i])
+        if (!brief) continue
+        setState((prev) => (prev ? { ...prev, currentNo: brief.chapterNo } : prev))
+        push(`第${brief.chapterNo}章 生成中…`)
+        try {
+          abortRef.current = await window.api.pipeline.run('chapter', { outlineId: ids[i] })
+          const gen = await new Promise<{ data?: { wordCount?: number; lint?: { pass?: boolean; issues?: Array<{ rule: string; advice: string; quote?: string }> } } }>((resolve, reject) => {
+            const offs: Array<() => void> = []
+            const cleanup = (): void => offs.forEach((o) => o())
+            offs.push(
+              window.api.llm.onDone((rid, p) => {
+                if (rid === abortRef.current) {
+                  cleanup()
+                  resolve(p as { data?: { wordCount?: number; lint?: { pass?: boolean; issues?: Array<{ rule: string; advice: string; quote?: string }> } } })
+                }
+              }),
+              window.api.llm.onError((rid, m) => {
+                if (rid === abortRef.current) {
+                  cleanup()
+                  reject(new Error(m))
+                }
+              })
+            )
+          })
+          const d = gen.data
+          setState((prev) => (prev ? { ...prev, done: prev.done + 1 } : prev))
+          push(`第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字`)
+          if (d?.lint && d.lint.pass === false && d.lint.issues) {
+            const focus = d.lint.issues
+              .map((it) => `- ${it.rule}：${it.advice}`)
+              .join('\n')
+            push(`第${brief.chapterNo}章 硬闸未过，自动返修…`)
+            await window.api.pipeline.run('polish', { outlineId: ids[i], focus, save: true })
+            push(`第${brief.chapterNo}章 返修完成`)
+          }
+          await window.api.pipeline
+            .run('summary', { outlineId: ids[i], finalize: false })
+            .then(() => push(`第${brief.chapterNo}章 摘要完成`))
+            .catch((err: Error) => push(`第${brief.chapterNo}章 摘要失败：${err.message}`))
+          await window.api.novel
+            .outlineSave({
+              id: ids[i],
+              projectId,
+              volume: brief.volume,
+              chapterNo: brief.chapterNo,
+              title: brief.title,
+              synopsis: brief.synopsis,
+              status: d?.lint && d.lint.pass === false ? 'polished' : 'written'
+            })
+            .catch(() => {})
+          onFinish()
+        } catch (err) {
+          push(`第${brief.chapterNo}章 失败：${(err as Error).message}，已停止`)
+          setState((prev) => (prev ? { ...prev, running: false } : prev))
+          return
+        }
+      }
+      if (!stopRef.current) {
+        push('自动对齐后续大纲…')
+        try {
+          const alignId = await window.api.pipeline.run('outlineAlign', { projectId })
+          await new Promise<void>((resolve) => {
+            const off = window.api.llm.onDone((rid) => {
+              if (rid === alignId) {
+                off()
+                resolve()
+              }
+            })
+          })
+          push('对齐完成')
+        } catch {
+          push('对齐失败（可在大纲页重试）')
+        }
+      }
+      setState((prev) => (prev ? { ...prev, running: false } : prev))
+      onFinish()
+    })()
+  }
+
+  const options = briefs.map((b) => (
+    <option key={b.id} value={b.id}>
+      第{b.chapterNo}章 {b.title || '未命名'}
+    </option>
+  ))
+
+  return (
+    <div className="mx-3 mb-3 rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
+      <div className="text-xs font-medium text-zinc-300">自动写作</div>
+      {!state?.running && (
+        <>
+          <div className="mt-2 grid grid-cols-2 gap-2">
+            <select value={from} onChange={(e) => setFrom(e.target.value)} className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-2 text-xs text-zinc-300">
+              <option value="">起章…</option>
+              {options}
+            </select>
+            <select value={to} onChange={(e) => setTo(e.target.value)} className="rounded-lg border border-zinc-800 bg-zinc-950 px-2 py-2 text-xs text-zinc-300">
+              <option value="">止章…</option>
+              {options}
+            </select>
+          </div>
+          <Button className="mt-2 w-full" disabled={!from || !to} onClick={start}>
+            开始自动写作
+          </Button>
+          <div className="mt-1.5 text-[11px] leading-4 text-zinc-600">
+            全自动逐章：初稿 → 硬闸自动返修 → 摘要 → 大纲标记已写，完成后自动修订后续大纲。
+          </div>
+        </>
+      )}
+      {state && (
+        <div className="mt-2">
+          <div className="flex items-center gap-2 text-[11px] text-zinc-400">
+            进度：{state.done}/{state.total}
+            {state.running && state.currentNo > 0 ? ` · 第${state.currentNo}章进行中` : ''}
+            <Button variant="danger" className="ml-auto px-2 py-1 text-[11px]" disabled={!state.running} onClick={stop}>
+              停止
+            </Button>
+          </div>
+          <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-800">
+            <div
+              className="h-full rounded-full bg-amber-600 transition-all"
+              style={{ width: `${state.total > 0 ? (state.done / state.total) * 100 : 0}%` }}
+            />
+          </div>
+          {state.lines.length > 0 && (
+            <div className="mt-1.5 max-h-32 overflow-y-auto font-mono text-[10px] leading-4 text-zinc-500">
+              {state.lines.map((l, i) => (
+                // biome-ignore lint/suspicious/noArrayIndexKey: 追加式日志，index 即身份
+                <div key={i}>{l}</div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Write({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
+  const [autoOpen, setAutoOpen] = useState(false)
   const { data: briefs = [], isLoading } = useQuery({
     queryKey: ['novel', 'chapterBriefs', projectId],
     queryFn: () => window.api.novel.chapterBriefs(projectId),
@@ -24,6 +205,7 @@ export default function Write({ projectId }: { projectId: string }) {
 
   useEffect(() => {
     setSelectedId(null)
+    setAutoOpen(false)
   }, [projectId])
 
   const selected = useMemo(
@@ -55,47 +237,61 @@ export default function Write({ projectId }: { projectId: string }) {
       {briefs.length === 0 ? (
         <Empty text="该项目还没有大纲章节，请先在电脑端生成大纲" />
       ) : (
-        volumes.map((vol) => (
-          <div key={vol} className="mb-4">
-            <div className="mb-1.5 px-1 text-xs font-medium text-zinc-500">第 {vol} 卷</div>
-            <div className="space-y-1.5">
-              {briefs
-                .filter((b) => b.volume === vol)
-                .sort((a, b) => a.chapterNo - b.chapterNo)
-                .map((b) => (
-                  <div
-                    key={b.id}
-                    role="button"
-                    tabIndex={0}
-                    className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 active:bg-zinc-900"
-                    onClick={() => setSelectedId(b.id)}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') setSelectedId(b.id)
-                    }}
-                  >
-                    <span className="w-10 shrink-0 text-center text-sm text-zinc-500">
-                      {b.chapterNo}
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm text-zinc-200">
-                        {b.title || '（未命名）'}
+        <>
+          <Button variant="ghost" className="mb-3 w-full" onClick={() => setAutoOpen((v) => !v)}>
+            {autoOpen ? '收起自动写作' : '自动写作（连续生成多章）'}
+          </Button>
+          {autoOpen && (
+            <AutoWritePanel
+              projectId={projectId}
+              briefs={briefs}
+              onFinish={() =>
+                void qc.invalidateQueries({ queryKey: ['novel', 'chapterBriefs', projectId] })
+              }
+            />
+          )}
+          {volumes.map((vol) => (
+            <div key={vol} className="mb-4">
+              <div className="mb-1.5 px-1 text-xs font-medium text-zinc-500">第 {vol} 卷</div>
+              <div className="space-y-1.5">
+                {briefs
+                  .filter((b) => b.volume === vol)
+                  .sort((a, b) => a.chapterNo - b.chapterNo)
+                  .map((b) => (
+                    <div
+                      key={b.id}
+                      role="button"
+                      tabIndex={0}
+                      className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 active:bg-zinc-900"
+                      onClick={() => setSelectedId(b.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') setSelectedId(b.id)
+                      }}
+                    >
+                      <span className="w-10 shrink-0 text-center text-sm text-zinc-500">
+                        {b.chapterNo}
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm text-zinc-200">
+                          {b.title || '（未命名）'}
+                        </div>
+                        <div className="mt-0.5 text-[11px] text-zinc-600">
+                          {b.wordCount > 0 ? fmtWords(b.wordCount) : '未写'}
+                        </div>
                       </div>
-                      <div className="mt-0.5 text-[11px] text-zinc-600">
-                        {b.wordCount > 0 ? fmtWords(b.wordCount) : '未写'}
-                      </div>
+                      {b.hasDraft ? (
+                        <Badge className="bg-emerald-600/15 text-emerald-400">
+                          {STATUS_LABEL[b.chapterStatus] ?? b.chapterStatus}
+                        </Badge>
+                      ) : (
+                        <Badge>{STATUS_LABEL[b.status] ?? b.status}</Badge>
+                      )}
                     </div>
-                    {b.hasDraft ? (
-                      <Badge className="bg-emerald-600/15 text-emerald-400">
-                        {STATUS_LABEL[b.chapterStatus] ?? b.chapterStatus}
-                      </Badge>
-                    ) : (
-                      <Badge>{STATUS_LABEL[b.status] ?? b.status}</Badge>
-                    )}
-                  </div>
-                ))}
+                  ))}
+              </div>
             </div>
-          </div>
-        ))
+          ))}
+        </>
       )}
     </div>
   )

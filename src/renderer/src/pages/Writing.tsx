@@ -1,6 +1,6 @@
 import type { ContextPart, ReviewResult } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { DiffView } from '../components/DiffView'
 import { Badge, Button, Card, Label, Select, Textarea } from '../components/ui'
 import { fmtDuration, fmtTokens } from '../lib/format'
@@ -64,6 +64,16 @@ interface BatchState {
   log: string[]
 }
 
+interface AlignRevision {
+  outlineId: string
+  volume: number
+  chapterNo: number
+  title: string
+  synopsis: string
+  hook?: string
+  reason?: string
+}
+
 const STATUS_BADGE: Record<string, { label: string; tone: 'default' | 'amber' | 'green' }> = {
   draft: { label: '草稿', tone: 'default' },
   approved: { label: '已审定', tone: 'amber' },
@@ -109,8 +119,10 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const [batchOpen, setBatchOpen] = useState(false)
   const [batchFrom, setBatchFrom] = useState('')
   const [batchTo, setBatchTo] = useState('')
-  const [pauseEach, setPauseEach] = useState(true)
+  const [pauseEach, setPauseEach] = useState(false)
   const [batch, setBatch] = useState<BatchState | null>(null)
+  // 侧栏章节按每 20 章分段，折叠态记录「卷:段」key
+  const [collapsedSegs, setCollapsedSegs] = useState<Set<string>>(new Set())
   const requestIdRef = useRef<string | null>(null)
   const streamTargetRef = useRef<'editor' | 'candidate'>('editor')
   const polishedRef = useRef(false)
@@ -490,6 +502,33 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
       })
   }
 
+  const closeMenu = (e: SyntheticEvent): void => {
+    ;(e.currentTarget.closest('details') as HTMLDetailsElement | null)?.removeAttribute('open')
+  }
+
+  /** 大纲对齐：AI 比对已写剧情与后续大纲，返回修订建议；auto=true 直接落库并返回修订数 */
+  const alignOutline = async (auto: boolean): Promise<number | AlignRevision[]> => {
+    const payload = await runPipeline('outlineAlign', { projectId })
+    const d = payload.data as { parsed?: boolean; revisions?: AlignRevision[]; error?: string }
+    if (d?.error) throw new Error(d.error)
+    if (!d?.parsed || !d.revisions) throw new Error('对齐结果解析失败')
+    if (!auto) return d.revisions
+    let n = 0
+    for (const r of d.revisions) {
+      await window.api.novel.outlineSave({
+        id: r.outlineId,
+        projectId,
+        volume: r.volume,
+        chapterNo: r.chapterNo,
+        title: r.title,
+        synopsis: r.synopsis,
+        hook: r.hook
+      })
+      n++
+    }
+    return n
+  }
+
   const runBatchList = async (ids: string[]): Promise<void> => {
     batchStopRef.current = false
     setBatch({ running: true, paused: false, done: 0, total: ids.length, currentNo: 0, log: [] })
@@ -539,11 +578,13 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
 
         // 硬闸判定 + 自动返修（一次）
         let passed = d?.lint?.pass !== false
+        let repaired = false
         if (!passed && d?.lint) {
           const focus = d.lint.issues
             .map((it) => `- ${it.rule}：${it.advice}${it.quote ? `（原文：${it.quote}）` : ''}`)
             .join('\n')
           appendLog(`第${brief.chapterNo}章 硬闸未过（${d.lint.issues.length} 项），自动返修…`)
+          repaired = true
           try {
             await runPipeline('polish', { outlineId: ids[i], focus, save: true })
             const re = (await window.api.lint.run(ids[i])) as LintReport
@@ -563,6 +604,20 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
           appendLog(`第${brief.chapterNo}章 ${passed ? '✓ 完成' : '⚠ 已写入（需人工）'}`)
         } catch (err) {
           appendLog(`第${brief.chapterNo}章 摘要失败：${(err as Error).message}`)
+        }
+        // 大纲状态自动流转：写完即标，不等手动定稿
+        try {
+          await window.api.novel.outlineSave({
+            id: ids[i],
+            projectId,
+            volume: brief.volume,
+            chapterNo: brief.chapterNo,
+            title: brief.title,
+            synopsis: brief.synopsis,
+            status: repaired && passed ? 'polished' : 'written'
+          })
+        } catch {
+          /* 状态流转失败不阻断批量 */
         }
         loadBriefs()
 
@@ -595,6 +650,20 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
             : prev
         )
         return
+      }
+    }
+    // 全部跑完（非中止/熔断）→ 附带自动对齐后续大纲
+    if (!batchStopRef.current && results.length === ids.length) {
+      appendLog('自动对齐后续大纲…')
+      try {
+        const n = await alignOutline(true)
+        appendLog(
+          typeof n === 'number' && n > 0
+            ? `自动对齐完成：已修订 ${n} 章大纲梗概`
+            : '自动对齐：后续大纲与已写剧情一致，无需修订'
+        )
+      } catch (err) {
+        appendLog(`自动对齐失败：${(err as Error).message}`)
       }
     }
     setBatch((prev) => (prev ? { ...prev, running: false } : prev))
@@ -655,46 +724,87 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               </div>
             </div>
           )}
-          {volumes.map((vol) => (
-            <div key={vol} className="mb-2">
-              <div className="px-2 py-1 text-[10px] font-medium tracking-wider text-zinc-600">
-                第 {vol} 卷
+          {volumes.map((vol) => {
+            const inVol = briefs.filter((b) => b.volume === vol)
+            // 每 20 章一段：段号 = floor((chapterNo-1)/20)
+            const segs = new Map<number, typeof inVol>()
+            for (const b of inVol) {
+              const seg = Math.floor((b.chapterNo - 1) / 20)
+              const list = segs.get(seg) ?? []
+              list.push(b)
+              segs.set(seg, list)
+            }
+            return (
+              <div key={vol} className="mb-2">
+                <div className="px-2 py-1 text-[10px] font-medium tracking-wider text-zinc-600">
+                  第 {vol} 卷
+                </div>
+                {[...segs.entries()]
+                  .sort((a, b) => a[0] - b[0])
+                  .map(([seg, list]) => {
+                    const key = `${vol}:${seg}`
+                    const from = list[0].chapterNo
+                    const to = list[list.length - 1].chapterNo
+                    const collapsed = collapsedSegs.has(key)
+                    const hasSelected = list.some((b) => b.id === selectedId)
+                    return (
+                      <div key={key}>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setCollapsedSegs((prev) => {
+                              const next = new Set(prev)
+                              if (next.has(key)) next.delete(key)
+                              else next.add(key)
+                              return next
+                            })
+                          }
+                          className="flex w-full cursor-pointer items-center gap-1 rounded px-2 py-1 text-left text-[10px] text-zinc-500 hover:bg-zinc-800/50 hover:text-zinc-300"
+                        >
+                          <span className={`transition-transform ${collapsed ? '' : 'rotate-90'}`}>
+                            ▸
+                          </span>
+                          第 {from}-{to} 章
+                          <span className="ml-auto font-normal text-zinc-700">{list.length}</span>
+                        </button>
+                        {(!collapsed || hasSelected) &&
+                          list.map((b) => (
+                            <button
+                              type="button"
+                              key={b.id}
+                              onClick={() => openChapter(b.id)}
+                              className={`mb-0.5 flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
+                                selectedId === b.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
+                              }`}
+                            >
+                              <span className="w-7 shrink-0 text-right font-mono text-xs text-zinc-500">
+                                {b.chapterNo}
+                              </span>
+                              <span
+                                className={`min-w-0 flex-1 truncate text-xs ${
+                                  selectedId === b.id ? 'text-zinc-100' : 'text-zinc-300'
+                                }`}
+                              >
+                                {b.title || '未命名'}
+                              </span>
+                              <span
+                                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                                  b.hasDraft ? 'bg-emerald-500' : 'bg-zinc-700'
+                                }`}
+                                title={b.hasDraft ? `${b.wordCount} 字` : '未写'}
+                              />
+                            </button>
+                          ))}
+                      </div>
+                    )
+                  })}
               </div>
-              {briefs
-                .filter((b) => b.volume === vol)
-                .map((b) => (
-                  <button
-                    type="button"
-                    key={b.id}
-                    onClick={() => openChapter(b.id)}
-                    className={`mb-0.5 flex w-full cursor-pointer items-center gap-2 rounded-md px-2.5 py-1.5 text-left transition-colors ${
-                      selectedId === b.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-                    }`}
-                  >
-                    <span className="w-7 shrink-0 text-right font-mono text-xs text-zinc-500">
-                      {b.chapterNo}
-                    </span>
-                    <span
-                      className={`min-w-0 flex-1 truncate text-xs ${
-                        selectedId === b.id ? 'text-zinc-100' : 'text-zinc-300'
-                      }`}
-                    >
-                      {b.title || '未命名'}
-                    </span>
-                    <span
-                      className={`h-1.5 w-1.5 shrink-0 rounded-full ${
-                        b.hasDraft ? 'bg-emerald-500' : 'bg-zinc-700'
-                      }`}
-                      title={b.hasDraft ? `${b.wordCount} 字` : '未写'}
-                    />
-                  </button>
-                ))}
-            </div>
-          ))}
+            )
+          })}
         </div>
       </Card>
 
-      <Card className="flex min-w-0 flex-1 flex-col p-4">
+      <Card className="flex min-h-0 min-w-0 flex-1 flex-col overflow-y-auto p-4">
         {selected ? (
           <>
             <div className="mb-3 flex flex-wrap items-center gap-2.5">
@@ -705,9 +815,6 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               {dirty && <Badge tone="amber">未保存</Badge>}
               <span className="text-xs text-zinc-500">{wordCount} 字</span>
               <div className="ml-auto flex min-w-0 gap-2 overflow-x-auto pb-1 [&>*]:shrink-0 md:flex-wrap md:overflow-visible md:pb-0">
-                <Button variant="ghost" onClick={previewContext} disabled={busyAny}>
-                  上下文
-                </Button>
                 <Button variant="ghost" onClick={saveDraft} disabled={!dirty || busyAny}>
                   保存
                 </Button>
@@ -745,68 +852,81 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                 <Button onClick={generateDraft} disabled={busyAny}>
                   {busy === 'chapter' ? '生成中…' : selected.hasDraft ? '重新生成' : 'AI 初稿'}
                 </Button>
-                <Button variant="ghost" onClick={polish} disabled={busyAny || !selected.hasDraft}>
-                  {busy === 'polish' ? '润色中…' : '润色'}
-                </Button>
-                <Button variant="ghost" onClick={expand} disabled={busyAny || !selected.hasDraft}>
-                  {busy === 'expand' ? '扩写中…' : '扩写'}
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => void check()}
-                  disabled={busyAny || !selected.hasDraft}
-                >
-                  {busy === 'check' ? '检查中…' : '检查'}
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => void runLint()}
-                  disabled={busyAny || !content.trim()}
-                >
-                  硬闸
-                </Button>
-                <Button
-                  variant="ghost"
-                  onClick={() => void review()}
-                  disabled={busyAny || !selected.hasDraft}
-                >
-                  {busy === 'review' ? '评审中…' : '评审'}
-                </Button>
-                <Button onClick={finalize} disabled={busyAny || content.trim().length === 0}>
-                  {busy === 'summary' ? '定稿中…' : '定稿'}
-                </Button>
-                <span className="mx-1 w-px bg-zinc-700" />
-                <Button
-                  variant="ghost"
-                  className="px-2"
-                  onClick={() => exportChapter('txt')}
-                  disabled={busyAny}
-                >
-                  txt
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="px-2"
-                  onClick={() => exportChapter('md')}
-                  disabled={busyAny}
-                >
-                  md
-                </Button>
-                <Button
-                  variant="ghost"
-                  className="px-2"
-                  onClick={() => exportChapter('docx')}
-                  disabled={busyAny}
-                >
-                  docx
-                </Button>
                 <Button
                   variant="ghost"
                   onClick={() => setBatchOpen((v) => !v)}
                   disabled={batch?.running ?? false}
                 >
-                  批量
+                  自动写作
                 </Button>
+                <Button onClick={finalize} disabled={busyAny || content.trim().length === 0}>
+                  {busy === 'summary' ? '定稿中…' : '定稿'}
+                </Button>
+                <details className="relative">
+                  <summary className="inline-flex cursor-pointer list-none items-center rounded-md border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-400 hover:text-zinc-200 [&::-webkit-details-marker]:hidden">
+                    更多 ▾
+                  </summary>
+                  <div className="absolute right-0 top-full z-20 mt-1 w-40 rounded-md border border-zinc-700 bg-zinc-900 p-1 shadow-xl">
+                    {(
+                      [
+                        ['上下文', () => previewContext(), busyAny, null],
+                        [
+                          '润色',
+                          polish,
+                          busyAny || !selected.hasDraft,
+                          busy === 'polish' ? '润色中…' : null
+                        ],
+                        [
+                          '扩写',
+                          expand,
+                          busyAny || !selected.hasDraft,
+                          busy === 'expand' ? '扩写中…' : null
+                        ],
+                        [
+                          '检查',
+                          () => void check(),
+                          busyAny || !selected.hasDraft,
+                          busy === 'check' ? '检查中…' : null
+                        ],
+                        ['硬闸', () => void runLint(), busyAny || !content.trim(), null],
+                        [
+                          '评审',
+                          () => void review(),
+                          busyAny || !selected.hasDraft,
+                          busy === 'review' ? '评审中…' : null
+                        ]
+                      ] as Array<[string, () => void, boolean, string | null]>
+                    ).map(([label, fn, disabled, busyLabel]) => (
+                      <button
+                        type="button"
+                        key={label}
+                        disabled={disabled}
+                        onClick={(e) => {
+                          closeMenu(e)
+                          fn()
+                        }}
+                        className="block w-full cursor-pointer rounded px-2.5 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:text-zinc-600"
+                      >
+                        {busyLabel ?? label}
+                      </button>
+                    ))}
+                    <div className="my-1 h-px bg-zinc-800" />
+                    {(['txt', 'md', 'docx'] as const).map((f) => (
+                      <button
+                        type="button"
+                        key={f}
+                        disabled={busyAny}
+                        onClick={(e) => {
+                          closeMenu(e)
+                          exportChapter(f)
+                        }}
+                        className="block w-full cursor-pointer rounded px-2.5 py-1.5 text-left text-xs text-zinc-300 hover:bg-zinc-800 disabled:cursor-not-allowed disabled:text-zinc-600"
+                      >
+                        导出 {f}
+                      </button>
+                    ))}
+                  </div>
+                </details>
               </div>
             </div>
 
@@ -861,13 +981,13 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                       onClick={startBatch}
                       disabled={!batchFrom || !batchTo}
                     >
-                      开始批量
+                      开始自动写作
                     </Button>
                   </div>
                 </div>
                 <div className="mt-2 text-xs text-zinc-600">
-                  流程：逐章「生成初稿 →
-                  自动摘要」（保证后续章节上下文连续）。逐章暂停时每章完成后停下待审。
+                  全自动逐章：生成初稿 → 硬闸未过自动返修 → 自动摘要 → 大纲标记已写；全部完成后 AI
+                  会对照已写剧情自动修订后续大纲。逐章暂停（高级）时每章完成后停下待审。
                 </div>
               </div>
             )}
@@ -876,7 +996,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
               <div className="mb-3 rounded-md border border-zinc-800 bg-zinc-900 p-3">
                 <div className="flex items-center gap-3">
                   <span className="text-xs text-zinc-400">
-                    批量进度：{batch.done}/{batch.total}
+                    自动写作进度：{batch.done}/{batch.total}
                     {batch.running && batch.currentNo > 0 ? ` · 第${batch.currentNo}章进行中` : ''}
                     {batch.paused ? ' · 已暂停待审' : ''}
                   </span>
@@ -888,7 +1008,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                     )}
                     {batch.running && (
                       <Button variant="danger" className="px-2 py-1 text-xs" onClick={stopBatch}>
-                        停止批量
+                        停止
                       </Button>
                     )}
                   </div>
@@ -911,7 +1031,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
             )}
 
             <Textarea
-              className="min-h-0 flex-1 leading-8"
+              className="min-h-[45vh] shrink-0 leading-8 md:min-h-[55vh]"
               value={content}
               onChange={(e) => {
                 setContent(e.target.value)
@@ -1140,7 +1260,8 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
           <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-zinc-600">
             <span>左侧选择一章开始写作</span>
             <span className="text-xs">
-              单章：AI 初稿 → 编辑 → 定稿（自动摘要/伏笔）；「批量」可连续生成多章
+              单章：AI 初稿 → 编辑 →
+              定稿（自动摘要/伏笔）；「自动写作」可连续生成多章并自动修订后续大纲
             </span>
           </div>
         )}

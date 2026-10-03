@@ -298,3 +298,93 @@ export function applySummaryResult(
 
   return { planted: plantedCount, resolved: resolvedCount, parsed: true }
 }
+
+const ALIGN_SYSTEM = [
+  '你是小说项目的连续性编辑。给定「已写章节的实际剧情」与「后续未写章节的大纲梗概」，检查后续大纲是否与已写剧情脱节（人物状态不符、伏笔悬空、情节矛盾、节奏断裂），仅对需要修订的章节输出修订条目。',
+  '严格输出 JSON 数组，不要 markdown 代码块、不要解释文字：',
+  '[{"chapter_no":9,"synopsis":"修订后的完整章节梗概（含本章目标/关键冲突/结尾钩子，120字内）","hook":"结尾钩子（可选）","reason":"修订原因一句话"}]',
+  '要求：',
+  '- 只输出确实需要修订的章节；与已写剧情衔接良好的章节不要输出',
+  '- synopsis 必须是修订后的完整梗概（不是增量说明），并与前后章自然衔接',
+  '- 若全部无需修订，输出 []',
+  '- JSON 字符串内不得出现未转义的引号或换行'
+].join('\n')
+
+export function buildAlignRequest(projectId: string): ChatParams {
+  const outlines = store.listOutlines(projectId).sort((a, b) => a.chapterNo - b.chapterNo)
+  const written: string[] = []
+  const pending: string[] = []
+  for (const o of outlines) {
+    const chapter = store.getChapterByOutline(o.id)
+    if (chapter) {
+      const s = store.getSummary(chapter.id)
+      written.push(`第${o.chapterNo}章《${o.title}》：${s?.summary?.slice(0, 300) || '（无摘要）'}`)
+    } else {
+      pending.push(
+        `第${o.chapterNo}章《${o.title}》：${o.synopsis.slice(0, 200)}${o.hook ? `（钩子：${o.hook}）` : ''}`
+      )
+    }
+  }
+  if (written.length === 0) throw new Error('还没有已写作的章节，无需对齐')
+  if (pending.length === 0) throw new Error('没有未写作的大纲章节，无需对齐')
+  const vols = store.listVolumeSummaries(projectId)
+  const system = [
+    ALIGN_SYSTEM,
+    vols.length > 0 &&
+      `【各卷剧情摘要】\n${vols.map((v) => `第${v.volume}卷：${v.summary.slice(0, 500)}`).join('\n')}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  // 已写章节只取最近 30 章，防止超长
+  const user = `【已写章节实际剧情（最近 ${Math.min(30, written.length)} 章）】\n${written.slice(-30).join('\n')}\n\n【后续未写章节大纲（共 ${pending.length} 章）】\n${pending.join('\n')}\n\n请检查后续大纲与已写剧情的连贯性，输出需修订章节的 JSON 数组。`
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: 8192,
+    temperature: 0.4,
+    purpose: 'outline'
+  }
+}
+
+export interface AlignRevision {
+  outlineId: string
+  volume: number
+  chapterNo: number
+  title: string
+  synopsis: string
+  hook?: string
+  reason?: string
+}
+
+export function parseAlignResult(
+  projectId: string,
+  text: string
+): { parsed: boolean; revisions: AlignRevision[] } {
+  const arr = extractJsonArray(text)
+  if (!arr) return { parsed: false, revisions: [] }
+  const byKey = new Map<string, OutlineItem>()
+  for (const o of store.listOutlines(projectId)) byKey.set(`${o.volume}:${o.chapterNo}`, o)
+  const revisions: AlignRevision[] = []
+  for (const item of arr) {
+    const r = item as Record<string, unknown>
+    const chapterNo = Number(r.chapter_no ?? r.chapterNo)
+    const synopsis = String(r.synopsis ?? '').trim()
+    if (!chapterNo || Number.isNaN(chapterNo) || !synopsis) continue
+    // 未指定卷时在全部卷中找同章号且未写的章节
+    const hit =
+      byKey.get(`1:${chapterNo}`) ??
+      [...byKey.values()].find((o) => o.chapterNo === chapterNo && !store.getChapterByOutline(o.id))
+    if (!hit) continue
+    revisions.push({
+      outlineId: hit.id,
+      volume: hit.volume,
+      chapterNo: hit.chapterNo,
+      title: hit.title,
+      synopsis: synopsis.slice(0, 1000),
+      hook: typeof r.hook === 'string' ? r.hook.slice(0, 120) : undefined,
+      reason: typeof r.reason === 'string' ? r.reason.slice(0, 200) : undefined
+    })
+  }
+  return { parsed: true, revisions }
+}
