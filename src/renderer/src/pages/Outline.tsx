@@ -1,6 +1,7 @@
 import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { fireCanonSync } from '../../../wizard/canonStore'
 import { type AlignRevision, applyAlignRevisions } from '../../../wizard/outlineAlign'
 import {
   deriveStartNo,
@@ -637,6 +638,14 @@ export default function Outline({
                 中断
               </Button>
             )}
+            <Button
+              variant="ghost"
+              onClick={() => {
+                if (projectId) fireCanonSync(projectId, volume)
+              }}
+            >
+              同步设定与人物
+            </Button>
             {outlineActive && !generating && (
               <span className="text-xs text-amber-600">
                 后台大纲生成中，完成后自动导入（可离开此页）

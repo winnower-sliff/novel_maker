@@ -6,7 +6,7 @@ import { NumberField, StreamBox } from './widgets'
 import { loadProjectPlan, saveProjectPlan } from './wizardPlan'
 
 /** 人物设定页生成区（桌面/移动共用）：一键按方案清单逐个生成人物卡（save:false 仅预览），
- *  预览挑选后落库；已入库人物可单卡重生成（按 id 更新，不重复插入）。 */
+ *  预览挑选后落库；入库后卡片自动从队列消失（库内列表可继续编辑/重生成）。 */
 interface CharacterGenPanelProps {
   ui: WizardUi
   projectId: string
@@ -14,30 +14,20 @@ interface CharacterGenPanelProps {
   onChanged?: () => void
 }
 
-type ItemStatus = 'pending' | 'running' | 'done' | 'error' | 'saved'
+type ItemStatus = 'pending' | 'running' | 'done' | 'error'
 
 interface GenItem extends PremiseDraftCharacter {
   card: string
   tags: string[]
-  savedId: string | null
   status: ItemStatus
 }
 
-/** 方案清单 + 已有库人物 → 生成队列初始态（同名即视为已入库） */
+/** 方案清单 → 生成队列；同名已入库人物不入队（下方库内列表可编辑/重生成） */
 function buildItems(chars: PremiseDraftCharacter[], existing: Character[]): GenItem[] {
-  const byName = new Map(existing.map((c) => [c.name.trim(), c]))
+  const savedNames = new Set(existing.map((c) => c.name.trim()))
   return chars
-    .filter((c) => c.name.trim())
-    .map((c) => {
-      const hit = byName.get(c.name.trim())
-      return {
-        ...c,
-        card: hit?.card ?? '',
-        tags: hit?.tags ? hit.tags.split(',').filter(Boolean) : [],
-        savedId: hit?.id ?? null,
-        status: hit ? 'saved' : 'pending'
-      }
-    })
+    .filter((c) => c.name.trim() && !savedNames.has(c.name.trim()))
+    .map((c) => ({ ...c, card: '', tags: [], status: 'pending' as ItemStatus }))
 }
 
 export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPanelProps) {
@@ -72,9 +62,7 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
           // 面板内已生成未保存的卡不因重挂丢失：按名保留
           return next.map((n) => {
             const old = prev.find((p) => p.name.trim() === n.name.trim())
-            return !n.savedId && old?.card
-              ? { ...n, card: old.card, tags: old.tags, status: old.status }
-              : n
+            return old?.card ? { ...n, card: old.card, tags: old.tags, status: old.status } : n
           })
         })
       })
@@ -96,8 +84,8 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
     setItems((prev) => prev.map((it) => (it.name === name ? { ...it, ...patch } : it)))
   }
 
-  /** 生成单卡（save:false 只预览）；saveThen=true 时成功后立即落库 */
-  const genOne = async (item: GenItem, saveThen: boolean): Promise<boolean> => {
+  /** 生成单卡预览（save:false 不落库），确认满意由调用方走 saveOne */
+  const genOne = async (item: GenItem): Promise<boolean> => {
     setRunIndex(itemsRef.current.findIndex((x) => x.name === item.name))
     setDelta('')
     setError(null)
@@ -115,7 +103,6 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
       const main = payload.preview?.main ?? ''
       if (!main.trim()) throw new Error('AI 未输出有效人物卡')
       patchItem(item.name, { card: main, tags: payload.preview?.mainTags ?? [], status: 'done' })
-      if (saveThen) return await saveOne(item.name)
       return true
     } catch (e) {
       patchItem(item.name, { status: 'error' })
@@ -127,14 +114,13 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
     }
   }
 
-  /** 预览卡落库：已有 id 更新（role 用清单 brief 保持一致），否则新建 */
+  /** 预览卡落库（新建），成功后自动从队列消失：下方库内列表可继续编辑/重生成 */
   const saveOne = async (name: string): Promise<boolean> => {
     const it = itemsRef.current.find((x) => x.name === name)
     if (!it?.card.trim()) return false
     try {
       await window.api.novel.characterSave({
         projectId,
-        id: it.savedId ?? undefined,
         name: it.name.trim(),
         role: it.brief.trim(),
         tags: it.tags.join(','),
@@ -144,13 +130,9 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
       setError(e instanceof Error ? e.message : String(e))
       return false
     }
-    if (!it.savedId) {
-      // 新建后补拉一次拿 id，避免重复保存插重
-      const list = await window.api.novel.characters(projectId)
-      const hit = list.find((c) => c.name.trim() === it.name.trim())
-      patchItem(it.name, { savedId: hit?.id ?? null })
-    }
-    patchItem(it.name, { status: 'saved' })
+    const rest = itemsRef.current.filter((x) => x.name !== it.name)
+    setItems(rest)
+    syncPlan(rest)
     onChanged?.()
     return true
   }
@@ -159,8 +141,8 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
     setRunning(true)
     for (const it of itemsRef.current) {
       if (!it.brief.trim()) continue
-      if (it.status === 'saved' || it.status === 'running') continue
-      const ok = await genOne(it, false)
+      if (it.status === 'running') continue
+      const ok = await genOne(it)
       if (!ok) break // 失败即停，可单卡重试
     }
     setRunning(false)
@@ -195,7 +177,7 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
     }
     const next: GenItem[] = [
       ...itemsRef.current,
-      { name, brief: customBrief.trim(), card: '', tags: [], savedId: null, status: 'pending' }
+      { name, brief: customBrief.trim(), card: '', tags: [], status: 'pending' }
     ]
     setItems(next)
     syncPlan(next)
@@ -231,7 +213,6 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
           brief: f.brief,
           card: '',
           tags: [],
-          savedId: null,
           status: 'pending' as ItemStatus
         }))
       ]
@@ -253,7 +234,6 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
 
   const pendingCount = items.filter((i) => i.status === 'pending').length
   const doneCount = items.filter((i) => i.status === 'done').length
-  const savedCount = items.filter((i) => i.status === 'saved').length
 
   return (
     <div className="space-y-3">
@@ -275,7 +255,6 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
             保存全部（{doneCount}）
           </Button>
         )}
-        {savedCount > 0 && <Badge tone="green">已入库 {savedCount}</Badge>}
       </div>
       <div className="flex flex-wrap items-end gap-2">
         <div className="w-28">
@@ -314,7 +293,7 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
       </div>
       <p className="text-xs text-zinc-500">
         初始清单来自「基本设定」的方案；可「AI
-        补充人物」或「+自定义」加人，生成后先预览，确认满意再入库，入库后仍可逐张编辑。
+        补充人物」或「+自定义」加人，生成后先预览，确认满意再入库——入库后卡片自动从这里消失，下方列表可继续编辑。
       </p>
       {error && <div className="text-xs text-red-400">{error}</div>}
       <div className="space-y-2">
@@ -327,7 +306,6 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
             >
               <div className="flex items-center gap-2">
                 <span className="text-sm font-medium text-zinc-100">{it.name}</span>
-                {it.status === 'saved' && <Badge tone="green">已入库</Badge>}
                 {it.status === 'done' && <Badge tone="amber">待确认</Badge>}
                 {it.status === 'error' && <Badge tone="red">失败</Badge>}
                 <span className="ml-auto flex items-center gap-1.5">
@@ -337,7 +315,7 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
                     </Button>
                   )}
                   {!running && (
-                    <Button variant="ghost" onClick={() => void genOne(it, it.status !== 'saved')}>
+                    <Button variant="ghost" onClick={() => void genOne(it)}>
                       {it.card ? '重生成' : '生成'}
                     </Button>
                   )}

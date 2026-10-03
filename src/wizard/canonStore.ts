@@ -71,15 +71,18 @@ export function ingestCanonSync(
   invalidate(projectId)
 }
 
-/** 大纲导入成功后触发设定同步（后台运行，失败静默，不干扰大纲主流程） */
+/** 大纲导入成功后触发设定同步（后台运行，不阻塞大纲主流程；失败可见，可在大纲页手动重试） */
 export function fireCanonSync(projectId: string, volume: number): void {
   const { done } = startPipeline('canonSync', { projectId, volume })
   void done
     .then((r) => {
       ingestCanonSync(projectId, volume, r.data as CanonSyncResult)
     })
-    .catch(() => {
-      /* 设定同步失败静默：不影响大纲导入结果 */
+    .catch((e: unknown) => {
+      pushToast(
+        'error',
+        `第 ${volume} 卷设定同步失败：${e instanceof Error ? e.message : String(e)}（可在大纲页手动重试）`
+      )
     })
 }
 

@@ -10,6 +10,7 @@ import {
   rememberVolumePlan,
   useOutlineRunActive
 } from '@wizard/volumeGen'
+import { fireCanonSync } from '@wizard/canonStore'
 import { NumberField, OutlineProgress } from '@wizard/widgets'
 import { loadProjectPlan, type WizardPlanFull } from '@wizard/wizardPlan'
 import type { Foreshadow, OutlineItem } from '@shared/types'
@@ -339,6 +340,13 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           {targetWritten && (
             <span className="text-[11px] text-zinc-500">该卷已有 {volWritten(volume)} 章正文，重写将全卷覆盖</span>
           )}
+          <button
+            type="button"
+            onClick={() => fireCanonSync(projectId, volume)}
+            className="cursor-pointer rounded-lg border border-zinc-700 px-3.5 py-2 text-sm text-zinc-300 active:bg-zinc-900"
+          >
+            同步设定与人物
+          </button>
         </div>
       </div>
 
