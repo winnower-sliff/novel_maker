@@ -51,7 +51,9 @@ export const pipelineHandlers = {
         const params = PIPELINE_PARAM_SCHEMAS.outline.parse(rawParams)
         return startStream(ctx.sink, buildOutlineRequest(params), {
           action,
-          afterDone: (r) => applyOutlineResult(params, r.text)
+          afterDone: (r) => applyOutlineResult(params, r.text),
+          // 大章数输出超长被截断时自动续写拼接（与 worldbuild 同机制）
+          continueOnMaxTokens: 3
         })
       }
       case 'outlineAlign': {

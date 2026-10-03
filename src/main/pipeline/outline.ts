@@ -51,7 +51,7 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
     model: '',
     system,
     messages: [{ role: 'user', content: user }],
-    maxTokens: 16384,
+    maxTokens: Math.min(65536, Math.max(16384, p.count * 1400)),
     temperature: 0.7,
     purpose: 'outline'
   }
