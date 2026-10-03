@@ -224,6 +224,12 @@ export interface Character {
   updatedAt: number
 }
 
+/** 人物关联展示：按人物 id 索引的出场章节统计（主进程扫描已写正文） */
+export interface CharacterAppearance {
+  chapters: number[]
+  count: number
+}
+
 export interface WorldbuildEntry {
   id: string
   projectId: string

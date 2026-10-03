@@ -9,6 +9,7 @@ import {
   buildAlignRequest,
   buildChapterRequest,
   buildCharacterRequest,
+  buildCharacterRosterRequest,
   buildCheckRequest,
   buildExpandRequest,
   buildOutlineRequest,
@@ -17,11 +18,13 @@ import {
   buildReviewRequest,
   buildStateSyncRequest,
   buildSummaryRequest,
+  buildVolumeIdeaRequest,
   buildVolumeSummaryRequest,
   buildWorldbuildRequest,
   guessCharacterName,
   parseAlignResult,
   parseCharacterCards,
+  parseCharacterRoster,
   parseCheckResult,
   parsePremiseDraft,
   parseReviewResult,
@@ -97,6 +100,18 @@ export const pipelineHandlers = {
           // 大章数输出超长被截断时自动续写拼接（与 worldbuild 同机制）
           continueOnMaxTokens: 3
         })
+      }
+      case 'volumeIdea': {
+        const params = PIPELINE_PARAM_SCHEMAS.volumeIdea.parse(rawParams)
+        return startStream(
+          ctx.sink,
+          buildVolumeIdeaRequest(params.projectId, params.volume, params.idea),
+          {
+            action,
+            meta: { projectId: params.projectId },
+            afterDone: (r) => ({ idea: r.text.trim() })
+          }
+        )
       }
       case 'outlineAlign': {
         const params = PIPELINE_PARAM_SCHEMAS.outlineAlign.parse(rawParams)
@@ -271,6 +286,18 @@ export const pipelineHandlers = {
                 }
               return saveParsedCharacters(params.projectId, parsed, params.name ?? '')
             }
+          }
+        )
+      }
+      case 'characterRoster': {
+        const params = PIPELINE_PARAM_SCHEMAS.characterRoster.parse(rawParams)
+        return startStream(
+          ctx.sink,
+          buildCharacterRosterRequest(params.projectId, params.count ?? 3, params.note),
+          {
+            action,
+            meta: { projectId: params.projectId },
+            afterDone: (r) => ({ roster: parseCharacterRoster(r.text) })
           }
         )
       }

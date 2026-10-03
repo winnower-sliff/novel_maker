@@ -2,8 +2,8 @@ import type { Character, PremiseDraftCharacter } from '@shared/types'
 import { useEffect, useRef, useState } from 'react'
 import { startPipeline } from './pipeline'
 import type { WizardUi } from './uiTypes'
-import { StreamBox } from './widgets'
-import { loadProjectPlan } from './wizardPlan'
+import { NumberField, StreamBox } from './widgets'
+import { loadProjectPlan, saveProjectPlan } from './wizardPlan'
 
 /** 人物设定页生成区（桌面/移动共用）：一键按方案清单逐个生成人物卡（save:false 仅预览），
  *  预览挑选后落库；已入库人物可单卡重生成（按 id 更新，不重复插入）。 */
@@ -41,7 +41,7 @@ function buildItems(chars: PremiseDraftCharacter[], existing: Character[]): GenI
 }
 
 export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPanelProps) {
-  const { Badge, Button } = ui
+  const { Badge, Button, Input } = ui
   const [items, setItems] = useState<GenItem[]>([])
   const [running, setRunning] = useState(false)
   const [runIndex, setRunIndex] = useState(-1)
@@ -51,12 +51,21 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
   // 生成期间改 items 的闭包读到旧值：跑队列用 ref 镜像
   const itemsRef = useRef<GenItem[]>([])
   itemsRef.current = items
+  // 「+自定义」与「AI 补充」
+  const [customName, setCustomName] = useState('')
+  const [customBrief, setCustomBrief] = useState('')
+  const [addCount, setAddCount] = useState(3)
+  const [adding, setAdding] = useState(false)
+  const addAbortRef = useRef<(() => void) | null>(null)
+  // 库内人物名（含不在方案清单里的），供补充名单去重
+  const existingNamesRef = useRef<string[]>([])
 
   useEffect(() => {
     let alive = true
     void Promise.all([loadProjectPlan(projectId), window.api.novel.characters(projectId)])
       .then(([plan, existing]) => {
         if (!alive) return
+        existingNamesRef.current = existing.map((c) => c.name.trim())
         const roster = plan?.chars ?? []
         setItems((prev) => {
           const next = buildItems(roster, existing)
@@ -78,6 +87,7 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
   useEffect(
     () => () => {
       abortRef.current?.()
+      addAbortRef.current?.()
     },
     []
   )
@@ -168,6 +178,79 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
     }
   }
 
+  /** 队列名单写回方案存档（wizard_plan.chars），刷新/重挂不丢 */
+  const syncPlan = (list: GenItem[]): void => {
+    void saveProjectPlan(projectId, { chars: list.map(({ name, brief }) => ({ name, brief })) })
+  }
+
+  const addCustom = (): void => {
+    const name = customName.trim()
+    if (!name) return
+    if (
+      itemsRef.current.some((x) => x.name.trim() === name) ||
+      existingNamesRef.current.includes(name)
+    ) {
+      setError('已有同名人物（在队列或库中）')
+      return
+    }
+    const next: GenItem[] = [
+      ...itemsRef.current,
+      { name, brief: customBrief.trim(), card: '', tags: [], savedId: null, status: 'pending' }
+    ]
+    setItems(next)
+    syncPlan(next)
+    setCustomName('')
+    setCustomBrief('')
+    setError(null)
+  }
+
+  /** AI 补充名单（第一步只出「姓名+简述」，入队后再生成卡片） */
+  const aiAdd = async (): Promise<void> => {
+    setAdding(true)
+    setError(null)
+    const { done, abort } = startPipeline(
+      'characterRoster',
+      { projectId, count: addCount },
+      () => {}
+    )
+    addAbortRef.current = abort
+    try {
+      const payload = (await done).data as { roster?: Array<{ name: string; brief: string }> }
+      const roster = payload.roster ?? []
+      if (roster.length === 0) throw new Error('AI 未输出有效名单，请重试')
+      const known = new Set<string>([
+        ...itemsRef.current.map((x) => x.name.trim()),
+        ...existingNamesRef.current
+      ])
+      const fresh = roster.filter((r) => r.name.trim() && !known.has(r.name.trim()))
+      if (fresh.length === 0) throw new Error('AI 补充的人物都已在队列或库中')
+      const next: GenItem[] = [
+        ...itemsRef.current,
+        ...fresh.map((f) => ({
+          name: f.name.trim(),
+          brief: f.brief,
+          card: '',
+          tags: [],
+          savedId: null,
+          status: 'pending' as ItemStatus
+        }))
+      ]
+      setItems(next)
+      syncPlan(next)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e))
+    } finally {
+      addAbortRef.current = null
+      setAdding(false)
+    }
+  }
+
+  const removeItem = (name: string): void => {
+    const next = itemsRef.current.filter((x) => x.name !== name)
+    setItems(next)
+    syncPlan(next)
+  }
+
   const pendingCount = items.filter((i) => i.status === 'pending').length
   const doneCount = items.filter((i) => i.status === 'done').length
   const savedCount = items.filter((i) => i.status === 'saved').length
@@ -194,8 +277,44 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
         )}
         {savedCount > 0 && <Badge tone="green">已入库 {savedCount}</Badge>}
       </div>
+      <div className="flex flex-wrap items-end gap-2">
+        <div className="w-28">
+          <NumberField
+            input={Input}
+            value={addCount}
+            min={1}
+            max={12}
+            disabled={adding || running}
+            className="w-full"
+            onChange={setAddCount}
+          />
+        </div>
+        <Button variant="ghost" onClick={() => void aiAdd()} disabled={adding || running}>
+          {adding ? '补充中…' : 'AI 补充人物'}
+        </Button>
+        <div className="flex flex-1 flex-wrap items-end gap-2">
+          <Input
+            value={customName}
+            onChange={(e) => setCustomName(e.target.value)}
+            placeholder="人物名"
+            className="w-28"
+            disabled={running}
+          />
+          <Input
+            value={customBrief}
+            onChange={(e) => setCustomBrief(e.target.value)}
+            placeholder="一句话定位（可空）"
+            className="min-w-40 flex-1"
+            disabled={running}
+          />
+          <Button variant="ghost" onClick={addCustom} disabled={running || !customName.trim()}>
+            +自定义
+          </Button>
+        </div>
+      </div>
       <p className="text-xs text-zinc-500">
-        人物清单来自「基本设定」的 AI 起草方案；生成后先预览，确认满意再入库，入库后仍可逐张编辑。
+        初始清单来自「基本设定」的方案；可「AI
+        补充人物」或「+自定义」加人，生成后先预览，确认满意再入库，入库后仍可逐张编辑。
       </p>
       {error && <div className="text-xs text-red-400">{error}</div>}
       <div className="space-y-2">
@@ -212,6 +331,11 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
                 {it.status === 'done' && <Badge tone="amber">待确认</Badge>}
                 {it.status === 'error' && <Badge tone="red">失败</Badge>}
                 <span className="ml-auto flex items-center gap-1.5">
+                  {!running && (
+                    <Button variant="ghost" className="px-1.5" onClick={() => removeItem(it.name)}>
+                      ✕
+                    </Button>
+                  )}
                   {!running && (
                     <Button variant="ghost" onClick={() => void genOne(it, it.status !== 'saved')}>
                       {it.card ? '重生成' : '生成'}
@@ -240,7 +364,7 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
         })}
         {items.length === 0 && (
           <p className="text-xs text-zinc-500">
-            方案里还没有人物清单——先回「基本设定」AI 起草创作方案。
+            还没有人物名单——用「AI 补充人物」让 AI 起名，或「+自定义」手动加入。
           </p>
         )}
       </div>

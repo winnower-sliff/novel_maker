@@ -2,7 +2,7 @@ import { Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { generateVolume } from '@wizard/volumeGen'
+import { generateVolume, generateVolumeIdea, rememberVolumePlan } from '@wizard/volumeGen'
 import { NumberField, OutlineProgress } from '@wizard/widgets'
 import { loadProjectPlan, type WizardPlanFull } from '@wizard/wizardPlan'
 import type { Foreshadow, OutlineItem } from '@shared/types'
@@ -31,6 +31,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const [count, setCount] = useState(20)
   const [idea, setIdea] = useState('')
   const [busy, setBusy] = useState(false)
+  const [ideaBusy, setIdeaBusy] = useState(false)
   const [delta, setDelta] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
@@ -84,7 +85,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const targetWritten = briefs.some((b) => b.volume === volume && b.hasDraft)
 
   const generate = async (): Promise<void> => {
-    if (!idea.trim() || busy) return
+    if (!idea.trim() || busy || ideaBusy) return
     if (
       targetWritten &&
       !window.confirm(
@@ -155,15 +156,57 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   return (
     <div className="h-full overflow-y-auto p-3">
       <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-        <Label>本卷创意（描述这一卷要讲的故事）</Label>
+        <div className="flex items-center justify-between gap-2">
+          <Label>本卷创意（描述这一卷要讲的故事）</Label>
+          <button
+            type="button"
+            onClick={() => {
+              if (ideaBusy || busy || !idea.trim()) return
+              setIdeaBusy(true)
+              setError(null)
+              setResult(null)
+              setDelta('')
+              const { done, abort } = generateVolumeIdea({
+                projectId,
+                volume,
+                idea: idea.trim(),
+                onDelta: (t) => setDelta((v) => v + t)
+              })
+              abortRef.current = abort
+              void done
+                .then((text) => {
+                  setIdea(text)
+                  void rememberVolumePlan(projectId, volume, {
+                    idea: text,
+                    startNo,
+                    count: count >= 1 ? Math.floor(count) : 20
+                  })
+                })
+                .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                .finally(() => {
+                  abortRef.current = null
+                  setIdeaBusy(false)
+                })
+            }}
+            disabled={ideaBusy || busy || !idea.trim()}
+            className="shrink-0 cursor-pointer rounded-lg border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 active:bg-zinc-800 disabled:cursor-default disabled:opacity-40"
+          >
+            {ideaBusy ? '扩写中…' : 'AI 扩写成创意'}
+          </button>
+        </div>
         <Textarea
           value={idea}
           onChange={(e) => setIdea(e.target.value)}
           rows={3}
           style={{ resize: 'vertical' }}
           disabled={busy}
-          placeholder="例：主角进入宗门后的第一次试炼，与同门结怨、初窥力量体系…"
+          placeholder="例：主角进入宗门后的第一次试炼，与同门结怨、初窥力量体系…（也可写简短要求，点「AI 扩写成创意」补全）"
         />
+        {ideaBusy && (
+          <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
+            {delta.slice(-400) || '扩写中…'}
+          </pre>
+        )}
         <div className="flex items-end gap-3 text-xs">
           <div>
             <Label>卷号</Label>
@@ -185,7 +228,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           <button
             type="button"
             onClick={() => void generate()}
-            disabled={busy || !idea.trim()}
+            disabled={busy || ideaBusy || !idea.trim()}
             className={`cursor-pointer rounded-lg px-3.5 py-2 text-sm disabled:cursor-default disabled:opacity-40 ${
               targetWritten ? 'bg-red-800/80 text-red-50' : 'bg-amber-600 text-white'
             }`}

@@ -9,30 +9,39 @@ import { enqueueEmbedding } from '../embedding'
 import * as store from '../store'
 import { clampInt, extractJsonArray, extractJsonObject, skillBody } from './util'
 
-export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
-  const project = store.listProjects().find((x) => x.id === p.projectId)
+/** 大纲/卷创意共用的项目素材拼装（每次现查库，量级小） */
+function collectOutlineMaterials(projectId: string, volume: number) {
+  const project = store.listProjects().find((x) => x.id === projectId)
   const wb = store
-    .listWorldbuild(p.projectId)
+    .listWorldbuild(projectId)
     .map((e) => `- [${e.category}] ${e.title}：${e.content.slice(0, 200)}`)
     .join('\n')
   const chars = store
-    .listCharacters(p.projectId)
+    .listCharacters(projectId)
     .map((c) => `- ${c.name}（${c.role || '未定位'}）：${c.card.slice(0, 200)}`)
     .join('\n')
   const outlineCtx = store
-    .listOutlines(p.projectId)
-    .filter((o) => o.volume === p.volume)
+    .listOutlines(projectId)
+    .filter((o) => o.volume === volume)
     .sort((a, b) => a.chapterNo - b.chapterNo)
     .map((o) => `- 第${o.chapterNo}章《${o.title}》：${o.synopsis.slice(0, 200)}`)
     .join('\n')
   const openFore = store
-    .listForeshadows(p.projectId)
+    .listForeshadows(projectId)
     .filter((f) => f.status === 'open')
     .map(
       (f) =>
         `- ${f.content}（埋于${f.plantedChapter || '?'}${f.plannedResolve ? `，计划回收：${f.plannedResolve}` : ''}${f.priority ? `，优先级：${f.priority}` : ''}）`
     )
     .join('\n')
+  return { project, wb, chars, outlineCtx, openFore }
+}
+
+export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
+  const { project, wb, chars, outlineCtx, openFore } = collectOutlineMaterials(
+    p.projectId,
+    p.volume
+  )
   const system = [
     skillBody('outline-architect'),
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
@@ -54,6 +63,43 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
     messages: [{ role: 'user', content: user }],
     maxTokens: Math.min(65536, Math.max(16384, p.count * 1400)),
     temperature: 0.7,
+    purpose: 'outline'
+  }
+}
+
+/** 卷创意起草：把用户的简短要求扩写成正式的本卷创意（纯文字，供 idea 框修改后再生成大纲） */
+export function buildVolumeIdeaRequest(
+  projectId: string,
+  volume: number,
+  idea: string
+): ChatParams {
+  const req = idea.trim()
+  if (!req) throw new Error('请先在创意框写下你对这一卷的要求')
+  const { project, wb, chars, outlineCtx, openFore } = collectOutlineMaterials(projectId, volume)
+  const volSums = store
+    .listVolumeSummaries(projectId)
+    .sort((a, b) => a.volume - b.volume)
+    .map((v) => `【第${v.volume}卷完成摘要】${v.summary.slice(0, 600)}`)
+    .join('\n\n')
+  const system = [
+    '你是小说项目的卷策划。基于已有设定与前情，把用户的本卷要求扩写成一份可直接执行的卷创意。只输出一段纯文字，不要标题、列表、JSON 或任何解释。',
+    '卷创意要求（200-300字）：写清这一卷要讲的故事——承接前情的起点、本卷主线冲突与阶段推进、关键人物的作用、本卷收束点与引向下卷的钩子；必须与已有世界观、人物关系咬合，合理安排未回收伏笔的回收或推进。',
+    project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
+    wb && `【已有世界观】\n${wb}`,
+    chars && `【已有人物】\n${chars}`,
+    volSums && `【已完成各卷前情摘要】\n${volSums}`,
+    outlineCtx &&
+      `【第 ${volume} 卷已有大纲（扩写时应自然衔接并整合这些既有章节，不得与之矛盾）】\n${outlineCtx}`,
+    openFore && `【未回收伏笔台账】\n${openFore}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: `本卷要求：${req}\n\n请输出第 ${volume} 卷的卷创意。` }],
+    maxTokens: 2048,
+    temperature: 0.8,
     purpose: 'outline'
   }
 }

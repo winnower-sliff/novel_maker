@@ -1,6 +1,7 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { CharacterGenPanel } from '../../../wizard/CharacterGenPanel'
+import { parseWikiLinks, useCharacterRegen } from '../../../wizard/characterTools'
 import { AiTextarea } from '../components/AiTextarea'
 import { Badge, Button, Card, Input, Label } from '../components/ui'
 import { desktopWizardUi } from '../lib/desktopWizardUi'
@@ -25,16 +26,25 @@ export default function Characters({
 }) {
   const queryClient = useQueryClient()
   const { data: list = [] } = useQuery(queries.characters(projectId))
+  const { data: appearances } = useQuery({
+    queryKey: ['novel', 'characterAppearances', projectId],
+    queryFn: () => window.api.novel.characterAppearances(projectId)
+  })
   const [edit, setEdit] = useState<EditState | null>(null)
   const [genOpen, setGenOpen] = useState(false)
+  const regen = useCharacterRegen(projectId)
 
   const load = (): void => {
     void queryClient.invalidateQueries({ queryKey: qk.characters(projectId) })
+    void queryClient.invalidateQueries({
+      queryKey: ['novel', 'characterAppearances', projectId]
+    })
   }
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
     setEdit(null)
+    regen.reset()
   }, [projectId])
 
   if (!projectId) {
@@ -47,6 +57,7 @@ export default function Characters({
   }
 
   const pick = (c: (typeof list)[number]): void => {
+    regen.reset()
     setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card, state: c.state })
   }
 
@@ -54,7 +65,7 @@ export default function Characters({
     if (!edit?.name.trim()) return
     void window.api.novel
       .characterSave({
-        id: edit.id,
+        id: edit.id || undefined,
         projectId,
         name: edit.name.trim(),
         role: edit.role,
@@ -62,19 +73,33 @@ export default function Characters({
         card: edit.card,
         state: edit.state
       })
-      .then(() => {
+      .then((saved) => {
+        setEdit((prev) => (prev && !prev.id ? { ...prev, id: saved.id } : prev))
         load()
       })
   }
+
+  const newBlank = (): void => {
+    regen.reset()
+    setEdit({ id: '', name: '', role: '', tags: '', card: '', state: '' })
+  }
+
+  const app = edit?.id ? appearances?.[edit.id] : undefined
+  const links = edit ? parseWikiLinks(edit.card) : []
 
   return (
     <div className="flex h-full flex-col gap-3 p-3 md:flex-row md:p-4">
       <Card className="flex max-h-44 shrink-0 flex-col md:max-h-none md:w-64">
         <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-2.5">
           <span className="text-sm font-medium text-zinc-200">人物（{list.length}）</span>
-          <Button className="px-2 py-1 text-xs" onClick={() => setGenOpen(true)}>
-            AI 生成
-          </Button>
+          <span className="flex items-center gap-1.5">
+            <Button className="px-2 py-1 text-xs" onClick={newBlank}>
+              + 新增
+            </Button>
+            <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => setGenOpen(true)}>
+              AI 生成
+            </Button>
+          </span>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {list.length === 0 && (
@@ -160,7 +185,46 @@ export default function Characters({
               </div>
             </div>
             <div className="mt-3 flex-1">
-              <Label>人物卡（markdown，M4 写作时自动注入相关人物；选中文字可用 AI 改写）</Label>
+              <div className="flex items-center justify-between">
+                <Label>人物卡（markdown，M4 写作时自动注入相关人物；选中文字可用 AI 改写）</Label>
+                <Button
+                  variant="ghost"
+                  className="px-2 py-1 text-xs"
+                  disabled={regen.busy || !edit.name.trim()}
+                  onClick={() => regen.run(edit.name.trim(), edit.role || edit.name.trim())}
+                >
+                  {regen.busy ? '生成中…' : 'AI 重生成'}
+                </Button>
+              </div>
+              {regen.error && <div className="mb-1.5 text-xs text-red-400">{regen.error}</div>}
+              {regen.busy && (
+                <pre className="mb-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
+                  {regen.delta.slice(-800) || '生成中…'}
+                </pre>
+              )}
+              {regen.preview && (
+                <div className="mb-1.5 rounded-md border border-amber-700/50 bg-amber-950/20 p-2">
+                  <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-zinc-300">
+                    {regen.preview.main}
+                  </pre>
+                  <div className="mt-2 flex justify-end gap-2">
+                    <Button variant="ghost" className="px-2 py-1 text-xs" onClick={regen.reset}>
+                      放弃
+                    </Button>
+                    <Button
+                      className="px-2 py-1 text-xs"
+                      onClick={() => {
+                        const p = regen.preview
+                        if (!p) return
+                        setEdit({ ...edit, card: p.main, tags: p.tags.join(',') })
+                        regen.reset()
+                      }}
+                    >
+                      替换人物卡
+                    </Button>
+                  </div>
+                </div>
+              )}
               <AiTextarea
                 className="h-full min-h-72"
                 value={edit.card}
@@ -183,20 +247,54 @@ export default function Characters({
                 }
               />
             </div>
+            <div className="mt-3 grid grid-cols-1 gap-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3 sm:grid-cols-2">
+              <div>
+                <Label>出场章节</Label>
+                <div className="text-xs text-zinc-400">
+                  {app
+                    ? app.chapters.length > 0
+                      ? `第 ${app.chapters.join('、')} 章（提及 ${app.count} 次）`
+                      : '已写章节中尚未出场'
+                    : '—'}
+                </div>
+              </div>
+              <div>
+                <Label>世界观链接（[[条目]]）</Label>
+                <div className="flex flex-wrap gap-1">
+                  {links.length > 0 ? (
+                    links.map((l) => (
+                      <Badge key={l} tone="amber">
+                        {l}
+                      </Badge>
+                    ))
+                  ) : (
+                    <span className="text-xs text-zinc-600">无</span>
+                  )}
+                </div>
+              </div>
+            </div>
             <div className="mt-3 flex justify-end gap-2">
+              {edit.id && (
+                <Button
+                  variant="danger"
+                  onClick={() => {
+                    if (!window.confirm(`删除人物「${edit.name}」？`)) return
+                    void window.api.novel.characterDelete(edit.id).then(() => {
+                      setEdit(null)
+                      load()
+                    })
+                  }}
+                >
+                  删除
+                </Button>
+              )}
               <Button
-                variant="danger"
+                variant="ghost"
                 onClick={() => {
-                  if (!window.confirm(`删除人物「${edit.name}」？`)) return
-                  void window.api.novel.characterDelete(edit.id).then(() => {
-                    setEdit(null)
-                    load()
-                  })
+                  regen.reset()
+                  setEdit(null)
                 }}
               >
-                删除
-              </Button>
-              <Button variant="ghost" onClick={() => setEdit(null)}>
                 关闭
               </Button>
               <Button onClick={save} disabled={!edit.name.trim()}>

@@ -2,7 +2,7 @@ import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { type AlignRevision, applyAlignRevisions } from '../../../wizard/outlineAlign'
-import { generateVolume } from '../../../wizard/volumeGen'
+import { generateVolume, generateVolumeIdea, rememberVolumePlan } from '../../../wizard/volumeGen'
 import { NumberField } from '../../../wizard/widgets'
 import { loadProjectPlan, type WizardPlanFull } from '../../../wizard/wizardPlan'
 import { EmptyGuide } from '../components/EmptyGuide'
@@ -71,6 +71,8 @@ export default function Outline({
   const [count, setCount] = useState(30)
   const [generating, setGenerating] = useState(false)
   const [genOutput, setGenOutput] = useState('')
+  const [ideaBusy, setIdeaBusy] = useState(false)
+  const ideaAbortRef = useRef<(() => void) | null>(null)
   const [genNotice, setGenNotice] = useState('')
   const genAbortRef = useRef<(() => void) | null>(null)
   const [volNotice, setVolNotice] = useState('')
@@ -374,12 +376,50 @@ export default function Outline({
       {genOpen && (
         <Card className="space-y-3 p-4">
           <div>
-            <Label>核心创意（题材、主角、金手指、主线冲突；已有世界观/人物会自动作为上下文）</Label>
+            <div className="flex items-center justify-between gap-2">
+              <Label>
+                核心创意（题材、主角、金手指、主线冲突；已有世界观/人物会自动作为上下文）
+              </Label>
+              <Button
+                variant="ghost"
+                className="shrink-0 px-2 py-1 text-xs"
+                disabled={generating || ideaBusy || !idea.trim()}
+                onClick={() => {
+                  setIdeaBusy(true)
+                  setGenNotice('')
+                  const { done, abort } = generateVolumeIdea({
+                    projectId,
+                    volume,
+                    idea: idea.trim(),
+                    onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
+                  })
+                  ideaAbortRef.current = abort
+                  done
+                    .then((text) => {
+                      setIdea(text)
+                      void rememberVolumePlan(projectId, volume, {
+                        idea: text,
+                        startNo,
+                        count: Math.max(1, Math.floor(count) || 30)
+                      })
+                    })
+                    .catch((err: unknown) => {
+                      setGenNotice(`出错：${(err as Error).message}`)
+                    })
+                    .finally(() => {
+                      ideaAbortRef.current = null
+                      setIdeaBusy(false)
+                    })
+                }}
+              >
+                {ideaBusy ? '扩写中…' : 'AI 扩写成创意'}
+              </Button>
+            </div>
             <Textarea
               rows={3}
               value={idea}
               onChange={(e) => setIdea(e.target.value)}
-              placeholder="例：末法时代最后一位炼丹师重生都市，靠一手丹术搅动风云…"
+              placeholder="例：末法时代最后一位炼丹师重生都市，靠一手丹术搅动风云…（也可写简短要求，点「AI 扩写成创意」补全）"
               disabled={generating}
             />
           </div>
@@ -424,7 +464,7 @@ export default function Outline({
           <div className="flex items-center gap-3">
             <Button
               variant={targetWritten ? 'danger' : 'primary'}
-              disabled={generating || !idea.trim()}
+              disabled={generating || ideaBusy || !idea.trim()}
               onClick={() => {
                 if (
                   targetWritten &&
@@ -477,11 +517,12 @@ export default function Outline({
                   ? `重写第 ${volume} 卷（大纲+正文）`
                   : '生成并导入'}
             </Button>
-            {generating && (
+            {(generating || ideaBusy) && (
               <Button
                 variant="danger"
                 onClick={() => {
                   genAbortRef.current?.()
+                  ideaAbortRef.current?.()
                 }}
               >
                 中断

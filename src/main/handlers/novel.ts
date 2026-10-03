@@ -24,6 +24,34 @@ export const novelHandlers = {
     deleteEmbeddingsByRef('character', id)
     store.deleteCharacter(id)
   },
+  'novel:characterAppearances': (_ctx, [projectId]) => {
+    const characters = store.listCharacters(projectId)
+    const out: Record<string, { chapters: number[]; count: number }> = {}
+    for (const c of characters) out[c.id] = { chapters: [], count: 0 }
+    if (characters.length === 0) return out
+    // 按名字长度倒序构造交替正则，一次扫描最长匹配优先——避免「波普」⊂「铁砧学徒波普」重复计数
+    const sorted = characters
+      .filter((c) => c.name.trim())
+      .sort((a, b) => b.name.trim().length - a.name.trim().length)
+    const esc = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+    const re = new RegExp(sorted.map((c) => esc(c.name.trim())).join('|'), 'g')
+    for (const o of store.listOutlines(projectId)) {
+      const ch = store.getChapterByOutline(o.id)
+      if (!ch?.content) continue
+      const seenIds = new Set<string>()
+      for (const m of ch.content.matchAll(re)) {
+        const hit = sorted.find((c) => c.name.trim() === m[0])
+        if (!hit) continue
+        out[hit.id].count += 1
+        if (!seenIds.has(hit.id)) {
+          seenIds.add(hit.id)
+          out[hit.id].chapters.push(o.chapterNo)
+        }
+      }
+    }
+    for (const rec of Object.values(out)) rec.chapters.sort((a, b) => a - b)
+    return out
+  },
   'novel:worldbuild': (_ctx, [projectId]) => store.listWorldbuild(projectId),
   'novel:worldbuildSave': (_ctx, [input]) => {
     const saved = store.saveWorldbuild(input)

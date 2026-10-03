@@ -22,6 +22,43 @@ export interface VolumeGenOpts {
   onDelta?: (t: string) => void
 }
 
+/** 每卷生成参数记忆：读-合并-写回 volumePlans（下次换卷预填） */
+export async function rememberVolumePlan(
+  projectId: string,
+  volume: number,
+  plan: { idea: string; startNo: number; count: number }
+): Promise<void> {
+  const cur = await loadProjectPlan(projectId)
+  await saveProjectPlan(projectId, {
+    volumePlans: { ...(cur?.volumePlans ?? {}), [String(volume)]: plan }
+  })
+}
+
+/**
+ * 卷创意起草（两端共用）：把 idea 框内的简短要求扩写成正式卷创意（不落库）。
+ * 抛错透传给调用方展示；成功后调用方写回 volumePlans 记忆。
+ */
+export function generateVolumeIdea(opts: {
+  projectId: string
+  volume: number
+  idea: string
+  onDelta?: (t: string) => void
+}): { done: Promise<string>; abort: () => void } {
+  const { done, abort } = startPipeline(
+    'volumeIdea',
+    { projectId: opts.projectId, volume: opts.volume, idea: opts.idea },
+    opts.onDelta
+  )
+  return {
+    done: done.then((r) => {
+      const idea = (r.data as { idea?: string } | undefined)?.idea ?? ''
+      if (!idea.trim()) throw new Error('AI 未输出有效卷创意，请重试')
+      return idea
+    }),
+    abort
+  }
+}
+
 /**
  * 生成/重写一卷大纲（桌面/移动共用）：outline 管线（allowUpdate:true，重生成同卷覆盖同章号）
  * → volumePlans 写回参数记忆（下次预填）→ hasWritten 时清理新范围外孤儿章并批量重写该卷正文。
@@ -47,14 +84,8 @@ export function generateVolume(opts: VolumeGenOpts): {
       parsed: boolean
     }
     if (!r.parsed || r.created + r.updated === 0) return { ...r, rewriting: 0 }
-    // 参数记忆：读-合并-写回 volumePlans，下次重生成预填
-    const cur = await loadProjectPlan(projectId)
-    void saveProjectPlan(projectId, {
-      volumePlans: {
-        ...(cur?.volumePlans ?? {}),
-        [String(volume)]: { idea, startNo, count }
-      }
-    })
+    // 参数记忆：写回 volumePlans，下次重生成预填
+    await rememberVolumePlan(projectId, volume, { idea, startNo, count })
     let rewriting = 0
     if (hasWritten) {
       const old = await oldVolPromise

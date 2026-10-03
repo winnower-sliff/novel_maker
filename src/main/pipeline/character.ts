@@ -1,7 +1,7 @@
 import { splitHeadingHashtags, splitTags } from '../../shared/tags'
 import type { ChatParams } from '../../shared/types'
 import * as store from '../store'
-import { skillBody } from './util'
+import { clampInt, extractJsonArray, skillBody } from './util'
 
 export function buildStateSyncRequest(projectId: string, outlineId: string): ChatParams {
   const outline = store.getOutline(outlineId)
@@ -171,6 +171,60 @@ export function guessCharacterName(card: string, fallback: string): string {
     if (name) return name.slice(0, 20)
   }
   return fallback || '新人物'
+}
+
+/** AI 自动补充人物名单（第一步只出「姓名+一句话简述」，写卡由 character 管线第二步完成） */
+export function buildCharacterRosterRequest(
+  projectId: string,
+  count: number,
+  note?: string
+): ChatParams {
+  const project = store.listProjects().find((x) => x.id === projectId)
+  const wb = store
+    .listWorldbuild(projectId)
+    .map((e) => `- [${e.category}] ${e.title}`)
+    .join('\n')
+  const chars = store
+    .listCharacters(projectId)
+    .map((c) => `- ${c.name}（${c.role || '未定位'}）`)
+    .join('\n')
+  const system = [
+    skillBody('character-smith'),
+    project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
+    wb && `【世界观条目】\n${wb}`,
+    chars && `【已有人物（新人物必须避开重复定位，并与他们形成咬合的关系网）】\n${chars}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  const n = clampInt(count, 1, 12, 3)
+  const user = [
+    note?.trim() ? `补充要求：${note.trim()}` : `请为本书补充设计 ${n} 个新人物。`,
+    '',
+    '输出格式（严格遵守）：只输出一个 JSON 数组，不要输出任何其他文字：',
+    '[{"name":"人物名","brief":"一句话定位与核心冲突简述"}]'
+  ].join('\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: 2048,
+    temperature: 0.9,
+    purpose: 'outline'
+  }
+}
+
+export function parseCharacterRoster(text: string): Array<{ name: string; brief: string }> {
+  const arr = extractJsonArray(text)
+  if (!arr) return []
+  const out: Array<{ name: string; brief: string }> = []
+  for (const it of arr) {
+    if (!it || typeof it !== 'object') continue
+    const rec = it as Record<string, unknown>
+    const name = typeof rec.name === 'string' ? rec.name.trim().slice(0, 20) : ''
+    const brief = typeof rec.brief === 'string' ? rec.brief.trim() : ''
+    if (name) out.push({ name, brief })
+  }
+  return out
 }
 
 export interface ParsedCharacterRevision {

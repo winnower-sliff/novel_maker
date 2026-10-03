@@ -11,6 +11,7 @@ import type {
   ChapterBrief,
   ChapterSummary,
   Character,
+  CharacterAppearance,
   ChatMessage,
   ChatResult,
   ContentBlock,
@@ -64,6 +65,7 @@ export type Purpose = (typeof PURPOSES)[number]
 
 export const PIPELINE_ACTIONS = [
   'outline',
+  'volumeIdea',
   'outlineAlign',
   'chapter',
   'summary',
@@ -74,6 +76,7 @@ export const PIPELINE_ACTIONS = [
   'volumeSummary',
   'stateSync',
   'character',
+  'characterRoster',
   'worldbuild',
   'premiseDraft'
 ] as const
@@ -254,6 +257,11 @@ export const PremiseDraftParamsSchema = z.object({ projectId: z.string() })
 export const PIPELINE_PARAM_SCHEMAS = {
   premiseDraft: z.object({ projectId: z.string() }),
   outline: OutlineGenParamsSchema,
+  volumeIdea: z.object({
+    projectId: z.string(),
+    volume: z.number(),
+    idea: z.string()
+  }),
   outlineAlign: z.object({ projectId: z.string() }),
   chapter: z.object({
     outlineId: z.string(),
@@ -275,6 +283,11 @@ export const PIPELINE_PARAM_SCHEMAS = {
   volumeSummary: z.object({ projectId: z.string(), volume: z.number() }),
   stateSync: z.object({ outlineId: z.string() }),
   character: CharacterGenParamsSchema,
+  characterRoster: z.object({
+    projectId: z.string(),
+    count: z.number().optional(),
+    note: z.string().optional()
+  }),
   worldbuild: WorldbuildGenParamsSchema
 } satisfies Record<PipelineAction, z.ZodTypeAny>
 
@@ -409,6 +422,10 @@ export const invokeContract = {
     ret: ret<Character>()
   },
   'novel:characterDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
+  'novel:characterAppearances': {
+    args: z.tuple([z.string()]),
+    ret: ret<Record<string, CharacterAppearance>>()
+  },
   'novel:worldbuild': { args: z.tuple([z.string()]), ret: ret<WorldbuildEntry[]>() },
   'novel:worldbuildSave': {
     args: z.tuple([WorldbuildInputSchema.extend({ id: z.string().optional() })]),
@@ -599,6 +616,7 @@ export interface Api {
     characters: InvokeFn<'novel:characters'>
     characterSave: InvokeFn<'novel:characterSave'>
     characterDelete: InvokeFn<'novel:characterDelete'>
+    characterAppearances: InvokeFn<'novel:characterAppearances'>
     worldbuild: InvokeFn<'novel:worldbuild'>
     worldbuildSave: InvokeFn<'novel:worldbuildSave'>
     worldbuildDelete: InvokeFn<'novel:worldbuildDelete'>
