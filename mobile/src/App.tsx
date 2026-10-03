@@ -1,18 +1,16 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import Book, { type BookNavRequest } from '@mobile/pages/Book'
+import Book from '@mobile/pages/Book'
 import { consumeBack } from '@mobile/lib/backHandler'
 import { installNotifyProvider } from '@mobile/lib/notifyCapacitor'
 import { nativeApp } from '@mobile/lib/nativeApp'
 import Connect from '@mobile/pages/Connect'
 import More from '@mobile/pages/More'
 import Shelf from '@mobile/pages/Shelf'
-import { MobileToaster, WizardHost } from '@mobile/components/WizardHost'
+import { MobileToaster } from '@mobile/components/MobileToaster'
 import { useConnStore } from '@mobile/lib/conn'
 import { pushToast } from '@wizard/toastStore'
-import { openWizard } from '@wizard/wizardStore'
 import { ensureRuntimeSync } from '@wizard/runtimeSync'
-import type { Page as NavPage } from '@renderer/lib/nav'
 
 type Page = 'shelf' | 'more'
 
@@ -26,33 +24,19 @@ export default function App() {
   const queryClient = useQueryClient()
   const [page, setPage] = useState<Page>('shelf')
   const [bookId, setBookId] = useState<string | null>(null)
-  const [bookNav, setBookNav] = useState<BookNavRequest | null>(null)
-  const consumeBookNav = useCallback(() => setBookNav(null), [])
+  const [newBook, setNewBook] = useState(false)
 
-  // 向导内创建/改项目元数据：失效书架列表；创建的书立即置为当前书（step4 导航依赖 bookId）
-  const handleWizardChanged = useCallback(
-    (id: string, kind: 'created' | 'updated') => {
-      void queryClient.invalidateQueries({ queryKey: ['novel', 'projects'] })
-      if (kind === 'created') setBookId(id)
+  // 「基本设定」创建/改元数据后失效书架与书内门禁查询；创建成功即进入该书
+  const invalidateProjects = useCallback((): void => {
+    void queryClient.invalidateQueries({ queryKey: ['novel', 'projects'] })
+  }, [queryClient])
+  const handleCreated = useCallback(
+    (id: string) => {
+      invalidateProjects()
+      setNewBook(false)
+      setBookId(id)
     },
-    [queryClient]
-  )
-
-  // 向导 step4 导航映射：写作台→write tab；板块→codex tab 并展开对应 section
-  const handleWizardNav = useCallback(
-    (dest: NavPage) => {
-      const map: Partial<Record<NavPage, { tab: BookNavRequest['tab']; section?: BookNavRequest['section'] }>> = {
-        writing: { tab: 'write' },
-        worldbuild: { tab: 'codex', section: 'world' },
-        characters: { tab: 'codex', section: 'characters' },
-        outline: { tab: 'codex', section: 'outline' },
-        foreshadows: { tab: 'codex', section: 'foreshadow' }
-      }
-      const target = map[dest]
-      if (!target) return
-      setBookNav({ ...target, nonce: Date.now() })
-    },
-    []
+    [invalidateProjects]
   )
   const { data: projects } = useQuery({
     queryKey: ['novel', 'projects'],
@@ -99,18 +83,20 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      {bookId && book ? (
+      {newBook || (bookId && book) ? (
         <Book
           projectId={bookId}
-          title={book.title}
-          onClose={() => setBookId(null)}
-          navRequest={bookNav}
-          onNavConsumed={consumeBookNav}
+          title={book?.title ?? ''}
+          onClose={() => {
+            setBookId(null)
+            setNewBook(false)
+          }}
+          onCreated={handleCreated}
         />
       ) : (
         <>
           <main className="min-h-0 flex-1 overflow-y-auto">
-            {page === 'shelf' && <Shelf onOpen={setBookId} onCreate={() => openWizard(null)} />}
+            {page === 'shelf' && <Shelf onOpen={setBookId} onCreate={() => setNewBook(true)} />}
             {page === 'more' && <More />}
           </main>
           <nav className="flex border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
@@ -130,7 +116,6 @@ export default function App() {
           </nav>
         </>
       )}
-      <WizardHost onNavigate={handleWizardNav} onChanged={handleWizardChanged} />
       <MobileToaster />
     </div>
   )

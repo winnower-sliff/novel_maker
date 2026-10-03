@@ -193,7 +193,9 @@ export const CharacterGenParamsSchema = z.object({
   projectId: z.string(),
   brief: z.string(),
   name: z.string().optional(),
-  allowUpdate: z.boolean().optional()
+  allowUpdate: z.boolean().optional(),
+  // false = 仅解析预览不落库（人物班底挑选模式），缺省 true 保持自动落库
+  save: z.boolean().optional()
 })
 
 export const OutlineGenParamsSchema = z.object({

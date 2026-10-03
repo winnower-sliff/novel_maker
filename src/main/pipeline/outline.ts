@@ -1,4 +1,5 @@
 import type {
+  AlignRevision,
   ChatParams,
   OutlineGenParams,
   OutlineItem,
@@ -345,16 +346,6 @@ export function buildAlignRequest(projectId: string): ChatParams {
     temperature: 0.4,
     purpose: 'outline'
   }
-}
-
-export interface AlignRevision {
-  outlineId: string
-  volume: number
-  chapterNo: number
-  title: string
-  synopsis: string
-  hook?: string
-  reason?: string
 }
 
 export function parseAlignResult(

@@ -1,0 +1,166 @@
+import type { PremiseDraftResult } from '@shared/types'
+import { useEffect, useRef, useState } from 'react'
+import type { WizardUi } from './uiTypes'
+
+/** 流式原始输出框：自动滚底 */
+export function StreamBox({ text, className }: { text: string; className: string }) {
+  const ref = useRef<HTMLPreElement>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
+  useEffect(() => {
+    if (ref.current) ref.current.scrollTop = ref.current.scrollHeight
+  }, [text])
+  return (
+    <pre
+      ref={ref}
+      className={`overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs leading-relaxed text-zinc-400 ${className}`}
+    >
+      {text || '…'}
+    </pre>
+  )
+}
+
+/** 方案卡分节容器 */
+export function PlanSection({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+      <div className="text-[11px] font-medium tracking-wide text-zinc-500">{label}</div>
+      <div className="mt-1.5">{children}</div>
+    </div>
+  )
+}
+
+/** 受控数字输入：内部保留原始字符串，允许清空/中间态，blur 时才 clamp 规范化——避免 Number('')=0 回填卡死 */
+export function NumberField({
+  input: Input,
+  value,
+  min = 1,
+  max,
+  disabled,
+  className,
+  onChange
+}: {
+  input: WizardUi['Input']
+  value: number
+  min?: number
+  max?: number
+  disabled?: boolean
+  className?: string
+  onChange: (n: number) => void
+}) {
+  const [raw, setRaw] = useState(String(value))
+  useEffect(() => {
+    // 输入中的中间态（'12.'、'0100'）数值与 value 相等时不打断；仅存档恢复/applyPlan 类外部变更才重写
+    setRaw((prev) => (Number(prev) === value ? prev : String(value)))
+  }, [value])
+  const clamp = (n: number): number => {
+    if (!Number.isFinite(n)) return min
+    const low = Math.max(min, n)
+    return max === undefined ? low : Math.min(max, low)
+  }
+  return (
+    <Input
+      type="number"
+      min={min}
+      max={max}
+      value={raw}
+      disabled={disabled}
+      className={className}
+      onChange={(e) => {
+        setRaw(e.target.value)
+        const n = Number(e.target.value)
+        if (e.target.value.trim() !== '' && Number.isFinite(n)) onChange(clamp(n))
+      }}
+      onBlur={() => {
+        const n = clamp(Number(raw))
+        setRaw(String(n))
+        onChange(n)
+      }}
+    />
+  )
+}
+
+/** 扫描大纲流文本中已配平的章节对象，取标题做实时进度（坏对象/半截对象忽略） */
+export function scanOutlineProgress(text: string): { count: number; lastTitles: string[] } {
+  const titles: string[] = []
+  let depth = 0
+  let inStr = false
+  let esc = false
+  let start = -1
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i]
+    if (inStr) {
+      if (esc) esc = false
+      else if (ch === '\\') esc = true
+      else if (ch === '"') inStr = false
+      continue
+    }
+    if (ch === '"') inStr = true
+    else if (ch === '{') {
+      if (depth === 0) start = i
+      depth++
+    } else if (ch === '}') {
+      depth--
+      if (depth === 0 && start >= 0) {
+        try {
+          const obj = JSON.parse(text.slice(start, i + 1)) as { title?: unknown }
+          if (obj && typeof obj.title === 'string') titles.push(obj.title)
+        } catch {
+          // 解析失败的单个对象直接跳过
+        }
+        start = -1
+      }
+    }
+  }
+  return { count: titles.length, lastTitles: titles.slice(-3) }
+}
+
+/** 大纲生成进度框：与世界观生成进度框同款式（不裸露原始流） */
+export function OutlineProgress({ text }: { text: string }) {
+  const prog = scanOutlineProgress(text)
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
+      <div className="text-amber-300">
+        {prog.count > 0 ? `生成中 · 已解析 ${prog.count} 章` : '生成中'}
+      </div>
+      {prog.lastTitles.length > 0 && (
+        <div className="mt-1 truncate text-zinc-500">{prog.lastTitles.join(' / ')}</div>
+      )}
+    </div>
+  )
+}
+
+/** AI 起草的创作方案卡：世界观方向 / 核心人物 / 第一卷创意 三节只读展示 */
+export function PlanCard({ plan }: { plan: PremiseDraftResult }) {
+  const charList = plan.characters.filter((c) => c.name.trim())
+  return (
+    <div className="space-y-2">
+      <PlanSection
+        label={`世界观方向 · ${plan.worldbuildCategories.join(' / ')} · 约 ${plan.worldbuildCount} 条`}
+      >
+        <p className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-300">
+          {plan.worldbuildBrief || '（未生成，可跳到下一步手动填写）'}
+        </p>
+      </PlanSection>
+      <PlanSection label={`核心人物 · ${charList.length} 名`}>
+        {charList.length > 0 ? (
+          <ul className="space-y-1.5">
+            {charList.map((c, i) => (
+              // biome-ignore lint/suspicious/noArrayIndexKey: 只读展示列表，库中可存在同名人物卡，index 才是稳定身份
+              <li key={`${c.name}-${i}`} className="text-xs leading-relaxed">
+                <span className="font-medium text-zinc-100">{c.name}</span>
+                {c.brief.trim() && <span className="text-zinc-400">　{c.brief}</span>}
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="text-xs text-zinc-500">（未生成）</p>
+        )}
+      </PlanSection>
+      <PlanSection label={`第一卷创意 · 预计 ${plan.outlineCount} 章`}>
+        <p className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-300">
+          {plan.outlineIdea || '（未生成，可跳到下一步手动填写）'}
+        </p>
+      </PlanSection>
+    </div>
+  )
+}

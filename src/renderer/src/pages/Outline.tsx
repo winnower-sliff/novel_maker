@@ -1,6 +1,7 @@
 import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type AlignRevision, applyAlignRevisions } from '../../../wizard/outlineAlign'
 import { EmptyGuide } from '../components/EmptyGuide'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
@@ -79,15 +80,7 @@ export default function Outline({
   const alignRequestId = useRef<string | null>(null)
   const [alignBusy, setAlignBusy] = useState(false)
   const [alignNotice, setAlignNotice] = useState('')
-  const [alignRevisions, setAlignRevisions] = useState<Array<{
-    outlineId: string
-    volume: number
-    chapterNo: number
-    title: string
-    synopsis: string
-    hook?: string
-    reason?: string
-  }> | null>(null)
+  const [alignRevisions, setAlignRevisions] = useState<AlignRevision[] | null>(null)
   const [alignSkip, setAlignSkip] = useState<Set<string>>(new Set())
 
   const startAlign = (): void => {
@@ -109,22 +102,11 @@ export default function Outline({
   const applyAlign = (): void => {
     if (!alignRevisions) return
     const list = alignRevisions.filter((r) => !alignSkip.has(r.outlineId))
-    void (async () => {
-      for (const r of list) {
-        await window.api.novel.outlineSave({
-          id: r.outlineId,
-          projectId,
-          volume: r.volume,
-          chapterNo: r.chapterNo,
-          title: r.title,
-          synopsis: r.synopsis,
-          hook: r.hook
-        })
-      }
+    void applyAlignRevisions(projectId, list).then((n) => {
       setAlignRevisions(null)
-      setAlignNotice(list.length > 0 ? `已修订 ${list.length} 章大纲` : '未选择任何修订')
+      setAlignNotice(n > 0 ? `已修订 ${n} 章大纲` : '未选择任何修订')
       load()
-    })()
+    })
   }
 
   const load = useCallback((): void => {

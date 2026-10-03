@@ -37,6 +37,46 @@ import {
   startStream
 } from './stream'
 
+type ParsedCharacterCards = ReturnType<typeof parseCharacterCards>
+
+/** 解析结果落库：主卡新建/更新 + 修订卡按名匹配已有人物（character 管线 save=true 路径） */
+function saveParsedCharacters(
+  projectId: string,
+  parsed: ParsedCharacterCards,
+  fallbackName: string
+): { characterId?: string; name: string; revised: Array<{ id: string; name: string }> } {
+  let characterId: string | undefined
+  let name = ''
+  if (parsed.main) {
+    name = guessCharacterName(parsed.main, fallbackName)
+    const character = store.saveCharacter({
+      projectId,
+      name,
+      tags: parsed.mainTags.join(','),
+      card: parsed.main
+    })
+    characterId = character.id
+  }
+  const revised: Array<{ id: string; name: string }> = []
+  if (parsed.revisions.length > 0) {
+    const existing = store.listCharacters(projectId)
+    for (const rev of parsed.revisions) {
+      const hit = existing.find((c) => c.name.trim() === rev.name)
+      if (!hit || !rev.card.trim()) continue
+      store.saveCharacter({
+        id: hit.id,
+        projectId,
+        name: hit.name,
+        role: hit.role,
+        tags: rev.tags.length > 0 ? rev.tags.join(',') : hit.tags,
+        card: rev.card
+      })
+      revised.push({ id: hit.id, name: hit.name })
+    }
+  }
+  return { characterId, name, revised }
+}
+
 export const pipelineHandlers = {
   'pipeline:run': async (ctx, [action, rawParams]) => {
     switch (action) {
@@ -220,36 +260,12 @@ export const pipelineHandlers = {
             meta: { projectId: params.projectId },
             afterDone: (r) => {
               const parsed = parseCharacterCards(r.text)
-              let characterId: string | undefined
-              let name = ''
-              if (parsed.main) {
-                name = guessCharacterName(parsed.main, params.name ?? '')
-                const character = store.saveCharacter({
-                  projectId: params.projectId,
-                  name,
-                  tags: parsed.mainTags.join(','),
-                  card: parsed.main
-                })
-                characterId = character.id
-              }
-              const revised: Array<{ id: string; name: string }> = []
-              if (parsed.revisions.length > 0) {
-                const existing = store.listCharacters(params.projectId)
-                for (const rev of parsed.revisions) {
-                  const hit = existing.find((c) => c.name.trim() === rev.name)
-                  if (!hit || !rev.card.trim()) continue
-                  store.saveCharacter({
-                    id: hit.id,
-                    projectId: params.projectId,
-                    name: hit.name,
-                    role: hit.role,
-                    tags: rev.tags.length > 0 ? rev.tags.join(',') : hit.tags,
-                    card: rev.card
-                  })
-                  revised.push({ id: hit.id, name: hit.name })
+              // save=false：班底挑选模式，只回预览不落库（确认后由调用方显式保存）
+              if (params.save === false)
+                return {
+                  preview: { main: parsed.main, mainTags: parsed.mainTags, revisions: parsed.revisions }
                 }
-              }
-              return { characterId, name, revised }
+              return saveParsedCharacters(params.projectId, parsed, params.name ?? '')
             }
           }
         )

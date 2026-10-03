@@ -281,6 +281,17 @@ export interface ChapterBrief extends OutlineItem {
   chapterStatus: string
 }
 
+/** outlineAlign 产出的大纲修订项（对照已写剧情修正后续章节纲要） */
+export interface AlignRevision {
+  outlineId: string
+  volume: number
+  chapterNo: number
+  title: string
+  synopsis: string
+  hook?: string
+  reason?: string
+}
+
 export interface LedgerEntry {
   name: string
   value: string
