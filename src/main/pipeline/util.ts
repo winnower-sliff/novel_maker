@@ -18,18 +18,19 @@ export function extractJsonArray(text: string): unknown[] | null {
   const start = text.indexOf('[')
   if (start < 0) return null
   const raw = sliceBetween(text, '[', ']')
+  let best: unknown[] = []
   if (raw) {
     try {
       const parsed = JSON.parse(raw) as unknown
-      if (Array.isArray(parsed)) return parsed
+      if (Array.isArray(parsed)) best = parsed
     } catch {
       // 输出超长被 max_tokens 截断时 JSON 不完整，下面抢救已完整的对象
     }
-    const salvaged = salvageArrayObjects(raw)
-    return salvaged.length > 0 ? salvaged : null
   }
-  const salvaged = salvageArrayObjects(text.slice(start))
-  return salvaged.length > 0 ? salvaged : null
+  // 分批拼接/截断场景：sliceBetween 可能漏掉后续未闭合数组，对全文做配平扫描兜底（取对象更多者）
+  const scanned = salvageArrayObjects(text.slice(start))
+  if (scanned.length > best.length) best = scanned
+  return best.length > 0 ? best : null
 }
 
 // 从可能被截断的 JSON 数组文本中配平扫描出所有完整的顶层对象（坏对象跳过）

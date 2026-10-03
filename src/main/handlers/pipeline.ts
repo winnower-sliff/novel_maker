@@ -23,6 +23,8 @@ import {
   buildVolumeSummaryRequest,
   buildWorldbuildRequest,
   guessCharacterName,
+  outlineBatchTail,
+  outlineUserPrompt,
   parseAlignResult,
   parseCharacterCards,
   parseCharacterRoster,
@@ -94,6 +96,49 @@ export const pipelineHandlers = {
       }
       case 'outline': {
         const params = PIPELINE_PARAM_SCHEMAS.outline.parse(rawParams)
+        // 大章数分批生成：每批一次请求，批间衔接上下文，批内截断续写兜底——结构性避免 max_tokens 截断缺章
+        const BATCH_SIZE = 8
+        if (params.count > BATCH_SIZE + 2) {
+          const total = params.count
+          const totalStart = params.startNo
+          const totalEnd = totalStart + total - 1
+          const segments = Math.ceil(total / BATCH_SIZE)
+          let curStart = totalStart
+          let curCount = Math.min(BATCH_SIZE, total)
+          let resumed = false
+          return startStream(
+            ctx.sink,
+            buildOutlineRequest(params, { start: curStart, count: curCount, total, totalStart }),
+            {
+              action,
+              meta: { projectId: params.projectId },
+              afterDone: (r) => applyOutlineResult(params, r.text),
+              multiRound: {
+                // 每批 1 次截断续写机会 + 批间切换，留足余量
+                maxRounds: segments * 2 + 1,
+                nextPrompt: (fullText, _roundsDone, stopReason) => {
+                  if (stopReason === 'max_tokens' && !resumed) {
+                    resumed = true
+                    return '继续输出，从中断处接着写本批剩余章节的 JSON 对象，不要重复已输出的内容，保持 JSON 数组格式直到本批章节完整。'
+                  }
+                  resumed = false
+                  const batchEnd = curStart + curCount - 1
+                  if (batchEnd >= totalEnd) return null
+                  curStart = batchEnd + 1
+                  curCount = Math.min(BATCH_SIZE, totalEnd - curStart + 1)
+                  const tail = outlineBatchTail(fullText)
+                  return outlineUserPrompt(params, {
+                    start: curStart,
+                    count: curCount,
+                    total,
+                    totalStart,
+                    prevTail: tail
+                  })
+                }
+              }
+            }
+          )
+        }
         return startStream(ctx.sink, buildOutlineRequest(params), {
           action,
           meta: { projectId: params.projectId },

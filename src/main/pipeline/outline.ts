@@ -37,7 +37,48 @@ function collectOutlineMaterials(projectId: string, volume: number) {
   return { project, wb, chars, outlineCtx, openFore }
 }
 
-export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
+/** 分批生成时本批的范围与衔接上下文 */
+export interface OutlineBatch {
+  start: number
+  count: number
+  total: number
+  totalStart: number
+  prevTail?: string
+}
+
+export function outlineUserPrompt(p: OutlineGenParams, b: OutlineBatch | null): string {
+  const idea = `核心创意：${p.idea}`
+  const scope = b
+    ? `本次生成第 ${p.volume} 卷、第 ${b.start} 章至第 ${b.start + b.count - 1} 章的大纲（本批共 ${b.count} 章；全卷计划生成第 ${b.totalStart} 章至第 ${b.totalStart + b.total - 1} 章共 ${b.total} 章，分批生成中，后续批次将自动续写）。严格按约定的 JSON 数组格式只输出本批章节，不要输出其他内容。`
+    : `请生成第 ${p.volume} 卷、第 ${p.startNo} 章到第 ${p.startNo + p.count - 1} 章的大纲（共 ${p.count} 章），严格按约定的 JSON 数组格式输出，不要输出其他内容。`
+  const rulesNote = p.rules?.trim()
+    ? '\n硬性节奏规则区中的每一条都必须落实到具体章节，不得省略或合并。'
+    : ''
+  const tailNote = b?.prevTail
+    ? `\n\n【已生成的前文（本批须自然衔接，不得重复已有章节）】\n${b.prevTail}`
+    : ''
+  return `${idea}\n\n${scope}${rulesNote}${tailNote}`
+}
+
+/** 从已生成的全文中提取衔接上下文：全部章节标题 + 末 2 章梗概 */
+export function outlineBatchTail(fullText: string): string {
+  const arr = extractJsonArray(fullText)
+  if (!arr || arr.length === 0) return ''
+  const items = arr as Array<Record<string, unknown>>
+  const titles = items
+    .map((o) => `第${o.chapter_no ?? o.chapterNo}章《${o.title ?? ''}》`)
+    .join('、')
+  const tail = items
+    .slice(-2)
+    .map(
+      (o) =>
+        `第${o.chapter_no ?? o.chapterNo}章《${o.title ?? ''}》：${String(o.synopsis ?? '').slice(0, 200)}`
+    )
+    .join('\n')
+  return `已生成章节：${titles}\n末尾章节梗概：\n${tail}`
+}
+
+export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): ChatParams {
   const { project, wb, chars, outlineCtx, openFore } = collectOutlineMaterials(
     p.projectId,
     p.volume
@@ -58,12 +99,14 @@ export function buildOutlineRequest(p: OutlineGenParams): ChatParams {
   ]
     .filter(Boolean)
     .join('\n\n')
-  const user = `核心创意：${p.idea}\n\n请生成第 ${p.volume} 卷、第 ${p.startNo} 章到第 ${p.startNo + p.count - 1} 章的大纲（共 ${p.count} 章），严格按约定的 JSON 数组格式输出，不要输出其他内容。${p.rules?.trim() ? '\n硬性节奏规则区中的每一条都必须落实到具体章节，不得省略或合并。' : ''}`
+  const user = outlineUserPrompt(p, batch ?? null)
   return {
     model: '',
     system,
     messages: [{ role: 'user', content: user }],
-    maxTokens: Math.min(65536, Math.max(16384, p.count * 1400)),
+    maxTokens: batch
+      ? Math.max(16384, batch.count * 1400)
+      : Math.min(65536, Math.max(16384, p.count * 1400)),
     temperature: 0.7,
     purpose: 'outline'
   }

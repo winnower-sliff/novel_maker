@@ -148,6 +148,11 @@ export function startStream(
     action?: PipelineAction
     afterDone?: (result: ChatResult) => unknown
     continueOnMaxTokens?: number
+    /** 多段生成：每段结束后由 nextPrompt 决定下一段指令（返回 null 结束）。分批生成等编排场景用 */
+    multiRound?: {
+      maxRounds: number
+      nextPrompt: (fullText: string, roundsDone: number, stopReason: string | null) => string | null
+    }
     onSettled?: SettleCb
     meta?: RunMeta
   }
@@ -177,6 +182,7 @@ export function startStream(
       let totalMs = 0
       let round = 0
       const maxRounds = opts?.continueOnMaxTokens ?? 0
+      const multi = opts?.multiRound
 
       for (;;) {
         let pending = ''
@@ -221,9 +227,20 @@ export function startStream(
           ratelimit: pickRatelimitHeaders(result.headers)
         })
 
-        if (result.stopReason !== 'max_tokens' || round >= maxRounds || controller.signal.aborted) {
-          break
+        if (controller.signal.aborted) break
+        if (multi) {
+          if (round >= multi.maxRounds) break
+          const next = multi.nextPrompt(fullText, round + 1, result.stopReason)
+          if (next === null) break
+          round++
+          params.messages = [
+            ...params.messages,
+            { role: 'assistant', content: fullText },
+            { role: 'user', content: next }
+          ]
+          continue
         }
+        if (result.stopReason !== 'max_tokens' || round >= maxRounds) break
         round++
         params.messages = [
           ...params.messages,
