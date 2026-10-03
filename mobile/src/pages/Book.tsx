@@ -77,8 +77,14 @@ export default function Book({
   const gatesReady =
     !enabled || (projects.length > 0 && [wb, chars, outlines].every((l) => Array.isArray(l)))
   const planDone = !!projectId && projects.some((p: Project) => p.id === projectId && !!p.wizardPlan)
+  // 基本设定视为已完成：走过 AI 起草（wizardPlan 存在），或项目本就有任何板块内容
+  // （旧项目没起草过也能解锁后续子页——门禁防的是「没内容就跳步」，不是「必须用起草」）
   const done: Record<SubPage, boolean> = {
-    premise: planDone,
+    premise:
+      planDone ||
+      wb.length > 0 ||
+      chars.length > 0 ||
+      outlines.length > 0,
     world: wb.length > 0,
     chars: chars.length > 0,
     outline: outlines.length > 0,
