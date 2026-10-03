@@ -100,9 +100,14 @@ async function rpc(channel: string, args: unknown[]): Promise<unknown> {
     res = await fetch(`/api/invoke/${encodeURIComponent(channel)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ args })
+      body: JSON.stringify({ args }),
+      // 响应丢失/网络假死时 30s 必然 reject，调用方才能走失败路径（否则 Promise 永久悬挂，UI 卡死）
+      signal: AbortSignal.timeout(30_000)
     })
   } catch (err) {
+    if ((err as Error).name === 'TimeoutError') {
+      throw new Error('请求超时（30 秒无响应），请检查电脑端连接后重试')
+    }
     throw new Error(`无法连接服务器: ${(err as Error).message}`)
   }
   if (res.status === 401) {

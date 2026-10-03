@@ -61,7 +61,13 @@ function AutoWritePanel({
   }, [state?.running, briefs])
 
   const stop = (): void => {
-    void window.api.write.batchStop({ projectId }).catch(() => {})
+    // 返回快照直接落 store：不依赖 SSE 推送，界面立即与主进程对齐（响应丢失场景的自救路径）
+    void window.api.write
+      .batchStop({ projectId })
+      .then((snap) => {
+        if (snap) useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
+      })
+      .catch(() => {})
   }
 
   const start = (): void => {
@@ -119,7 +125,8 @@ function AutoWritePanel({
           <div className="flex items-center gap-2 text-[11px] text-zinc-400">
             进度：{state.done}/{state.total}
             {state.running && state.currentNo > 0 ? ` · 第${state.currentNo}章进行中` : ''}
-            <Button variant="danger" className="ml-auto px-2 py-1 text-[11px]" disabled={!state.running} onClick={stop}>
+            {/* 不 disable：store 里的 running 可能是「响应丢失」造成的假灰，点一下即与主进程对账（无害） */}
+            <Button variant="danger" className="ml-auto px-2 py-1 text-[11px]" onClick={stop}>
               停止
             </Button>
           </div>
