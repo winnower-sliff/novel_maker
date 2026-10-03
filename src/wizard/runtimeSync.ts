@@ -26,6 +26,13 @@ let lastTickAt = 0
 /** 上次快照中各 run/batch 的状态：检测迁移用（首次不通知，避免历史完成重复打扰） */
 const lastRunStatus = new Map<string, string>()
 const lastBatchRunning = new Map<string, boolean>()
+/** 刷新后已提示过「后台大纲生成中」的 run：防每个 tick 重复 toast */
+const outlineHinted = new Set<string>()
+/**
+ * 刷新后在途 orphan run（本页 promise 链已断，pendingRuns 无记录）：
+ * 登记后 tick(false) 的 localActive 才包含它们，迁移检测（running→settle 补通知）才能持续工作
+ */
+const watchedRuns = new Set<string>()
 
 function fire(title: string, body: string, tone: 'success' | 'error', missed: boolean): void {
   pushToast(tone, `${title}：${body}`)
@@ -91,15 +98,35 @@ function applySnapshot(snap: RuntimeSnapshot): void {
       )
       pushToast('success', '检测到后台生成任务，已恢复进度显示')
     }
+    // 刷新后主进程仍在跑的大纲批量生成：提示即可（落库由主进程 afterDone 负责，不受刷新影响）
+    const orphanOutline = snap.runs.find(
+      (r) => r.status === 'running' && r.meta?.action === 'outline' && r.meta?.projectId
+    )
+    if (orphanOutline) {
+      watchedRuns.add(orphanOutline.id)
+      if (!outlineHinted.has(orphanOutline.id)) {
+        outlineHinted.add(orphanOutline.id)
+        pushToast('success', '检测到后台大纲生成任务，完成后会自动导入')
+      }
+    }
   }
 
-  // —— 单章完成迁移通知 ——
+  // —— run 完成迁移通知（章节类 + 大纲类）——
   for (const r of snap.runs) {
     const prev = lastRunStatus.get(r.id)
-    if (prev === 'running' && r.status !== 'running' && r.meta?.outlineId) {
+    if (prev === 'running' && r.status !== 'running') {
+      watchedRuns.delete(r.id)
+      const m = r.meta
       const missed = r.finishedAt !== undefined && r.finishedAt < lastTickAt
-      if (r.status === 'done') fire('章节生成完成', '正文已就绪', 'success', missed)
-      else fire('章节生成失败', r.error ?? '未知错误', 'error', missed)
+      if (m?.outlineId) {
+        if (r.status === 'done') fire('章节生成完成', '正文已就绪', 'success', missed)
+        else fire('章节生成失败', r.error ?? '未知错误', 'error', missed)
+      } else if (m?.action === 'outline' && m.projectId) {
+        // 大纲分批生成在后台完成/失败：补通知 + 失效大纲缓存（列表页自动刷新）
+        if (r.status === 'done') fire('大纲生成完成', '新大纲已导入', 'success', missed)
+        else fire('大纲生成失败', r.error ?? '未知错误', 'error', missed)
+        void queryClient.invalidateQueries({ queryKey: qk.outlines(m.projectId) })
+      }
     }
     lastRunStatus.set(r.id, r.status)
   }
@@ -109,6 +136,7 @@ function isActive(snap: RuntimeSnapshot): boolean {
   return (
     snap.runs.some((r) => r.status === 'running') ||
     snap.batches.some((b) => b.running) ||
+    watchedRuns.size > 0 ||
     pollPending()
   )
 }
@@ -119,7 +147,10 @@ function tick(force = false): void {
   if (!force) {
     const st = useWriteRunStore.getState()
     const localActive =
-      (st.batch?.running ?? false) || (st.run !== null && !st.run.finished) || pollPending()
+      (st.batch?.running ?? false) ||
+      (st.run !== null && !st.run.finished) ||
+      watchedRuns.size > 0 ||
+      pollPending()
     if (!localActive) return
   }
   void api.runtime

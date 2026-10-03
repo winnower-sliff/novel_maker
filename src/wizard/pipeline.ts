@@ -74,8 +74,32 @@ export function subscribeStream(
     const armWatchdog = (): void => {
       stopWatchdog()
       watchdog = setTimeout(() => {
-        cleanup()
-        reject(new Error('连接长时间无响应，已中断。请检查网络后重试'))
+        // 看门狗到期先向主进程查询该 run：仍 running 就续期等待（SSE 断连 ≠ 请求死亡，
+        // 重连后 delta/done 自然恢复），确认 done/error/记录不存在才 settle。
+        // 期间 rid 保留在 pendingRuns 里，pollPending（中央同步器）持续兜底补拉。
+        const id = requestId
+        if (!id) return
+        void window.api.llm
+          .poll({ requestIds: [id] })
+          .then((recs) => {
+            const rec = recs[id]
+            if (!rec) {
+              cleanup()
+              reject(new Error('连接长时间无响应，已中断。请检查网络后重试'))
+            } else if (rec.status === 'done') {
+              cleanup()
+              resolve(rec.donePayload as DonePayload)
+            } else if (rec.status === 'error') {
+              cleanup()
+              reject(new Error(rec.error ?? '生成失败'))
+            } else {
+              armWatchdog()
+            }
+          })
+          .catch(() => {
+            // poll 本身失败（服务器不可达）：不判死，续期等待恢复
+            armWatchdog()
+          })
       }, IDLE_TIMEOUT_MS)
     }
     void open()

@@ -133,6 +133,10 @@ export function startAgentRun(
 const CONTINUE_PROMPT =
   '输出因长度限制被中断。请从中断处继续输出剩余条目：直接续写正文，不要重复已输出的任何内容，不要开场白或解释，保持完全相同的输出格式，直到全部条目输出完毕。'
 
+// multiRound 单批失败自动重试的退避间隔；重试耗尽但已生成部分内容时，
+// 降级为「保存已生成部分」而非全盘失败（afterDone 会 salvage 解析落库）
+const MULTI_RETRY_DELAYS_MS = [2000, 5000]
+
 function longestOverlapLen(prev: string, next: string, window = 200): number {
   const max = Math.min(window, prev.length, next.length)
   for (let n = max; n > 0; n--) {
@@ -185,6 +189,8 @@ export function startStream(
       const multi = opts?.multiRound
       // multiRound 分批场景下，历史 assistant 消息只放本段增量（避免累计全文重叠导致 input O(n²) 膨胀）
       let lastAssistantLen = 0
+      // multiRound 重试耗尽后的降级标记：已有部分成果时 break 进正常 afterDone 流程（salvage 落库）
+      let degraded = false
 
       for (;;) {
         let pending = ''
@@ -209,12 +215,47 @@ export function startStream(
           if (pending.length >= 200 || pending.includes('\n')) flush()
         }
 
-        result = await chatStream(
-          params,
-          { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
-          onDelta,
-          controller.signal
-        )
+        let roundResult: ChatResult | null = null
+        for (let attempt = 0; ; attempt++) {
+          try {
+            roundResult = await chatStream(
+              params,
+              { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+              onDelta,
+              controller.signal
+            )
+            break
+          } catch (err) {
+            // 失败批次的半截输出（未 flush 部分）不进正文，同段整体重试
+            pending = ''
+            if (controller.signal.aborted) throw err
+            if (!multi || fullText.length === 0) throw err
+            if (attempt >= MULTI_RETRY_DELAYS_MS.length) {
+              degraded = true
+              break
+            }
+            const waitS = Math.round(MULTI_RETRY_DELAYS_MS[attempt] / 1000)
+            if (!sink.isClosed()) {
+              sink.send(
+                'llm:notice',
+                requestId,
+                `本段生成失败（${(err as Error)?.message ?? '网络错误'}），${waitS}s 后自动重试…`
+              )
+            }
+            await new Promise((r) => setTimeout(r, MULTI_RETRY_DELAYS_MS[attempt]))
+          }
+        }
+        if (degraded) {
+          if (!sink.isClosed()) {
+            sink.send(
+              'llm:notice',
+              requestId,
+              `连续多段生成失败，已保存已生成的约 ${fullText.length} 字内容，其余部分可稍后重新生成`
+            )
+          }
+          break
+        }
+        result = roundResult as ChatResult
         flush()
         totalMs += result.durationMs
         appendUsage({
