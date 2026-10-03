@@ -67,6 +67,15 @@ function mapWorldbuild(r: Row): WorldbuildEntry {
   }
 }
 
+function parseScenes(v: unknown): string[] {
+  try {
+    const arr: unknown = JSON.parse(String(v ?? '[]'))
+    return Array.isArray(arr) ? arr.map((s) => String(s)).filter((s) => s.trim() !== '') : []
+  } catch {
+    return []
+  }
+}
+
 function mapOutline(r: Row): OutlineItem {
   return {
     id: r.id as string,
@@ -75,6 +84,7 @@ function mapOutline(r: Row): OutlineItem {
     chapterNo: r.chapter_no as number,
     title: (r.title as string) ?? '',
     synopsis: (r.synopsis as string) ?? '',
+    scenes: parseScenes(r.scenes),
     role: (r.role as string) ?? '',
     suspense: (r.suspense as string) ?? '',
     twist: (r.twist as number) ?? 0,
@@ -418,12 +428,13 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
   if (input.id) {
     const cur = mapOutline(db.prepare('SELECT * FROM outlines WHERE id = ?').get(input.id) as Row)
     db.prepare(
-      'UPDATE outlines SET volume = ?, chapter_no = ?, title = ?, synopsis = ?, role = ?, suspense = ?, twist = ?, hook = ?, foreshadow_ops = ?, status = ?, updated_at = ? WHERE id = ?'
+      'UPDATE outlines SET volume = ?, chapter_no = ?, title = ?, synopsis = ?, scenes = ?, role = ?, suspense = ?, twist = ?, hook = ?, foreshadow_ops = ?, status = ?, updated_at = ? WHERE id = ?'
     ).run(
       input.volume,
       input.chapterNo,
       input.title ?? cur.title,
       input.synopsis ?? cur.synopsis,
+      input.scenes ? JSON.stringify(input.scenes) : JSON.stringify(cur.scenes),
       input.role ?? cur.role,
       input.suspense ?? cur.suspense,
       input.twist ?? cur.twist,
@@ -437,7 +448,7 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
   }
   const id = randomUUID()
   db.prepare(
-    'INSERT INTO outlines (id, project_id, volume, chapter_no, title, synopsis, role, suspense, twist, hook, foreshadow_ops, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO outlines (id, project_id, volume, chapter_no, title, synopsis, scenes, role, suspense, twist, hook, foreshadow_ops, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     id,
     input.projectId,
@@ -445,6 +456,7 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
     input.chapterNo,
     input.title ?? '',
     input.synopsis ?? '',
+    JSON.stringify(input.scenes ?? []),
     input.role ?? '',
     input.suspense ?? '',
     input.twist ?? 0,
@@ -458,7 +470,21 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
 }
 
 export function deleteOutline(id: string): void {
-  getDb().prepare('DELETE FROM outlines WHERE id = ?').run(id)
+  const db = getDb()
+  const row = db.prepare('SELECT project_id, volume FROM outlines WHERE id = ?').get(id) as
+    | { project_id: string; volume: number }
+    | undefined
+  db.prepare('DELETE FROM outlines WHERE id = ?').run(id)
+  if (!row) return
+  // 大纲变动后，基于旧大纲写的衍生数据一并清除（正文/章摘要经 CASCADE 已删）
+  clearVolumeSummary(row.project_id, row.volume)
+  db.prepare("DELETE FROM embeddings WHERE kind = 'summary' AND ref_id = ?").run(id)
+}
+
+export function clearVolumeSummary(projectId: string, volume: number): void {
+  getDb()
+    .prepare('DELETE FROM volume_summaries WHERE project_id = ? AND volume = ?')
+    .run(projectId, volume)
 }
 
 type ChapterRow = {

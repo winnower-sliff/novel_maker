@@ -195,7 +195,7 @@ export function generateVolume(opts: VolumeGenOpts): {
         .sort((a, b) => a.chapterNo - b.chapterNo)
         .map((o) => o.id)
       if (volIds.length > 0) {
-        await window.api.write.batchStart({ projectId, ids: volIds })
+        await window.api.write.batchStart({ projectId, ids: volIds, regenVolumeSummary: true })
         rewriting = volIds.length
       }
     }

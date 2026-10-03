@@ -7,10 +7,12 @@ import type { EventSink } from '../eventSink'
 import { type LintReport, lintChapterReport, stripHtmlComments } from '../lint'
 import {
   applySummaryResult,
+  applyVolumeSummaryResult,
   buildAlignRequest,
   buildChapterRequest,
   buildPolishRequest,
   buildSummaryRequest,
+  buildVolumeSummaryRequest,
   parseAlignResult
 } from '../pipeline'
 import * as store from '../store'
@@ -37,7 +39,14 @@ interface ChapterDoneData {
 interface InternalBatch extends BatchSnapshot {
   stopFlag: boolean
   currentRid: string | null
-  opts: { wordTarget?: number; candidates?: number; pauseEach: boolean }
+  opts: {
+    wordTarget?: number
+    candidates?: number
+    pauseEach: boolean
+    /** 全卷重写语义：完成后自动重新生成该卷卷摘要（启动时先清旧摘要） */
+    regenVolumeSummary?: boolean
+    volume?: number
+  }
 }
 
 const batches = new Map<string, InternalBatch>()
@@ -269,6 +278,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
           chapterNo: number
           title: string
           synopsis: string
+          scenes?: string[]
           hook: string
         }[]
         error?: string
@@ -283,6 +293,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
           chapterNo: r.chapterNo,
           title: r.title,
           synopsis: r.synopsis,
+          ...(r.scenes && r.scenes.length > 0 ? { scenes: r.scenes } : {}),
           hook: r.hook
         })
       }
@@ -293,6 +304,21 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
       )
     } catch (err) {
       log(`自动对齐失败：${(err as Error).message}`)
+    }
+  }
+
+  // 全卷重写语义：重新生成该卷卷摘要（旧摘要已在启动时清除）
+  if (b.opts.regenVolumeSummary && b.opts.volume && !b.stopFlag && !b.paused) {
+    const volume = b.opts.volume
+    log(`重新生成第 ${volume} 卷摘要…`)
+    try {
+      await waitStream(sink, buildVolumeSummaryRequest(b.projectId, volume), {
+        action: 'volumeSummary',
+        afterDone: (r) => applyVolumeSummaryResult(b.projectId, volume, r.text)
+      }).done
+      log(`第 ${volume} 卷摘要已更新`)
+    } catch (err) {
+      log(`卷摘要生成失败：${(err as Error).message}`)
     }
   }
   b.running = false
@@ -312,10 +338,20 @@ export const writeHandlers = {
     } else {
       if (!p.ids || p.ids.length === 0) throw new Error('章节范围不能为空')
       ids = p.ids
+      const volumes = new Set(
+        ids
+          .map((id) => store.getOutline(id)?.volume)
+          .filter((v): v is number => typeof v === 'number')
+      )
       opts = {
         wordTarget: p.wordTarget,
         candidates: p.candidates,
-        pauseEach: p.pauseEach ?? false
+        pauseEach: p.pauseEach ?? false,
+        regenVolumeSummary: p.regenVolumeSummary,
+        volume: volumes.size === 1 ? [...volumes][0] : undefined
+      }
+      if (opts.regenVolumeSummary && opts.volume) {
+        store.clearVolumeSummary(p.projectId, opts.volume)
       }
     }
     const b: InternalBatch = {

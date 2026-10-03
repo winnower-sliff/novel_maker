@@ -141,6 +141,7 @@ export const OutlineInputSchema = z.object({
   chapterNo: z.number(),
   title: z.string().optional(),
   synopsis: z.string().optional(),
+  scenes: z.array(z.string()).optional(),
   role: z.string().optional(),
   suspense: z.string().optional(),
   twist: z.number().optional(),
@@ -382,7 +383,8 @@ export const invokeContract = {
         resume: z.boolean().optional(),
         wordTarget: z.number().optional(),
         candidates: z.number().optional(),
-        pauseEach: z.boolean().optional()
+        pauseEach: z.boolean().optional(),
+        regenVolumeSummary: z.boolean().optional()
       })
     ]),
     ret: ret<BatchSnapshot>()
