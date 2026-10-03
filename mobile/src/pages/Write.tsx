@@ -4,7 +4,9 @@ import { AiBar } from '@mobile/components/AiBar'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { Badge, Button, Empty, Spinner } from '@mobile/components/ui'
 import { fmtWords } from '@mobile/lib/format'
+import { useWriteListStore } from '@mobile/lib/writeListStore'
 import { suggestBatchRange, useWriteRunStore } from '../../../src/wizard/writeRunStore'
+import { groupChapterSegments } from '@shared/chapterSegments'
 import type { ChapterBrief } from '@shared/types'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -13,6 +15,20 @@ const STATUS_LABEL: Record<string, string> = {
   written: '已写',
   polished: '已返修'
 }
+
+const STATUS_STYLE: Record<string, string> = {
+  approved: 'bg-emerald-500/15 text-emerald-400',
+  polished: 'bg-violet-500/15 text-violet-400',
+  written: 'bg-sky-500/15 text-sky-400',
+  draft: 'bg-zinc-700/40 text-zinc-400'
+}
+const badgeStyle = (s: string): string => STATUS_STYLE[s] ?? 'bg-zinc-700/40 text-zinc-400'
+
+// chapterStatus 为 draft（初稿落库的默认值，流程不升级）时视为无更细信息，回退大纲工作流状态
+const briefBadgeStatus = (b: ChapterBrief): string =>
+  b.hasDraft && (b.chapterStatus === 'polished' || b.chapterStatus === 'approved')
+    ? b.chapterStatus
+    : b.status
 
 /** 简版自动写作：逐章 初稿→硬闸自动返修→摘要→大纲标记已写；失败即停；完成后自动对齐后续大纲。
  *  进度状态在共享 writeRunStore：进入单章编辑再返回，进度与日志不丢，生成在后台闭包继续。 */
@@ -131,6 +147,9 @@ export default function Write({ projectId }: { projectId: string }) {
   const batchRunning = useWriteRunStore(
     (s) => !!(s.batch && s.batch.projectId === projectId && s.batch.running)
   )
+  // hooks 一律在 early return 之前：点进章节走 ChapterEditor 分支时不能少声明，否则 React 崩溃黑屏
+  const openSegs = useWriteListStore((s) => s.openSegs)
+  const toggleSeg = useWriteListStore((s) => s.toggleSeg)
   const { data: briefs = [], isLoading } = useQuery({
     queryKey: ['novel', 'chapterBriefs', projectId],
     queryFn: () => window.api.novel.chapterBriefs(projectId),
@@ -173,10 +192,10 @@ export default function Write({ projectId }: { projectId: string }) {
     )
   }
 
-  const volumes = [...new Set(briefs.map((b) => b.volume))].sort((a, b) => a - b)
+  const volumeGroups = groupChapterSegments(briefs)
 
   return (
-    <div className="p-3">
+    <div className="h-full overflow-y-auto p-3">
       {briefs.length === 0 ? (
         <Empty text="该项目还没有大纲章节，请先在电脑端生成大纲" />
       ) : (
@@ -201,45 +220,86 @@ export default function Write({ projectId }: { projectId: string }) {
               }
             />
           )}
-          {volumes.map((vol) => (
-            <div key={vol} className="mb-4">
-              <div className="mb-1.5 px-1 text-xs font-medium text-zinc-500">第 {vol} 卷</div>
-              <div className="space-y-1.5">
-                {briefs
-                  .filter((b) => b.volume === vol)
-                  .sort((a, b) => a.chapterNo - b.chapterNo)
-                  .map((b) => (
-                    <div
-                      key={b.id}
-                      role="button"
-                      tabIndex={0}
-                      className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 active:bg-zinc-900"
-                      onClick={() => setSelectedId(b.id)}
-                      onKeyDown={(e) => {
-                        if (e.key === 'Enter') setSelectedId(b.id)
-                      }}
+          {volumeGroups.map(({ volume, segments }) => (
+            <div key={volume} className="mb-4">
+              <div className="sticky -top-3 z-10 -mx-3 bg-zinc-950/95 px-3 pb-1.5 pt-3 text-xs font-medium text-zinc-500 backdrop-blur-sm">
+                第 {volume} 卷
+              </div>
+              {segments.map((seg) => {
+                const key = `${volume}:${seg.segNo}`
+                const open = openSegs.has(key)
+                return (
+                  <div key={key} className="mb-2">
+                    <button
+                      type="button"
+                      onClick={() => toggleSeg(key)}
+                      className="flex w-full flex-col gap-1.5 rounded-lg border border-zinc-800/60 bg-zinc-900/40 px-3 py-2.5 text-xs active:bg-zinc-900"
                     >
-                      <span className="w-10 shrink-0 text-center text-sm text-zinc-500">
-                        {b.chapterNo}
+                      <span className="flex w-full items-center gap-1.5">
+                        <span
+                          className={`text-[10px] text-zinc-500 transition-transform ${open ? 'rotate-90' : ''}`}
+                        >
+                          ▸
+                        </span>
+                        <span className="text-zinc-300">第 {seg.from}-{seg.to} 章</span>
+                        <span className="ml-auto text-[11px] text-zinc-500">
+                          已写 {seg.writtenCount}/{seg.chapters.length}
+                        </span>
                       </span>
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm text-zinc-200">
-                          {b.title || '（未命名）'}
-                        </div>
-                        <div className="mt-0.5 text-[11px] text-zinc-600">
-                          {b.wordCount > 0 ? fmtWords(b.wordCount) : '未写'}
+                      <span className="block h-1 w-full overflow-hidden rounded-full bg-zinc-800">
+                        <span
+                          className="block h-full rounded-full bg-emerald-500 transition-[width] duration-300"
+                          style={{ width: `${(seg.writtenCount / seg.chapters.length) * 100}%` }}
+                        />
+                      </span>
+                    </button>
+                    <div
+                      aria-hidden={!open}
+                      className={`grid transition-[grid-template-rows,visibility] duration-200 ease-out ${
+                        open ? 'visible grid-rows-[1fr]' : 'invisible grid-rows-[0fr]'
+                      }`}
+                    >
+                      <div className="min-h-0 overflow-hidden">
+                        <div className="mt-1.5 space-y-1.5">
+                          {seg.chapters.map((b) => (
+                            <div
+                              key={b.id}
+                              role="button"
+                              tabIndex={0}
+                              className="flex cursor-pointer items-center gap-3 rounded-xl border border-zinc-800 bg-zinc-900/60 px-4 py-3 active:bg-zinc-900"
+                              onClick={() => setSelectedId(b.id)}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') setSelectedId(b.id)
+                              }}
+                            >
+                              <span className="w-10 shrink-0 text-center text-sm text-zinc-500">
+                                {b.chapterNo}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                <div className="truncate text-sm text-zinc-200">
+                                  {b.title || '（未命名）'}
+                                </div>
+                                <div className="mt-0.5 text-[11px] text-zinc-600">
+                                  {b.wordCount > 0 ? fmtWords(b.wordCount) : '未写'}
+                                </div>
+                              </div>
+                              {b.hasDraft ? (
+                                <Badge className={badgeStyle(briefBadgeStatus(b))}>
+                                  {STATUS_LABEL[briefBadgeStatus(b)] ?? briefBadgeStatus(b)}
+                                </Badge>
+                              ) : (
+                                <Badge className={badgeStyle(b.status)}>
+                                  {STATUS_LABEL[b.status] ?? b.status}
+                                </Badge>
+                              )}
+                            </div>
+                          ))}
                         </div>
                       </div>
-                      {b.hasDraft ? (
-                        <Badge className="bg-emerald-600/15 text-emerald-400">
-                          {STATUS_LABEL[b.chapterStatus] ?? b.chapterStatus}
-                        </Badge>
-                      ) : (
-                        <Badge>{STATUS_LABEL[b.status] ?? b.status}</Badge>
-                      )}
                     </div>
-                  ))}
-              </div>
+                  </div>
+                )
+              })}
             </div>
           ))}
         </>

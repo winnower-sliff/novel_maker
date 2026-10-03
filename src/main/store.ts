@@ -536,6 +536,23 @@ export function saveChapter(args: {
   return getChapterByOutline(args.outlineId) as Chapter
 }
 
+const CHAPTER_STATUS_RANK: Record<string, number> = {
+  draft: 0,
+  written: 1,
+  polished: 2,
+  approved: 3
+}
+
+/** 章节工作流状态只升不降（批量写完/返修后与大纲状态对齐；不覆盖已审定等更高状态） */
+export function raiseChapterStatus(outlineId: string, status: string): void {
+  const cur = getChapterByOutline(outlineId)
+  if (!cur) return
+  if ((CHAPTER_STATUS_RANK[status] ?? 0) <= (CHAPTER_STATUS_RANK[cur.status] ?? 0)) return
+  getDb()
+    .prepare('UPDATE chapters SET status = ?, updated_at = ? WHERE id = ?')
+    .run(status, now(), cur.id)
+}
+
 export function getSummary(chapterId: string): ChapterSummary | null {
   const r = getDb().prepare('SELECT * FROM summaries WHERE chapter_id = ?').get(chapterId) as
     | { id: string; chapter_id: string; content: string; created_at: number }

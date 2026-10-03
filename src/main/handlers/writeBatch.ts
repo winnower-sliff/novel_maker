@@ -201,7 +201,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
       } catch (err) {
         log(`第${brief.chapterNo}章 摘要失败：${(err as Error).message}`)
       }
-      // 大纲状态自动流转：写完即标，不等手动定稿
+      // 大纲状态自动流转：写完即标，不等手动定稿；章节行状态同步升级（徽章/导出以章节行为准）
       try {
         store.saveOutline({
           id: ids[i],
@@ -212,6 +212,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
           synopsis: brief.synopsis,
           status: repaired && passed ? 'polished' : 'written'
         })
+        store.raiseChapterStatus(ids[i], repaired && passed ? 'polished' : 'written')
       } catch {
         /* 状态流转失败不阻断批量 */
       }
