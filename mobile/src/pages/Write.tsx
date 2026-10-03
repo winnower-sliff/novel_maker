@@ -4,7 +4,7 @@ import { AiBar } from '@mobile/components/AiBar'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { Badge, Button, Empty, Spinner } from '@mobile/components/ui'
 import { fmtWords } from '@mobile/lib/format'
-import { appendBatchLog, suggestBatchRange, useWriteRunStore } from '../../../src/wizard/writeRunStore'
+import { suggestBatchRange, useWriteRunStore } from '../../../src/wizard/writeRunStore'
 import type { ChapterBrief } from '@shared/types'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -27,6 +27,7 @@ function AutoWritePanel({
 }) {
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
+  const [startErr, setStartErr] = useState<string | null>(null)
   const state = useWriteRunStore((s) =>
     s.batch && s.batch.projectId === projectId ? s.batch : null
   )
@@ -40,8 +41,6 @@ function AutoWritePanel({
     setTo(range.to)
   }, [state?.running, briefs])
 
-  const push = appendBatchLog
-
   const stop = (): void => {
     void window.api.write.batchStop({ projectId }).catch(() => {})
   }
@@ -52,11 +51,16 @@ function AutoWritePanel({
     const iTo = briefs.findIndex((b) => b.id === to)
     if (iFrom < 0 || iTo < 0 || iFrom > iTo) return
     const ids = briefs.slice(iFrom, iTo + 1).map((b) => b.id)
-    // 编排在主进程：熄屏/切走后电脑端继续逐章写作，进度经 write:batch 事件回推
+    setStartErr(null)
+    // 编排在主进程：熄屏/切走后电脑端继续逐章写作。用返回快照立即切运行态，
+    // 不依赖 write:batch 事件回推（手机端 SSE 断连时事件会丢，表单会卡住不动）
     void window.api.write
       .batchStart({ projectId, ids })
-      .then(() => onFinish())
-      .catch((err: Error) => push(`启动失败：${err.message}`))
+      .then((snap) => {
+        useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
+        onFinish()
+      })
+      .catch((err: Error) => setStartErr(err.message))
   }
 
   const options = briefs.map((b) => (
@@ -83,6 +87,9 @@ function AutoWritePanel({
           <Button className="mt-2 w-full" disabled={!from || !to} onClick={start}>
             开始自动写作
           </Button>
+          {startErr && (
+            <div className="mt-1.5 text-[11px] leading-4 text-red-400">启动失败：{startErr}</div>
+          )}
           <div className="mt-1.5 text-[11px] leading-4 text-zinc-600">
             全自动逐章：初稿 → 硬闸自动返修 → 摘要 → 大纲标记已写，完成后自动修订后续大纲。
           </div>

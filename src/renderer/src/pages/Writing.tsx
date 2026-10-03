@@ -506,6 +506,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     if (idxFrom < 0 || idxTo < 0 || idxFrom > idxTo) return
     const ids = briefs.slice(idxFrom, idxTo + 1).map((b) => b.id)
     setBatchOpen(false)
+    // 用返回快照立即切运行态，不依赖 write:batch 事件回推（SSE 断连时事件会丢）
     void window.api.write
       .batchStart({
         projectId,
@@ -513,6 +514,9 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         wordTarget: parseInt(wordTarget, 10) || undefined,
         candidates: parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined,
         pauseEach
+      })
+      .then((snap) => {
+        useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
       })
       .catch((err: unknown) => setNotice(`启动失败：${(err as Error).message}`))
   }
@@ -524,6 +528,9 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const resumeBatch = (): void => {
     void window.api.write
       .batchStart({ projectId, resume: true })
+      .then((snap) => {
+        useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
+      })
       .catch((err: unknown) => setNotice(`继续失败：${(err as Error).message}`))
   }
 
