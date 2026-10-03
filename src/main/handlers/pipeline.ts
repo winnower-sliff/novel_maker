@@ -44,6 +44,7 @@ export const pipelineHandlers = {
         const params = PIPELINE_PARAM_SCHEMAS.premiseDraft.parse(rawParams)
         return startStream(ctx.sink, buildPremiseDraftRequest(params.projectId), {
           action,
+          meta: { projectId: params.projectId },
           afterDone: (r) => parsePremiseDraft(r.text)
         })
       }
@@ -51,6 +52,7 @@ export const pipelineHandlers = {
         const params = PIPELINE_PARAM_SCHEMAS.outline.parse(rawParams)
         return startStream(ctx.sink, buildOutlineRequest(params), {
           action,
+          meta: { projectId: params.projectId },
           afterDone: (r) => applyOutlineResult(params, r.text),
           // 大章数输出超长被截断时自动续写拼接（与 worldbuild 同机制）
           continueOnMaxTokens: 3
@@ -60,6 +62,7 @@ export const pipelineHandlers = {
         const params = PIPELINE_PARAM_SCHEMAS.outlineAlign.parse(rawParams)
         return startStream(ctx.sink, buildAlignRequest(params.projectId), {
           action,
+          meta: { projectId: params.projectId },
           afterDone: (r) => parseAlignResult(params.projectId, r.text)
         })
       }
@@ -83,6 +86,7 @@ export const pipelineHandlers = {
         const built = await buildChapterRequest(outline.projectId, outlineId, wordTarget)
         return startStream(ctx.sink, built.params, {
           action,
+          meta: { projectId: outline.projectId, outlineId },
           afterDone: (r) => {
             const clean = stripHtmlComments(r.text)
             const chapter = store.saveChapter({
@@ -121,6 +125,7 @@ export const pipelineHandlers = {
         }
         return startStream(ctx.sink, buildSummaryRequest(outline.projectId, outlineId), {
           action,
+          meta: { projectId: outline.projectId, outlineId },
           afterDone: (r) => applySummaryResult(outline.projectId, outlineId, r.text)
         })
       }
@@ -131,6 +136,7 @@ export const pipelineHandlers = {
         if (!outline) throw new Error('章节不存在')
         return startStream(ctx.sink, buildPolishRequest(outline.projectId, outlineId, focus), {
           action,
+          meta: { projectId: outline.projectId, outlineId },
           afterDone: (r) => {
             if (save) {
               const chapter = store.saveChapter({
@@ -152,6 +158,7 @@ export const pipelineHandlers = {
         if (!outline) throw new Error('章节不存在')
         return startStream(ctx.sink, await buildCheckRequest(outline.projectId, outlineId), {
           action,
+          meta: { projectId: outline.projectId, outlineId },
           afterDone: (r) => parseCheckResult(r.text)
         })
       }
@@ -162,6 +169,7 @@ export const pipelineHandlers = {
         if (!outline) throw new Error('章节不存在')
         return startStream(ctx.sink, await buildReviewRequest(outline.projectId, outlineId), {
           action,
+          meta: { projectId: outline.projectId, outlineId },
           afterDone: (r) => parseReviewResult(r.text).result
         })
       }
@@ -176,6 +184,7 @@ export const pipelineHandlers = {
           buildExpandRequest(outline.projectId, outlineId, targetWords),
           {
             action,
+            meta: { projectId: outline.projectId, outlineId },
             afterDone: (r) => ({ wordCount: r.text.replace(/\s/g, '').length }),
             continueOnMaxTokens: 2
           }
@@ -186,6 +195,7 @@ export const pipelineHandlers = {
         const { projectId, volume } = params
         return startStream(ctx.sink, buildVolumeSummaryRequest(projectId, volume), {
           action,
+          meta: { projectId },
           afterDone: (r) => applyVolumeSummaryResult(projectId, volume, r.text)
         })
       }
@@ -196,6 +206,7 @@ export const pipelineHandlers = {
         if (!outline) throw new Error('章节不存在')
         return startStream(ctx.sink, buildStateSyncRequest(outline.projectId, outlineId), {
           action,
+          meta: { projectId: outline.projectId, outlineId },
           afterDone: (r) => applyStateSyncResult(outline.projectId, r.text)
         })
       }
@@ -206,6 +217,7 @@ export const pipelineHandlers = {
           buildCharacterRequest(params.projectId, params.brief, params.allowUpdate === true),
           {
             action,
+            meta: { projectId: params.projectId },
             afterDone: (r) => {
               const parsed = parseCharacterCards(r.text)
               let characterId: string | undefined
@@ -247,6 +259,7 @@ export const pipelineHandlers = {
         const retrieval = await runWorldbuildRetrieval(params)
         return startStream(ctx.sink, buildWorldbuildRequest(params, retrieval), {
           action,
+          meta: { projectId: params.projectId },
           afterDone: (r) => ({ entries: previewWorldbuildResult(params, r.text) }),
           continueOnMaxTokens: 3
         })

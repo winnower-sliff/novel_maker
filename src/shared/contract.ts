@@ -22,6 +22,7 @@ import type {
   Project,
   ProjectGraph,
   RunRecordPayload,
+  RuntimeSnapshot,
   SearchHit,
   ServerStatus,
   SettingsView,
@@ -347,6 +348,8 @@ export const invokeContract = {
     ret: ret<Record<string, RunRecordPayload>>()
   },
 
+  'runtime:snapshot': { args: z.tuple([]), ret: ret<RuntimeSnapshot>() },
+
   'write:batchStart': {
     args: z.tuple([
       z.object({
@@ -572,6 +575,9 @@ export interface Api {
     onDone: SubscribeFn<'llm:done'>
     onError: SubscribeFn<'llm:error'>
     onNotice: SubscribeFn<'llm:notice'>
+  }
+  runtime: {
+    snapshot: InvokeFn<'runtime:snapshot'>
   }
   usage: {
     list: InvokeFn<'usage:list'>

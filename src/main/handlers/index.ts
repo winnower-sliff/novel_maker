@@ -10,6 +10,7 @@ import { ipcOnlyHandlers } from './ipcOnly'
 import { llmHandlers } from './llm'
 import { novelHandlers } from './novel'
 import { pipelineHandlers } from './pipeline'
+import { runtimeHandlers } from './runtime'
 import { settingsHandlers } from './settings'
 import { toolHandlers } from './tools'
 import { writeHandlers } from './writeBatch'
@@ -17,6 +18,7 @@ import { writeHandlers } from './writeBatch'
 export const sharedHandlers: HandlerTable = {
   ...settingsHandlers,
   ...llmHandlers,
+  ...runtimeHandlers,
   ...agentHandlers,
   ...pipelineHandlers,
   ...novelHandlers,

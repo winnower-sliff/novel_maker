@@ -12,18 +12,19 @@ export type { DonePayload } from '../preload/index'
 // 流式兜底：长时间收不到任何 delta/done/error 视为连接中断（SSE 断连且重连失败等）
 const IDLE_TIMEOUT_MS = 300_000
 
-// 断连补拉：SSE 重连成功或页面回前台时，把在途请求向主进程查询一次，
-// 已完成/已失败的合成结果喂给等待方（Promise 二次 settle 天然幂等），
-// 避免手机熄屏/切后台后 UI 永远卡「生成中」。
+// 断连兜底：pollPending 由中央同步器（runtimeSync.ts）按触发时机统一调用，
+// 把在途请求向主进程查询，已完成/已失败的合成结果喂给等待方
+// （Promise 二次 settle 天然幂等），避免手机熄屏/切后台后 UI 永远卡「生成中」。
 const pendingRuns = new Map<
   string,
   { resolve: (p: DonePayload) => void; reject: (e: Error) => void }
 >()
-let pollBridgeReady = false
 
-function pollPending(): void {
-  if (pendingRuns.size === 0) return
+/** 查询在途 pipeline run 并合成结果；返回是否仍有在途（供同步器判断是否继续轮询） */
+export function pollPending(): boolean {
+  if (pendingRuns.size === 0) return false
   const requestIds = [...pendingRuns.keys()]
+  let live = false
   void window.api.llm
     .poll({ requestIds })
     .then((recs: Record<string, RunRecordPayload>) => {
@@ -38,19 +39,10 @@ function pollPending(): void {
           run.reject(new Error(rec.error ?? '生成失败'))
         }
       }
+      live = pendingRuns.size > 0
     })
     .catch(() => {})
-}
-
-export function ensurePollBridge(): void {
-  if (pollBridgeReady || typeof window === 'undefined') return
-  pollBridgeReady = true
-  window.addEventListener('nm-sse-state', ((e: CustomEvent<string>) => {
-    if (e.detail === 'open') pollPending()
-  }) as EventListener)
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') pollPending()
-  })
+  return live || pendingRuns.size > 0
 }
 
 type StreamHooks = {
@@ -62,7 +54,6 @@ export function subscribeStream(
   open: () => Promise<string>,
   hooks: StreamHooks
 ): { done: Promise<DonePayload>; abort: () => void } {
-  ensurePollBridge()
   let requestId: string | null = null
   let watchdog: ReturnType<typeof setTimeout> | null = null
   const done = new Promise<DonePayload>((resolve, reject) => {

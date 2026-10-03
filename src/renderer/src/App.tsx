@@ -1,6 +1,7 @@
 import { providerPreset } from '@shared/providers'
 import { useQuery } from '@tanstack/react-query'
 import { lazy, type ReactElement, Suspense, useCallback, useEffect, useState } from 'react'
+import { ensureRuntimeSync } from '../../wizard/runtimeSync'
 import { CreationWizard } from './components/CreationWizard'
 import { Toaster } from './components/Toaster'
 import { markAgentSeen, useAgentNavBadge } from './lib/agentUiStore'
@@ -272,6 +273,11 @@ export default function App() {
     return () => window.removeEventListener('nm-sse-state', onState)
   }, [])
 
+  // 中央同步器：运行态「拉为兜底」，不依赖事件到达（幂等，App 级挂一次）
+  useEffect(() => {
+    ensureRuntimeSync()
+  }, [])
+
   const statsQ = useQuery({ ...queries.usageStats(), refetchInterval: 30_000 })
   const settingsQ = useQuery(queries.settings())
   const projectsQ = useQuery(queries.projects())
@@ -328,6 +334,7 @@ export default function App() {
   )
 
   const clearGraphFocus = useCallback((): void => setGraphFocus(null), [])
+  const clearWritingFocus = useCallback((): void => setWritingFocus(null), [])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
@@ -586,7 +593,7 @@ export default function App() {
               projectId={currentProject?.id ?? ''}
               onNavigate={navigate}
               focusOutlineId={writingFocus}
-              onFocusConsumed={() => setWritingFocus(null)}
+              onFocusConsumed={clearWritingFocus}
             />
           )}
           {page === 'outline' && (

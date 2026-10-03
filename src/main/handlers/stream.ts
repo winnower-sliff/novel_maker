@@ -4,7 +4,9 @@ import type {
   ChatParams,
   ChatResult,
   PipelineAction,
+  RunMeta,
   RunRecordPayload,
+  RuntimeRunRecord,
   WorldbuildGenParams
 } from '../../shared/types'
 import { runAgent } from '../agent'
@@ -36,8 +38,8 @@ type RunRecord = RunRecordPayload
 const runRecords = new Map<string, RunRecord>()
 const RECORD_TTL_MS = 10 * 60 * 1000
 
-function recordRunning(requestId: string, kind: RunRecord['kind']): void {
-  runRecords.set(requestId, { status: 'running', kind })
+function recordRunning(requestId: string, kind: RunRecord['kind'], meta?: RunMeta): void {
+  runRecords.set(requestId, { status: 'running', kind, meta })
 }
 
 function recordDone(requestId: string, payload: unknown): void {
@@ -70,6 +72,12 @@ export function pollRuns(requestIds: string[]): Record<string, RunRecord> {
     if (rec) out[rid] = rec
   }
   return out
+}
+
+/** 全部在途/近期完成记录（runtime:snapshot 用，渲染端中央同步器拉取兜底） */
+export function listRuns(): RuntimeRunRecord[] {
+  void pollRuns([])
+  return [...runRecords.entries()].map(([id, rec]) => ({ id, ...rec }))
 }
 
 export { LONG_CHAPTER_THRESHOLD }
@@ -141,12 +149,13 @@ export function startStream(
     afterDone?: (result: ChatResult) => unknown
     continueOnMaxTokens?: number
     onSettled?: SettleCb
+    meta?: RunMeta
   }
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
   activeRequests.set(requestId, controller)
-  recordRunning(requestId, 'llm')
+  recordRunning(requestId, 'llm', { ...opts?.meta, action: opts?.action ?? opts?.meta?.action })
 
   void (async () => {
     try {
@@ -273,7 +282,7 @@ export function startLongChapterStream(
   const requestId = randomUUID()
   const controller = new AbortController()
   activeRequests.set(requestId, controller)
-  recordRunning(requestId, 'llm')
+  recordRunning(requestId, 'llm', { projectId, outlineId, action: 'chapter' })
 
   void (async () => {
     try {
@@ -343,7 +352,7 @@ export function startChapterCandidatesStream(
   const requestId = randomUUID()
   const controller = new AbortController()
   activeRequests.set(requestId, controller)
-  recordRunning(requestId, 'llm')
+  recordRunning(requestId, 'llm', { projectId, outlineId, action: 'chapter' })
 
   void (async () => {
     try {

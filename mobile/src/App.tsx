@@ -2,6 +2,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Book, { type BookNavRequest } from '@mobile/pages/Book'
 import { consumeBack } from '@mobile/lib/backHandler'
+import { installNotifyProvider } from '@mobile/lib/notifyCapacitor'
 import { nativeApp } from '@mobile/lib/nativeApp'
 import Connect from '@mobile/pages/Connect'
 import More from '@mobile/pages/More'
@@ -10,6 +11,7 @@ import { MobileToaster, WizardHost } from '@mobile/components/WizardHost'
 import { useConnStore } from '@mobile/lib/conn'
 import { pushToast } from '@wizard/toastStore'
 import { openWizard } from '@wizard/wizardStore'
+import { ensureRuntimeSync } from '@wizard/runtimeSync'
 import type { Page as NavPage } from '@renderer/lib/nav'
 
 type Page = 'shelf' | 'more'
@@ -85,6 +87,13 @@ export default function App() {
     }
     void Promise.resolve(app.addListener('backButton', onBack)).catch(() => {})
   }, [])
+
+  // 连接就绪后挂中央同步器（拉为兜底）与系统通知（幂等）
+  useEffect(() => {
+    if (!conn) return
+    installNotifyProvider()
+    ensureRuntimeSync()
+  }, [conn])
 
   if (!conn) return <Connect />
 

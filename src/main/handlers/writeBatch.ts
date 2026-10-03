@@ -49,6 +49,11 @@ function snapshotOf(projectId: string): BatchSnapshot | null {
   return { projectId: pid, running, paused, done, total, currentNo, log: [...log], resumeIds }
 }
 
+/** 全部项目批量快照（runtime:snapshot 用） */
+export function allBatchesSnapshot(): BatchSnapshot[] {
+  return [...batches.keys()].map((pid) => snapshotOf(pid)).filter((s): s is BatchSnapshot => !!s)
+}
+
 function publish(sink: EventSink, projectId: string): void {
   const snap = snapshotOf(projectId)
   if (snap && !sink.isClosed()) sink.send('write:batch', projectId, snap)

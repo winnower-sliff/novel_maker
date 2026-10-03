@@ -176,23 +176,40 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     void queryClient.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
   }, [projectId, queryClient])
 
-  const openChapter = useCallback((outlineId: string): void => {
-    setSelectedId(outlineId)
-    setCtxPreview(null)
-    setNotice('')
-    setCheckResult(null)
-    setLintReport(null)
-    setReviewResult(null)
-    setCandidate(null)
-    setCandidateSet(null)
-    polishedRef.current = false
-    void window.api.novel.chapter(outlineId).then((c) => {
-      setContent(c?.content ?? '')
-      setDirty(false)
-    })
+  // 单章初稿流式进行中：编辑器节流跟随 store 累积文本（300ms flush，
+  // 避免每个 delta 触发整页 re-render；切章/完成时立即清理防止旧文本串章）
+  const followTextRef = useRef('')
+  const followTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const clearFollowTimer = useCallback((): void => {
+    if (followTimerRef.current) {
+      clearTimeout(followTimerRef.current)
+      followTimerRef.current = null
+    }
   }, [])
+  useEffect(() => clearFollowTimer, [clearFollowTimer])
+
+  const openChapter = useCallback(
+    (outlineId: string): void => {
+      clearFollowTimer()
+      setSelectedId(outlineId)
+      setCtxPreview(null)
+      setNotice('')
+      setCheckResult(null)
+      setLintReport(null)
+      setReviewResult(null)
+      setCandidate(null)
+      setCandidateSet(null)
+      polishedRef.current = false
+      void window.api.novel.chapter(outlineId).then((c) => {
+        setContent(c?.content ?? '')
+        setDirty(false)
+      })
+    },
+    [clearFollowTimer]
+  )
 
   useEffect(() => {
+    clearFollowTimer()
     setSelectedId(null)
     setContent('')
     useWriteRunStore.setState({ batch: null, resumeIds: null })
@@ -207,7 +224,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         }
       })
       .catch(() => {})
-  }, [projectId])
+  }, [projectId, clearFollowTimer])
 
   useEffect(() => {
     if (!focusOutlineId || briefs.length === 0) return
@@ -228,17 +245,32 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const runEditorText = run?.editorText
   useEffect(() => {
     if (!runFinished || runConsumed || runId !== selectedId) return
+    clearFollowTimer()
     if (runKind === 'chapter') {
-      setContent(runEditorText ?? '')
-      setDirty(false)
+      if (runEditorText) {
+        setContent(runEditorText)
+        setDirty(false)
+      } else {
+        // 刷新恢复场景兜底：流式文本随旧页面丢失，但主进程完成时已落库，从 DB 重读
+        void window.api.novel.chapter(runId).then((c) => {
+          if (c?.content) {
+            setContent(c.content)
+            setDirty(false)
+          }
+        })
+      }
     }
     markRunConsumed()
-  }, [runFinished, runConsumed, runId, runKind, runEditorText, selectedId])
+  }, [runFinished, runConsumed, runId, runKind, runEditorText, selectedId, clearFollowTimer])
 
-  // 单章初稿流式进行中：编辑器实时跟随 store 累积文本（切走再回来也能看到已生成的部分）
   useEffect(() => {
     if (runFinished || runKind !== 'chapter' || runId !== selectedId) return
-    setContent(runEditorText ?? '')
+    followTextRef.current = runEditorText ?? ''
+    if (followTimerRef.current) return
+    followTimerRef.current = setTimeout(() => {
+      followTimerRef.current = null
+      setContent(followTextRef.current)
+    }, 300)
   }, [runFinished, runKind, runId, runEditorText, selectedId])
 
   if (!projectId) {

@@ -131,13 +131,32 @@ export interface ServerStatus {
   error: string | null
 }
 
-/** 运行注册表条目（llm:poll 补拉用）：断连期间 done/error 事件丢失时的结果快照 */
+/** 运行元数据：runtime:snapshot 恢复进度/补发通知用 */
+export interface RunMeta {
+  projectId?: string
+  outlineId?: string
+  action?: string
+}
+
+/** 运行注册表条目（llm:poll/runtime:snapshot 补拉用）：断连期间 done/error 事件丢失时的结果快照 */
 export interface RunRecordPayload {
   status: 'running' | 'done' | 'error'
   kind: 'llm' | 'agent'
   finishedAt?: number
   donePayload?: unknown
   error?: string
+  meta?: RunMeta
+}
+
+/** 带 requestId 的运行记录（runtime:snapshot 返回） */
+export interface RuntimeRunRecord extends RunRecordPayload {
+  id: string
+}
+
+/** 中央同步器拉取的全量运行态快照 */
+export interface RuntimeSnapshot {
+  runs: RuntimeRunRecord[]
+  batches: BatchSnapshot[]
 }
 
 /** 批量自动写作进度快照（主进程编排，write:batch 事件/write:batchStatus 拉取） */
