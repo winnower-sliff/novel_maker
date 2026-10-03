@@ -480,6 +480,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   }
 
   const runBatchList = async (ids: string[]): Promise<void> => {
+    if (useWriteRunStore.getState().batch?.running) return
     useWriteRunStore.setState({
       batchStop: false,
       batchAbortId: null,
@@ -504,12 +505,12 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
       patchBatch({ currentNo: brief.chapterNo })
       appendLog(`第${brief.chapterNo}章 生成中…`)
       try {
-        const abortId = await window.api.pipeline.run('chapter', {
+        const myRid = await window.api.pipeline.run('chapter', {
           outlineId: ids[i],
           wordTarget: parseInt(wordTarget, 10) || undefined,
           candidates: parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined
         })
-        useWriteRunStore.setState({ batchAbortId: abortId })
+        useWriteRunStore.setState({ batchAbortId: myRid })
         const gen = await new Promise<DonePayload>((resolve, reject) => {
           const offs: Array<() => void> = []
           const cleanup = (): void =>
@@ -518,16 +519,14 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
             })
           offs.push(
             window.api.llm.onDone((rid, p) => {
-              if (rid === useWriteRunStore.getState().batchAbortId) {
-                cleanup()
-                resolve(p)
-              }
+              if (rid !== myRid) return
+              cleanup()
+              resolve(p)
             }),
             window.api.llm.onError((rid, m) => {
-              if (rid === useWriteRunStore.getState().batchAbortId) {
-                cleanup()
-                reject(new Error(m))
-              }
+              if (rid !== myRid) return
+              cleanup()
+              reject(new Error(m))
             })
           )
         })

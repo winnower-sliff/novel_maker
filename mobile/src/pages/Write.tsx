@@ -41,6 +41,7 @@ function AutoWritePanel({
   }
 
   const start = (): void => {
+    if (useWriteRunStore.getState().batch?.running) return
     const iFrom = briefs.findIndex((b) => b.id === from)
     const iTo = briefs.findIndex((b) => b.id === to)
     if (iFrom < 0 || iTo < 0 || iFrom > iTo) return
@@ -66,23 +67,21 @@ function AutoWritePanel({
         patchBatch({ currentNo: brief.chapterNo })
         push(`第${brief.chapterNo}章 生成中…`)
         try {
-          const abortId = await window.api.pipeline.run('chapter', { outlineId: ids[i] })
-          useWriteRunStore.setState({ batchAbortId: abortId })
+          const myRid = await window.api.pipeline.run('chapter', { outlineId: ids[i] })
+          useWriteRunStore.setState({ batchAbortId: myRid })
           const gen = await new Promise<{ data?: { wordCount?: number; lint?: { pass?: boolean; issues?: Array<{ rule: string; advice: string; quote?: string }> } } }>((resolve, reject) => {
             const offs: Array<() => void> = []
             const cleanup = (): void => offs.forEach((o) => o())
             offs.push(
               window.api.llm.onDone((rid, p) => {
-                if (rid === useWriteRunStore.getState().batchAbortId) {
-                  cleanup()
-                  resolve(p as { data?: { wordCount?: number; lint?: { pass?: boolean; issues?: Array<{ rule: string; advice: string; quote?: string }> } } })
-                }
+                if (rid !== myRid) return
+                cleanup()
+                resolve(p as { data?: { wordCount?: number; lint?: { pass?: boolean; issues?: Array<{ rule: string; advice: string; quote?: string }> } } })
               }),
               window.api.llm.onError((rid, m) => {
-                if (rid === useWriteRunStore.getState().batchAbortId) {
-                  cleanup()
-                  reject(new Error(m))
-                }
+                if (rid !== myRid) return
+                cleanup()
+                reject(new Error(m))
               })
             )
           })
