@@ -183,6 +183,8 @@ export function startStream(
       let round = 0
       const maxRounds = opts?.continueOnMaxTokens ?? 0
       const multi = opts?.multiRound
+      // multiRound 分批场景下，历史 assistant 消息只放本段增量（避免累计全文重叠导致 input O(n²) 膨胀）
+      let lastAssistantLen = 0
 
       for (;;) {
         let pending = ''
@@ -235,9 +237,10 @@ export function startStream(
           round++
           params.messages = [
             ...params.messages,
-            { role: 'assistant', content: fullText },
+            { role: 'assistant', content: fullText.slice(lastAssistantLen) },
             { role: 'user', content: next }
           ]
+          lastAssistantLen = fullText.length
           continue
         }
         if (result.stopReason !== 'max_tokens' || round >= maxRounds) break

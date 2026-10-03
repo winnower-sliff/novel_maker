@@ -97,8 +97,9 @@ export const pipelineHandlers = {
       case 'outline': {
         const params = PIPELINE_PARAM_SCHEMAS.outline.parse(rawParams)
         // 大章数分批生成：每批一次请求，批间衔接上下文，批内截断续写兜底——结构性避免 max_tokens 截断缺章
+        const OUTLINE_BATCH_THRESHOLD = 10
         const BATCH_SIZE = 8
-        if (params.count > BATCH_SIZE + 2) {
+        if (params.count > OUTLINE_BATCH_THRESHOLD) {
           const total = params.count
           const totalStart = params.startNo
           const totalEnd = totalStart + total - 1
