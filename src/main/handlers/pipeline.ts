@@ -51,7 +51,8 @@ type ParsedCharacterCards = ReturnType<typeof parseCharacterCards>
 function saveParsedCharacters(
   projectId: string,
   parsed: ParsedCharacterCards,
-  fallbackName: string
+  fallbackName: string,
+  role?: string
 ): { characterId?: string; name: string; revised: Array<{ id: string; name: string }> } {
   let characterId: string | undefined
   let name = ''
@@ -60,6 +61,7 @@ function saveParsedCharacters(
     const character = store.saveCharacter({
       projectId,
       name,
+      role: role?.trim() || undefined,
       tags: parsed.mainTags.join(','),
       card: parsed.main
     })
@@ -341,7 +343,12 @@ export const pipelineHandlers = {
         const params = PIPELINE_PARAM_SCHEMAS.character.parse(rawParams)
         return startStream(
           ctx.sink,
-          buildCharacterRequest(params.projectId, params.brief, params.allowUpdate === true),
+          buildCharacterRequest(
+            params.projectId,
+            params.brief,
+            params.allowUpdate === true,
+            params.peers
+          ),
           {
             action,
             meta: { projectId: params.projectId },
@@ -382,7 +389,12 @@ export const pipelineHandlers = {
             const parsed = parseCanonSyncResult(params.projectId, r.text)
             // 人物（含修订卡）自动落库；世界观进预览由用户确认
             const saved = parsed.characters
-              ? saveParsedCharacters(params.projectId, parsed.characters, '')
+              ? saveParsedCharacters(
+                  params.projectId,
+                  parsed.characters,
+                  '',
+                  parsed.characters.main.trim() ? parsed.mainRole : undefined
+                )
               : { characterId: undefined, name: '', revised: [] }
             return {
               savedCharacters: saved,

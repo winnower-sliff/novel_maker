@@ -101,10 +101,21 @@ export function applyStateSyncResult(
   return { updated, parsed: updated.length > 0 }
 }
 
+/** 人物卡注入共享渲染（buildCharacterRequest / canonSync 共用）：`### 名（定位）` + 卡片节选 */
+export function renderCharacterCards(
+  list: Array<{ name: string; role: string; card: string }>,
+  clip: number
+): string {
+  return list
+    .map((c) => `### ${c.name}（${c.role || '未定位'}）\n${c.card.slice(0, clip) || '（无卡）'}`)
+    .join('\n\n')
+}
+
 export function buildCharacterRequest(
   projectId: string,
   brief: string,
-  allowUpdate = false
+  allowUpdate = false,
+  peers?: Array<{ name: string; card: string }>
 ): ChatParams {
   const project = store.listProjects().find((x) => x.id === projectId)
   const wb = store
@@ -112,11 +123,8 @@ export function buildCharacterRequest(
     .map((e) => `- [${e.category}] ${e.title}`)
     .join('\n')
   const characters = store.listCharacters(projectId)
-  const chars = allowUpdate
-    ? characters
-        .map((c) => `### ${c.name}（${c.role || '未定位'}）\n${c.card.slice(0, 800)}`)
-        .join('\n\n')
-    : characters.map((c) => `- ${c.name}（${c.role || '未定位'}）`).join('\n')
+  // 已有人物统一注入卡片节选（与 canonSync 同款）：仅名单时新人物无法与关系网咬合
+  const chars = renderCharacterCards(characters, allowUpdate ? 800 : 600)
   const tagCounts = new Map<string, number>()
   for (const c of characters) {
     for (const t of splitTags(c.tags)) tagCounts.set(t, (tagCounts.get(t) ?? 0) + 1)
@@ -125,6 +133,10 @@ export function buildCharacterRequest(
     tagCounts.size > 0
       ? `【已有标签（必须优先复用；新建标签须是可被多个人物共享的主题词）】\n${[...tagCounts.entries()].map(([name, count]) => `${name}(${count})`).join('、')}`
       : ''
+  const peerBlocks = (peers ?? [])
+    .filter((p) => p.name.trim() && p.card.trim())
+    .map((p) => `### ${p.name.trim()}\n${p.card.slice(0, 600)}`)
+    .join('\n\n')
   const system = [
     skillBody('character-smith'),
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
@@ -133,7 +145,9 @@ export function buildCharacterRequest(
     chars &&
       (allowUpdate
         ? `【已有人物（新人物的定位与关系须与他们咬合不矛盾。若有人物需要因新人物/新设定调整定位、关系或履历，可按输出格式约定追加修订卡；只能修订上面列出的人物）】\n${chars}`
-        : `【已有人物（避免定位重复，需咬合关系网）】\n${chars}`)
+        : `【已有人物（避免定位重复，新人物须与他们的关系网咬合不矛盾）】\n${chars}`),
+    peerBlocks &&
+      `【本批已生成的人物卡（同一批班底，新人物须与他们咬合、避免定位/关系重复）】\n${peerBlocks}`
   ]
     .filter(Boolean)
     .join('\n\n')

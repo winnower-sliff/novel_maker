@@ -90,9 +90,13 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
     setDelta('')
     setError(null)
     patchItem(item.name, { status: 'running' })
+    // 批内感知：把本批已生成好卡的预览卡传给 AI，后面的人与前人咬合（关系/定位不撞车）
+    const peers = itemsRef.current
+      .filter((x) => x.name !== item.name && x.status === 'done' && x.card.trim())
+      .map((x) => ({ name: x.name.trim(), card: x.card }))
     const { done, abort } = startPipeline(
       'character',
-      { projectId, name: item.name.trim(), brief: item.brief.trim(), save: false },
+      { projectId, name: item.name.trim(), brief: item.brief.trim(), save: false, peers },
       (t) => setDelta((v) => v + t)
     )
     abortRef.current = abort

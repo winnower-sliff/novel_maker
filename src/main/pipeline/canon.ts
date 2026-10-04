@@ -4,7 +4,7 @@
 import { splitTags } from '../../shared/tags'
 import type { CanonWorldUpdate, ChatParams, WorldbuildPreviewEntry } from '../../shared/types'
 import * as store from '../store'
-import { parseCharacterCards } from './character'
+import { parseCharacterCards, renderCharacterCards } from './character'
 import { normalizeWorldbuildParsed, parseWorldbuildEntries } from './worldbuild'
 
 type ParsedCharacterCards = ReturnType<typeof parseCharacterCards>
@@ -39,13 +39,11 @@ export function buildCanonSyncRequest(projectId: string, volume: number): ChatPa
   const wbBlock =
     entryBlocks.length > 0 ? entryBlocks.join('\n\n') : '（暂无世界观条目——请全部作为新增输出）'
 
-  const chars = store
-    .listCharacters(projectId)
-    .map(
-      (c) => `### ${c.name}（${c.role || '未定位'}）\n${c.card.slice(0, CHAR_CLIP) || '（无卡）'}`
-    )
-    .join('\n\n')
-  const charBlock = chars || '（暂无人物——新人物按完整人物卡输出）'
+  const chars = store.listCharacters(projectId)
+  const charBlock =
+    chars.length > 0
+      ? renderCharacterCards(chars, CHAR_CLIP)
+      : '（暂无人物——新人物按完整人物卡输出）'
 
   const system = [
     '你是小说设定的守护者。任务：对照一卷新写好的章节大纲，检查已有世界观与人物班底，',
@@ -79,9 +77,10 @@ export function buildCanonSyncRequest(projectId: string, volume: number): ChatPa
     '（融合新设定后的完整修订正文，标题必须与已有条目逐字一致）',
     '',
     '【新增人物】',
-    '## 人物名 #标签1 #标签2',
+    '## 人物名（一句话定位） #标签1 #标签2',
     '（硬性要求：先逐一核对本卷大纲全部章节里出现的每个人名，凡不在【已有人物班底】清单中的，',
-    '每个都必须单独输出一张完整人物卡，一个都不能漏；完整人物卡为 markdown 要点式；',
+    '每个都必须单独输出一张完整人物卡，一个都不能漏；定位必须写在标题行名字后的括号里，',
+    '随后为 markdown 要点式正文；',
     '如需调整已有人物，用「## [修订] 原人物名」标题行追加修订卡）'
   ].join('\n')
   return {
@@ -98,6 +97,8 @@ export interface ParsedCanonSync {
   worldNew: WorldbuildPreviewEntry[]
   worldUpdates: CanonWorldUpdate[]
   characters: ParsedCharacterCards | null
+  /** 主卡「定位：」首行提取（落库写 role，卡内不留该行） */
+  mainRole?: string
 }
 
 /** 解析三段式输出；修订条目按标题匹配原条目（匹配不到的丢弃），人物卡交调用方落库 */
@@ -150,6 +151,22 @@ export function parseCanonSyncResult(projectId: string, text: string): ParsedCan
   }
 
   const characters = parseCharacterCards(seg('新增人物'))
+  let mainRole: string | undefined
+  if (characters.main.trim()) {
+    // 优先从主标题「## 名（定位）」剥括号提取（character-smith 惯例格式）
+    const hm = /^(#{1,3}\s*)([^#（(\n]+?)\s*[（(](.+?)[）)]/.exec(characters.main)
+    if (hm) {
+      mainRole = hm[3].trim().slice(0, 30)
+      characters.main = characters.main.replace(hm[0], `${hm[1]}${hm[2].trim()}`)
+    } else {
+      // 兼容「定位：」独立行写法
+      const m = /^\s*定位[:：]\s*(.+)$/m.exec(characters.main)
+      if (m) {
+        mainRole = m[1].trim().slice(0, 30)
+        characters.main = characters.main.replace(m[0], '').trim()
+      }
+    }
+  }
   const hasChars = Boolean(characters.main.trim()) || characters.revisions.length > 0
-  return { worldNew, worldUpdates, characters: hasChars ? characters : null }
+  return { worldNew, worldUpdates, characters: hasChars ? characters : null, mainRole }
 }
