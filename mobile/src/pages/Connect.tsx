@@ -1,12 +1,13 @@
 import { useState } from 'react'
-import { DEFAULT_BASE_URL } from '@mobile/lib/conn'
-import { useConnStore } from '@mobile/lib/conn'
+import { DEFAULT_BASE_URL, useConnStore } from '@mobile/lib/conn'
+import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { Button, Card, Input } from '@mobile/components/ui'
 
 export default function Connect() {
   const setConn = useConnStore((s) => s.setConn)
+  const setLastBase = useSettingsStore((s) => s.setLastBase)
   const [baseUrl, setBaseUrl] = useState(
-    () => localStorage.getItem('nm_last_base') ?? DEFAULT_BASE_URL
+    () => useSettingsStore.getState().lastBase || DEFAULT_BASE_URL
   )
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
@@ -28,7 +29,7 @@ export default function Connect() {
         error?: string
       } | null
       if (!res.ok || !data?.token) throw new Error(data?.error ?? `HTTP ${res.status}`)
-      localStorage.setItem('nm_last_base', base)
+      setLastBase(base)
       setConn({ baseUrl: base, token: data.token })
       window.location.reload()
     } catch (err) {

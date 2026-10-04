@@ -1,7 +1,7 @@
 import { Button, Empty } from '@mobile/components/ui'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { useTocStore } from '@mobile/lib/tocStore'
-import { useThemeStore } from '@mobile/lib/themeStore'
+import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { useReaderStore } from '@mobile/lib/readerStore'
 import {
   getCachedBriefs,
@@ -14,8 +14,6 @@ import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { groupChapterSegments, SEGMENT_SIZE } from '@shared/chapterSegments'
 import type { ChapterBrief } from '@shared/types'
-
-const posKey = (pid: string): string => `nm-read-pos:${pid}`
 
 /** 剥掉章节正文的 md 标题行与 [[链接]] 语法，得到纯文本段落 */
 export function parseParagraphs(content: string): string[] {
@@ -56,8 +54,8 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
   )
   const [openId, setOpenId] = useState<string | null>(null)
   const [hlId, setHlId] = useState<string | null>(null)
-  const font = useReaderStore((s) => s.font)
-  const setFont = useReaderStore((s) => s.setFont)
+  const font = useSettingsStore((s) => s.font)
+  const setFont = useSettingsStore((s) => s.setFont)
   const setOffline = useReaderStore((s) => s.setOffline)
   const offlineChapter = useReaderStore((s) => s.offlineChapter)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -102,14 +100,14 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
   useEffect(() => {
     if (restoredForRef.current === projectId || written.length === 0) return
     restoredForRef.current = projectId
-    const saved = localStorage.getItem(posKey(projectId))
+    const saved = useSettingsStore.getState().readPos[projectId]
     if (saved && written.some((b) => b.id === saved)) setOpenId(saved)
   }, [written, projectId])
 
   // 目录定位：每次回到目录，自动展开上次阅读章节所在段、滚动到该章并短暂高亮
   useEffect(() => {
     if (openId || written.length === 0) return
-    const last = localStorage.getItem(posKey(projectId))
+    const last = useSettingsStore.getState().readPos[projectId]
     const target = last ? written.find((b) => b.id === last) : undefined
     if (!target) return
     useTocStore
@@ -128,7 +126,7 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
   }, [openId, written, projectId])
 
   useEffect(() => {
-    if (current) localStorage.setItem(posKey(projectId), current.id)
+    if (current) useSettingsStore.getState().setReadPos(projectId, current.id)
   }, [current, projectId])
 
   // 整本预取：目录就绪后后台增量拉取全部已写章正文（跳过已缓存），失败静默、下次续传
@@ -140,8 +138,8 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
   // 阅读中返回键先回目录
   useBackHandler(() => setOpenId(null), openId !== null)
 
-  const isSepia = useThemeStore((s) => s.appearance) === 'sepia'
-  const toggleSepia = useThemeStore((s) => s.toggleSepia)
+  const isSepia = useSettingsStore((s) => s.appearance) === 'sepia'
+  const toggleSepia = useSettingsStore((s) => s.toggleSepia)
   const openSegs = useTocStore((s) => s.openSegs)
   const toggleSeg = useTocStore((s) => s.toggleSeg)
 

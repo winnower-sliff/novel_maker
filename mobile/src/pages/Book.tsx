@@ -9,6 +9,7 @@ import WorldSub from '@mobile/pages/subs/WorldSub'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import type { Project } from '@shared/types'
+import { useSettingsStore } from '@mobile/lib/settingsStore'
 
 type BookTab = 'read' | 'write' | 'agent'
 
@@ -29,20 +30,19 @@ const TABS: Array<{ key: BookTab; label: string }> = [
   { key: 'agent', label: '智能体' }
 ]
 
-const subStorageKey = (pid: string): string => `nm-book-sub:${pid}`
-const tabStorageKey = (pid: string): string => `nm-book-tab:${pid}`
-
 const SUB_KEYS: readonly string[] = SUBS.map((s) => s.key)
-const isSubPage = (v: string | null): v is SubPage => v !== null && SUB_KEYS.includes(v)
-const isBookTab = (v: string | null): v is BookTab => v === 'read' || v === 'write' || v === 'agent'
+const isSubPage = (v: unknown): v is SubPage => typeof v === 'string' && SUB_KEYS.includes(v)
+const isBookTab = (v: unknown): v is BookTab =>
+  v === 'read' || v === 'write' || v === 'agent'
 
+/** 进书第一帧同步读 store（App 对 settings 水合做 ready 门控，此处必是恢复后的值） */
 function loadTab(pid: string): BookTab {
-  const saved = localStorage.getItem(tabStorageKey(pid))
+  const saved = useSettingsStore.getState().bookUi[pid]?.tab
   return isBookTab(saved) ? saved : 'write'
 }
 
 function loadSub(pid: string): SubPage {
-  const saved = localStorage.getItem(subStorageKey(pid))
+  const saved = useSettingsStore.getState().bookUi[pid]?.sub
   return isSubPage(saved) ? saved : 'premise'
 }
 
@@ -113,8 +113,7 @@ export default function Book({
   // 位置持久化
   useEffect(() => {
     if (!projectId) return
-    localStorage.setItem(tabStorageKey(projectId), tab)
-    localStorage.setItem(subStorageKey(projectId), sub)
+    useSettingsStore.getState().setBookUi(projectId, { tab, sub })
   }, [projectId, tab, sub])
 
   if (!projectId)

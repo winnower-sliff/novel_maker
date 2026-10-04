@@ -1,4 +1,5 @@
 import type { ChapterBrief, Project } from '@shared/types'
+import { useSettingsStore } from '@mobile/lib/settingsStore'
 
 /**
  * 阅读离线缓存：IndexedDB（整本正文缓存体量在 MB 级，localStorage 会爆配额）。
@@ -189,11 +190,7 @@ export async function listCachedBooks(): Promise<CachedBookEntry[]> {
 }
 
 function clearBookProgress(projectId: string): void {
-  try {
-    localStorage.removeItem(`nm-read-pos:${projectId}`)
-  } catch {
-    // 忽略：进度清除失败不影响缓存清除
-  }
+  useSettingsStore.getState().clearReadPos(projectId)
 }
 
 export async function clearBook(projectId: string): Promise<void> {
@@ -218,8 +215,7 @@ export async function clearBook(projectId: string): Promise<void> {
 }
 
 export async function clearAllBooks(): Promise<void> {
-  const rows = await tx<CachedBriefs[]>(BRIEF_STORE, 'readonly', (s) => s.getAll() as IDBRequest<CachedBriefs[]>)
-  for (const r of rows ?? []) clearBookProgress(r.projectId)
+  useSettingsStore.getState().clearReadPos()
   const db = await openDb()
   if (!db) return
   await new Promise<void>((resolve) => {

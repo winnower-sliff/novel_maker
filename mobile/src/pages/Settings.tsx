@@ -13,8 +13,7 @@ import {
   subscribePrefetch,
   type CachedBookEntry
 } from '@mobile/lib/readerCache'
-import { useReaderStore } from '@mobile/lib/readerStore'
-import { ACCENTS, APPEARANCES, useThemeStore } from '@mobile/lib/themeStore'
+import { ACCENTS, APPEARANCES, useSettingsStore } from '@mobile/lib/settingsStore'
 
 type ApkState =
   | { kind: 'idle' }
@@ -42,10 +41,10 @@ function fmtBytes(n: number): string {
 }
 
 function AppearanceCard() {
-  const appearance = useThemeStore((s) => s.appearance)
-  const accent = useThemeStore((s) => s.accent)
-  const setAppearance = useThemeStore((s) => s.setAppearance)
-  const setAccent = useThemeStore((s) => s.setAccent)
+  const appearance = useSettingsStore((s) => s.appearance)
+  const accent = useSettingsStore((s) => s.accent)
+  const setAppearance = useSettingsStore((s) => s.setAppearance)
+  const setAccent = useSettingsStore((s) => s.setAccent)
   return (
       <Card className="p-4">
         <div className="text-sm font-medium text-zinc-200">外观</div>
@@ -84,8 +83,8 @@ function AppearanceCard() {
 }
 
 function FontCard() {
-  const font = useReaderStore((s) => s.font)
-  const setFont = useReaderStore((s) => s.setFont)
+  const font = useSettingsStore((s) => s.font)
+  const setFont = useSettingsStore((s) => s.setFont)
   return (
     <Card className="p-4">
       <div className="text-sm font-medium text-zinc-200">阅读</div>

@@ -72,3 +72,17 @@ export async function removeJson(key: string): Promise<void> {
     // 静默
   }
 }
+
+/** 列出 localStorage 里带指定前缀的 key（老版本散落数据迁移用） */
+export function localKeys(prefix: string): string[] {
+  try {
+    const out: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k?.startsWith(prefix)) out.push(k)
+    }
+    return out
+  } catch {
+    return []
+  }
+}

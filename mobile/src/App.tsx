@@ -11,6 +11,7 @@ import Shelf from '@mobile/pages/Shelf'
 import { MobileToaster } from '@mobile/components/MobileToaster'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { useConnStore } from '@mobile/lib/conn'
+import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { getCachedProjects, saveProjects } from '@mobile/lib/readerCache'
 import { pushToast } from '@wizard/toastStore'
 import { CanonPreviewPanel } from '@wizard/CanonPreviewPanel'
@@ -26,6 +27,7 @@ const PAGES: Array<{ key: Page; label: string; icon: string }> = [
 export default function App() {
   const conn = useConnStore((s) => s.conn)
   const ready = useConnStore((s) => s.ready)
+  const settingsReady = useSettingsStore((s) => s.ready)
   const queryClient = useQueryClient()
   const [page, setPage] = useState<Page>('shelf')
   const [bookId, setBookId] = useState<string | null>(null)
@@ -96,7 +98,7 @@ export default function App() {
     ensureRuntimeSync()
   }, [conn])
 
-  if (!ready) return <div className="h-full bg-zinc-950" />
+  if (!ready || !settingsReady) return <div className="h-full bg-zinc-950" />
   if (!conn) return <Connect />
 
   return (
