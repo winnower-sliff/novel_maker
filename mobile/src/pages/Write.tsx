@@ -1,3 +1,4 @@
+import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AiBar } from '@mobile/components/AiBar'
@@ -206,7 +207,7 @@ export default function Write({ projectId }: { projectId: string }) {
   const volumeGroups = groupChapterSegments(briefs)
 
   return (
-    <div className="h-full overflow-y-auto p-3">
+    <PullToRefresh className="p-3">
       {briefs.length === 0 ? (
         <Empty text="该项目还没有大纲章节，请先在电脑端生成大纲" />
       ) : (
@@ -315,7 +316,7 @@ export default function Write({ projectId }: { projectId: string }) {
           ))}
         </>
       )}
-    </div>
+    </PullToRefresh>
   )
 }
 

@@ -1,3 +1,4 @@
+import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
@@ -102,7 +103,7 @@ export default function WorldSub({ projectId }: { projectId: string }) {
   const groups = [...new Set(list.map((w) => w.category))]
 
   return (
-    <div className="h-full overflow-y-auto p-3">
+    <PullToRefresh className="p-3">
       <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
         <div className="flex items-center gap-2">
           <Label>世界观方向（AI 生成条目的需求描述）</Label>
@@ -186,7 +187,7 @@ export default function WorldSub({ projectId }: { projectId: string }) {
           ))
         )}
       </div>
-    </div>
+    </PullToRefresh>
   )
 }
 

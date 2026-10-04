@@ -1,3 +1,4 @@
+import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { Button, Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
@@ -50,7 +51,7 @@ export default function CharsSub({ projectId }: { projectId: string }) {
     )
 
   return (
-    <div className="h-full overflow-y-auto p-3">
+    <PullToRefresh className="p-3">
       <CharacterGenPanel ui={mobileWizardUi} projectId={projectId} onChanged={invalidate} />
 
       <div className="mt-4">
@@ -78,7 +79,7 @@ export default function CharsSub({ projectId }: { projectId: string }) {
           </div>
         )}
       </div>
-    </div>
+    </PullToRefresh>
   )
 }
 

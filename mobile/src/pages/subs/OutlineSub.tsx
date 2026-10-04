@@ -1,3 +1,4 @@
+import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -113,6 +114,12 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
 
   const generate = async (): Promise<void> => {
     if (!idea.trim() || busy || ideaBusy || rulesBusy || gRulesBusy) return
+    if (!rules.trim() && !globalRules.trim()) {
+      const go = window.confirm(
+        '通用规则与本卷规则都是空的，本次生成将不附加任何节奏/硬性要求。\n仍要继续吗？'
+      )
+      if (!go) return
+    }
     if (
       targetWritten &&
       !window.confirm(
@@ -183,7 +190,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
     )
 
   return (
-    <div className="h-full overflow-y-auto p-3">
+    <PullToRefresh className="p-3">
       <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="mr-0.5 text-xs text-zinc-500">选择卷</span>
@@ -273,7 +280,10 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           </pre>
         )}
         <div className="flex items-center justify-between gap-2">
-          <Label>通用规则（全书各卷适用，每行一条；随大纲生成注入，逐章严格执行）</Label>
+          <Label>
+            通用规则（全书各卷适用，每行一条；随大纲生成注入，逐章严格执行）
+            {!globalRules.trim() && <span className="ml-1 text-amber-500">· 未填写，不生效</span>}
+          </Label>
           <button
             type="button"
             onClick={() => {
@@ -322,7 +332,10 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           </pre>
         )}
         <div className="flex items-center justify-between gap-2">
-          <Label>第 {volume} 卷 · 节奏与硬性要求（每行一条，原样透传、逐章严格执行）</Label>
+          <Label>
+            第 {volume} 卷 · 节奏与硬性要求（每行一条，原样透传、逐章严格执行）
+            {!rules.trim() && <span className="ml-1 text-amber-500">· 未填写，不生效</span>}
+          </Label>
           <button
             type="button"
             onClick={() => {
@@ -491,7 +504,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
       </div>
 
       <ForeshadowList projectId={projectId} onEdit={setFeditId} />
-    </div>
+    </PullToRefresh>
   )
 }
 

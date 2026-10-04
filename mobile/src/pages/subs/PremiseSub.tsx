@@ -1,3 +1,4 @@
+import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { useQueryClient } from '@tanstack/react-query'
 import { PremisePanel } from '@wizard/PremisePanel'
@@ -12,7 +13,7 @@ export default function PremiseSub({
 }) {
   const qc = useQueryClient()
   return (
-    <div className="h-full overflow-y-auto p-3">
+    <PullToRefresh className="p-3">
       <PremisePanel
         ui={mobileWizardUi}
         projectId={projectId}
@@ -22,6 +23,6 @@ export default function PremiseSub({
         }}
         onUpdated={() => void qc.invalidateQueries({ queryKey: ['novel', 'projects'] })}
       />
-    </div>
+    </PullToRefresh>
   )
 }
