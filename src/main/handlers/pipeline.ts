@@ -154,7 +154,13 @@ export const pipelineHandlers = {
         const params = PIPELINE_PARAM_SCHEMAS.volumeIdea.parse(rawParams)
         return startStream(
           ctx.sink,
-          buildVolumeIdeaRequest(params.projectId, params.volume, params.idea, params.rules),
+          buildVolumeIdeaRequest(
+            params.projectId,
+            params.volume,
+            params.idea,
+            params.rules,
+            params.globalRules
+          ),
           {
             action,
             meta: { projectId: params.projectId },
@@ -166,7 +172,12 @@ export const pipelineHandlers = {
         const params = PIPELINE_PARAM_SCHEMAS.rulesRefine.parse(rawParams)
         return startStream(
           ctx.sink,
-          buildRulesRefineRequest(params.projectId, params.volume, params.rules),
+          buildRulesRefineRequest(
+            params.projectId,
+            params.volume,
+            params.rules,
+            params.globalRules
+          ),
           {
             action,
             meta: { projectId: params.projectId },

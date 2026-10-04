@@ -11,8 +11,8 @@ import {
   rememberVolumePlan,
   useOutlineRunActive
 } from '../../../wizard/volumeGen'
-import { NumberField } from '../../../wizard/widgets'
-import { loadProjectPlan, type WizardPlanFull } from '../../../wizard/wizardPlan'
+import { ExpandableTextarea, NumberField } from '../../../wizard/widgets'
+import { loadProjectPlan, saveProjectPlan, type WizardPlanFull } from '../../../wizard/wizardPlan'
 import { EmptyGuide } from '../components/EmptyGuide'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
@@ -86,6 +86,10 @@ export default function Outline({
   const [rules, setRules] = useState('')
   const [rulesBusy, setRulesBusy] = useState(false)
   const rulesAbortRef = useRef<(() => void) | null>(null)
+  // 通用规则：全书各卷适用（存 wizard_plan.outlineRules，区别于 volumePlans[].rules 的本卷规则）
+  const [globalRules, setGlobalRules] = useState('')
+  const [gRulesBusy, setGRulesBusy] = useState(false)
+  const gRulesAbortRef = useRef<(() => void) | null>(null)
   const [genNotice, setGenNotice] = useState('')
   const genAbortRef = useRef<(() => void) | null>(null)
   const [volNotice, setVolNotice] = useState('')
@@ -154,6 +158,7 @@ export default function Outline({
         setPlan(p)
         setCount(p?.outlineCount ?? 30)
         setIdea(p?.outlineIdea ?? '')
+        setGlobalRules(p?.outlineRules ?? '')
       })
       .catch(() => {})
     return () => {
@@ -468,6 +473,7 @@ export default function Outline({
                     volume,
                     idea: idea.trim(),
                     rules: rules.trim() || undefined,
+                    globalRules: globalRules.trim() || undefined,
                     onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
                   })
                   ideaAbortRef.current = abort
@@ -492,12 +498,61 @@ export default function Outline({
                 {ideaBusy ? '扩写中…' : 'AI 扩写成创意'}
               </Button>
             </div>
-            <Textarea
-              rows={3}
+            <ExpandableTextarea
+              ui={{ Textarea, Button }}
+              rows={5}
               value={idea}
-              onChange={(e) => setIdea(e.target.value)}
+              onChange={setIdea}
               placeholder="例：末法时代最后一位炼丹师重生都市，靠一手丹术搅动风云…（也可写简短要求，点「AI 扩写成创意」补全）"
               disabled={genBusy}
+              overlayTitle={`第 ${volume} 卷 · 核心创意`}
+            />
+          </div>
+          <div>
+            <div className="flex items-center justify-between gap-2">
+              <Label>通用规则（全书各卷适用，每行一条；随本卷大纲生成注入，逐章严格执行）</Label>
+              <Button
+                variant="ghost"
+                className="shrink-0 px-2 py-1 text-xs"
+                disabled={gRulesBusy || genBusy || !globalRules.trim()}
+                onClick={() => {
+                  setGRulesBusy(true)
+                  setGenNotice('')
+                  const { done, abort } = generateRulesRefine({
+                    projectId,
+                    volume,
+                    rules: globalRules.trim(),
+                    onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
+                  })
+                  gRulesAbortRef.current = abort
+                  done
+                    .then((text) => {
+                      setGlobalRules(text)
+                      void saveProjectPlan(projectId, { outlineRules: text })
+                    })
+                    .catch((err: unknown) => {
+                      setGenNotice(`出错：${(err as Error).message}`)
+                    })
+                    .finally(() => {
+                      gRulesAbortRef.current = null
+                      setGRulesBusy(false)
+                    })
+                }}
+              >
+                {gRulesBusy ? '优化中…' : 'AI 优化规则'}
+              </Button>
+            </div>
+            <ExpandableTextarea
+              ui={{ Textarea, Button }}
+              rows={4}
+              value={globalRules}
+              onChange={setGlobalRules}
+              onCommit={(v) => {
+                void saveProjectPlan(projectId, { outlineRules: v })
+              }}
+              placeholder={'例：\n每 10 章安排一个单元故事收尾\n主角每次突破都须付出明确代价'}
+              disabled={genBusy}
+              overlayTitle="通用规则（全书各卷适用）"
             />
           </div>
           <div>
@@ -517,6 +572,7 @@ export default function Outline({
                     projectId,
                     volume,
                     rules: rules.trim(),
+                    globalRules: globalRules.trim() || undefined,
                     onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
                   })
                   rulesAbortRef.current = abort
@@ -541,14 +597,16 @@ export default function Outline({
                 {rulesBusy ? '优化中…' : 'AI 优化规则'}
               </Button>
             </div>
-            <Textarea
-              rows={2}
+            <ExpandableTextarea
+              ui={{ Textarea, Button }}
+              rows={4}
               value={rules}
-              onChange={(e) => setRules(e.target.value)}
+              onChange={setRules}
               placeholder={
                 '例：\n每 3~6 章插入一段独立的色情小故事\n每 10 章安排一个单元小故事收尾'
               }
               disabled={genBusy}
+              overlayTitle={`第 ${volume} 卷 · 节奏与硬性要求`}
             />
           </div>
           <div className="max-w-48">
@@ -570,7 +628,7 @@ export default function Outline({
           <div className="flex items-center gap-3">
             <Button
               variant={targetWritten ? 'danger' : 'primary'}
-              disabled={genBusy || ideaBusy || rulesBusy || !idea.trim()}
+              disabled={genBusy || ideaBusy || rulesBusy || gRulesBusy || !idea.trim()}
               onClick={() => {
                 if (
                   targetWritten &&
@@ -582,11 +640,14 @@ export default function Outline({
                 setGenerating(true)
                 setGenOutput('')
                 setGenNotice('')
+                // 通用规则原位编辑可能未经弹层 commit，生成启动时统一落库一次
+                void saveProjectPlan(projectId, { outlineRules: globalRules })
                 const { done, abort } = generateVolume({
                   projectId,
                   volume,
                   idea: idea.trim(),
                   rules: rules.trim() || undefined,
+                  globalRules: globalRules.trim() || undefined,
                   startNo: deriveStartNo(volume, items),
                   count: Math.max(1, Math.floor(count) || 30),
                   hasWritten: targetWritten,
@@ -626,13 +687,14 @@ export default function Outline({
                     ? `重写第 ${volume} 卷（大纲+正文）`
                     : `生成第 ${volume} 卷大纲`}
             </Button>
-            {(generating || ideaBusy || rulesBusy) && (
+            {(generating || ideaBusy || rulesBusy || gRulesBusy) && (
               <Button
                 variant="danger"
                 onClick={() => {
                   genAbortRef.current?.()
                   ideaAbortRef.current?.()
                   rulesAbortRef.current?.()
+                  gRulesAbortRef.current?.()
                 }}
               >
                 中断

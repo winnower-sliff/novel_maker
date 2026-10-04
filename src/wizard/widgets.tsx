@@ -1,5 +1,7 @@
 import type { PremiseDraftResult } from '@shared/types'
+import type { ComponentType, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
+import { OverlayCard } from './OverlayCard'
 import type { WizardUi } from './uiTypes'
 
 /** 流式原始输出框：自动滚底 */
@@ -129,8 +131,95 @@ export function OutlineProgress({ text }: { text: string }) {
   )
 }
 
-/** AI 起草的创作方案卡：世界观方向 / 核心人物 / 第一卷创意 三节只读展示 */
-export function PlanCard({ plan }: { plan: PremiseDraftResult }) {
+/**
+ * 可展开文本域：原位小框常态编辑 + 右下角「展开」进 OverlayCard 大编辑区。
+ * 弹层内为草稿隔离编辑（Escape/遮罩关闭丢弃修改），点「完成」才回填并触发 onCommit（用于持久化）。
+ */
+export function ExpandableTextarea({
+  ui,
+  value,
+  onChange,
+  onCommit,
+  rows = 3,
+  placeholder,
+  disabled,
+  overlayTitle
+}: {
+  /** 两端注入的 Textarea/Button；Button 只要求 ghost 用法子集（桌面 variant 联合与 WizardUi.Button 不兼容） */
+  ui: {
+    Textarea: WizardUi['Textarea']
+    Button: ComponentType<{
+      className?: string
+      disabled?: boolean
+      onClick?: () => void
+      children?: ReactNode
+    }>
+  }
+  value: string
+  onChange: (v: string) => void
+  onCommit?: (v: string) => void
+  rows?: number
+  placeholder?: string
+  disabled?: boolean
+  overlayTitle: string
+}) {
+  const [open, setOpen] = useState(false)
+  const [draft, setDraft] = useState(value)
+  const { Textarea, Button } = ui
+  return (
+    <>
+      <div className="relative">
+        <Textarea
+          rows={rows}
+          value={value}
+          placeholder={placeholder}
+          disabled={disabled}
+          onChange={(e) => onChange(e.target.value)}
+          className="pr-16"
+        />
+        <button
+          type="button"
+          onClick={() => {
+            setDraft(value)
+            setOpen(true)
+          }}
+          className="absolute right-2.5 bottom-2.5 cursor-pointer rounded border border-zinc-700 bg-zinc-900 px-1.5 py-0.5 text-[11px] text-zinc-400 transition-colors hover:border-zinc-500 hover:text-zinc-200"
+        >
+          展开
+        </button>
+      </div>
+      <OverlayCard
+        open={open}
+        onClose={() => setOpen(false)}
+        title={overlayTitle}
+        footer={
+          <Button
+            onClick={() => {
+              onChange(draft)
+              onCommit?.(draft)
+              setOpen(false)
+            }}
+          >
+            完成
+          </Button>
+        }
+      >
+        <Textarea
+          className="min-h-[50vh]"
+          value={draft}
+          disabled={disabled}
+          onChange={(e) => setDraft(e.target.value)}
+        />
+      </OverlayCard>
+    </>
+  )
+}
+
+/** AI 起草的创作方案卡：世界观方向 / 核心人物 / 第一卷创意 三节只读展示 */ export function PlanCard({
+  plan
+}: {
+  plan: PremiseDraftResult
+}) {
   const charList = plan.characters.filter((c) => c.name.trim())
   return (
     <div className="space-y-2">

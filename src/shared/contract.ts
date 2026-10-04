@@ -201,7 +201,9 @@ export const CharacterGenParamsSchema = z.object({
   name: z.string().optional(),
   allowUpdate: z.boolean().optional(),
   // false = 仅解析预览不落库（人物班底挑选模式），缺省 true 保持自动落库
-  save: z.boolean().optional()
+  save: z.boolean().optional(),
+  // 本批已生成的预览卡（班底队列批内感知：后生成的人须与先生成的咬合）
+  peers: z.array(z.object({ name: z.string(), card: z.string() })).optional()
 })
 
 export const OutlineGenParamsSchema = z.object({
@@ -212,7 +214,9 @@ export const OutlineGenParamsSchema = z.object({
   count: z.number(),
   allowUpdate: z.boolean().optional(),
   // 节奏与硬性要求（每行一条，原样透传给 prompt，逐章严格执行）
-  rules: z.string().optional()
+  rules: z.string().optional(),
+  // 通用规则（全书各卷适用，与 rules 分块注入大纲链路 prompt，不透传正文生成）
+  globalRules: z.string().optional()
 })
 
 export const SaveChapterInputSchema = z.object({
@@ -266,12 +270,14 @@ export const PIPELINE_PARAM_SCHEMAS = {
     projectId: z.string(),
     volume: z.number(),
     idea: z.string(),
-    rules: z.string().optional()
+    rules: z.string().optional(),
+    globalRules: z.string().optional()
   }),
   rulesRefine: z.object({
     projectId: z.string(),
     volume: z.number(),
-    rules: z.string()
+    rules: z.string(),
+    globalRules: z.string().optional()
   }),
   outlineAlign: z.object({ projectId: z.string() }),
   chapter: z.object({

@@ -11,6 +11,8 @@ export interface WizardPlanSave {
   wbCount: number
   chars: PremiseDraftCharacter[]
   outlineIdea: string
+  /** 通用规则：全书各卷大纲生成共用（区别于 volumePlans[volume].rules 的本卷规则） */
+  outlineRules: string
   outlineCount: number
   volume: number
   startNo: number
@@ -36,6 +38,7 @@ export const EMPTY_PLAN: WizardPlanFull = {
   wbCount: 8,
   chars: [],
   outlineIdea: '',
+  outlineRules: '',
   outlineCount: 20,
   volume: 1,
   startNo: 1,
@@ -55,6 +58,7 @@ export function parsePlan(raw: string | undefined | null): WizardPlanFull | null
       wbCount: typeof v.wbCount === 'number' ? v.wbCount : 8,
       chars: Array.isArray(v.chars) ? v.chars : [],
       outlineIdea: v.outlineIdea ?? '',
+      outlineRules: v.outlineRules ?? '',
       outlineCount: typeof v.outlineCount === 'number' ? v.outlineCount : 20,
       volume: typeof v.volume === 'number' ? v.volume : 1,
       startNo: typeof v.startNo === 'number' ? v.startNo : 1,

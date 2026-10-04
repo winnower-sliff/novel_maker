@@ -11,8 +11,9 @@ import {
   useOutlineRunActive
 } from '@wizard/volumeGen'
 import { fireCanonSync } from '@wizard/canonStore'
-import { NumberField, OutlineProgress } from '@wizard/widgets'
-import { loadProjectPlan, type WizardPlanFull } from '@wizard/wizardPlan'
+import { ExpandableTextarea, NumberField, OutlineProgress } from '@wizard/widgets'
+import { loadProjectPlan, type WizardPlanFull, saveProjectPlan } from '@wizard/wizardPlan'
+import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import type { Foreshadow, OutlineItem } from '@shared/types'
 
 const FORESHADOW_STATUS = ['planted', 'resolved', 'abandoned']
@@ -50,6 +51,9 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const [ideaBusy, setIdeaBusy] = useState(false)
   const [rules, setRules] = useState('')
   const [rulesBusy, setRulesBusy] = useState(false)
+  // 通用规则：全书各卷适用（存 wizard_plan.outlineRules，区别于 volumePlans[].rules 的本卷规则）
+  const [globalRules, setGlobalRules] = useState('')
+  const [gRulesBusy, setGRulesBusy] = useState(false)
   const [delta, setDelta] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
@@ -65,6 +69,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
         setPlan(p)
         setCount(p?.outlineCount ?? 20)
         setIdea(p?.outlineIdea ?? '')
+        setGlobalRules(p?.outlineRules ?? '')
       })
       .catch(() => {})
     return () => {
@@ -106,7 +111,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const targetWritten = briefs.some((b) => b.volume === volume && b.hasDraft)
 
   const generate = async (): Promise<void> => {
-    if (!idea.trim() || busy || ideaBusy || rulesBusy) return
+    if (!idea.trim() || busy || ideaBusy || rulesBusy || gRulesBusy) return
     if (
       targetWritten &&
       !window.confirm(
@@ -118,11 +123,14 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
     setError(null)
     setResult(null)
     setDelta('')
+    // 通用规则原位编辑可能未经弹层 commit，生成启动时统一落库一次
+    void saveProjectPlan(projectId, { outlineRules: globalRules })
     const { done } = generateVolume({
       projectId,
       volume,
       idea: idea.trim(),
       rules: rules.trim() || undefined,
+      globalRules: globalRules.trim() || undefined,
       startNo: deriveStartNo(volume, outlines),
       count: count >= 1 ? Math.floor(count) : 20,
       hasWritten: targetWritten,
@@ -226,6 +234,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                 volume,
                 idea: idea.trim(),
                 rules: rules.trim() || undefined,
+                globalRules: globalRules.trim() || undefined,
                 onDelta: (t) => setDelta((v) => v + t)
               })
                         void done
@@ -248,17 +257,67 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
             {ideaBusy ? '扩写中…' : 'AI 扩写成创意'}
           </button>
         </div>
-        <Textarea
+        <ExpandableTextarea
+          ui={mobileWizardUi}
+          rows={5}
           value={idea}
-          onChange={(e) => setIdea(e.target.value)}
-          rows={3}
-          style={{ resize: 'vertical' }}
+          onChange={setIdea}
           disabled={busy}
           placeholder="例：主角进入宗门后的第一次试炼，与同门结怨、初窥力量体系…（也可写简短要求，点「AI 扩写成创意」补全）"
+          overlayTitle={`第 ${volume} 卷 · 本卷创意`}
         />
         {ideaBusy && (
           <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
             {delta.slice(-400) || '扩写中…'}
+          </pre>
+        )}
+        <div className="flex items-center justify-between gap-2">
+          <Label>通用规则（全书各卷适用，每行一条；随大纲生成注入，逐章严格执行）</Label>
+          <button
+            type="button"
+            onClick={() => {
+              if (gRulesBusy || busy || !globalRules.trim()) return
+              setGRulesBusy(true)
+              setError(null)
+              setResult(null)
+              setDelta('')
+              const { done } = generateRulesRefine({
+                projectId,
+                volume,
+                rules: globalRules.trim(),
+                onDelta: (t) => setDelta((v) => v + t)
+              })
+                        void done
+                .then((text) => {
+                  setGlobalRules(text)
+                  void saveProjectPlan(projectId, { outlineRules: text })
+                })
+                .catch((e: unknown) => setError(e instanceof Error ? e.message : String(e)))
+                .finally(() => {
+                  setGRulesBusy(false)
+                })
+            }}
+            disabled={gRulesBusy || busy || !globalRules.trim()}
+            className="shrink-0 cursor-pointer rounded-lg border border-zinc-700 px-2.5 py-1.5 text-xs text-zinc-200 active:bg-zinc-800 disabled:cursor-default disabled:opacity-40"
+          >
+            {gRulesBusy ? '优化中…' : 'AI 优化规则'}
+          </button>
+        </div>
+        <ExpandableTextarea
+          ui={mobileWizardUi}
+          rows={4}
+          value={globalRules}
+          onChange={setGlobalRules}
+          onCommit={(v) => {
+            void saveProjectPlan(projectId, { outlineRules: v })
+          }}
+          disabled={busy}
+          placeholder={'例：\n每 10 章安排一个单元故事收尾\n主角每次突破都须付出明确代价'}
+          overlayTitle="通用规则（全书各卷适用）"
+        />
+        {gRulesBusy && (
+          <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
+            {delta.slice(-400) || '优化中…'}
           </pre>
         )}
         <div className="flex items-center justify-between gap-2">
@@ -275,6 +334,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                 projectId,
                 volume,
                 rules: rules.trim(),
+                globalRules: globalRules.trim() || undefined,
                 onDelta: (t) => setDelta((v) => v + t)
               })
                         void done
@@ -297,13 +357,14 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
             {rulesBusy ? '优化中…' : 'AI 优化规则'}
           </button>
         </div>
-        <Textarea
+        <ExpandableTextarea
+          ui={mobileWizardUi}
+          rows={4}
           value={rules}
-          onChange={(e) => setRules(e.target.value)}
-          rows={2}
-          style={{ resize: 'vertical' }}
+          onChange={setRules}
           disabled={busy}
           placeholder={'例：\n每 3~6 章插入一段独立的色情小故事\n每 10 章安排一个单元小故事收尾'}
+          overlayTitle={`第 ${volume} 卷 · 节奏与硬性要求`}
         />
         {rulesBusy && (
           <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
@@ -324,7 +385,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           <button
             type="button"
             onClick={() => void generate()}
-            disabled={busy || ideaBusy || rulesBusy || !idea.trim()}
+            disabled={busy || ideaBusy || rulesBusy || gRulesBusy || !idea.trim()}
             className={`cursor-pointer rounded-lg px-3.5 py-2 text-sm disabled:cursor-default disabled:opacity-40 ${
               targetWritten ? 'bg-red-800/80 text-red-50' : 'bg-amber-600 text-white'
             }`}

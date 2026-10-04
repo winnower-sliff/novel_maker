@@ -21,6 +21,8 @@ export interface VolumeGenOpts {
   idea: string
   /** 节奏与硬性要求（原样透传给大纲生成 prompt，逐章严格执行） */
   rules?: string
+  /** 通用规则（全书各卷适用，仅作用于大纲链路） */
+  globalRules?: string
   startNo: number
   count: number
   /** 该卷已有正文 → 重写语义：清孤儿章 + write:batchStart 全卷覆盖重写 */
@@ -106,11 +108,18 @@ export function generateVolumeIdea(opts: {
   volume: number
   idea: string
   rules?: string
+  globalRules?: string
   onDelta?: (t: string) => void
 }): { done: Promise<string>; abort: () => void } {
   const { done, abort } = startPipeline(
     'volumeIdea',
-    { projectId: opts.projectId, volume: opts.volume, idea: opts.idea, rules: opts.rules },
+    {
+      projectId: opts.projectId,
+      volume: opts.volume,
+      idea: opts.idea,
+      rules: opts.rules,
+      globalRules: opts.globalRules
+    },
     opts.onDelta
   )
   return {
@@ -128,11 +137,18 @@ export function generateRulesRefine(opts: {
   projectId: string
   volume: number
   rules: string
+  /** 优化本卷规则时可传入通用规则作兼容上下文（优化通用规则自身时勿传，避免自参考） */
+  globalRules?: string
   onDelta?: (t: string) => void
 }): { done: Promise<string>; abort: () => void } {
   const { done, abort } = startPipeline(
     'rulesRefine',
-    { projectId: opts.projectId, volume: opts.volume, rules: opts.rules },
+    {
+      projectId: opts.projectId,
+      volume: opts.volume,
+      rules: opts.rules,
+      globalRules: opts.globalRules
+    },
     opts.onDelta
   )
   return {
@@ -166,7 +182,8 @@ export function generateVolume(opts: VolumeGenOpts): {
       startNo,
       count,
       allowUpdate: true,
-      rules: opts.rules?.trim() || undefined
+      rules: opts.rules?.trim() || undefined,
+      globalRules: opts.globalRules?.trim() || undefined
     },
     onDelta
   )
