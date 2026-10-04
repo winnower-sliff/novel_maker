@@ -11,15 +11,138 @@ body,
   height: 100dvh;
 }
 
+/* ===== 主题系统（data-appearance 外观 × data-accent 主题色，由 themeStore 写到 <html>） =====
+   组件类名不改：Tailwind v4 utilities 编译为 var(--color-*)，定义在 @layer theme，
+   此处无层级规则覆写同名变量即可全局换色。amber 即强调色，重映射到所选主题色。 */
 html {
   /* WebView 背景（capacitor backgroundColor 之外的双保险：overscroll/首帧不露白） */
-  background: #09090b;
+  background: var(--nm-bg, #09090b);
+  --nm-bg: #09090b;
+  --nm-fg: #e4e4e7;
+  /* 强调色档位默认 = 琥珀本色（data-accent 缺省时也有正确值，避免首帧透明） */
+  --nm-acc-100: #fef3c7;
+  --nm-acc-200: #fde68a;
+  --nm-acc-300: #fcd34d;
+  --nm-acc-400: #fbbf24;
+  --nm-acc-500: #f59e0b;
+  --nm-acc-600: #d97706;
+  --nm-acc-700: #b45309;
+  --nm-acc-800: #92400e;
+  --nm-acc-900: #78350f;
+  --nm-acc-950: #451a03;
+  /* amber 工具类统一接到强调色档位 */
+  --color-amber-100: var(--nm-acc-100);
+  --color-amber-200: var(--nm-acc-200);
+  --color-amber-300: var(--nm-acc-300);
+  --color-amber-400: var(--nm-acc-400);
+  --color-amber-500: var(--nm-acc-500);
+  --color-amber-600: var(--nm-acc-600);
+  --color-amber-700: var(--nm-acc-700);
+  --color-amber-800: var(--nm-acc-800);
+  --color-amber-900: var(--nm-acc-900);
+  --color-amber-950: var(--nm-acc-950);
+}
+
+/* 主题色：把档位指向所选 Tailwind 色板（不指 amber 本身，避免与上面的接线成环） */
+html[data-accent='emerald'] {
+  --nm-acc-100: var(--color-emerald-100);
+  --nm-acc-200: var(--color-emerald-200);
+  --nm-acc-300: var(--color-emerald-300);
+  --nm-acc-400: var(--color-emerald-400);
+  --nm-acc-500: var(--color-emerald-500);
+  --nm-acc-600: var(--color-emerald-600);
+  --nm-acc-700: var(--color-emerald-700);
+  --nm-acc-800: var(--color-emerald-800);
+  --nm-acc-900: var(--color-emerald-900);
+  --nm-acc-950: var(--color-emerald-950);
+}
+
+html[data-accent='sky'] {
+  --nm-acc-100: var(--color-sky-100);
+  --nm-acc-200: var(--color-sky-200);
+  --nm-acc-300: var(--color-sky-300);
+  --nm-acc-400: var(--color-sky-400);
+  --nm-acc-500: var(--color-sky-500);
+  --nm-acc-600: var(--color-sky-600);
+  --nm-acc-700: var(--color-sky-700);
+  --nm-acc-800: var(--color-sky-800);
+  --nm-acc-900: var(--color-sky-900);
+  --nm-acc-950: var(--color-sky-950);
+}
+
+html[data-accent='violet'] {
+  --nm-acc-100: var(--color-violet-100);
+  --nm-acc-200: var(--color-violet-200);
+  --nm-acc-300: var(--color-violet-300);
+  --nm-acc-400: var(--color-violet-400);
+  --nm-acc-500: var(--color-violet-500);
+  --nm-acc-600: var(--color-violet-600);
+  --nm-acc-700: var(--color-violet-700);
+  --nm-acc-800: var(--color-violet-800);
+  --nm-acc-900: var(--color-violet-900);
+  --nm-acc-950: var(--color-violet-950);
+}
+
+html[data-accent='rose'] {
+  --nm-acc-100: var(--color-rose-100);
+  --nm-acc-200: var(--color-rose-200);
+  --nm-acc-300: var(--color-rose-300);
+  --nm-acc-400: var(--color-rose-400);
+  --nm-acc-500: var(--color-rose-500);
+  --nm-acc-600: var(--color-rose-600);
+  --nm-acc-700: var(--color-rose-700);
+  --nm-acc-800: var(--color-rose-800);
+  --nm-acc-900: var(--color-rose-900);
+  --nm-acc-950: var(--color-rose-950);
+}
+
+/* 浅色：zinc 语义翻转（暗档=重文字、亮档=浅底/边框） */
+html[data-appearance='light'] {
+  --nm-bg: #f4f4f5;
+  --nm-fg: #27272a;
+  --color-zinc-100: #18181b;
+  --color-zinc-200: #27272a;
+  --color-zinc-300: #3f3f46;
+  --color-zinc-400: #52525b;
+  --color-zinc-500: #71717a;
+  --color-zinc-600: #a1a1aa;
+  --color-zinc-700: #a1a1aa;
+  --color-zinc-800: #e4e4e7;
+  --color-zinc-900: #ffffff;
+  --color-zinc-950: #f4f4f5;
+}
+
+/* 护眼：米黄纸感 + 暖棕文字 */
+html[data-appearance='sepia'] {
+  --nm-bg: #f1e7d0;
+  --nm-fg: #443b28;
+  --color-zinc-100: #2f2919;
+  --color-zinc-200: #443b28;
+  --color-zinc-300: #574b34;
+  --color-zinc-400: #6e6046;
+  --color-zinc-500: #8d7d61;
+  --color-zinc-600: #b3a184;
+  --color-zinc-700: #b3a184;
+  --color-zinc-800: #e0d3b4;
+  --color-zinc-900: #f6efdd;
+  --color-zinc-950: #efe6cf;
+}
+
+/* 浅色/护眼下强调色可读性修正：浅档文字转深档、深档底色转浅档 */
+html[data-appearance='light'],
+html[data-appearance='sepia'] {
+  --nm-acc-200: var(--nm-acc-700);
+  --nm-acc-300: var(--nm-acc-700);
+  --nm-acc-400: var(--nm-acc-600);
+  --nm-acc-500: var(--nm-acc-600);
+  --nm-acc-900: var(--nm-acc-100);
+  --nm-acc-950: var(--nm-acc-100);
 }
 
 body {
   margin: 0;
-  background: #09090b;
-  color: #e4e4e7;
+  background: var(--nm-bg, #09090b);
+  color: var(--nm-fg, #e4e4e7);
   font-family:
     -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", "PingFang SC", sans-serif;
   -webkit-tap-highlight-color: transparent;
