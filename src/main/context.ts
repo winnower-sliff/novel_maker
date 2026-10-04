@@ -1,5 +1,11 @@
 import { splitTags } from '../shared/tags'
-import type { BuiltContext, ContextPart, OutlineItem, WorldbuildEntry } from '../shared/types'
+import type {
+  BuiltContext,
+  ContextPart,
+  OutlineItem,
+  Project,
+  WorldbuildEntry
+} from '../shared/types'
 import { semanticSearch } from './embedding'
 import * as store from './store'
 
@@ -192,6 +198,28 @@ function renderCharactersSlim(projectId: string): { text: string; detail: string
   return { text, detail: `${list.length} 人（仅名单）` }
 }
 
+/**
+ * 上一章结尾原文（衔接基准）：无论摘要是否存在都注入，让模型拿到真实的
+ * 情绪落点与文字落点，而非只有概括。永不参与降级裁剪。
+ */
+function renderPrevTail(prevOutline: OutlineItem | undefined): {
+  text: string
+  detail: string
+} {
+  if (!prevOutline) return { text: '', detail: '无' }
+  const chapter = store.getChapterByOutline(prevOutline.id)
+  if (!chapter?.content.trim()) return { text: '', detail: '无' }
+  let tail = chapter.content.slice(-PREV_TAIL_CHARS)
+  if (chapter.content.length > PREV_TAIL_CHARS) {
+    const nl = tail.indexOf('\n')
+    if (nl > 0) tail = tail.slice(nl + 1)
+  }
+  return {
+    text: `第${prevOutline.chapterNo}章《${prevOutline.title}》结尾节选（本章开头须直接承接此处的场景与情绪）：\n${tail}`,
+    detail: `上一章末尾 ${tail.length} 字`
+  }
+}
+
 function renderRecentSummaries(
   projectId: string,
   beforeOutlineId: string
@@ -224,24 +252,7 @@ function renderRecentSummaries(
     }
     used++
   }
-  if (blocks.length === 0) {
-    const lastWithDraft = prev
-      .slice()
-      .reverse()
-      .find((o) => store.getChapterByOutline(o.id))
-    if (lastWithDraft) {
-      const chapter = store.getChapterByOutline(lastWithDraft.id)
-      if (chapter) {
-        const tail = chapter.content.slice(-PREV_TAIL_CHARS)
-        return {
-          text: `第${lastWithDraft.chapterNo}章 结尾节选：\n${tail}`,
-          detail: '前章结尾节选（无摘要）',
-          count: 1
-        }
-      }
-    }
-    return { text: '', detail: '无', count: 0 }
-  }
+  if (blocks.length === 0) return { text: '', detail: '无', count: 0 }
   const text =
     ledger.length > 0
       ? `${blocks.join('\n\n')}\n\n【硬账台账（上一章末，数字必须衔接）】\n${ledger.join('；')}`
@@ -278,6 +289,32 @@ function renderForeshadows(projectId: string): { text: string; detail: string } 
   return { text, detail: `${list.length} 条未回收` }
 }
 
+/**
+ * 开篇章的故事起点（链表头节点无 prev，靠 next 向数据入戏）：
+ * premise 草稿（仅第一卷）+ 本卷创意，来自创作向导存档 projects.wizard_plan。
+ * 数据缺失（向导完成后清空/旧项目）时静默降级为空。
+ */
+interface WizardPlanShape {
+  draftText?: string
+  volumePlans?: Record<string, { idea?: string }>
+}
+
+function renderStoryOrigin(project: Project, volume: number): { text: string; detail: string } {
+  let plan: WizardPlanShape | null = null
+  try {
+    plan = project.wizardPlan ? (JSON.parse(project.wizardPlan) as WizardPlanShape) : null
+  } catch {
+    plan = null
+  }
+  const idea = plan?.volumePlans?.[String(volume)]?.idea?.trim() ?? ''
+  const premise = volume === 1 ? (plan?.draftText?.trim() ?? '') : ''
+  if (!premise && !idea) return { text: '', detail: '无' }
+  const text = [premise && `【作品 premise】\n${premise}`, idea && `【本卷核心创意】\n${idea}`]
+    .filter(Boolean)
+    .join('\n\n')
+  return { text, detail: `开篇故事起点（premise ${premise.length} 字 / 卷创意 ${idea.length} 字）` }
+}
+
 export async function buildChapterContext(
   projectId: string,
   outlineId: string,
@@ -299,10 +336,16 @@ export async function buildChapterContext(
 
   const prevChapter = prev ? store.getChapterByOutline(prev.id) : null
   const prevChapterContent = prevChapter ? prevChapter.content : ''
+  const prevTail = renderPrevTail(prev)
+  const origin = prev ? { text: '', detail: '无' } : renderStoryOrigin(project, current.volume)
 
   const scenesText =
     current.scenes.length > 0
       ? `场景序列（按本章顺序展开）：\n${current.scenes.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
+      : ''
+  const nextScenesText =
+    next && next.scenes.length > 0
+      ? `\n下一章场景序列（结尾钩子须顺势滑入）：\n${next.scenes.map((s, i) => `${i + 1}. ${s}`).join('\n')}`
       : ''
 
   const outlineText = [
@@ -310,7 +353,7 @@ export async function buildChapterContext(
     `本章：第${current.chapterNo}章 ${current.title}\n梗概：${current.synopsis}${renderOutlineMeta(current) ? `\n${renderOutlineMeta(current)}` : ''}`,
     scenesText,
     next
-      ? `下一章预告（第${next.chapterNo}章 ${next.title}）：${next.synopsis}${renderOutlineMeta(next) ? `\n${renderOutlineMeta(next)}` : ''}`
+      ? `下一章预告（第${next.chapterNo}章 ${next.title}）：${next.synopsis}${renderOutlineMeta(next) ? `\n${renderOutlineMeta(next)}` : ''}${nextScenesText}`
       : ''
   ]
     .filter(Boolean)
@@ -332,6 +375,8 @@ export async function buildChapterContext(
     estimateTokens(summaries.text) +
     estimateTokens(volumeSummaries.text) +
     estimateTokens(foreshadows.text) +
+    estimateTokens(prevTail.text) +
+    estimateTokens(origin.text) +
     estimateTokens(outlineText) +
     extra
 
@@ -346,26 +391,43 @@ export async function buildChapterContext(
   const sections: Array<[string, string]> = (
     [
       ['【作品风格】', styleText],
+      ['【故事起点（开篇基准）】', origin.text],
       ['【前卷摘要（远期前情）】', volumeSummaries.text],
       ['【世界观设定】', wb.text],
       ['【人物卡（含动态状态）】', ch.text],
       ['【前情摘要】', summaries.text],
       ['【伏笔台账（未回收）】', foreshadows.text],
+      ['【上一章结尾（衔接基准）】', prevTail.text],
       ['【本章大纲】', outlineText]
     ] as Array<[string, string]>
   ).filter(([, text]) => text.trim().length > 0)
 
   const system = sections.map(([head, text]) => `${head}\n${text}`).join('\n\n')
   const words = wordTarget && wordTarget > 0 ? wordTarget : 2700
-  const user = `请撰写本章正文，目标 ${words} 字（浮动 ±20%）。直接输出正文，可带章节标题。`
+  const seamOpen = prevTail.text.trim()
+    ? '开头必须直接承接【上一章结尾（衔接基准）】的场景、情绪与时空，禁止时间跳跃、场景切换或另起炉灶式开场'
+    : origin.text.trim()
+      ? '本章为开篇：开头须从【故事起点（开篇基准）】自然入戏，直接进入本章大纲的第一个场景（建立主角处境与核心冲突）；禁止天气开场、背景倾倒或概述式开头'
+      : ''
+  const seamClose = next ? '结尾钩子必须顺势滑入【下一章预告】的开场场景' : ''
+  const seam = [seamOpen, seamClose].filter(Boolean).join('；')
+  const user = [
+    `请撰写本章正文，目标 ${words} 字（浮动 ±20%）。`,
+    seam && `衔接要求：${seam}。`,
+    '直接输出正文，可带章节标题。'
+  ]
+    .filter(Boolean)
+    .join('')
 
   const parts = [
     part('风格指南', project.styleGuide ? '已配置' : '无', styleText),
+    part('故事起点', origin.detail, origin.text),
     part('卷摘要', volumeSummaries.detail, volumeSummaries.text),
     part('世界观', wb.detail, wb.text),
     part('人物', ch.detail, ch.text),
     part('前情', summaries.detail, summaries.text),
     part('伏笔', foreshadows.detail, foreshadows.text),
+    part('上一章结尾', prevTail.detail, prevTail.text),
     part('大纲', `当前+前后章${renderOutlineMeta(current) ? '（含元数据）' : ''}`, outlineText)
   ]
 
