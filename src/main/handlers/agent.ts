@@ -1,5 +1,10 @@
 import { cancelAgentConfirms, resolveAgentConfirm } from '../agent'
 import {
+  getInstructionsView,
+  writeGlobalInstructions,
+  writeProjectInstructions
+} from '../agent/instructions'
+import {
   deleteAgentSession,
   listAgentSessions,
   loadAgentSession,
@@ -19,5 +24,14 @@ export const agentHandlers = {
   'agent:sessions': (_ctx, [projectId]) => listAgentSessions(projectId),
   'agent:sessionLoad': (_ctx, [id]) => loadAgentSession(id),
   'agent:sessionSave': (_ctx, [session]) => saveAgentSession(session),
-  'agent:sessionDelete': (_ctx, [id]) => deleteAgentSession(id)
+  'agent:sessionDelete': (_ctx, [id]) => deleteAgentSession(id),
+  'agent:instructionsGet': (_ctx, [projectId]) => getInstructionsView(projectId),
+  'agent:instructionsSave': (_ctx, [scope, text, projectId]) => {
+    if (scope === 'global') {
+      writeGlobalInstructions(text)
+      return
+    }
+    if (!projectId) throw new Error('缺少 projectId，无法保存本项目指令')
+    writeProjectInstructions(projectId, text)
+  }
 } satisfies PartialHandlerTable

@@ -34,6 +34,7 @@ function mapProject(r: Row): Project {
     targetWords: (r.target_words as number) ?? 0,
     status: (r.status as string) ?? 'active',
     wizardPlan: (r.wizard_plan as string) ?? '',
+    agentInstructions: (r.agent_instructions as string) ?? '',
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number
   }
@@ -118,13 +119,14 @@ export function updateProject(id: string, input: Partial<ProjectInput>): void {
   const db = getDb()
   const cur = mapProject(db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row)
   db.prepare(
-    'UPDATE projects SET title = ?, genre = ?, style_guide = ?, target_words = ?, wizard_plan = ?, updated_at = ? WHERE id = ?'
+    'UPDATE projects SET title = ?, genre = ?, style_guide = ?, target_words = ?, wizard_plan = ?, agent_instructions = ?, updated_at = ? WHERE id = ?'
   ).run(
     input.title ?? cur.title,
     input.genre ?? cur.genre,
     input.styleGuide ?? cur.styleGuide,
     input.targetWords ?? cur.targetWords,
     input.wizardPlan ?? cur.wizardPlan,
+    input.agentInstructions ?? cur.agentInstructions,
     now(),
     id
   )

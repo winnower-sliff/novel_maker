@@ -5,6 +5,11 @@ import { applyVolumeSummaryResult, buildVolumeSummaryRequest } from '../pipeline
 import { resolveRequestAuth } from '../settings'
 import * as store from '../store'
 import { appendUsage } from '../usage'
+import {
+  getInstructionsView,
+  writeGlobalInstructions,
+  writeProjectInstructions
+} from './instructions'
 import { runSubAgent } from './subagent'
 import {
   type AgentTool,
@@ -965,6 +970,45 @@ const TOOLS: AgentTool[] = [
         note: `第 ${volume} 卷卷摘要已重新生成并保存（${saved.summaryChars} 字）${auth.fallbackReason ? `。注意：${auth.fallbackReason}` : ''}`
       }
     }
+  },
+  {
+    def: {
+      name: 'get_agent_instructions',
+      description:
+        '读取智能体行为指令：globalText=全局指令（userData/agents.md，所有项目生效）、projectText=本项目指令（用户在界面配置），两者均注入系统提示且项目级优先。用户让你「记住/调整你自己的工作方式」时，先读再改',
+      input_schema: schema({}, [])
+    },
+    danger: false,
+    handler: (_input, projectId) => getInstructionsView(projectId)
+  },
+  {
+    def: {
+      name: 'set_agent_instructions',
+      description:
+        '写入智能体行为指令（用户确认后生效，下次任务起注入系统提示）：scope=global 写全局 agents.md（所有项目生效，放跨项目偏好），scope=project 写本项目指令（仅当前项目）。语义为整体替换：把完整的新全文传入 text；只想追加一行时先 get_agent_instructions 取回全文再改。不要用它记录任务内容或项目设定（那些有专门的板块）',
+      input_schema: schema(
+        {
+          scope: s("'global' 或 'project'，写入全局还是本项目"),
+          text: s('指令全文（Markdown，整体替换现有内容；清空传空串）')
+        },
+        ['scope', 'text']
+      )
+    },
+    danger: false,
+    dangerCheck: () => '将整体替换智能体行为指令（agents.md / 项目指令）',
+    handler: (input, projectId) => {
+      const scope = reqStr(input, 'scope')
+      const text = reqStr(input, 'text')
+      if (scope !== 'global' && scope !== 'project')
+        throw new Error("scope 必须是 'global' 或 'project'")
+      if (text.length > 20000) throw new Error('指令过长（上限 20000 字），请精简')
+      if (scope === 'global') {
+        writeGlobalInstructions(text)
+        return { ok: true, scope, chars: text.length, note: '全局 agents.md 已更新，下次任务生效' }
+      }
+      writeProjectInstructions(projectId, text)
+      return { ok: true, scope, chars: text.length, note: '本项目指令已更新，下次任务生效' }
+    }
   }
 ]
 
@@ -988,6 +1032,7 @@ export const READ_TOOLS = new Set([
   'list_summaries',
   'search_project',
   'get_book_digest',
+  'get_agent_instructions',
   'list_foreshadows'
 ])
 

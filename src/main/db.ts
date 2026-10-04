@@ -165,4 +165,7 @@ function migrate(d: DatabaseSync): void {
   if (!projCols.some((c) => c.name === 'wizard_plan')) {
     d.exec("ALTER TABLE projects ADD COLUMN wizard_plan TEXT DEFAULT ''")
   }
+  if (!projCols.some((c) => c.name === 'agent_instructions')) {
+    d.exec("ALTER TABLE projects ADD COLUMN agent_instructions TEXT DEFAULT ''")
+  }
 }

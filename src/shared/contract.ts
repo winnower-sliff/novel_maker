@@ -2,6 +2,7 @@ import { z } from 'zod'
 import { PROVIDER_IDS } from './providers'
 import type {
   AgentDonePayload,
+  AgentInstructionsView,
   AgentSession,
   AgentSessionBrief,
   AgentToolCall,
@@ -115,7 +116,8 @@ export const ProjectInputSchema = z.object({
   genre: z.string().optional(),
   styleGuide: z.string().optional(),
   targetWords: z.number().optional(),
-  wizardPlan: z.string().optional()
+  wizardPlan: z.string().optional(),
+  agentInstructions: z.string().optional()
 })
 
 export const CharacterInputSchema = z.object({
@@ -419,6 +421,14 @@ export const invokeContract = {
     ret: ret<void>()
   },
   'agent:sessionDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
+  'agent:instructionsGet': {
+    args: z.tuple([z.string()]),
+    ret: ret<AgentInstructionsView>()
+  },
+  'agent:instructionsSave': {
+    args: z.tuple([z.enum(['global', 'project']), z.string(), z.string().optional()]),
+    ret: ret<void>()
+  },
 
   'usage:list': { args: z.tuple([z.number().optional()]), ret: ret<UsageRecord[]>() },
   'usage:stats': { args: z.tuple([]), ret: ret<UsageStats>() },
@@ -690,6 +700,8 @@ export interface Api {
     sessionLoad: InvokeFn<'agent:sessionLoad'>
     sessionSave: InvokeFn<'agent:sessionSave'>
     sessionDelete: InvokeFn<'agent:sessionDelete'>
+    instructionsGet: InvokeFn<'agent:instructionsGet'>
+    instructionsSave: InvokeFn<'agent:instructionsSave'>
     onDelta: SubscribeFn<'agent:delta'>
     onToolCall: SubscribeFn<'agent:toolCall'>
     onToolResult: SubscribeFn<'agent:toolResult'>

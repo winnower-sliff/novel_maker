@@ -1,6 +1,7 @@
 import type { AgentToolCallEvent, AgentToolResultEvent } from '@shared/contract'
 import type {
   AgentDonePayload,
+  AgentInstructionsView,
   AgentSession,
   AgentSessionBrief,
   AgentToolCall,
@@ -11,6 +12,7 @@ import type {
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Markdown } from '../components/Markdown'
+import { OverlayCard } from '../components/OverlayCard'
 import { Badge, Button, Card, Select, Textarea } from '../components/ui'
 import { makeSessionTitle, toolLabel, toolSummary, turnsToMessages } from '../lib/agentTurns'
 import { setAgentUi } from '../lib/agentUiStore'
@@ -147,6 +149,111 @@ function ToolCallCard({
   )
 }
 
+type RenderItem =
+  | { kind: 'text'; text: string; key: string }
+  | { kind: 'tools'; calls: AgentToolCall[]; key: string }
+
+/** 把 turn 的 segments（时序）折叠成渲染项：相邻工具聚为一组；旧会话无 segments 回退 文本→工具 顺序。
+ * key 用确定性序号生成（跨渲染稳定），不能用文本长度/内容派生——流式时会导致 remount */
+function buildRenderItems(turn: AssistantTurn): RenderItem[] {
+  const byId = new Map(turn.toolCalls.map((c) => [c.id, c]))
+  let textSeq = 0
+  let toolSeq = 0
+  if (turn.segments && turn.segments.length > 0) {
+    const items: RenderItem[] = []
+    for (const seg of turn.segments) {
+      if (seg.kind === 'text') {
+        if (!seg.text) continue
+        const last = items[items.length - 1]
+        if (last?.kind === 'text') last.text += seg.text
+        else items.push({ kind: 'text', text: seg.text, key: `t${textSeq++}` })
+      } else {
+        const call = byId.get(seg.callId)
+        if (!call) continue
+        const last = items[items.length - 1]
+        if (last?.kind === 'tools') last.calls.push(call)
+        else items.push({ kind: 'tools', calls: [call], key: `g${toolSeq++}` })
+      }
+    }
+    if (items.length > 0) return items
+  }
+  const items: RenderItem[] = []
+  if (turn.text) items.push({ kind: 'text', text: turn.text, key: `t${textSeq++}` })
+  if (turn.toolCalls.length > 0)
+    items.push({ kind: 'tools', calls: [...turn.toolCalls], key: `g${toolSeq++}` })
+  return items
+}
+
+function ToolGroup({
+  calls,
+  running,
+  confirmTargetId,
+  onResolve,
+  subProcs
+}: {
+  calls: AgentToolCall[]
+  running: boolean
+  confirmTargetId: string | null
+  onResolve: (allow: boolean, always: boolean) => void
+  subProcs: Record<string, SubProc>
+}) {
+  const hasActive = calls.some((c) => c.state === 'running' || c.state === 'confirming')
+  const [open, setOpen] = useState(hasActive)
+  useEffect(() => {
+    if (hasActive) setOpen(true)
+  }, [hasActive])
+  const dot = calls.some((c) => c.state === 'confirming')
+    ? 'bg-red-500 animate-pulse'
+    : hasActive
+      ? 'bg-amber-500 animate-pulse'
+      : calls.some((c) => c.state === 'error' || c.state === 'denied')
+        ? 'bg-red-600'
+        : 'bg-emerald-500'
+  const active = calls.filter((c) => c.state === 'running' || c.state === 'confirming').length
+  const last = calls[calls.length - 1]
+  return (
+    <div className="rounded-md border border-zinc-800 bg-zinc-900/40">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full cursor-pointer items-center gap-2.5 rounded-md px-3 py-1.5 text-left"
+      >
+        <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
+        <span className="shrink-0 font-mono text-[11px] text-amber-500/70">
+          工具 × {calls.length}
+        </span>
+        <span className="flex-1 truncate text-xs text-zinc-400">
+          {active > 0 && <span className="text-amber-400/80">执行中 {active} 项 · </span>}
+          {toolLabel(last.name)} {toolSummary(last)}
+        </span>
+        <svg
+          aria-hidden="true"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          className={`h-3 w-3 shrink-0 text-zinc-600 transition-transform ${open ? 'rotate-180' : ''}`}
+        >
+          <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+        </svg>
+      </button>
+      {open && (
+        <div className="space-y-1.5 border-t border-zinc-800 p-1.5">
+          {calls.map((call) => (
+            <ToolCallCard
+              key={call.id}
+              call={call}
+              canResolve={running && call.id === confirmTargetId}
+              onResolve={onResolve}
+              sub={subProcs[call.id]}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 export default function Agent({ projectId }: { projectId: string }) {
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [probe, setProbe] = useState<ModelProbeResult | null>(null)
@@ -164,11 +271,22 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
+  const [instrOpen, setInstrOpen] = useState(false)
+  const [instrTab, setInstrTab] = useState<'global' | 'project'>('global')
+  const [instr, setInstr] = useState<AgentInstructionsView | null>(null)
+  const [instrDraft, setInstrDraft] = useState({ global: '', project: '' })
+  const [instrSaving, setInstrSaving] = useState(false)
+  const [instrSaved, setInstrSaved] = useState(false)
+  const [instrErr, setInstrErr] = useState('')
+  const [showJump, setShowJump] = useState(false)
   const requestIdRef = useRef<string | null>(null)
   const sessionIdRef = useRef<string | null>(null)
   const sessionCreatedAtRef = useRef<number>(Date.now())
   const turnsRef = useRef<AgentTurn[]>([])
-  const endRef = useRef<HTMLDivElement>(null)
+  const scrollRef = useRef<HTMLDivElement>(null)
+  const atBottomRef = useRef(true)
+  const pendingDeltaRef = useRef('')
+  const rafRef = useRef<number | null>(null)
 
   const applyTurns = useCallback((next: AgentTurn[]): void => {
     turnsRef.current = next
@@ -190,6 +308,29 @@ export default function Agent({ projectId }: { projectId: string }) {
     },
     [applyTurns]
   )
+
+  /** 追加流式文本：同步写入 text 与 segments（旧会话无 segments 时从现有 text 迁移） */
+  const appendDelta = useCallback(
+    (chunk: string): void => {
+      patchLastAssistant((t) => {
+        const segments = t.segments ? [...t.segments] : [{ kind: 'text' as const, text: t.text }]
+        const lastSeg = segments[segments.length - 1]
+        if (lastSeg && lastSeg.kind === 'text')
+          segments[segments.length - 1] = { kind: 'text', text: lastSeg.text + chunk }
+        else segments.push({ kind: 'text', text: chunk })
+        return { ...t, text: t.text + chunk, segments }
+      })
+    },
+    [patchLastAssistant]
+  )
+
+  const flushDelta = useCallback((): void => {
+    rafRef.current = null
+    const chunk = pendingDeltaRef.current
+    if (!chunk) return
+    pendingDeltaRef.current = ''
+    appendDelta(chunk)
+  }, [appendDelta])
 
   const refreshSessions = useCallback(
     (pid: string): void => {
@@ -263,23 +404,29 @@ export default function Agent({ projectId }: { projectId: string }) {
   useEffect(() => {
     const offDelta = window.api.agent.onDelta((id, text) => {
       if (id !== requestIdRef.current) return
-      patchLastAssistant((t) => ({ ...t, text: t.text + text }))
+      pendingDeltaRef.current += text
+      if (rafRef.current === null) rafRef.current = requestAnimationFrame(flushDelta)
     })
     const offToolCall = window.api.agent.onToolCall((id, call: AgentToolCallEvent) => {
       if (id !== requestIdRef.current) return
-      patchLastAssistant((t) => ({
-        ...t,
-        toolCalls: [
-          ...t.toolCalls,
-          {
-            id: call.id,
-            name: call.name,
-            input: call.input,
-            state: call.state,
-            dangerReason: call.dangerReason
-          }
-        ]
-      }))
+      patchLastAssistant((t) => {
+        const segments = t.segments ? [...t.segments] : [{ kind: 'text' as const, text: t.text }]
+        segments.push({ kind: 'tool', callId: call.id })
+        return {
+          ...t,
+          toolCalls: [
+            ...t.toolCalls,
+            {
+              id: call.id,
+              name: call.name,
+              input: call.input,
+              state: call.state,
+              dangerReason: call.dangerReason
+            }
+          ],
+          segments
+        }
+      })
       if (call.state === 'confirming') setAgentUi({ confirming: true })
     })
     const offToolResult = window.api.agent.onToolResult((id, r: AgentToolResultEvent) => {
@@ -373,13 +520,34 @@ export default function Agent({ projectId }: { projectId: string }) {
       offDone()
       offError()
       offSub()
+      if (rafRef.current !== null) {
+        cancelAnimationFrame(rafRef.current)
+        rafRef.current = null
+      }
     }
-  }, [applyTurns, patchLastAssistant, persist])
+  }, [applyTurns, patchLastAssistant, persist, flushDelta])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
-    endRef.current?.scrollIntoView({ block: 'nearest' })
+    const el = scrollRef.current
+    if (el && atBottomRef.current) el.scrollTop = el.scrollHeight
   }, [turns])
+
+  const handleScroll = (): void => {
+    const el = scrollRef.current
+    if (!el) return
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 80
+    atBottomRef.current = atBottom
+    setShowJump(!atBottom)
+  }
+
+  const jumpToBottom = (): void => {
+    const el = scrollRef.current
+    if (!el) return
+    atBottomRef.current = true
+    setShowJump(false)
+    el.scrollTop = el.scrollHeight
+  }
 
   const modelOptions = (() => {
     const ids = new Set<string>()
@@ -416,7 +584,7 @@ export default function Agent({ projectId }: { projectId: string }) {
     const next: AgentTurn[] = [
       ...turns,
       { role: 'user', text: input.trim(), ts },
-      { role: 'assistant', text: '', toolCalls: [], ts }
+      { role: 'assistant', text: '', toolCalls: [], segments: [], ts }
     ]
     applyTurns(next)
     setInput('')
@@ -425,6 +593,9 @@ export default function Agent({ projectId }: { projectId: string }) {
     setSubProcs({})
     setRunning(true)
     setAgentUi({ running: true, confirming: false, ended: null })
+    atBottomRef.current = true
+    setShowJump(false)
+    cancelPendingDelta()
     persist(sid, next)
     void window.api.agent
       .run({ projectId, messages: turnsToMessages(next), model })
@@ -446,6 +617,44 @@ export default function Agent({ projectId }: { projectId: string }) {
     void window.api.agent.resolve(requestIdRef.current, confirmTarget.id, allow, always)
   }
 
+  const openInstructions = (): void => {
+    setInstrOpen(true)
+    setInstrSaved(false)
+    void window.api.agent.instructionsGet(projectId).then((v) => {
+      setInstr(v)
+      setInstrDraft({ global: v.globalText, project: v.projectText })
+    })
+  }
+
+  const saveInstructions = (): void => {
+    if (!instr || instrSaving) return
+    setInstrSaving(true)
+    setInstrSaved(false)
+    setInstrErr('')
+    const tab = instrTab
+    const text = instrDraft[tab]
+    void window.api.agent
+      .instructionsSave(tab, text, projectId)
+      .then(() => {
+        setInstrSaving(false)
+        setInstrSaved(true)
+        setInstr((v) => (v ? { ...v, [tab === 'global' ? 'globalText' : 'projectText']: text } : v))
+        void queryClient.invalidateQueries({ queryKey: qk.projects })
+      })
+      .catch((e: unknown) => {
+        setInstrSaving(false)
+        setInstrErr((e as Error)?.message ?? '保存失败')
+      })
+  }
+
+  const cancelPendingDelta = (): void => {
+    pendingDeltaRef.current = ''
+    if (rafRef.current !== null) {
+      cancelAnimationFrame(rafRef.current)
+      rafRef.current = null
+    }
+  }
+
   const switchSession = (id: string): void => {
     if (running) stop()
     requestIdRef.current = null
@@ -454,6 +663,9 @@ export default function Agent({ projectId }: { projectId: string }) {
     setPanelOpen(false)
     setRenamingId(null)
     setConfirmDeleteId(null)
+    atBottomRef.current = true
+    setShowJump(false)
+    cancelPendingDelta()
     if (!id) {
       setSession(null)
       applyTurns([])
@@ -678,10 +890,15 @@ export default function Agent({ projectId }: { projectId: string }) {
         <div className="sm:pt-5">
           <Badge tone="amber">可直接读写当前项目的各板块</Badge>
         </div>
+        <div className="sm:ml-auto sm:pt-5">
+          <Button variant="ghost" onClick={openInstructions}>
+            指令
+          </Button>
+        </div>
       </div>
 
-      <Card className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        <div className="flex-1 overflow-y-auto p-4">
+      <Card className="relative flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div ref={scrollRef} onScroll={handleScroll} className="flex-1 overflow-y-auto p-4">
           {turns.length === 0 && !running && (
             <div className="flex h-full flex-col items-center justify-center gap-2 text-sm text-zinc-600">
               <div>用自然语言指挥智能体编辑当前项目，例如：</div>
@@ -707,18 +924,24 @@ export default function Agent({ projectId }: { projectId: string }) {
               ) : (
                 // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
                 <div key={idx} className="space-y-2">
-                  {turn.text && (
-                    <Markdown text={turn.text} className="text-sm leading-7 text-zinc-200" />
+                  {buildRenderItems(turn).map((item) =>
+                    item.kind === 'text' ? (
+                      <Markdown
+                        key={item.key}
+                        text={item.text}
+                        className="text-sm leading-7 text-zinc-200"
+                      />
+                    ) : (
+                      <ToolGroup
+                        key={item.key}
+                        calls={item.calls}
+                        running={running}
+                        confirmTargetId={confirmTarget?.id ?? null}
+                        onResolve={resolveConfirm}
+                        subProcs={subProcs}
+                      />
+                    )
                   )}
-                  {turn.toolCalls.map((call) => (
-                    <ToolCallCard
-                      key={call.id}
-                      call={call}
-                      canResolve={running && call.id === confirmTarget?.id}
-                      onResolve={resolveConfirm}
-                      sub={subProcs[call.id]}
-                    />
-                  ))}
                 </div>
               )
             )}
@@ -729,8 +952,16 @@ export default function Agent({ projectId }: { projectId: string }) {
               </div>
             )}
           </div>
-          <div ref={endRef} />
         </div>
+        {showJump && (
+          <button
+            type="button"
+            onClick={jumpToBottom}
+            className="absolute bottom-4 right-5 z-10 cursor-pointer rounded-full border border-zinc-700 bg-zinc-900/95 px-3 py-1.5 text-xs text-zinc-300 shadow-lg transition-colors hover:border-amber-600/60 hover:text-amber-400"
+          >
+            ↓ 回到底部
+          </button>
+        )}
         {(doneInfo || error) && (
           <div className="border-t border-zinc-800 px-4 py-2.5">
             {error ? (
@@ -804,6 +1035,60 @@ export default function Agent({ projectId }: { projectId: string }) {
           </div>
         </div>
       </div>
+
+      <OverlayCard
+        open={instrOpen}
+        onClose={() => setInstrOpen(false)}
+        title="智能体指令"
+        widthClass="max-w-2xl"
+      >
+        <div className="flex flex-col gap-3">
+          <div className="flex items-center gap-1.5">
+            {(
+              [
+                ['global', '全局（agents.md）'],
+                ['project', '本项目']
+              ] as Array<['global' | 'project', string]>
+            ).map(([key, label]) => (
+              <button
+                key={key}
+                type="button"
+                onClick={() => setInstrTab(key)}
+                className={`cursor-pointer rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                  instrTab === key
+                    ? 'border-amber-600/60 bg-amber-600/10 text-amber-400'
+                    : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                }`}
+              >
+                {label}
+              </button>
+            ))}
+            <span className="ml-auto text-[11px] text-zinc-600">
+              {instrTab === 'global'
+                ? `存于 ${instr?.globalPath ?? '…'}，所有项目生效`
+                : '仅当前项目的智能体生效，优先级高于全局'}
+            </span>
+          </div>
+          <Textarea
+            rows={14}
+            value={instrDraft[instrTab]}
+            onChange={(e) => setInstrDraft((d) => ({ ...d, [instrTab]: e.target.value }))}
+            placeholder={
+              instrTab === 'global'
+                ? '跨项目的写作偏好、称谓、章节结构习惯…（Markdown）'
+                : '本项目专属的工作要求，例如「伏笔必须三章内回收」…（Markdown）'
+            }
+            className="font-mono text-xs"
+          />
+          <div className="flex items-center gap-2">
+            <Button onClick={saveInstructions} disabled={instrSaving}>
+              {instrSaving ? '保存中…' : '保存'}
+            </Button>
+            {instrSaved && <span className="text-xs text-emerald-400">已保存，下次任务生效</span>}
+            {instrErr && <span className="text-xs text-red-400">{instrErr}</span>}
+          </div>
+        </div>
+      </OverlayCard>
     </div>
   )
 }

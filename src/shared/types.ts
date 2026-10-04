@@ -212,6 +212,7 @@ export interface Project {
   targetWords: number
   status: string
   wizardPlan: string
+  agentInstructions: string
   createdAt: number
   updatedAt: number
 }
@@ -465,9 +466,23 @@ export interface AgentToolCall {
   dangerReason?: string
 }
 
+export type AgentSegment = { kind: 'text'; text: string } | { kind: 'tool'; callId: string }
+
 export type AgentTurn =
   | { role: 'user'; text: string; ts: number }
-  | { role: 'assistant'; text: string; toolCalls: AgentToolCall[]; ts: number }
+  | {
+      role: 'assistant'
+      text: string
+      toolCalls: AgentToolCall[]
+      segments?: AgentSegment[]
+      ts: number
+    }
+
+export interface AgentInstructionsView {
+  globalText: string
+  projectText: string
+  globalPath: string
+}
 
 export interface AgentSession {
   id: string

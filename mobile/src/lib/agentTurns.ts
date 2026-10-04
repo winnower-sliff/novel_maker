@@ -20,6 +20,8 @@ export const TOOL_LABELS: Record<string, string> = {
   list_foreshadows: '伏笔·列表',
   save_foreshadow: '伏笔·保存',
   delete_foreshadow: '伏笔·删除',
+  get_agent_instructions: '指令·读取',
+  set_agent_instructions: '指令·修改',
   spawn_subagent: '子智能体·委派'
 }
 
@@ -43,6 +45,8 @@ export function toolSummary(call: AgentToolCall): string {
       return `${str(i, 'id') ? '修改人物' : '新建人物'}：${str(i, 'name') || '(未命名)'}`
     case 'save_worldbuild':
       return `${str(i, 'id') ? '修改词条' : '新建词条'}：${str(i, 'title') || '(无标题)'}`
+    case 'set_agent_instructions':
+      return `${str(i, 'scope') === 'global' ? '写入全局 agents.md' : '写入本项目指令'}（${str(i, 'text').length} 字）`
     case 'spawn_subagent': {
       const t = str(i, 'task')
       return `${str(i, 'role') || '调研'}：${t.slice(0, 40)}${t.length > 40 ? '…' : ''}`

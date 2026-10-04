@@ -11,6 +11,7 @@ import { chatStream, pickRatelimitHeaders } from '../llm'
 import { resolveRequestAuth } from '../settings'
 import * as store from '../store'
 import { appendUsage } from '../usage'
+import { readGlobalInstructions, readProjectInstructions } from './instructions'
 import {
   AGENT_MAX_TOKENS,
   clip,
@@ -58,11 +59,15 @@ export function cancelAgentConfirms(requestId: string): void {
 function buildSystemPrompt(projectId: string): string {
   const project = store.listProjects().find((p) => p.id === projectId)
   if (!project) throw new Error('项目不存在，无法启动智能体')
+  const globalInstr = readGlobalInstructions().trim()
+  const projectInstr = readProjectInstructions(projectId).trim()
   return [
     '你是小说项目的智能体编辑助理，通过工具直接读写当前项目的资料库（人物、世界观、大纲、章节正文、伏笔）。',
     '',
     `当前项目：《${project.title}》${project.genre ? `（类型：${project.genre}）` : ''}`,
     project.styleGuide ? `风格指南：\n${project.styleGuide}` : '（未配置风格指南）',
+    ...(globalInstr ? ['', `用户全局指令（所有项目生效）：`, globalInstr] : []),
+    ...(projectInstr ? ['', '本项目用户指令（优先级高于全局指令）：', projectInstr] : []),
     '',
     '工作规则：',
     '1. 修改前先用读工具核实目标（例如按名字找到准确 id），禁止凭记忆猜测 id',
