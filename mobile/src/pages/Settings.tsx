@@ -14,7 +14,7 @@ import {
   subscribePrefetch,
   type CachedBookEntry
 } from '@mobile/lib/readerCache'
-import { ACCENTS, APPEARANCES, useSettingsStore } from '@mobile/lib/settingsStore'
+import { AppearanceControls, FontControls } from '@mobile/components/appearance'
 
 type ApkState =
   | { kind: 'idle' }
@@ -42,63 +42,21 @@ function fmtBytes(n: number): string {
 }
 
 function AppearanceCard() {
-  const appearance = useSettingsStore((s) => s.appearance)
-  const accent = useSettingsStore((s) => s.accent)
-  const setAppearance = useSettingsStore((s) => s.setAppearance)
-  const setAccent = useSettingsStore((s) => s.setAccent)
   return (
-      <Card className="p-4">
-        <div className="text-sm font-medium text-zinc-200">外观</div>
-        <p className="mt-0.5 text-[11px] text-zinc-500">保存在本机，重启 APP 后仍生效</p>
-        <div className="mt-2 grid grid-cols-3 gap-1.5 rounded-lg bg-zinc-900 p-1">
-        {APPEARANCES.map((a) => (
-          <button
-            key={a.id}
-            type="button"
-            onClick={() => setAppearance(a.id)}
-            className={`cursor-pointer rounded-md px-2 py-1.5 text-xs transition-colors ${
-              appearance === a.id ? 'bg-amber-600 font-medium text-white' : 'text-zinc-400 active:bg-zinc-800'
-            }`}
-          >
-            {a.label}
-          </button>
-        ))}
-      </div>
-      <div className="mt-3 flex items-center gap-3">
-        {ACCENTS.map((c) => (
-          <button
-            key={c.id}
-            type="button"
-            aria-label={c.label}
-            title={c.label}
-            onClick={() => setAccent(c.id)}
-            className={`h-7 w-7 cursor-pointer rounded-full border-2 transition-[border-color,transform] ${
-              accent === c.id ? 'scale-110 border-zinc-100' : 'border-transparent'
-            }`}
-            style={{ background: c.color }}
-          />
-        ))}
-      </div>
+    <Card className="p-4">
+      <div className="text-sm font-medium text-zinc-200">外观</div>
+      <p className="mt-0.5 text-[11px] text-zinc-500">保存在本机，重启 APP 后仍生效</p>
+      <AppearanceControls />
     </Card>
   )
 }
 
 function FontCard() {
-  const font = useSettingsStore((s) => s.font)
-  const setFont = useSettingsStore((s) => s.setFont)
   return (
     <Card className="p-4">
       <div className="text-sm font-medium text-zinc-200">阅读</div>
-      <p className="mt-0.5 text-[11px] text-zinc-500">正文字号，与阅读页 A-/A+ 同步生效</p>
-      <div className="mt-3 flex items-center gap-3">
-        <Button variant="ghost" className="px-4 py-1.5 text-xs" onClick={() => setFont(font - 1)}>
-          A-
-        </Button>
-        <span className="w-12 text-center text-sm tabular-nums text-zinc-300">{font}px</span>
-        <Button variant="ghost" className="px-4 py-1.5 text-xs" onClick={() => setFont(font + 1)}>
-          A+
-        </Button>
-      </div>
+      <p className="mt-0.5 text-[11px] text-zinc-500">正文字号，与阅读页「Aa」设置抽屉同步生效</p>
+      <FontControls />
     </Card>
   )
 }

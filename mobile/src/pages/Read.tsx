@@ -1,4 +1,5 @@
 import { Button, Empty } from '@mobile/components/ui'
+import { ReaderSettingsSheet } from '@mobile/components/ReaderSettingsSheet'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { useTocStore } from '@mobile/lib/tocStore'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
@@ -54,7 +55,6 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
   const [openId, setOpenId] = useState<string | null>(null)
   const [hlId, setHlId] = useState<string | null>(null)
   const font = useSettingsStore((s) => s.font)
-  const setFont = useSettingsStore((s) => s.setFont)
   const setOffline = useReaderStore((s) => s.setOffline)
   const offlineChapter = useReaderStore((s) => s.offlineChapter)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -128,11 +128,11 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
     if (current) useSettingsStore.getState().setReadPos(projectId, current.id)
   }, [current, projectId])
 
-  // 阅读中返回键先回目录
+  // 阅读中返回键先回目录；设置抽屉打开时优先关抽屉（后注册者在栈顶）
   useBackHandler(() => setOpenId(null), openId !== null)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  useBackHandler(() => setSheetOpen(false), sheetOpen)
 
-  const isSepia = useSettingsStore((s) => s.appearance) === 'sepia'
-  const toggleSepia = useSettingsStore((s) => s.toggleSepia)
   const openSegs = useTocStore((s) => s.openSegs)
   const toggleSeg = useTocStore((s) => s.toggleSeg)
 
@@ -140,11 +140,8 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
     const target = written[next]
     if (!target) return
     setOpenId(target.id)
+    setSheetOpen(false)
     scrollRef.current?.scrollTo({ top: 0 })
-  }
-
-  const nudgeFont = (delta: number): void => {
-    setFont(font + delta)
   }
 
   if (isLoading) return <Empty text="加载中…" />
@@ -154,7 +151,14 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
     return (
       <div className="flex h-full flex-col">
         <div className="flex items-center gap-1 border-b border-zinc-800 bg-zinc-950/95 px-2 py-1.5">
-          <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => setOpenId(null)}>
+          <Button
+            variant="ghost"
+            className="px-2.5 py-1.5 text-xs"
+            onClick={() => {
+              setOpenId(null)
+              setSheetOpen(false)
+            }}
+          >
             目录
           </Button>
           <div className="min-w-0 flex-1 truncate text-center text-xs text-zinc-400">
@@ -163,18 +167,8 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
             )}
             第{current.chapterNo}章 {current.title || ''}
           </div>
-          <Button
-            variant={isSepia ? 'default' : 'ghost'}
-            className="px-2 py-1.5 text-xs"
-            onClick={toggleSepia}
-          >
-            护眼
-          </Button>
-          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => nudgeFont(-2)}>
-            A-
-          </Button>
-          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => nudgeFont(2)}>
-            A+
+          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setSheetOpen(true)}>
+            Aa
           </Button>
         </div>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-4 leading-loose">
@@ -216,6 +210,7 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
             下一章 →
           </Button>
         </div>
+        {sheetOpen && <ReaderSettingsSheet onClose={() => setSheetOpen(false)} />}
       </div>
     )
 
