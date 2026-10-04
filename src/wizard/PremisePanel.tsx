@@ -1,5 +1,11 @@
-import type { PremiseDraftResult, Project } from '@shared/types'
-import { useEffect, useRef, useState } from 'react'
+import type {
+  Character,
+  OutlineItem,
+  PremiseDraftResult,
+  Project,
+  WorldbuildEntry
+} from '@shared/types'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { startPipeline } from './pipeline'
 import type { WizardUi } from './uiTypes'
 import { PlanCard, StreamBox } from './widgets'
@@ -7,6 +13,15 @@ import { backfillPlan, parsePlan, saveProjectPlan } from './wizardPlan'
 
 /** 基本设定页（桌面/移动共用）：项目元表单 + AI 起草创作方案三态 + 方案卡。
  *  projectId=null 为创建模式：仅元表单，projectCreate 成功后经 onCreated 交还调用方切换。 */
+
+/** 冷启动快照种子（mobile 传，桌面不传）：网络回来前先按快照渲染，避免空表单闪现 */
+export interface PremiseSeed {
+  project: Project
+  worldbuild: WorldbuildEntry[]
+  characters: Character[]
+  outlines: OutlineItem[]
+}
+
 interface PremisePanelProps {
   ui: WizardUi
   projectId: string | null
@@ -14,6 +29,7 @@ interface PremisePanelProps {
   onUpdated?: (id: string) => void
   /** 起草完成状态变化（调用方算门禁用） */
   onDraftedChange?: (drafted: boolean) => void
+  seed?: PremiseSeed | null
 }
 
 const EMPTY_FORM = { title: '', genre: '', targetWords: '', styleGuide: '' }
@@ -35,7 +51,8 @@ export function PremisePanel({
   projectId,
   onCreated,
   onUpdated,
-  onDraftedChange
+  onDraftedChange,
+  seed
 }: PremisePanelProps) {
   const { Badge, Button, Input, Label, Textarea } = ui
   const [project, setProject] = useState<Project | null>(null)
@@ -56,11 +73,62 @@ export function PremisePanel({
   const [plan, setPlan] = useState<PremiseDraftResult | null>(null)
   const [existing, setExisting] = useState({ wb: 0, char: 0, ol: 0 })
   const draftAbortRef = useRef<(() => void) | null>(null)
+  // 用户是否动过表单：网络回包晚到时不得覆盖其输入（快照 seed 先渲染会放大这个窗口）
+  const formTouchedRef = useRef(false)
+  const editForm = (patch: Partial<ProjectForm>): void => {
+    formTouchedRef.current = true
+    setForm((f) => ({ ...f, ...patch }))
+  }
+
+  const applyLibrary = useCallback(
+    (
+      ps: Project[],
+      wb: WorldbuildEntry[],
+      cs: Character[],
+      ol: OutlineItem[],
+      keepForm = false
+    ): void => {
+      const p = ps.find((x) => x.id === projectId) ?? null
+      setProject(p)
+      if (p) {
+        if (!keepForm) {
+          setForm(seedForm(p))
+          formTouchedRef.current = false
+        }
+      } else {
+        setForm(EMPTY_FORM)
+        formTouchedRef.current = false
+      }
+      const counts = { wb: wb.length, char: cs.length, ol: ol.length }
+      setExisting(counts)
+      // 库数据回填：存档字段缺失（换端/损坏）时以项目库为准
+      const merged = backfillPlan(
+        parsePlan(p?.wizardPlan),
+        wb,
+        cs.map((c) => ({ name: c.name, role: c.role }))
+      )
+      setDraftDelta(merged.draftText)
+      setPlan({
+        worldbuildBrief: merged.wbBrief,
+        worldbuildCategories: merged.wbCats,
+        worldbuildCount: merged.wbCount,
+        characters: merged.chars,
+        outlineIdea: merged.outlineIdea,
+        outlineCount: merged.outlineCount
+      })
+      // 库里已有任何内容即视为已过设定，不强制重新起草
+      const done = merged.wbBrief.trim().length > 0 || counts.wb + counts.char + counts.ol > 0
+      setDrafted(done)
+      onDraftedChange?.(done)
+    },
+    [projectId, onDraftedChange]
+  )
 
   useEffect(() => {
     if (!projectId) {
       setProject(null)
       setForm(EMPTY_FORM)
+      formTouchedRef.current = false
       setDrafted(false)
       setPlan(null)
       setDraftDelta('')
@@ -68,6 +136,10 @@ export function PremisePanel({
       return
     }
     let alive = true
+    // 快照种子先渲染（mobile 传入；桌面不传无此路径），网络回来后覆盖为最新
+    if (seed && seed.project.id === projectId) {
+      applyLibrary([seed.project], seed.worldbuild, seed.characters, seed.outlines)
+    }
     void Promise.all([
       window.api.novel.projects(),
       window.api.novel.worldbuild(projectId),
@@ -76,36 +148,13 @@ export function PremisePanel({
     ])
       .then(([ps, wb, cs, ol]) => {
         if (!alive) return
-        const p = ps.find((x) => x.id === projectId) ?? null
-        setProject(p)
-        if (p) setForm(seedForm(p))
-        const counts = { wb: wb.length, char: cs.length, ol: ol.length }
-        setExisting(counts)
-        // 库数据回填：存档字段缺失（换端/损坏）时以项目库为准
-        const merged = backfillPlan(
-          parsePlan(p?.wizardPlan),
-          wb,
-          cs.map((c) => ({ name: c.name, role: c.role }))
-        )
-        setDraftDelta(merged.draftText)
-        setPlan({
-          worldbuildBrief: merged.wbBrief,
-          worldbuildCategories: merged.wbCats,
-          worldbuildCount: merged.wbCount,
-          characters: merged.chars,
-          outlineIdea: merged.outlineIdea,
-          outlineCount: merged.outlineCount
-        })
-        // 库里已有任何内容即视为已过设定，不强制重新起草
-        const done = merged.wbBrief.trim().length > 0 || counts.wb + counts.char + counts.ol > 0
-        setDrafted(done)
-        onDraftedChange?.(done)
+        applyLibrary(ps, wb, cs, ol, formTouchedRef.current)
       })
       .catch(() => {})
     return () => {
       alive = false
     }
-  }, [projectId, onDraftedChange])
+  }, [projectId, onDraftedChange, applyLibrary, seed])
 
   useEffect(
     () => () => {
@@ -214,7 +263,7 @@ export function PremisePanel({
             <Label>书名 *</Label>
             <Input
               value={form.title}
-              onChange={(e) => setForm({ ...form, title: e.target.value })}
+              onChange={(e) => editForm({ title: e.target.value })}
               placeholder="例：凡人修仙传"
             />
           </div>
@@ -222,7 +271,7 @@ export function PremisePanel({
             <Label>题材</Label>
             <Input
               value={form.genre}
-              onChange={(e) => setForm({ ...form, genre: e.target.value })}
+              onChange={(e) => editForm({ genre: e.target.value })}
               placeholder="仙侠/都市/科幻…"
             />
           </div>
@@ -232,7 +281,7 @@ export function PremisePanel({
           <Input
             type="number"
             value={form.targetWords}
-            onChange={(e) => setForm({ ...form, targetWords: e.target.value })}
+            onChange={(e) => editForm({ targetWords: e.target.value })}
             placeholder="例：2000000"
             className="w-full sm:w-40"
           />
@@ -243,7 +292,7 @@ export function PremisePanel({
             rows={3}
             style={{ resize: 'vertical' }}
             value={form.styleGuide}
-            onChange={(e) => setForm({ ...form, styleGuide: e.target.value })}
+            onChange={(e) => editForm({ styleGuide: e.target.value })}
             placeholder="文风参照、叙事视角、禁忌词、爽点偏好…"
           />
         </div>

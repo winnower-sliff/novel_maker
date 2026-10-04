@@ -61,7 +61,7 @@ export default function PremiseSub({
   if (!seedReady) return null
 
   return (
-    <PullToRefresh className="p-3">
+    <div className="h-full overflow-y-auto overscroll-contain p-3">
       <PremisePanel
         ui={mobileWizardUi}
         projectId={projectId}
@@ -72,6 +72,6 @@ export default function PremiseSub({
         }}
         onUpdated={() => void qc.invalidateQueries({ queryKey: ['novel', 'projects'] })}
       />
-    </PullToRefresh>
+    </div>
   )
 }
