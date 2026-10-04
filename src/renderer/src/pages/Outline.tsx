@@ -511,7 +511,12 @@ export default function Outline({
           </div>
           <div>
             <div className="flex items-center justify-between gap-2">
-              <Label>通用规则（全书各卷适用，每行一条；随本卷大纲生成注入，逐章严格执行）</Label>
+              <Label>
+                通用规则（全书各卷适用，每行一条；随本卷大纲生成注入，逐章严格执行）
+                {!globalRules.trim() && (
+                  <span className="ml-1 text-amber-500">· 未填写，不生效</span>
+                )}
+              </Label>
               <Button
                 variant="ghost"
                 className="shrink-0 px-2 py-1 text-xs"
@@ -561,6 +566,7 @@ export default function Outline({
               <Label>
                 第 {volume} 卷 · 节奏与硬性要求（每行一条，原样透传给大纲生成、逐章严格执行，不经 AI
                 改写）
+                {!rules.trim() && <span className="ml-1 text-amber-500">· 未填写，不生效</span>}
               </Label>
               <Button
                 variant="ghost"
@@ -639,6 +645,12 @@ export default function Outline({
               variant={targetWritten ? 'danger' : 'primary'}
               disabled={genBusy || ideaBusy || rulesBusy || gRulesBusy || !idea.trim()}
               onClick={() => {
+                if (!rules.trim() && !globalRules.trim()) {
+                  const go = window.confirm(
+                    '通用规则与本卷规则都是空的，本次生成将不附加任何节奏/硬性要求。\n仍要继续吗？'
+                  )
+                  if (!go) return
+                }
                 if (
                   targetWritten &&
                   !window.confirm(
