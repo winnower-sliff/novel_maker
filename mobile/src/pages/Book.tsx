@@ -7,12 +7,12 @@ import OutlineSub from '@mobile/pages/subs/OutlineSub'
 import PremiseSub from '@mobile/pages/subs/PremiseSub'
 import WorldSub from '@mobile/pages/subs/WorldSub'
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Project } from '@shared/types'
 
 type BookTab = 'read' | 'write' | 'agent'
 
-/** 写作 tab 内的二级子页（按创作流程顺序，门禁逐级解锁） */
+/** 写作 tab 内的二级子页（按创作流程顺序排列） */
 export type SubPage = 'premise' | 'world' | 'chars' | 'outline' | 'sub'
 
 const SUBS: Array<{ key: SubPage; label: string }> = [
@@ -30,11 +30,26 @@ const TABS: Array<{ key: BookTab; label: string }> = [
 ]
 
 const subStorageKey = (pid: string): string => `nm-book-sub:${pid}`
+const tabStorageKey = (pid: string): string => `nm-book-tab:${pid}`
+
+const SUB_KEYS: readonly string[] = SUBS.map((s) => s.key)
+const isSubPage = (v: string | null): v is SubPage => v !== null && SUB_KEYS.includes(v)
+const isBookTab = (v: string | null): v is BookTab => v === 'read' || v === 'write' || v === 'agent'
+
+function loadTab(pid: string): BookTab {
+  const saved = localStorage.getItem(tabStorageKey(pid))
+  return isBookTab(saved) ? saved : 'write'
+}
+
+function loadSub(pid: string): SubPage {
+  const saved = localStorage.getItem(subStorageKey(pid))
+  return isSubPage(saved) ? saved : 'premise'
+}
 
 /** 书内壳：一级 tab（阅读/写作/智能体）+ 写作内 5 子页顶栏切换。
  *  projectId=null 为创建模式：仅「基本设定」，projectCreate 后经 onCreated 交还调用方。
- *  门禁：前一步完成才能点亮下一步（完成=设定存档/世界观>0/人物>0/大纲>0）；写作子页恒开。
- *  子页位置记忆在 localStorage，无记录落第一个未完成页。 */
+ *  子页不设硬门禁（桌面端也没有），仅弱引导：第一个未完成子页标「下一步」。
+ *  位置记忆无条件恢复：进书第一帧同步读 localStorage（换书时渲染期重派生），无纠偏无等待。 */
 export default function Book({
   projectId,
   title,
@@ -46,13 +61,23 @@ export default function Book({
   onClose: () => void
   onCreated: (id: string) => void
 }) {
-  const [tab, setTab] = useState<BookTab>('write')
-  const [sub, setSub] = useState<SubPage>('premise')
+  const [tab, setTab] = useState<BookTab>(() => loadTab(projectId ?? 'new'))
+  const [sub, setSub] = useState<SubPage>(() => loadSub(projectId ?? 'new'))
+
+  // 换书时组件不 remount（App 无 key），渲染期检测 pid 变化同步重读位置（官方 derive-state 模式）
+  const [prevPid, setPrevPid] = useState<string | null>(projectId)
+  if (projectId !== prevPid) {
+    setPrevPid(projectId)
+    if (projectId) {
+      setTab(loadTab(projectId))
+      setSub(loadSub(projectId))
+    }
+  }
 
   // Book 内子视图（编辑器/阅读页/AiBar）各自注册返回键；都没注册（栈里只剩 Book）时，返回键回书架
   useBackHandler(onClose)
 
-  // —— 门禁数据（创建模式不查）——
+  // —— 弱引导数据（只用于标「下一步」，不阻塞进书与位置恢复；创建模式不查）——
   const enabled = !!projectId
   const { data: projects = [] } = useQuery({
     queryKey: ['novel', 'projects'],
@@ -74,49 +99,23 @@ export default function Book({
     queryFn: () => window.api.novel.outlines(projectId!),
     enabled
   })
-  const gatesReady =
-    !enabled || (projects.length > 0 && [wb, chars, outlines].every((l) => Array.isArray(l)))
   const planDone = !!projectId && projects.some((p: Project) => p.id === projectId && !!p.wizardPlan)
   // 基本设定视为已完成：走过 AI 起草（wizardPlan 存在），或项目本就有任何板块内容
-  // （旧项目没起草过也能解锁后续子页——门禁防的是「没内容就跳步」，不是「必须用起草」）
   const done: Record<SubPage, boolean> = {
-    premise:
-      planDone ||
-      wb.length > 0 ||
-      chars.length > 0 ||
-      outlines.length > 0,
+    premise: planDone || wb.length > 0 || chars.length > 0 || outlines.length > 0,
     world: wb.length > 0,
     chars: chars.length > 0,
     outline: outlines.length > 0,
     sub: true
   }
-  const unlocked: Record<SubPage, boolean> = {
-    premise: true,
-    world: done.premise,
-    chars: done.premise && done.world,
-    outline: done.premise && done.world && done.chars,
-    sub: true
-  }
-
-  // 位置记忆：进书一次性初始化（记住上次子页；无记录/已锁定则落第一个未完成页）
-  const initRef = useRef<string | null>(null)
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅进书初始化一次，门禁后续变化不重置位置
-  useEffect(() => {
-    if (!projectId || !gatesReady) return
-    if (initRef.current === projectId) return
-    initRef.current = projectId
-    const saved = localStorage.getItem(subStorageKey(projectId)) as SubPage | null
-    if (saved && unlocked[saved]) {
-      setSub(saved)
-      return
-    }
-    setSub(SUBS.find((s) => !done[s.key])?.key ?? 'sub')
-  }, [projectId, gatesReady])
+  const nextKey = SUBS.find((s) => !done[s.key])?.key
 
   // 位置持久化
   useEffect(() => {
-    if (projectId) localStorage.setItem(subStorageKey(projectId), sub)
-  }, [projectId, sub])
+    if (!projectId) return
+    localStorage.setItem(tabStorageKey(projectId), tab)
+    localStorage.setItem(subStorageKey(projectId), sub)
+  }, [projectId, tab, sub])
 
   if (!projectId)
     return (
@@ -173,30 +172,27 @@ export default function Book({
       </div>
       {tab === 'write' && (
         <div className="flex border-b border-zinc-800 bg-zinc-950/60">
-          {SUBS.map((s) => {
-            const ok = unlocked[s.key]
-            return (
-              <button
-                type="button"
-                key={s.key}
-                disabled={!ok}
-                onClick={() => setSub(s.key)}
-                className={`flex-1 cursor-pointer py-2 text-xs disabled:cursor-default ${
-                  sub === s.key
-                    ? 'border-b-2 border-amber-500/80 font-medium text-amber-400'
-                    : ok
-                      ? 'text-zinc-400'
-                      : 'text-zinc-700'
-                }`}
-              >
-                {ok ? s.label : `🔒${s.label}`}
-              </button>
-            )
-          })}
+          {SUBS.map((s) => (
+            <button
+              type="button"
+              key={s.key}
+              onClick={() => setSub(s.key)}
+              className={`flex flex-1 cursor-pointer items-center justify-center gap-1 py-2 text-xs ${
+                sub === s.key
+                  ? 'border-b-2 border-amber-500/80 font-medium text-amber-400'
+                  : 'text-zinc-400 active:text-zinc-200'
+              }`}
+            >
+              {s.label}
+              {s.key === nextKey && sub !== nextKey && (
+                <span className="inline-block h-1 w-1 rounded-full bg-amber-400" aria-label="下一步" />
+              )}
+            </button>
+          ))}
         </div>
       )}
       <main className="min-h-0 flex-1 overflow-hidden">
-        {tab === 'read' && <Read projectId={projectId} />}
+        {tab === 'read' && <Read projectId={projectId} title={title} />}
         {tab === 'agent' && <AgentChat projectId={projectId} />}
         {tab === 'write' && (
           <>

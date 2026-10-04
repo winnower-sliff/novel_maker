@@ -6,7 +6,7 @@ import { installNotifyProvider } from '@mobile/lib/notifyCapacitor'
 import { installKeyboardViewport } from '@mobile/lib/keyboard'
 import { nativeApp } from '@mobile/lib/nativeApp'
 import Connect from '@mobile/pages/Connect'
-import More from '@mobile/pages/More'
+import Settings from '@mobile/pages/Settings'
 import Shelf from '@mobile/pages/Shelf'
 import { MobileToaster } from '@mobile/components/MobileToaster'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
@@ -15,11 +15,11 @@ import { pushToast } from '@wizard/toastStore'
 import { CanonPreviewPanel } from '@wizard/CanonPreviewPanel'
 import { ensureRuntimeSync } from '@wizard/runtimeSync'
 
-type Page = 'shelf' | 'more'
+type Page = 'shelf' | 'settings'
 
 const PAGES: Array<{ key: Page; label: string; icon: string }> = [
   { key: 'shelf', label: '书架', icon: '📚' },
-  { key: 'more', label: '更多', icon: '⋯' }
+  { key: 'settings', label: '设置', icon: '⚙' }
 ]
 
 export default function App() {
@@ -101,7 +101,7 @@ export default function App() {
         <>
           <main className="min-h-0 flex-1 overflow-y-auto">
             {page === 'shelf' && <Shelf onOpen={setBookId} onCreate={() => setNewBook(true)} />}
-            {page === 'more' && <More />}
+            {page === 'settings' && <Settings />}
           </main>
           <nav className="flex border-t border-zinc-800 bg-zinc-950 pb-[env(safe-area-inset-bottom)]">
             {PAGES.map((p) => (

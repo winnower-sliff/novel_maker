@@ -5,6 +5,16 @@ import { fetchMobileVersion } from '@mobile/lib/bridge'
 import { apkUpdater } from '@mobile/lib/apkUpdater'
 import { useConnStore } from '@mobile/lib/conn'
 import { fmtTokens } from '@mobile/lib/format'
+import {
+  clearAllBooks,
+  clearBook,
+  getPrefetch,
+  listCachedBooks,
+  subscribePrefetch,
+  type CachedBookEntry
+} from '@mobile/lib/readerCache'
+import { useReaderStore } from '@mobile/lib/readerStore'
+import { ACCENTS, APPEARANCES, useThemeStore } from '@mobile/lib/themeStore'
 
 type ApkState =
   | { kind: 'idle' }
@@ -31,7 +41,186 @@ function fmtBytes(n: number): string {
   return `${n} B`
 }
 
-export default function More() {
+function AppearanceCard() {
+  const appearance = useThemeStore((s) => s.appearance)
+  const accent = useThemeStore((s) => s.accent)
+  const setAppearance = useThemeStore((s) => s.setAppearance)
+  const setAccent = useThemeStore((s) => s.setAccent)
+  return (
+      <Card className="p-4">
+        <div className="text-sm font-medium text-zinc-200">外观</div>
+        <p className="mt-0.5 text-[11px] text-zinc-500">保存在本机，重启 APP 后仍生效</p>
+        <div className="mt-2 grid grid-cols-3 gap-1.5 rounded-lg bg-zinc-900 p-1">
+        {APPEARANCES.map((a) => (
+          <button
+            key={a.id}
+            type="button"
+            onClick={() => setAppearance(a.id)}
+            className={`cursor-pointer rounded-md px-2 py-1.5 text-xs transition-colors ${
+              appearance === a.id ? 'bg-amber-600 font-medium text-white' : 'text-zinc-400 active:bg-zinc-800'
+            }`}
+          >
+            {a.label}
+          </button>
+        ))}
+      </div>
+      <div className="mt-3 flex items-center gap-3">
+        {ACCENTS.map((c) => (
+          <button
+            key={c.id}
+            type="button"
+            aria-label={c.label}
+            title={c.label}
+            onClick={() => setAccent(c.id)}
+            className={`h-7 w-7 cursor-pointer rounded-full border-2 transition-[border-color,transform] ${
+              accent === c.id ? 'scale-110 border-zinc-100' : 'border-transparent'
+            }`}
+            style={{ background: c.color }}
+          />
+        ))}
+      </div>
+    </Card>
+  )
+}
+
+function FontCard() {
+  const font = useReaderStore((s) => s.font)
+  const setFont = useReaderStore((s) => s.setFont)
+  return (
+    <Card className="p-4">
+      <div className="text-sm font-medium text-zinc-200">阅读</div>
+      <p className="mt-0.5 text-[11px] text-zinc-500">正文字号，与阅读页 A-/A+ 同步生效</p>
+      <div className="mt-3 flex items-center gap-3">
+        <Button variant="ghost" className="px-4 py-1.5 text-xs" onClick={() => setFont(font - 1)}>
+          A-
+        </Button>
+        <span className="w-12 text-center text-sm tabular-nums text-zinc-300">{font}px</span>
+        <Button variant="ghost" className="px-4 py-1.5 text-xs" onClick={() => setFont(font + 1)}>
+          A+
+        </Button>
+      </div>
+    </Card>
+  )
+}
+
+function OfflineCacheCard() {
+  const [books, setBooks] = useState<CachedBookEntry[]>([])
+  const [, setTick] = useState(0)
+  const [confirmAll, setConfirmAll] = useState(false)
+  const [confirmId, setConfirmId] = useState<string | null>(null)
+  const [busy, setBusy] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    const load = (): void => {
+      void listCachedBooks().then((r) => {
+        if (alive) setBooks(r)
+      })
+    }
+    load()
+    // 预取进度变化：刷新列表并重读进度（getPrefetch 非响应式，靠订阅驱动重渲染）
+    const unsub = subscribePrefetch(() => {
+      load()
+      setTick((t) => t + 1)
+    })
+    return () => {
+      alive = false
+      unsub()
+    }
+  }, [])
+
+  const doClear = async (pid: string | 'all'): Promise<void> => {
+    setBusy(true)
+    try {
+      if (pid === 'all') await clearAllBooks()
+      else await clearBook(pid)
+      setConfirmAll(false)
+      setConfirmId(null)
+    } finally {
+      setBusy(false)
+      void listCachedBooks().then(setBooks)
+    }
+  }
+
+  return (
+    <Card className="p-4">
+      <div className="text-sm font-medium text-zinc-200">离线缓存</div>
+      <p className="mt-0.5 text-[11px] text-zinc-500">
+        打开书的阅读页后自动整本预取正文，断网也能继续读
+      </p>
+      {books.length === 0 ? (
+        <div className="mt-3 text-xs text-zinc-500">还没有缓存——进入某本书的「阅读」页后自动开始</div>
+      ) : (
+        <div className="mt-3 space-y-1.5">
+          {books.map((b) => {
+            const pf = getPrefetch(b.projectId)
+            return (
+              <div
+                key={b.projectId}
+                className="flex items-center gap-2 rounded-lg bg-zinc-900/60 px-3 py-2"
+              >
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-xs text-zinc-200">{b.title || '（未命名）'}</div>
+                  <div className="mt-0.5 text-[11px] text-zinc-500">
+                    {pf
+                      ? `缓存中 ${pf.done}/${pf.total} 章…`
+                      : b.cached >= b.total
+                        ? `已缓存全部 ${b.total} 章`
+                        : `已缓存 ${b.cached}/${b.total} 章`}
+                  </div>
+                </div>
+                {confirmId === b.projectId ? (
+                  <Button
+                    variant="ghost"
+                    className="px-2.5 py-1 text-[11px] text-red-300"
+                    disabled={busy}
+                    onClick={() => void doClear(b.projectId)}
+                  >
+                    确认清除
+                  </Button>
+                ) : (
+                  <Button
+                    variant="ghost"
+                    className="px-2.5 py-1 text-[11px]"
+                    disabled={busy}
+                    onClick={() => setConfirmId(b.projectId)}
+                  >
+                    清除
+                  </Button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+      {books.length > 0 && (
+        <div className="mt-3">
+          {confirmAll ? (
+            <Button
+              variant="ghost"
+              className="px-3 py-1.5 text-xs text-red-300"
+              disabled={busy}
+              onClick={() => void doClear('all')}
+            >
+              确认清除全部缓存与阅读进度
+            </Button>
+          ) : (
+            <Button
+              variant="ghost"
+              className="px-3 py-1.5 text-xs"
+              disabled={busy}
+              onClick={() => setConfirmAll(true)}
+            >
+              清除全部
+            </Button>
+          )}
+        </div>
+      )}
+    </Card>
+  )
+}
+
+export default function Settings() {
   const conn = useConnStore((s) => s.conn)
   const setConn = useConnStore((s) => s.setConn)
   const [apkState, setApkState] = useState<ApkState>({ kind: 'idle' })
@@ -111,6 +300,10 @@ export default function More() {
 
   return (
     <div className="space-y-3 p-3">
+      <h1 className="px-1 pt-1 text-lg font-semibold text-zinc-100">设置</h1>
+      <AppearanceCard />
+      <FontCard />
+      <OfflineCacheCard />
       <Card className="p-4">
         <div className="text-sm font-medium text-zinc-200">连接</div>
         {conn ? (
@@ -127,7 +320,7 @@ export default function More() {
 
       <Card className="p-4">
         <div className="flex items-center gap-2">
-          <div className="text-sm font-medium text-zinc-200">APP 版本</div>
+          <div className="text-sm font-medium text-zinc-200">关于</div>
           {appVersion && <Badge>v{appVersion}</Badge>}
         </div>
         <p className="mt-1.5 text-[11px] leading-4 text-zinc-500">

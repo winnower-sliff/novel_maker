@@ -5,7 +5,7 @@ export type Accent = 'amber' | 'emerald' | 'sky' | 'violet' | 'rose'
 
 const KEY = 'nm_theme'
 
-/** 主题色色板（color 为色板代表色，用于 More 页圆点，固定本色不随外观变） */
+/** 主题色色板（color 为色板代表色，用于设置页圆点，固定本色不随外观变） */
 export const ACCENTS: Array<{ id: Accent; label: string; color: string }> = [
   { id: 'amber', label: '琥珀', color: '#d97706' },
   { id: 'emerald', label: '青绿', color: '#059669' },

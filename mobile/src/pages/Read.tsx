@@ -2,12 +2,19 @@ import { Button, Empty } from '@mobile/components/ui'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { useTocStore } from '@mobile/lib/tocStore'
 import { useThemeStore } from '@mobile/lib/themeStore'
+import { useReaderStore } from '@mobile/lib/readerStore'
+import {
+  getCachedBriefs,
+  getCachedChapter,
+  prefetchBook,
+  putBriefs,
+  putChapters
+} from '@mobile/lib/readerCache'
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { groupChapterSegments, SEGMENT_SIZE } from '@shared/chapterSegments'
 import type { ChapterBrief } from '@shared/types'
 
-const FONT_KEY = 'nm-read-font'
 const posKey = (pid: string): string => `nm-read-pos:${pid}`
 
 /** 剥掉章节正文的 md 标题行与 [[链接]] 语法，得到纯文本段落 */
@@ -21,11 +28,26 @@ export function parseParagraphs(content: string): string[] {
     .filter(Boolean)
 }
 
-/** 阅读页：卷分组目录（只列已写章）+ 排版阅读（字号可调）+ 上下章 + 进度记忆（重进续读） */
-export default function Read({ projectId }: { projectId: string }) {
+/** 阅读页：卷分组目录（只列已写章）+ 排版阅读（字号可调）+ 上下章 + 进度记忆（重进续读）。
+ *  打开即后台整本预取正文到 IndexedDB；断网时目录/正文自动回退缓存（顶栏标「离线」）。 */
+export default function Read({ projectId, title }: { projectId: string; title?: string }) {
   const { data: briefs = [], isLoading } = useQuery({
     queryKey: ['novel', 'chapterBriefs', projectId],
-    queryFn: () => window.api.novel.chapterBriefs(projectId)
+    queryFn: async (): Promise<ChapterBrief[]> => {
+      try {
+        const fresh = await window.api.novel.chapterBriefs(projectId)
+        setOffline('briefs', false)
+        void putBriefs({ projectId, title: title ?? '', briefs: fresh, cachedAt: Date.now() })
+        return fresh
+      } catch (err) {
+        const cached = await getCachedBriefs(projectId)
+        if (cached) {
+          setOffline('briefs', true)
+          return cached.briefs
+        }
+        throw err
+      }
+    }
   })
   const written = useMemo(
     () =>
@@ -34,16 +56,43 @@ export default function Read({ projectId }: { projectId: string }) {
   )
   const [openId, setOpenId] = useState<string | null>(null)
   const [hlId, setHlId] = useState<string | null>(null)
-  const [font, setFont] = useState(() => {
-    const v = Number.parseInt(localStorage.getItem(FONT_KEY) ?? '', 10)
-    return Number.isFinite(v) && v >= 12 && v <= 28 ? v : 17
-  })
+  const font = useReaderStore((s) => s.font)
+  const setFont = useReaderStore((s) => s.setFont)
+  const setOffline = useReaderStore((s) => s.setOffline)
+  const offlineChapter = useReaderStore((s) => s.offlineChapter)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const idx = openId ? written.findIndex((b) => b.id === openId) : -1
   const current = idx >= 0 ? (written[idx] ?? null) : null
-  const { data: chapter, isLoading: loadingChapter } = useQuery({
+  const { data: chapter, isLoading: loadingChapter, isError: chapterError } = useQuery({
     queryKey: ['novel', 'chapter', current?.id],
-    queryFn: () => window.api.novel.chapter(current!.id),
+    queryFn: async () => {
+      if (!current) throw new Error('no chapter')
+      try {
+        const fresh = await window.api.novel.chapter(current.id)
+        if (!fresh) throw new Error('chapter not written')
+        setOffline('chapter', false)
+        void putChapters([
+          {
+            id: current.id,
+            projectId,
+            volume: current.volume,
+            chapterNo: current.chapterNo,
+            title: current.title,
+            content: fresh.content,
+            wordCount: fresh.wordCount,
+            cachedAt: Date.now()
+          }
+        ])
+        return fresh
+      } catch (err) {
+        const cached = await getCachedChapter(current.id)
+        if (cached) {
+          setOffline('chapter', true)
+          return cached
+        }
+        throw err
+      }
+    },
     enabled: !!current
   })
 
@@ -82,6 +131,12 @@ export default function Read({ projectId }: { projectId: string }) {
     if (current) localStorage.setItem(posKey(projectId), current.id)
   }, [current, projectId])
 
+  // 整本预取：目录就绪后后台增量拉取全部已写章正文（跳过已缓存），失败静默、下次续传
+  useEffect(() => {
+    if (written.length === 0) return
+    void prefetchBook(projectId, written)
+  }, [written, projectId])
+
   // 阅读中返回键先回目录
   useBackHandler(() => setOpenId(null), openId !== null)
 
@@ -97,10 +152,8 @@ export default function Read({ projectId }: { projectId: string }) {
     scrollRef.current?.scrollTo({ top: 0 })
   }
 
-  const setFontClamped = (v: number): void => {
-    const n = Math.min(28, Math.max(12, v))
-    setFont(n)
-    localStorage.setItem(FONT_KEY, String(n))
+  const nudgeFont = (delta: number): void => {
+    setFont(font + delta)
   }
 
   if (isLoading) return <Empty text="加载中…" />
@@ -114,6 +167,9 @@ export default function Read({ projectId }: { projectId: string }) {
             目录
           </Button>
           <div className="min-w-0 flex-1 truncate text-center text-xs text-zinc-400">
+            {offlineChapter && !loadingChapter && (
+              <span className="mr-1 text-amber-500/90">离线</span>
+            )}
             第{current.chapterNo}章 {current.title || ''}
           </div>
           <Button
@@ -123,16 +179,18 @@ export default function Read({ projectId }: { projectId: string }) {
           >
             护眼
           </Button>
-          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setFontClamped(font - 2)}>
+          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => nudgeFont(-2)}>
             A-
           </Button>
-          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setFontClamped(font + 2)}>
+          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => nudgeFont(2)}>
             A+
           </Button>
         </div>
         <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-4 leading-loose">
           {loadingChapter ? (
             <Empty text="加载中…" />
+          ) : chapterError && !chapter ? (
+            <Empty text="本章正文未缓存，联网后重试" />
           ) : (
             (parseParagraphs(chapter?.content ?? '') ?? []).map((p, i) => (
               // biome-ignore lint/suspicious/noArrayIndexKey: 一次性渲染的静态段落，无重排语义
