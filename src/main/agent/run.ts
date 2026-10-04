@@ -3,6 +3,7 @@ import type {
   AgentDonePayload,
   ChatMessage,
   ContentBlock,
+  PendingConfirmInfo,
   ToolDef,
   UsageInfo
 } from '../../shared/types'
@@ -26,12 +27,30 @@ export function getAgentToolDefs(): ToolDef[] {
   return getToolDefs()
 }
 
+/** 确认等待超时：渲染端刷新/断连后无人应答时自动拒绝，防 run 在主进程死等（对齐 runRecords TTL） */
+const CONFIRM_TIMEOUT_MS = 10 * 60 * 1000
+
 interface RunState {
-  confirms: Map<string, { resolve: (allow: boolean) => void; toolName: string }>
+  confirms: Map<
+    string,
+    PendingConfirmInfo & { resolve: (allow: boolean) => void; timer: ReturnType<typeof setTimeout> }
+  >
   alwaysAllowed: Set<string>
 }
 
 const activeRuns = new Map<string, RunState>()
+
+export function getAgentPendingConfirm(requestId: string): PendingConfirmInfo | null {
+  const run = activeRuns.get(requestId)
+  const pending = run ? [...run.confirms.values()][0] : undefined
+  if (!pending) return null
+  return {
+    confirmId: pending.confirmId,
+    toolName: pending.toolName,
+    input: pending.input,
+    dangerReason: pending.dangerReason
+  }
+}
 
 export function resolveAgentConfirm(
   requestId: string,
@@ -43,6 +62,7 @@ export function resolveAgentConfirm(
   if (!run) return false
   const pending = run.confirms.get(confirmId)
   if (!pending) return false
+  clearTimeout(pending.timer)
   run.confirms.delete(confirmId)
   if (always && allow) run.alwaysAllowed.add(pending.toolName)
   pending.resolve(allow)
@@ -52,8 +72,22 @@ export function resolveAgentConfirm(
 export function cancelAgentConfirms(requestId: string): void {
   const run = activeRuns.get(requestId)
   if (!run) return
-  for (const pending of run.confirms.values()) pending.resolve(false)
+  for (const pending of run.confirms.values()) {
+    clearTimeout(pending.timer)
+    pending.resolve(false)
+  }
   run.confirms.clear()
+}
+
+/** 等待渲染端应答；超时自动拒绝（resolve false）兜底，真实应答/中断会清掉 timer */
+function waitConfirm(runState: RunState, info: PendingConfirmInfo): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const timer = setTimeout(() => {
+      runState.confirms.delete(info.confirmId)
+      resolve(false)
+    }, CONFIRM_TIMEOUT_MS)
+    runState.confirms.set(info.confirmId, { ...info, resolve, timer })
+  })
 }
 
 function buildSystemPrompt(projectId: string): string {
@@ -232,8 +266,11 @@ export async function runAgent(opts: {
             state: 'confirming',
             dangerReason
           })
-          const allowed = await new Promise<boolean>((resolve) => {
-            runState.confirms.set(tu.id, { resolve, toolName: tu.name })
+          const allowed = await waitConfirm(runState, {
+            confirmId: tu.id,
+            toolName: tu.name,
+            input: tu.input,
+            dangerReason: dangerReason ?? undefined
           })
           if (!allowed) {
             denied = true

@@ -9,7 +9,7 @@ import type {
   RuntimeRunRecord,
   WorldbuildGenParams
 } from '../../shared/types'
-import { runAgent } from '../agent'
+import { getAgentPendingConfirm, runAgent } from '../agent'
 import { LONG_CHAPTER_THRESHOLD, runChapterCandidates, runLongChapter } from '../chapterRunner'
 import { enqueueEmbedding } from '../embedding'
 import type { EventSink } from '../eventSink'
@@ -77,7 +77,13 @@ export function pollRuns(requestIds: string[]): Record<string, RunRecord> {
 /** 全部在途/近期完成记录（runtime:snapshot 用，渲染端中央同步器拉取兜底） */
 export function listRuns(): RuntimeRunRecord[] {
   void pollRuns([])
-  return [...runRecords.entries()].map(([id, rec]) => ({ id, ...rec }))
+  return [...runRecords.entries()].map(([id, rec]) => {
+    if (rec.kind === 'agent' && rec.status === 'running') {
+      const pendingConfirm = getAgentPendingConfirm(id)
+      if (pendingConfirm) return { id, ...rec, pendingConfirm }
+    }
+    return { id, ...rec }
+  })
 }
 
 export { LONG_CHAPTER_THRESHOLD }
@@ -97,7 +103,7 @@ export function startAgentRun(
   const requestId = randomUUID()
   const controller = new AbortController()
   activeAgentRuns.set(requestId, controller)
-  recordRunning(requestId, 'agent')
+  recordRunning(requestId, 'agent', { projectId: params.projectId })
 
   void (async () => {
     let payload: Awaited<ReturnType<typeof runAgent>>

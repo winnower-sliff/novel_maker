@@ -140,6 +140,14 @@ export interface RunMeta {
   volume?: number
 }
 
+/** agent run 在途待应答的确认（runtime:snapshot 恢复用；串行 await，同一时刻最多一个） */
+export interface PendingConfirmInfo {
+  confirmId: string
+  toolName: string
+  input?: unknown
+  dangerReason?: string
+}
+
 /** 运行注册表条目（llm:poll/runtime:snapshot 补拉用）：断连期间 done/error 事件丢失时的结果快照 */
 export interface RunRecordPayload {
   status: 'running' | 'done' | 'error'
@@ -150,6 +158,8 @@ export interface RunRecordPayload {
   meta?: RunMeta
   /** running 期间的流式文本尾部（后台/重挂页面经 snapshot 恢复进度显示用，done 后不再更新） */
   textTail?: string
+  /** agent run 的待应答确认（仅 running 时由 listRuns 实时附加） */
+  pendingConfirm?: PendingConfirmInfo
 }
 
 /** 带 requestId 的运行记录（runtime:snapshot 返回） */

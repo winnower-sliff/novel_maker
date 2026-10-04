@@ -7,6 +7,11 @@
  * 本文件仅做聚合导出，保持 `from './agent'` 导入路径不变。
  */
 
-export { cancelAgentConfirms, resolveAgentConfirm, runAgent } from './run'
+export {
+  cancelAgentConfirms,
+  getAgentPendingConfirm,
+  resolveAgentConfirm,
+  runAgent
+} from './run'
 export { AGENT_MAX_TOKENS } from './toolkit'
 export { getToolDefs } from './tools'
