@@ -11,6 +11,7 @@ import Shelf from '@mobile/pages/Shelf'
 import { MobileToaster } from '@mobile/components/MobileToaster'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { useConnStore } from '@mobile/lib/conn'
+import { getCachedProjects, saveProjects } from '@mobile/lib/readerCache'
 import { pushToast } from '@wizard/toastStore'
 import { CanonPreviewPanel } from '@wizard/CanonPreviewPanel'
 import { ensureRuntimeSync } from '@wizard/runtimeSync'
@@ -41,9 +42,20 @@ export default function App() {
     },
     [invalidateProjects]
   )
+  // 项目列表：失败（断网）回退 IndexedDB 快照，离线仍可从书架进书阅读
   const { data: projects } = useQuery({
     queryKey: ['novel', 'projects'],
-    queryFn: () => window.api.novel.projects(),
+    queryFn: async () => {
+      try {
+        const fresh = await window.api.novel.projects()
+        void saveProjects(fresh)
+        return fresh
+      } catch (err) {
+        const cached = await getCachedProjects()
+        if (cached) return cached
+        throw err
+      }
+    },
     enabled: !!conn
   })
   const book = projects?.find((p) => p.id === bookId) ?? null

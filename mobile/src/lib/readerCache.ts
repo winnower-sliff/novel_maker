@@ -1,16 +1,18 @@
-import type { ChapterBrief } from '@shared/types'
+import type { ChapterBrief, Project } from '@shared/types'
 
 /**
  * 阅读离线缓存：IndexedDB（整本正文缓存体量在 MB 级，localStorage 会爆配额）。
  * - chapters store：已预取的章节正文（keyPath id，projectId 二级索引支持按书统计/清除）
  * - briefs store：每本书的目录快照（离线时章节列表仍可用）
+ * - projects store：项目列表快照（离线时书架仍可进书）
  * 所有失败路径静默降级（返回空/null），绝不能影响在线主链路。
  */
 
 const DB_NAME = 'nm-reader-cache'
-const DB_VERSION = 1
+const DB_VERSION = 2
 const CH_STORE = 'chapters'
 const BRIEF_STORE = 'briefs'
+const PROJECT_STORE = 'projects'
 
 export interface CachedChapter {
   id: string
@@ -54,6 +56,9 @@ function openDb(): Promise<IDBDatabase | null> {
         }
         if (!db.objectStoreNames.contains(BRIEF_STORE)) {
           db.createObjectStore(BRIEF_STORE, { keyPath: 'projectId' })
+        }
+        if (!db.objectStoreNames.contains(PROJECT_STORE)) {
+          db.createObjectStore(PROJECT_STORE, { keyPath: 'id' })
         }
       }
       req.onsuccess = () => resolve(req.result)
@@ -108,6 +113,35 @@ export async function getCachedBriefs(projectId: string): Promise<CachedBriefs |
 
 export async function putBriefs(entry: CachedBriefs): Promise<void> {
   await tx<IDBValidKey>(BRIEF_STORE, 'readwrite', (s) => s.put(entry))
+}
+
+// —— 项目列表快照：离线时书架/进书仍可用 ——
+
+export async function saveProjects(projects: Project[]): Promise<void> {
+  const db = await openDb()
+  if (!db) return
+  await new Promise<void>((resolve) => {
+    try {
+      const t = db.transaction(PROJECT_STORE, 'readwrite')
+      const store = t.objectStore(PROJECT_STORE)
+      store.clear()
+      for (const p of projects) store.put(p)
+      t.oncomplete = () => resolve()
+      t.onerror = () => resolve()
+      t.onabort = () => resolve()
+    } catch {
+      resolve()
+    }
+  })
+}
+
+export async function getCachedProjects(): Promise<Project[] | null> {
+  const rows = await tx<Project[]>(
+    PROJECT_STORE,
+    'readonly',
+    (s) => s.getAll() as IDBRequest<Project[]>
+  )
+  return rows && rows.length > 0 ? rows : null
 }
 
 async function cachedCount(projectId: string): Promise<number> {
@@ -190,9 +224,10 @@ export async function clearAllBooks(): Promise<void> {
   if (!db) return
   await new Promise<void>((resolve) => {
     try {
-      const t = db.transaction([CH_STORE, BRIEF_STORE], 'readwrite')
+      const t = db.transaction([CH_STORE, BRIEF_STORE, PROJECT_STORE], 'readwrite')
       t.objectStore(CH_STORE).clear()
       t.objectStore(BRIEF_STORE).clear()
+      t.objectStore(PROJECT_STORE).clear()
       t.oncomplete = () => resolve()
       t.onerror = () => resolve()
       t.onabort = () => resolve()

@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Button, Empty } from '@mobile/components/ui'
 import { fmtRelative, fmtWords } from '@mobile/lib/format'
+import { getCachedBriefs, getCachedProjects, saveProjects } from '@mobile/lib/readerCache'
 import type { Project } from '@shared/types'
 
 function hueFromId(id: string): number {
@@ -12,7 +13,15 @@ function hueFromId(id: string): number {
 function Cover({ project, onOpen }: { project: Project; onOpen: (id: string) => void }) {
   const { data: briefs } = useQuery({
     queryKey: ['novel', 'chapterBriefs', project.id],
-    queryFn: () => window.api.novel.chapterBriefs(project.id),
+    queryFn: async () => {
+      try {
+        return await window.api.novel.chapterBriefs(project.id)
+      } catch (err) {
+        const cached = await getCachedBriefs(project.id)
+        if (cached) return cached.briefs
+        throw err
+      }
+    },
     staleTime: 60_000
   })
   const words = (briefs ?? []).reduce((s, b) => s + b.wordCount, 0)
@@ -64,9 +73,20 @@ export default function Shelf({
   onOpen: (id: string) => void
   onCreate: () => void
 }) {
+  // 与 App.tsx 同 key 共用内存缓存；queryFn 失败（断网）回退 IndexedDB 快照
   const { data: projects = [], isLoading } = useQuery({
     queryKey: ['novel', 'projects'],
-    queryFn: () => window.api.novel.projects()
+    queryFn: async () => {
+      try {
+        const fresh = await window.api.novel.projects()
+        void saveProjects(fresh)
+        return fresh
+      } catch (err) {
+        const cached = await getCachedProjects()
+        if (cached) return cached
+        throw err
+      }
+    }
   })
 
   if (isLoading) return <Empty text="加载中…" />
