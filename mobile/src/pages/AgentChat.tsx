@@ -1,19 +1,20 @@
-import type { AgentToolCallEvent, AgentToolResultEvent } from '@shared/contract'
-import type {
-  AgentDonePayload,
-  AgentInstructionsView,
-  AgentSession,
-  AgentSessionBrief,
-  AgentToolCall,
-  AgentTurn
-} from '@shared/types'
+import type { AgentInstructionsView, AgentToolCall, AgentTurn } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { Markdown } from '@mobile/components/Markdown'
 import { Badge, Button, Empty, Textarea } from '@mobile/components/ui'
 import { fmtRelative } from '@mobile/lib/format'
-import { finalizeTurns, makeSessionTitle, toolLabel, toolSummary, turnsToMessages } from '@mobile/lib/agentTurns'
+import { toolLabel, toolSummary } from '@mobile/lib/agentTurns'
+import {
+  resolveConfirm,
+  startRun,
+  stopRun,
+  switchSession as switchSessionRun,
+  syncProject,
+  useAgentConfirmTarget,
+  useAgentRunStore
+} from '@wizard/agentRunStore'
 import { OverlayCard } from '@wizard/OverlayCard'
 
 type AssistantTurn = Extract<AgentTurn, { role: 'assistant' }>
@@ -176,11 +177,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     queryKey: ['agentSessions', projectId],
     queryFn: () => window.api.agent.sessions(projectId)
   })
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [turns, setTurns] = useState<AgentTurn[]>([])
   const [input, setInput] = useState('')
-  const [running, setRunning] = useState(false)
-  const [error, setError] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [instrOpen, setInstrOpen] = useState(false)
   const [instrTab, setInstrTab] = useState<'global' | 'project'>('global')
@@ -192,182 +189,21 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const [showJump, setShowJump] = useState(false)
   // 会话选择器打开时，返回键先关闭它
   useBackHandler(useCallback(() => setPickerOpen(false), []), pickerOpen)
-  const requestIdRef = useRef<string | null>(null)
-  const sessionIdRef = useRef<string | null>(null)
-  const sessionCreatedAtRef = useRef<number>(Date.now())
-  const turnsRef = useRef<AgentTurn[]>([])
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const atBottomRef = useRef(true)
-  const pendingDeltaRef = useRef('')
-  const rafRef = useRef<number | null>(null)
 
-  const applyTurns = useCallback((next: AgentTurn[]): void => {
-    turnsRef.current = next
-    setTurns(next)
-  }, [])
+  // 运行态（turns/running/error/session）全在 agentRunStore（模块级），
+  // 切 tab 卸载本组件不断流；hooks 必须全部位于下方 early return 之前
+  const turns = useAgentRunStore((s) => s.turns)
+  const running = useAgentRunStore((s) => s.running)
+  const error = useAgentRunStore((s) => s.error)
+  const sessionId = useAgentRunStore((s) => s.sessionId)
+  const confirmTarget = useAgentConfirmTarget()
 
-  const setSession = useCallback((id: string | null): void => {
-    sessionIdRef.current = id
-    setSessionId(id)
-  }, [])
-
-  const patchLastAssistant = useCallback(
-    (fn: (t: AssistantTurn) => AgentTurn): void => {
-      const prev = turnsRef.current
-      if (prev.length === 0) return
-      const last = prev[prev.length - 1]
-      if (last.role !== 'assistant') return
-      applyTurns([...prev.slice(0, -1), fn(last)])
-    },
-    [applyTurns]
-  )
-
-  /** 追加流式文本：同步写入 text 与 segments（旧会话无 segments 时从现有 text 迁移） */
-  const appendDelta = useCallback(
-    (chunk: string): void => {
-      patchLastAssistant((t) => {
-        const segments = t.segments ? [...t.segments] : [{ kind: 'text' as const, text: t.text }]
-        const lastSeg = segments[segments.length - 1]
-        if (lastSeg && lastSeg.kind === 'text')
-          segments[segments.length - 1] = { kind: 'text', text: lastSeg.text + chunk }
-        else segments.push({ kind: 'text', text: chunk })
-        return { ...t, text: t.text + chunk, segments }
-      })
-    },
-    [patchLastAssistant]
-  )
-
-  const flushDelta = useCallback((): void => {
-    rafRef.current = null
-    const chunk = pendingDeltaRef.current
-    if (!chunk) return
-    pendingDeltaRef.current = ''
-    appendDelta(chunk)
-  }, [appendDelta])
-
-  const persist = useCallback(
-    (sid: string, finalTurns: AgentTurn[]): void => {
-      const session: AgentSession = {
-        id: sid,
-        projectId,
-        title: makeSessionTitle(finalTurns),
-        createdAt: sessionCreatedAtRef.current,
-        updatedAt: Date.now(),
-        turns: finalTurns
-      }
-      void window.api.agent.sessionSave(session).then(() => {
-        void qc.invalidateQueries({ queryKey: ['agentSessions', projectId] })
-      })
-    },
-    [projectId, qc]
-  )
-
-  // 切项目时中断并加载该项目最近会话
+  // 项目变化：中断旧任务并加载新项目最近会话（同项目重复挂载为幂等 no-op）
   useEffect(() => {
-    if (requestIdRef.current) {
-      void window.api.agent.abort(requestIdRef.current)
-      requestIdRef.current = null
-      setRunning(false)
-    }
-    if (!projectId) return
-    void window.api.agent.sessions(projectId).then((list) => {
-      if (list.length > 0) {
-        void window.api.agent.sessionLoad(list[0].id).then((session) => {
-          if (!session) return
-          setSession(session.id)
-          applyTurns(session.turns)
-          sessionCreatedAtRef.current = session.createdAt
-        })
-      } else {
-        setSession(null)
-        applyTurns([])
-      }
-    })
-    return () => {
-      const sid = sessionIdRef.current
-      if (sid && turnsRef.current.length > 0) persist(sid, finalizeTurns(turnsRef.current))
-    }
-  }, [projectId, applyTurns, setSession, persist])
-
-  useEffect(() => {
-    const offDelta = window.api.agent.onDelta((id, text) => {
-      if (id !== requestIdRef.current) return
-      pendingDeltaRef.current += text
-      if (rafRef.current === null) rafRef.current = requestAnimationFrame(flushDelta)
-    })
-    const offToolCall = window.api.agent.onToolCall((id, call: AgentToolCallEvent) => {
-      if (id !== requestIdRef.current) return
-      patchLastAssistant((t) => {
-        const segments = t.segments ? [...t.segments] : [{ kind: 'text' as const, text: t.text }]
-        segments.push({ kind: 'tool', callId: call.id })
-        return {
-          ...t,
-          toolCalls: [
-            ...t.toolCalls,
-            {
-              id: call.id,
-              name: call.name,
-              input: call.input,
-              state: call.state,
-              dangerReason: call.dangerReason
-            }
-          ],
-          segments
-        }
-      })
-    })
-    const offToolResult = window.api.agent.onToolResult((id, r: AgentToolResultEvent) => {
-      if (id !== requestIdRef.current) return
-      patchLastAssistant((t) => ({
-        ...t,
-        toolCalls: t.toolCalls.map((c) =>
-          c.id === r.id
-            ? {
-                ...c,
-                state: (r.denied ? 'denied' : r.ok ? 'ok' : 'error') as AgentToolCall['state'],
-                result: r.result
-              }
-            : c
-        )
-      }))
-      const sid = sessionIdRef.current
-      if (sid) persist(sid, turnsRef.current)
-    })
-    const offDone = window.api.agent.onDone((id, payload: AgentDonePayload) => {
-      if (id !== requestIdRef.current) return
-      const fixed = finalizeTurns(turnsRef.current)
-      if (fixed.length > 0 && fixed[fixed.length - 1].role === 'assistant') {
-        const last = fixed[fixed.length - 1] as AssistantTurn
-        fixed[fixed.length - 1] = { ...last, text: payload.text || last.text }
-      }
-      applyTurns(fixed)
-      const sid = sessionIdRef.current
-      if (sid) persist(sid, fixed)
-      setRunning(false)
-      requestIdRef.current = null
-    })
-    const offError = window.api.agent.onError((id, message) => {
-      if (id !== requestIdRef.current) return
-      const fixed = finalizeTurns(turnsRef.current)
-      applyTurns(fixed)
-      const sid = sessionIdRef.current
-      if (sid) persist(sid, fixed)
-      setError(message)
-      setRunning(false)
-      requestIdRef.current = null
-    })
-    return () => {
-      offDelta()
-      offToolCall()
-      offToolResult()
-      offDone()
-      offError()
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-    }
-  }, [applyTurns, patchLastAssistant, persist, flushDelta])
+    syncProject(projectId)
+  }, [projectId])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
@@ -403,51 +239,16 @@ export default function AgentChat({ projectId }: { projectId: string }) {
 
   if (!projectId) return <Empty text="请先在「书架」选择项目" />
 
-  const confirmTarget = (() => {
-    if (!running || turns.length === 0) return null
-    const last = turns[turns.length - 1]
-    if (last.role !== 'assistant') return null
-    return last.toolCalls.find((c) => c.state === 'confirming') ?? null
-  })()
-
   const send = (): void => {
     if (!input.trim() || running) return
-    const sid = sessionId ?? crypto.randomUUID()
-    if (!sessionId) {
-      setSession(sid)
-      sessionCreatedAtRef.current = Date.now()
-    }
-    const next: AgentTurn[] = [
-      ...turns,
-      { role: 'user', text: input.trim(), ts: Date.now() },
-      { role: 'assistant', text: '', toolCalls: [], segments: [], ts: Date.now() }
-    ]
-    applyTurns(next)
+    startRun(input)
     setInput('')
-    setError('')
     atBottomRef.current = true
     setShowJump(false)
-    cancelPendingDelta()
-    persist(sid, next)
-    void window.api.agent
-      .run({ projectId, messages: turnsToMessages(next) })
-      .then((id) => {
-        requestIdRef.current = id
-      })
-      .catch((err: unknown) => {
-        setError((err as Error).message)
-        setRunning(false)
-      })
-    setRunning(true)
   }
 
   const stop = (): void => {
-    if (requestIdRef.current) void window.api.agent.abort(requestIdRef.current)
-  }
-
-  const resolveConfirm = (allow: boolean, always: boolean): void => {
-    if (!requestIdRef.current || !confirmTarget) return
-    void window.api.agent.resolve(requestIdRef.current, confirmTarget.id, allow, always)
+    stopRun()
   }
 
   const openInstructions = (): void => {
@@ -480,35 +281,11 @@ export default function AgentChat({ projectId }: { projectId: string }) {
       })
   }
 
-  const cancelPendingDelta = (): void => {
-    pendingDeltaRef.current = ''
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-      rafRef.current = null
-    }
-  }
-
-  const switchSession = (id: string | null): void => {
-    if (running) stop()
-    requestIdRef.current = null
-    setRunning(false)
+  const handleSwitchSession = (id: string | null): void => {
+    switchSessionRun(id)
     setPickerOpen(false)
     atBottomRef.current = true
     setShowJump(false)
-    cancelPendingDelta()
-    if (!id) {
-      setSession(null)
-      applyTurns([])
-      setError('')
-      return
-    }
-    void window.api.agent.sessionLoad(id).then((session) => {
-      if (!session) return
-      setSession(session.id)
-      applyTurns(session.turns)
-      sessionCreatedAtRef.current = session.createdAt
-      setError('')
-    })
   }
 
   return (
@@ -521,7 +298,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
         >
           {sessions.find((s) => s.id === sessionId)?.title ?? '新会话'}
         </button>
-        <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => switchSession(null)}>
+        <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => handleSwitchSession(null)}>
           新建
         </Button>
         <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={openInstructions}>
@@ -531,15 +308,15 @@ export default function AgentChat({ projectId }: { projectId: string }) {
       {pickerOpen && (
         <div className="max-h-56 overflow-y-auto border-b border-zinc-800 bg-zinc-900">
           {sessions.length === 0 && <div className="p-3 text-xs text-zinc-600">暂无历史会话</div>}
-          {sessions.map((s: AgentSessionBrief) => (
+          {sessions.map((s) => (
             <div
               key={s.id}
               role="button"
               tabIndex={0}
               className={`cursor-pointer px-4 py-2.5 text-sm active:bg-zinc-800 ${s.id === sessionId ? 'text-amber-400' : 'text-zinc-300'}`}
-              onClick={() => switchSession(s.id)}
+              onClick={() => handleSwitchSession(s.id)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter') switchSession(s.id)
+                if (e.key === 'Enter') handleSwitchSession(s.id)
               }}
             >
               <div className="truncate">{s.title}</div>

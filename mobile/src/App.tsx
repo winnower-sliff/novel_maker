@@ -12,10 +12,11 @@ import { MobileToaster } from '@mobile/components/MobileToaster'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { useConnStore } from '@mobile/lib/conn'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
-import { getCachedProjects, saveProjects } from '@mobile/lib/readerCache'
+import { hydrateSnapshots, withSnapshot } from '@mobile/lib/querySnapshot'
 import { pushToast } from '@wizard/toastStore'
 import { CanonPreviewPanel } from '@wizard/CanonPreviewPanel'
 import { ensureRuntimeSync } from '@wizard/runtimeSync'
+import { ensureAgentRuntime } from '@wizard/agentRunStore'
 
 type Page = 'shelf' | 'settings'
 
@@ -45,23 +46,21 @@ export default function App() {
     },
     [invalidateProjects]
   )
-  // 项目列表：失败（断网）回退 IndexedDB 快照，离线仍可从书架进书阅读
+  // 项目列表：成功双写快照；失败回退快照（断网仍可从书架进书阅读）
   const { data: projects } = useQuery({
     queryKey: ['novel', 'projects'],
-    queryFn: async () => {
-      try {
-        const fresh = await window.api.novel.projects()
-        void saveProjects(fresh)
-        return fresh
-      } catch (err) {
-        const cached = await getCachedProjects()
-        if (cached) return cached
-        throw err
-      }
-    },
+    queryFn: withSnapshot(['novel', 'projects'], () => window.api.novel.projects()),
     enabled: !!conn
   })
   const book = projects?.find((p) => p.id === bookId) ?? null
+
+  // 启动即灌快照：各页首帧有旧数据，随后照常 refetch（幂等；趁启动页期间完成最快）
+  const hydratedRef = useRef(false)
+  useEffect(() => {
+    if (hydratedRef.current) return
+    hydratedRef.current = true
+    void hydrateSnapshots(queryClient)
+  }, [queryClient])
 
   // Android 返回键：返回栈优先；栈空时根页双击退出、未连接直退。
   // 挂载一次，conn 经 ref 读取避免重复注册。
@@ -90,15 +89,26 @@ export default function App() {
     void Promise.resolve(app.addListener('backButton', onBack)).catch(() => {})
   }, [])
 
-  // 连接就绪后挂中央同步器（拉为兜底）与系统通知（幂等）
+  // 连接就绪后挂中央同步器（拉为兜底）、系统通知（幂等）与 agent 全局事件订阅（幂等）
   useEffect(() => {
     if (!conn) return
     installNotifyProvider()
     installKeyboardViewport()
     ensureRuntimeSync()
+    ensureAgentRuntime()
   }, [conn])
 
-  if (!ready || !settingsReady) return <div className="h-full bg-zinc-950" />
+  // 启动页：水合完成前无论如何都显示护眼橙，避免「先深色、读缓存后变色」的闪
+  if (!ready || !settingsReady)
+    return (
+      <div
+        className="flex h-full flex-col items-center justify-center gap-3"
+        style={{ background: 'var(--nm-bg, #f1e7d0)' }}
+      >
+        <div className="text-4xl">📖</div>
+        <div className="text-lg font-medium text-[#443b28]">Novel Maker</div>
+      </div>
+    )
   if (!conn) return <Connect />
 
   return (
