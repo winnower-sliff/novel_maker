@@ -1,4 +1,5 @@
 import { create } from 'zustand'
+import { loadJson, saveJson } from '@mobile/lib/persist'
 
 export type Appearance = 'dark' | 'light' | 'sepia'
 export type Accent = 'amber' | 'emerald' | 'sky' | 'violet' | 'rose'
@@ -31,19 +32,6 @@ interface Saved {
   preSepia: Appearance
 }
 
-function load(): Partial<Saved> {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? '{}') as Partial<Saved>
-    return {
-      appearance: isAppearance(raw.appearance) ? raw.appearance : undefined,
-      accent: isAccent(raw.accent) ? raw.accent : undefined,
-      preSepia: isAppearance(raw.preSepia) ? raw.preSepia : undefined
-    }
-  } catch {
-    return {}
-  }
-}
-
 /** 把外观/主题色写到 <html> data 属性，驱动 styles.css 的色板变量重映射 */
 function apply(s: Saved): void {
   const el = document.documentElement
@@ -59,17 +47,12 @@ interface ThemeState extends Saved {
 }
 
 export const useThemeStore = create<ThemeState>((set) => {
-  const saved = load()
-  const initial: Saved = {
-    appearance: saved.appearance ?? 'dark',
-    accent: saved.accent ?? 'amber',
-    preSepia: saved.preSepia ?? 'dark'
-  }
+  const initial: Saved = { appearance: 'dark', accent: 'amber', preSepia: 'dark' }
   apply(initial)
 
   const persist = (s: Saved): void => {
     apply(s)
-    localStorage.setItem(KEY, JSON.stringify(s))
+    void saveJson(KEY, s)
   }
 
   return {
@@ -103,3 +86,24 @@ export const useThemeStore = create<ThemeState>((set) => {
       })
   }
 })
+
+// 异步水合：Preferences/localStorage 读回持久化外观（覆盖 WebView localStorage 丢失问题）。
+// 用户在水合完成前已手动改动（dirty）则不回填，避免旧值覆盖新选择。
+let dirty = false
+const unsubDirty = useThemeStore.subscribe(() => {
+  dirty = true
+})
+
+void (async () => {
+  const raw = await loadJson<Partial<Saved>>(KEY)
+  const next: Saved = {
+    appearance: isAppearance(raw?.appearance) ? raw.appearance : 'dark',
+    accent: isAccent(raw?.accent) ? raw.accent : 'amber',
+    preSepia: isAppearance(raw?.preSepia) ? raw.preSepia : 'dark'
+  }
+  if (!dirty) {
+    apply(next)
+    useThemeStore.setState(next)
+  }
+  unsubDirty()
+})()

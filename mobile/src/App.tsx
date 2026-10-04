@@ -25,6 +25,7 @@ const PAGES: Array<{ key: Page; label: string; icon: string }> = [
 
 export default function App() {
   const conn = useConnStore((s) => s.conn)
+  const ready = useConnStore((s) => s.ready)
   const queryClient = useQueryClient()
   const [page, setPage] = useState<Page>('shelf')
   const [bookId, setBookId] = useState<string | null>(null)
@@ -95,6 +96,7 @@ export default function App() {
     ensureRuntimeSync()
   }, [conn])
 
+  if (!ready) return <div className="h-full bg-zinc-950" />
   if (!conn) return <Connect />
 
   return (
