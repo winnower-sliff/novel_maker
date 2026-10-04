@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import Book from '@mobile/pages/Book'
 import { consumeBack } from '@mobile/lib/backHandler'
 import { installNotifyProvider } from '@mobile/lib/notifyCapacitor'
+import { installKeyboardViewport } from '@mobile/lib/keyboard'
 import { nativeApp } from '@mobile/lib/nativeApp'
 import Connect from '@mobile/pages/Connect'
 import More from '@mobile/pages/More'
@@ -78,6 +79,7 @@ export default function App() {
   useEffect(() => {
     if (!conn) return
     installNotifyProvider()
+    installKeyboardViewport()
     ensureRuntimeSync()
   }, [conn])
 

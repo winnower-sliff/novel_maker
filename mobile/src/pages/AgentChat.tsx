@@ -183,6 +183,13 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     endRef.current?.scrollIntoView({ block: 'nearest' })
   }, [turns])
 
+  // 键盘弹出/收起（--kb 变化挤压聊天区）后保持滚到底部
+  useEffect(() => {
+    const onKb = (): void => endRef.current?.scrollIntoView({ block: 'nearest' })
+    window.addEventListener('nm-kb', onKb)
+    return () => window.removeEventListener('nm-kb', onKb)
+  }, [])
+
   if (!projectId) return <Empty text="请先在「书架」选择项目" />
 
   const confirmTarget = (() => {
@@ -250,7 +257,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex h-full flex-col pb-[var(--kb,0px)]">
       <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-950/95 px-3 py-2">
         <button
           type="button"
