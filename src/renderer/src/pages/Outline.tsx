@@ -603,6 +603,14 @@ export default function Outline({
               rows={4}
               value={rules}
               onChange={setRules}
+              onCommit={(v) => {
+                // 与通用规则对称：弹层完成即记忆，切卷重进不丢
+                void rememberVolumePlan(projectId, volume, {
+                  idea,
+                  count: Math.max(1, Math.floor(count) || 30),
+                  rules: v
+                })
+              }}
               placeholder={
                 '例：\n每 3~6 章插入一段独立的色情小故事\n每 10 章安排一个单元小故事收尾'
               }
