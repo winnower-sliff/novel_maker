@@ -481,6 +481,40 @@ export function deleteOutline(id: string): void {
   db.prepare("DELETE FROM embeddings WHERE kind = 'summary' AND ref_id = ?").run(id)
 }
 
+/**
+ * 卷重写语义：清除该卷全部旧正文/章摘要/嵌入，并把该卷大纲状态降回草稿。
+ * 大纲已重写即旧稿作废，写作页立刻回到「未写」；重写正文由用户在写作页主动触发，不再自动批量跑。
+ * 返回清除的正文章数。
+ */
+export function clearVolumeContent(projectId: string, volume: number): number {
+  const db = getDb()
+  const outlineIds = (
+    db
+      .prepare('SELECT id FROM outlines WHERE project_id = ? AND volume = ?')
+      .all(projectId, volume) as Array<{ id: string }>
+  ).map((o) => o.id)
+  if (outlineIds.length === 0) return 0
+  const ph = outlineIds.map(() => '?').join(',')
+  const chapterIds = (
+    db.prepare(`SELECT id FROM chapters WHERE outline_id IN (${ph})`).all(...outlineIds) as Array<{
+      id: string
+    }>
+  ).map((c) => c.id)
+  if (chapterIds.length > 0) {
+    const cph = chapterIds.map(() => '?').join(',')
+    db.prepare(`DELETE FROM summaries WHERE chapter_id IN (${cph})`).run(...chapterIds)
+    db.prepare(`DELETE FROM chapters WHERE id IN (${cph})`).run(...chapterIds)
+  }
+  db.prepare(`DELETE FROM embeddings WHERE kind = 'summary' AND ref_id IN (${ph})`).run(
+    ...outlineIds
+  )
+  db.prepare(
+    "UPDATE outlines SET status = 'draft' WHERE project_id = ? AND volume = ? AND status != 'draft'"
+  ).run(projectId, volume)
+  clearVolumeSummary(projectId, volume)
+  return chapterIds.length
+}
+
 export function clearVolumeSummary(projectId: string, volume: number): void {
   getDb()
     .prepare('DELETE FROM volume_summaries WHERE project_id = ? AND volume = ?')

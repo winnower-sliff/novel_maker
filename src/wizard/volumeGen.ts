@@ -9,8 +9,8 @@ export interface VolumeGenResult {
   created: number
   updated: number
   skipped: number
-  /** 触发全卷重写时：已开始批量重写的章数（0 = 未触发批量） */
-  rewriting: number
+  /** 全卷重写语义：已清除的旧正文章数（0 = 未清除；重写正文由用户在写作页主动触发） */
+  cleared: number
   /** 全卷重写时直接删除的「埋于本卷」未回收伏笔条数 */
   foreRemoved: number
 }
@@ -25,7 +25,7 @@ export interface VolumeGenOpts {
   globalRules?: string
   startNo: number
   count: number
-  /** 该卷已有正文 → 重写语义：清孤儿章 + write:batchStart 全卷覆盖重写 */
+  /** 该卷已有正文 → 重写语义：清孤儿章 + 清除该卷全部旧正文/摘要（不自动重写，写作页主动触发） */
   hasWritten: boolean
   onDelta?: (t: string) => void
 }
@@ -167,7 +167,7 @@ export function generateRulesRefine(opts: {
 
 /**
  * 生成/重写一卷大纲（桌面/移动共用）：outline 管线（allowUpdate:true，重生成同卷覆盖同章号）
- * → volumePlans 写回参数记忆（下次预填）→ hasWritten 时清理新范围外孤儿章并批量重写该卷正文。
+ * → volumePlans 写回参数记忆（下次预填）→ hasWritten 时清理新范围外孤儿章并清除该卷旧正文/摘要。
  * 抛错透传给调用方展示。
  */
 export function generateVolume(opts: VolumeGenOpts): {
@@ -198,8 +198,8 @@ export function generateVolume(opts: VolumeGenOpts): {
       skipped: number
       parsed: boolean
     }
-    if (!r.parsed || r.created + r.updated === 0) return { ...r, rewriting: 0, foreRemoved: 0 }
-    // 反向闭环：新大纲导入成功后自动同步世界观与人物（后台运行，不阻塞批量重写）
+    if (!r.parsed || r.created + r.updated === 0) return { ...r, cleared: 0, foreRemoved: 0 }
+    // 反向闭环：新大纲导入成功后自动同步世界观与人物（后台运行，不阻塞后续写作）
     fireCanonSync(projectId, volume)
     // 参数记忆：写回 volumePlans，下次重生成预填
     await rememberVolumePlan(projectId, volume, {
@@ -208,7 +208,7 @@ export function generateVolume(opts: VolumeGenOpts): {
       count,
       rules: opts.rules?.trim() || undefined
     })
-    let rewriting = 0
+    let cleared = 0
     let foreRemoved = 0
     if (hasWritten) {
       const old = await oldVolPromise
@@ -217,7 +217,7 @@ export function generateVolume(opts: VolumeGenOpts): {
       for (const o of old.filter((x) => x.volume === volume && !newNos.has(x.chapterNo))) {
         await window.api.novel.outlineDelete(o.id)
       }
-      // 旧稿伏笔随之废弃：埋于本卷章号范围的未回收伏笔直接删除（正文已全新重写，台账引用的剧情线不复存在）
+      // 旧稿伏笔随之废弃：埋于本卷章号范围的未回收伏笔直接删除（旧正文已作废，台账引用的剧情线不复存在）
       const volNos = old.filter((x) => x.volume === volume).map((x) => x.chapterNo)
       if (volNos.length > 0) {
         const lo = Math.min(...volNos)
@@ -233,21 +233,16 @@ export function generateVolume(opts: VolumeGenOpts): {
           }
         }
       }
-      const volIds = (await window.api.novel.outlines(projectId))
-        .filter((o) => o.volume === volume)
-        .sort((a, b) => a.chapterNo - b.chapterNo)
-        .map((o) => o.id)
-      if (volIds.length > 0) {
-        await window.api.write.batchStart({ projectId, ids: volIds, regenVolumeSummary: true })
-        rewriting = volIds.length
-      }
+      // 旧正文即废稿：立即清除该卷正文/摘要/嵌入并把大纲降回草稿（写作页回到「未写」）；
+      // 不自动批量重写，是否写、何时写由用户在写作页主动触发
+      cleared = (await window.api.novel.clearVolumeContent(projectId, volume)).removed
     }
     return {
       parsed: r.parsed,
       created: r.created,
       updated: r.updated,
       skipped: r.skipped,
-      rewriting,
+      cleared,
       foreRemoved
     }
   }

@@ -123,7 +123,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
     if (
       targetWritten &&
       !window.confirm(
-        `第 ${volume} 卷已有 ${volWritten(volume)} 章正文。\n重写 = 重新生成该卷大纲 + 自动覆盖重写该卷全部章节正文，原稿不会保留。\n确定继续？`
+        `第 ${volume} 卷已有 ${volWritten(volume)} 章正文。\n重写 = 重新生成该卷大纲，并清除该卷全部旧正文与摘要（原稿不保留，不会自动重写）。\n确定继续？`
       )
     )
       return
@@ -150,9 +150,9 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
         setError('AI 输出无法解析为章节列表，请重试或调整创意描述')
         return
       }
-      if (r.rewriting > 0) {
+      if (r.cleared > 0) {
         setResult(
-          `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已开始自动重写该卷 ${r.rewriting} 章正文，进度见「写作」子页${r.foreRemoved ? `；已删除埋于本卷的旧伏笔 ${r.foreRemoved} 条` : ''}`
+          `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已清除该卷 ${r.cleared} 章旧正文与摘要${r.foreRemoved ? `，并删除埋于本卷的旧伏笔 ${r.foreRemoved} 条` : ''}；需要重写正文时到「写作」子页主动触发`
         )
       } else {
         setResult(

@@ -102,6 +102,9 @@ export const novelHandlers = {
   'novel:outlines': (_ctx, [projectId]) => store.listOutlines(projectId),
   'novel:outlineSave': (_ctx, [input]) => store.saveOutline(input),
   'novel:outlineDelete': (_ctx, [id]) => store.deleteOutline(id),
+  'novel:clearVolumeContent': (_ctx, [projectId, volume]) => ({
+    removed: store.clearVolumeContent(projectId, volume)
+  }),
   'novel:chapterBriefs': (_ctx, [projectId]) => store.listChapterBriefs(projectId),
   'novel:chapter': (_ctx, [outlineId]) => store.getChapterByOutline(outlineId),
   'novel:saveChapter': (_ctx, [input]) => store.saveChapter(input),

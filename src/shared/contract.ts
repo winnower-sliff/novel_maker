@@ -489,6 +489,11 @@ export const invokeContract = {
     ret: ret<OutlineItem>()
   },
   'novel:outlineDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
+  // 卷重写语义：清除该卷全部旧正文/章摘要/嵌入并把大纲降回草稿，返回清除的正文章数
+  'novel:clearVolumeContent': {
+    args: z.tuple([z.string(), z.number()]),
+    ret: ret<{ removed: number }>()
+  },
   'novel:chapterBriefs': { args: z.tuple([z.string()]), ret: ret<ChapterBrief[]>() },
   'novel:chapter': { args: z.tuple([z.string()]), ret: ret<Chapter | null>() },
   'novel:saveChapter': { args: z.tuple([SaveChapterInputSchema]), ret: ret<Chapter>() },
@@ -651,6 +656,7 @@ export interface Api {
     outlines: InvokeFn<'novel:outlines'>
     outlineSave: InvokeFn<'novel:outlineSave'>
     outlineDelete: InvokeFn<'novel:outlineDelete'>
+    clearVolumeContent: InvokeFn<'novel:clearVolumeContent'>
     chapterBriefs: InvokeFn<'novel:chapterBriefs'>
     chapter: InvokeFn<'novel:chapter'>
     saveChapter: InvokeFn<'novel:saveChapter'>
