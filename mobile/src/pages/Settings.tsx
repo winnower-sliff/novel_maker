@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { Badge, Button, Card, Spinner } from '@mobile/components/ui'
 import { fetchMobileVersion } from '@mobile/lib/bridge'
@@ -10,6 +10,7 @@ import {
   clearBook,
   getPrefetch,
   listCachedBooks,
+  prefetchBook,
   subscribePrefetch,
   type CachedBookEntry
 } from '@mobile/lib/readerCache'
@@ -108,6 +109,7 @@ function OfflineCacheCard() {
   const [confirmAll, setConfirmAll] = useState(false)
   const [confirmId, setConfirmId] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const qc = useQueryClient()
 
   useEffect(() => {
     let alive = true
@@ -141,14 +143,30 @@ function OfflineCacheCard() {
     }
   }
 
+  const doPrefetch = async (pid: string): Promise<void> => {
+    setBusy(true)
+    try {
+      const briefs = await qc.fetchQuery({
+        queryKey: ['novel', 'chapterBriefs', pid],
+        queryFn: () => window.api.novel.chapterBriefs(pid)
+      })
+      await prefetchBook(pid, briefs)
+    } catch {
+      // 静默：断网/项目不可达时按钮无效，进度不丢失
+    } finally {
+      setBusy(false)
+      void listCachedBooks().then(setBooks)
+    }
+  }
+
   return (
     <Card className="p-4">
       <div className="text-sm font-medium text-zinc-200">离线缓存</div>
       <p className="mt-0.5 text-[11px] text-zinc-500">
-        打开书的阅读页后自动整本预取正文，断网也能继续读
+        打开书后自动整本预取正文，断网也能继续读
       </p>
       {books.length === 0 ? (
-        <div className="mt-3 text-xs text-zinc-500">还没有缓存——进入某本书的「阅读」页后自动开始</div>
+        <div className="mt-3 text-xs text-zinc-500">还没有缓存——进入某本书后自动开始</div>
       ) : (
         <div className="mt-3 space-y-1.5">
           {books.map((b) => {
@@ -178,14 +196,24 @@ function OfflineCacheCard() {
                     确认清除
                   </Button>
                 ) : (
-                  <Button
-                    variant="ghost"
-                    className="px-2.5 py-1 text-[11px]"
-                    disabled={busy}
-                    onClick={() => setConfirmId(b.projectId)}
-                  >
-                    清除
-                  </Button>
+                  <>
+                    <Button
+                      variant="ghost"
+                      className="px-2.5 py-1 text-[11px]"
+                      disabled={busy || !!pf || b.cached >= b.total}
+                      onClick={() => void doPrefetch(b.projectId)}
+                    >
+                      {pf ? '缓存中' : '立即缓存'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="px-2.5 py-1 text-[11px]"
+                      disabled={busy}
+                      onClick={() => setConfirmId(b.projectId)}
+                    >
+                      清除
+                    </Button>
+                  </>
                 )}
               </div>
             )

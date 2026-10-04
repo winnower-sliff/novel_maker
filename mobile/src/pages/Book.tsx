@@ -7,8 +7,9 @@ import OutlineSub from '@mobile/pages/subs/OutlineSub'
 import PremiseSub from '@mobile/pages/subs/PremiseSub'
 import WorldSub from '@mobile/pages/subs/WorldSub'
 import { useQuery } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
-import type { Project } from '@shared/types'
+import { useEffect, useMemo, useState } from 'react'
+import type { ChapterBrief, Project } from '@shared/types'
+import { prefetchBook, putBriefs, getCachedBriefs } from '@mobile/lib/readerCache'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 
 type BookTab = 'read' | 'write' | 'agent'
@@ -99,6 +100,33 @@ export default function Book({
     queryFn: () => window.api.novel.outlines(projectId!),
     enabled
   })
+  // 目录（顺带缓存快照）：进书即整本预取正文，无论落在哪个 tab，不依赖「阅读」页挂载
+  const { data: briefs = [] } = useQuery({
+    queryKey: ['novel', 'chapterBriefs', projectId ?? ''],
+    queryFn: async (): Promise<ChapterBrief[]> => {
+      try {
+        const fresh = await window.api.novel.chapterBriefs(projectId!)
+        void putBriefs({ projectId: projectId!, title, briefs: fresh, cachedAt: Date.now() })
+        return fresh
+      } catch (err) {
+        const cached = await getCachedBriefs(projectId!)
+        if (cached) return cached.briefs
+        throw err
+      }
+    },
+    enabled
+  })
+  const written = useMemo(
+    () =>
+      briefs
+        .filter((b) => b.hasDraft)
+        .sort((a, b) => a.volume - b.volume || a.chapterNo - b.chapterNo),
+    [briefs]
+  )
+  useEffect(() => {
+    if (!projectId || written.length === 0) return
+    void prefetchBook(projectId, written)
+  }, [projectId, written])
   const planDone = !!projectId && projects.some((p: Project) => p.id === projectId && !!p.wizardPlan)
   // 基本设定视为已完成：走过 AI 起草（wizardPlan 存在），或项目本就有任何板块内容
   const done: Record<SubPage, boolean> = {

@@ -1,7 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { Button, Empty } from '@mobile/components/ui'
 import { fmtRelative, fmtWords } from '@mobile/lib/format'
-import { getCachedBriefs, getCachedProjects, saveProjects } from '@mobile/lib/readerCache'
+import { getCachedBriefs, getCachedProjects, putBriefs, saveProjects } from '@mobile/lib/readerCache'
 import type { Project } from '@shared/types'
 
 function hueFromId(id: string): number {
@@ -15,7 +15,10 @@ function Cover({ project, onOpen }: { project: Project; onOpen: (id: string) => 
     queryKey: ['novel', 'chapterBriefs', project.id],
     queryFn: async () => {
       try {
-        return await window.api.novel.chapterBriefs(project.id)
+        // 同 queryKey 以首个挂载的 observer 的 queryFn 为准（书架总是先进），快照落库必须写在这里
+        const fresh = await window.api.novel.chapterBriefs(project.id)
+        void putBriefs({ projectId: project.id, title: project.title, briefs: fresh, cachedAt: Date.now() })
+        return fresh
       } catch (err) {
         const cached = await getCachedBriefs(project.id)
         if (cached) return cached.briefs

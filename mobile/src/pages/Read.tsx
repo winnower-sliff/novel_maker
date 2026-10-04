@@ -6,7 +6,6 @@ import { useReaderStore } from '@mobile/lib/readerStore'
 import {
   getCachedBriefs,
   getCachedChapter,
-  prefetchBook,
   putBriefs,
   putChapters
 } from '@mobile/lib/readerCache'
@@ -27,7 +26,7 @@ export function parseParagraphs(content: string): string[] {
 }
 
 /** 阅读页：卷分组目录（只列已写章）+ 排版阅读（字号可调）+ 上下章 + 进度记忆（重进续读）。
- *  打开即后台整本预取正文到 IndexedDB；断网时目录/正文自动回退缓存（顶栏标「离线」）。 */
+ *  整本预取在进书时由 Book 层触发（不依赖本页挂载）；断网时目录/正文自动回退缓存（顶栏标「离线」）。 */
 export default function Read({ projectId, title }: { projectId: string; title?: string }) {
   const { data: briefs = [], isLoading } = useQuery({
     queryKey: ['novel', 'chapterBriefs', projectId],
@@ -128,12 +127,6 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
   useEffect(() => {
     if (current) useSettingsStore.getState().setReadPos(projectId, current.id)
   }, [current, projectId])
-
-  // 整本预取：目录就绪后后台增量拉取全部已写章正文（跳过已缓存），失败静默、下次续传
-  useEffect(() => {
-    if (written.length === 0) return
-    void prefetchBook(projectId, written)
-  }, [written, projectId])
 
   // 阅读中返回键先回目录
   useBackHandler(() => setOpenId(null), openId !== null)
