@@ -1,6 +1,7 @@
 import type { BuiltContext, ChatParams, ReviewResult, ReviewScore } from '../../shared/types'
 import { buildChapterContext } from '../context'
 import * as store from '../store'
+import { buildForeLedger } from './fore'
 import { extractJsonArray, extractJsonObject, skillBody } from './util'
 
 export async function buildChapterRequest(
@@ -32,7 +33,13 @@ export function buildSummaryRequest(projectId: string, outlineId: string): ChatP
     .listCharacters(projectId)
     .map((c) => c.name)
     .join('、')
-  const system = [skillBody('summarizer'), chars && `本书人物名单：${chars}`]
+  const ledger = buildForeLedger(projectId, true)
+  const system = [
+    skillBody('summarizer'),
+    chars && `本书人物名单：${chars}`,
+    ledger.text &&
+      `【既有未回收伏笔台账（编号稳定）】\n${ledger.text}\n登记伏笔时必须逐条对照此表：台账已有语义相同的条目禁止重复登记进 foreshadows_planted——只是再现/强化则写入 foreshadows_reinforced 引用编号；确已兑现回收则写入 foreshadows_resolved 引用编号。`
+  ]
     .filter(Boolean)
     .join('\n\n')
   return {

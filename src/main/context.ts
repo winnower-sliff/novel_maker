@@ -275,9 +275,12 @@ function renderVolumeSummaries(
 }
 
 function renderForeshadows(projectId: string): { text: string; detail: string } {
-  const list = store.listForeshadows(projectId).filter((f) => f.status === 'open')
-  if (list.length === 0) return { text: '', detail: '无' }
-  const text = list
+  const open = store.listForeshadows(projectId).filter((f) => f.status === 'open')
+  if (open.length === 0) return { text: '', detail: '无' }
+  // 分层：主线/人物级全量注入；氛围级仅计数——重复登记的钩子多为氛围级，全量注入会淹没主线
+  const major = open.filter((f) => f.priority.trim() !== '氛围')
+  const ambienceCount = open.length - major.length
+  const text = major
     .map((f) => {
       const extras: string[] = []
       if (f.priority) extras.push(f.priority)
@@ -286,7 +289,13 @@ function renderForeshadows(projectId: string): { text: string; detail: string } 
       return `- ${f.content}${suffix}（埋于${f.plantedChapter || '?'}）`
     })
     .join('\n')
-  return { text, detail: `${list.length} 条未回收` }
+  const note =
+    ambienceCount > 0 ? `\n（另有 ${ambienceCount} 条氛围级伏笔，无需在正文刻意回应）` : ''
+  const count =
+    ambienceCount > 0
+      ? `${major.length} 条未回收（另 ${ambienceCount} 条氛围级）`
+      : `${major.length} 条未回收`
+  return { text: text + note, detail: count }
 }
 
 /**

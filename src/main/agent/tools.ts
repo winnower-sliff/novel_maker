@@ -849,7 +849,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_foreshadow',
       description:
-        '新建或修改伏笔。传 id 表示修改；不传 id 表示新建。可选：plannedResolve（计划回收点，如 第2卷30-35章）、priority（优先级：主线/人物/氛围）；修改时未传字段保留原值',
+        '新建或修改伏笔。传 id 表示修改；不传 id 表示新建。新建前必须先 list_foreshadows 对照，语义相同的伏笔改为传既有 id 更新，禁止重复登记。可选：plannedResolve（计划回收点，如 第2卷30-35章）、priority（优先级：主线/人物/氛围）；修改时未传字段保留原值',
       input_schema: schema(
         {
           id: optS('要修改的伏笔 id（新建时省略）'),

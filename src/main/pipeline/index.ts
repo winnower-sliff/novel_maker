@@ -6,6 +6,7 @@
 export * from './canon'
 export * from './chapter'
 export * from './character'
+export * from './fore'
 export * from './outline'
 export * from './util'
 export * from './worldbuild'

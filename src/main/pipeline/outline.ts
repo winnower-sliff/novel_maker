@@ -1,16 +1,18 @@
 import type {
   AlignRevision,
   ChatParams,
+  Foreshadow,
   OutlineGenParams,
   OutlineItem,
   PremiseDraftResult
 } from '../../shared/types'
 import { enqueueEmbedding } from '../embedding'
 import * as store from '../store'
+import { buildForeLedger, FORE_PRIORITIES, FORE_REF_RE, normalizeForeText } from './fore'
 import { clampInt, extractJsonArray, extractJsonObject, skillBody } from './util'
 
-/** 大纲/卷创意共用的项目素材拼装（每次现查库，量级小） */
-function collectOutlineMaterials(projectId: string, volume: number) {
+/** 大纲/卷创意共用的项目素材拼装（每次现查库，量级小）；卷创意为纯文本输出，伏笔台账用无编号形态 */
+function collectOutlineMaterials(projectId: string, volume: number, numberedFore = true) {
   const project = store.listProjects().find((x) => x.id === projectId)
   const wb = store
     .listWorldbuild(projectId)
@@ -26,21 +28,8 @@ function collectOutlineMaterials(projectId: string, volume: number) {
     .sort((a, b) => a.chapterNo - b.chapterNo)
     .map((o) => `- 第${o.chapterNo}章《${o.title}》：${o.synopsis.slice(0, 200)}`)
     .join('\n')
-  // 注入防御上限：只取 20 条（有优先级标注的优先，其余新登记优先），防伏笔累积撑爆 prompt
-  const openFore = store
-    .listForeshadows(projectId)
-    .filter((f) => f.status === 'open')
-    .sort((a, b) => {
-      const pa = a.priority.trim() ? 1 : 0
-      const pb = b.priority.trim() ? 1 : 0
-      return pb - pa || b.createdAt - a.createdAt
-    })
-    .slice(0, 20)
-    .map(
-      (f) =>
-        `- ${f.content}（埋于${f.plantedChapter || '?'}${f.plannedResolve ? `，计划回收：${f.plannedResolve}` : ''}${f.priority ? `，优先级：${f.priority}` : ''}）`
-    )
-    .join('\n')
+  // 分层编号台账：主/人物级全量、氛围级节选，防伏笔累积撑爆 prompt
+  const openFore = buildForeLedger(projectId, numberedFore).text
   return { project, wb, chars, outlineCtx, openFore }
 }
 
@@ -103,7 +92,7 @@ export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): 
     wb && `【已有世界观】\n${wb}`,
     chars && `【已有人物】\n${chars}`,
     openFore &&
-      `【未回收伏笔台账（规划新章节时应安排合理回收点，并在对应章节的 foreshadow_ops 中写明）】\n${openFore}`,
+      `【未回收伏笔台账（编号稳定；主线/人物级全量，氛围级仅节选）。为需要回收或升级的伏笔安排回收章：在对应章节对象中输出 foreshadow_plan:[{"ref":"编号","priority":"主线|人物|氛围"}]（priority 可省略表示仅定回收点不调级），系统会据此更新台账；氛围级节选条目无需逐条处理】\n${openFore}`,
     p.globalRules?.trim() && rulesBlock('通用规则', p.globalRules.trim(), p),
     p.rules?.trim() && rulesBlock('本卷规则', p.rules.trim(), p),
     // 覆盖重写（allowUpdate:true）刻意不注入旧大纲：整卷重写时旧标题/梗概只会牵引 AI 复刻旧框架，
@@ -138,7 +127,7 @@ export function buildVolumeIdeaRequest(
   const req = idea.trim()
   if (!req) throw new Error('请先在创意框写下你对这一卷的要求')
   // 刻意不注入本卷已有大纲：idea 可持久化（volumePlans），起草创意时应忠于用户要求而非被旧大纲牵引
-  const { project, wb, chars, openFore } = collectOutlineMaterials(projectId, volume)
+  const { project, wb, chars, openFore } = collectOutlineMaterials(projectId, volume, false)
   const volSums = store
     .listVolumeSummaries(projectId)
     .sort((a, b) => a.volume - b.volume)
@@ -309,15 +298,53 @@ export function parsePremiseDraft(text: string): PremiseDraftResult {
   }
 }
 
+/** 解析章级 foreshadow_plan 并更新台账：planned_resolve=该章章号，priority 受控值才落（否则保留原值） */
+function applyForePlanItems(
+  plan: unknown,
+  chapterNo: number,
+  projectId: string,
+  foreMapping: Map<string, string>,
+  foreById: Map<string, Foreshadow>,
+  seen: Set<string>
+): number {
+  if (!Array.isArray(plan)) return 0
+  let applied = 0
+  for (const item of plan) {
+    const r = (item ?? {}) as Record<string, unknown>
+    const ref = String(r.ref ?? '')
+      .trim()
+      .toUpperCase()
+    if (!FORE_REF_RE.test(ref)) continue
+    const id = foreMapping.get(ref)
+    const target = id ? foreById.get(id) : undefined
+    if (target?.status !== 'open' || seen.has(target.id)) continue
+    const priority = typeof r.priority === 'string' ? r.priority.trim() : ''
+    store.saveForeshadow({
+      id: target.id,
+      projectId,
+      content: target.content,
+      plannedResolve: `第${chapterNo}章`,
+      priority: FORE_PRIORITIES.find((x) => x === priority)
+    })
+    seen.add(target.id)
+    applied++
+  }
+  return applied
+}
+
 export function applyOutlineResult(
   p: OutlineGenParams,
   text: string
-): { created: number; updated: number; skipped: number; parsed: boolean } {
+): { created: number; updated: number; skipped: number; parsed: boolean; forePlans: number } {
   const arr = extractJsonArray(text)
-  if (!arr) return { created: 0, updated: 0, skipped: 0, parsed: false }
+  if (!arr) return { created: 0, updated: 0, skipped: 0, parsed: false, forePlans: 0 }
   let created = 0
   let updated = 0
   let skipped = 0
+  let forePlans = 0
+  const foreMapping = buildForeLedger(p.projectId, true).mapping
+  const foreById = new Map(store.listForeshadows(p.projectId).map((f) => [f.id, f]))
+  const plannedFores = new Set<string>()
   const existing = new Map<string, OutlineItem | null>()
   for (const o of store.listOutlines(p.projectId)) {
     const key = `${o.volume}:${o.chapterNo}`
@@ -328,6 +355,14 @@ export function applyOutlineResult(
     const volume = Number(r.volume) || p.volume
     const chapterNo = Number(r.chapter_no ?? r.chapterNo)
     if (!chapterNo || Number.isNaN(chapterNo)) continue
+    forePlans += applyForePlanItems(
+      r.foreshadow_plan,
+      chapterNo,
+      p.projectId,
+      foreMapping,
+      foreById,
+      plannedFores
+    )
     const key = `${volume}:${chapterNo}`
     const hit = existing.get(key)
     const meta = {
@@ -380,7 +415,7 @@ export function applyOutlineResult(
     existing.set(key, null)
     created++
   }
-  return { created, updated, skipped, parsed: true }
+  return { created, updated, skipped, parsed: true, forePlans }
 }
 
 export function applySummaryResult(
@@ -392,6 +427,21 @@ export function applySummaryResult(
   const outline = store.listOutlines(projectId).find((o) => o.id === outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
   if (!obj || !outline || !chapter) return { planted: 0, resolved: 0, parsed: !!obj }
+
+  const allFore = store.listForeshadows(projectId)
+  const foreById = new Map(allFore.map((f) => [f.id, f]))
+  const foreMapping = buildForeLedger(projectId, true).mapping
+  const existingOpen = allFore.filter((f) => f.status === 'open')
+  // 存档去编号化：编号是 build 时刻快照，翻译回内容文本保证 summary 存档自描述
+  const resolveArchiveText = (raw: string): string => {
+    const ref = raw.trim().toUpperCase()
+    if (FORE_REF_RE.test(ref)) {
+      const id = foreMapping.get(ref)
+      const f = id ? foreById.get(id) : undefined
+      if (f) return f.content
+    }
+    return raw
+  }
 
   store.saveSummary(chapter.id, {
     summary: String(obj.summary ?? ''),
@@ -418,7 +468,7 @@ export function applySummaryResult(
         }))
       : [],
     foreshadowsResolved: Array.isArray(obj.foreshadows_resolved)
-      ? obj.foreshadows_resolved.map(String)
+      ? obj.foreshadows_resolved.map((x) => resolveArchiveText(String(x)))
       : []
   })
   enqueueEmbedding(
@@ -428,7 +478,6 @@ export function applySummaryResult(
     `第${outline.chapterNo}章 ${outline.title}：${String(obj.summary ?? '')} ${Array.isArray(obj.events) ? obj.events.join('；') : ''}`
   )
 
-  const existingOpen = store.listForeshadows(projectId).filter((f) => f.status === 'open')
   // 代码兜底上限：AI 摘要偶发过量登记（曾致单项目累积 1300+ open），每章登记/回收各最多 3 条
   const FORE_PER_CHAPTER_LIMIT = 3
   let plantedCount = 0
@@ -437,27 +486,42 @@ export function applySummaryResult(
     : []) {
     if (plantedCount >= FORE_PER_CHAPTER_LIMIT) break
     const content = String(f.content ?? '').trim()
-    if (!content) continue
-    if (existingOpen.some((x) => x.content === content)) continue
+    const normalized = normalizeForeText(content)
+    if (!content || !normalized) continue
+    // 去重双保险：LLM 已对照注入台账，这里再做归一化等值兜底（宁漏勿误）
+    if (
+      existingOpen.some((x) => x.content === content || normalizeForeText(x.content) === normalized)
+    )
+      continue
+    const priority = String(f.priority ?? '').trim()
     store.saveForeshadow({
       projectId,
       content,
       plantedChapter: `第${outline.chapterNo}章`,
-      status: 'open'
+      status: 'open',
+      priority: FORE_PRIORITIES.find((x) => x === priority) ?? ''
     })
     plantedCount++
   }
 
   let resolvedCount = 0
+  const resolvedSeen = new Set<string>()
   const resolvedList = Array.isArray(obj.foreshadows_resolved)
     ? obj.foreshadows_resolved.map(String)
     : []
-  for (const content of resolvedList) {
+  for (const raw of resolvedList) {
     if (resolvedCount >= FORE_PER_CHAPTER_LIMIT) break
-    const target = existingOpen.find(
-      (x) => content.includes(x.content) || x.content.includes(content)
-    )
-    if (target) {
+    const ref = raw.trim().toUpperCase()
+    let target: Foreshadow | undefined
+    if (FORE_REF_RE.test(ref)) {
+      const id = foreMapping.get(ref)
+      if (id) target = foreById.get(id)
+    }
+    // 兜底：编号失配或旧格式自由文本走子串匹配
+    if (!target) {
+      target = existingOpen.find((x) => raw.includes(x.content) || x.content.includes(raw))
+    }
+    if (target && target.status === 'open' && !resolvedSeen.has(target.id)) {
       store.saveForeshadow({
         id: target.id,
         projectId,
@@ -466,6 +530,7 @@ export function applySummaryResult(
         status: 'resolved',
         resolvedChapter: `第${outline.chapterNo}章`
       })
+      resolvedSeen.add(target.id)
       resolvedCount++
     }
   }
