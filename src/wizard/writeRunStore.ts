@@ -7,6 +7,7 @@ import { fmtTokens } from '../renderer/src/lib/format'
 import type { DonePayload } from '../renderer/src/lib/ipc'
 import { qk } from '../renderer/src/lib/queries'
 import { queryClient } from '../renderer/src/lib/queryClient'
+import { ensureBridge } from './ensureBridge'
 
 export interface LintIssue {
   rule: string
@@ -173,8 +174,6 @@ interface ChapterDoneData {
   }>
 }
 
-let bridgeReady = false
-
 // —— 章节运行结果应用（真实事件与同步器补拉共用同一条路径，保证回填/卡片不丢）——
 
 export async function applyRunDone(id: string, payload: DonePayload): Promise<void> {
@@ -262,36 +261,35 @@ export function applyRunError(id: string, message: string): void {
 
 /** 挂全局 llm 事件桥（幂等）。在写作页组件挂载时调用即可，事件处理不依赖组件存活 */
 export function ensureWriteRunBridge(): void {
-  if (bridgeReady) return
-  bridgeReady = true
+  ensureBridge('writeRun', () => {
+    // 批量进度事件（主进程编排）：快照直接落 store；一轮跑完时失效章节列表
+    window.api.write.onBatch((projectId, snap) => {
+      const prev = S.getState().batch
+      const wasRunning = prev?.running ?? false
+      S.setState({ batch: snap, resumeIds: snap.resumeIds })
+      if (wasRunning && !snap.running) {
+        void queryClient.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
+      }
+    })
 
-  // 批量进度事件（主进程编排）：快照直接落 store；一轮跑完时失效章节列表
-  window.api.write.onBatch((projectId, snap) => {
-    const prev = S.getState().batch
-    const wasRunning = prev?.running ?? false
-    S.setState({ batch: snap, resumeIds: snap.resumeIds })
-    if (wasRunning && !snap.running) {
-      void queryClient.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
-    }
-  })
+    window.api.llm.onDelta((id, text) => {
+      const { run } = S.getState()
+      if (!run || run.requestId !== id || run.finished) return
+      if (run.kind === 'chapter') {
+        S.setState((s) => (s.run ? { run: { ...s.run, editorText: s.run.editorText + text } } : s))
+      } else {
+        S.setState((s) =>
+          s.run ? { run: { ...s.run, candidateText: s.run.candidateText + text } } : s
+        )
+      }
+    })
 
-  window.api.llm.onDelta((id, text) => {
-    const { run } = S.getState()
-    if (!run || run.requestId !== id || run.finished) return
-    if (run.kind === 'chapter') {
-      S.setState((s) => (s.run ? { run: { ...s.run, editorText: s.run.editorText + text } } : s))
-    } else {
-      S.setState((s) =>
-        s.run ? { run: { ...s.run, candidateText: s.run.candidateText + text } } : s
-      )
-    }
-  })
+    window.api.llm.onDone((id, payload) => applyRunDone(id, payload))
 
-  window.api.llm.onDone((id, payload) => applyRunDone(id, payload))
+    window.api.llm.onError((id, message) => applyRunError(id, message))
 
-  window.api.llm.onError((id, message) => applyRunError(id, message))
-
-  window.api.llm.onNotice((_id, message) => {
-    S.setState({ notice: message })
+    window.api.llm.onNotice((_id, message) => {
+      S.setState({ notice: message })
+    })
   })
 }

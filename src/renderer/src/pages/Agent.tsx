@@ -1,33 +1,30 @@
-import type { AgentToolCallEvent, AgentToolResultEvent } from '@shared/contract'
 import type {
-  AgentDonePayload,
   AgentInstructionsView,
-  AgentSession,
-  AgentSessionBrief,
   AgentToolCall,
   AgentTurn,
   ModelProbeResult,
   SettingsView
 } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import type { SubProc } from '../../../wizard/agentRunStore'
+import {
+  resolveConfirm,
+  startRun,
+  stopRun,
+  switchSession as switchSessionRun,
+  syncProject,
+  useAgentConfirmTarget,
+  useAgentRunStore
+} from '../../../wizard/agentRunStore'
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
 import { Badge, Button, Card, Select, Textarea } from '../components/ui'
-import { makeSessionTitle, toolLabel, toolSummary, turnsToMessages } from '../lib/agentTurns'
-import { setAgentUi } from '../lib/agentUiStore'
+import { makeSessionTitle, toolLabel, toolSummary } from '../lib/agentTurns'
 import { fmtDuration, fmtRelative, fmtTokens } from '../lib/format'
 import { qk, queries } from '../lib/queries'
 
 type AssistantTurn = Extract<AgentTurn, { role: 'assistant' }>
-
-interface SubProc {
-  task: string
-  role: string
-  text: string
-  tools: AgentToolCall[]
-  running: boolean
-}
 
 const STATE_DOT: Record<AgentToolCall['state'], string> = {
   running: 'bg-amber-500 animate-pulse',
@@ -43,21 +40,6 @@ const STATE_LABEL: Record<AgentToolCall['state'], string> = {
   ok: '完成',
   error: '失败',
   denied: '已拒绝'
-}
-
-function finalizeTurns(turns: AgentTurn[]): AgentTurn[] {
-  return turns.map((t) =>
-    t.role === 'assistant'
-      ? {
-          ...t,
-          toolCalls: t.toolCalls.map((c) =>
-            c.state === 'running' || c.state === 'confirming'
-              ? { ...c, state: 'error' as const, result: c.result ?? '（已中断）' }
-              : c
-          )
-        }
-      : t
-  )
 }
 
 function ToolCallCard({
@@ -260,13 +242,7 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [model, setModel] = useState('')
   const queryClient = useQueryClient()
   const { data: sessions = [] } = useQuery(queries.agentSessions(projectId))
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [turns, setTurns] = useState<AgentTurn[]>([])
   const [input, setInput] = useState('')
-  const [running, setRunning] = useState(false)
-  const [error, setError] = useState('')
-  const [doneInfo, setDoneInfo] = useState<AgentDonePayload | null>(null)
-  const [subProcs, setSubProcs] = useState<Record<string, SubProc>>({})
   const [panelOpen, setPanelOpen] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
@@ -279,88 +255,26 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [instrSaved, setInstrSaved] = useState(false)
   const [instrErr, setInstrErr] = useState('')
   const [showJump, setShowJump] = useState(false)
-  const requestIdRef = useRef<string | null>(null)
-  const sessionIdRef = useRef<string | null>(null)
-  const sessionCreatedAtRef = useRef<number>(Date.now())
-  const turnsRef = useRef<AgentTurn[]>([])
   const scrollRef = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
-  const pendingDeltaRef = useRef('')
-  const rafRef = useRef<number | null>(null)
 
-  const applyTurns = useCallback((next: AgentTurn[]): void => {
-    turnsRef.current = next
-    setTurns(next)
-  }, [])
+  // 运行态（turns/running/error/doneInfo/subProcs/session）全在 agentRunStore，
+  // 切页回来原样恢复；这里只做项目对账与模型选择数据加载
+  const turns = useAgentRunStore((s) => s.turns)
+  const running = useAgentRunStore((s) => s.running)
+  const error = useAgentRunStore((s) => s.error)
+  const doneInfo = useAgentRunStore((s) => s.doneInfo)
+  const subProcs = useAgentRunStore((s) => s.subProcs)
+  const sessionId = useAgentRunStore((s) => s.sessionId)
+  const confirmTarget = useAgentConfirmTarget()
 
-  const setSession = useCallback((id: string | null): void => {
-    sessionIdRef.current = id
-    setSessionId(id)
-  }, [])
+  const refreshSessions = (pid: string): void => {
+    void queryClient.invalidateQueries({ queryKey: qk.agentSessions(pid) })
+  }
 
-  const patchLastAssistant = useCallback(
-    (fn: (t: AssistantTurn) => AgentTurn): void => {
-      const prev = turnsRef.current
-      if (prev.length === 0) return
-      const last = prev[prev.length - 1]
-      if (last.role !== 'assistant') return
-      applyTurns([...prev.slice(0, -1), fn(last)])
-    },
-    [applyTurns]
-  )
-
-  /** 追加流式文本：同步写入 text 与 segments（旧会话无 segments 时从现有 text 迁移） */
-  const appendDelta = useCallback(
-    (chunk: string): void => {
-      patchLastAssistant((t) => {
-        const segments = t.segments ? [...t.segments] : [{ kind: 'text' as const, text: t.text }]
-        const lastSeg = segments[segments.length - 1]
-        if (lastSeg && lastSeg.kind === 'text')
-          segments[segments.length - 1] = { kind: 'text', text: lastSeg.text + chunk }
-        else segments.push({ kind: 'text', text: chunk })
-        return { ...t, text: t.text + chunk, segments }
-      })
-    },
-    [patchLastAssistant]
-  )
-
-  const flushDelta = useCallback((): void => {
-    rafRef.current = null
-    const chunk = pendingDeltaRef.current
-    if (!chunk) return
-    pendingDeltaRef.current = ''
-    appendDelta(chunk)
-  }, [appendDelta])
-
-  const refreshSessions = useCallback(
-    (pid: string): void => {
-      void queryClient.invalidateQueries({ queryKey: qk.agentSessions(pid) })
-    },
-    [queryClient]
-  )
-
-  const persist = useCallback(
-    (sid: string, finalTurns: AgentTurn[]): void => {
-      const session: AgentSession = {
-        id: sid,
-        projectId,
-        title: makeSessionTitle(finalTurns),
-        createdAt: sessionCreatedAtRef.current,
-        updatedAt: Date.now(),
-        turns: finalTurns
-      }
-      void window.api.agent.sessionSave(session).then(() => refreshSessions(projectId))
-    },
-    [projectId, refreshSessions]
-  )
-
+  // 项目变化：中断旧任务并加载新项目最近会话（同一项目重复挂载为幂等 no-op）
   useEffect(() => {
-    if (requestIdRef.current) {
-      void window.api.agent.abort(requestIdRef.current)
-      requestIdRef.current = null
-      setRunning(false)
-      setAgentUi({ running: false, confirming: false })
-    }
+    syncProject(projectId)
     if (!projectId) return
     void (async () => {
       const s = await window.api.settings.get()
@@ -375,157 +289,17 @@ export default function Agent({ projectId }: { projectId: string }) {
             : r.model || s.defaultModel
         })()
       )
-      try {
-        setProbe(await window.api.models.probe({}))
-      } catch {
-        setProbe(null)
-      }
     })()
-    void queryClient.invalidateQueries({ queryKey: qk.agentSessions(projectId) }).then(() => {
-      const list = queryClient.getQueryData(qk.agentSessions(projectId)) as AgentSessionBrief[]
-      if (list.length > 0) {
-        void window.api.agent.sessionLoad(list[0].id).then((session) => {
-          if (!session) return
-          setSession(session.id)
-          applyTurns(session.turns)
-          sessionCreatedAtRef.current = session.createdAt
-        })
-      } else {
-        setSession(null)
-        applyTurns([])
-      }
-    })
-    return () => {
-      const sid = sessionIdRef.current
-      if (sid && turnsRef.current.length > 0) persist(sid, finalizeTurns(turnsRef.current))
+    try {
+      void window.api.models
+        .probe({})
+        .then(setProbe)
+        .catch(() => setProbe(null))
+    } catch {
+      setProbe(null)
     }
-  }, [projectId, applyTurns, setSession, persist, queryClient])
-
-  useEffect(() => {
-    const offDelta = window.api.agent.onDelta((id, text) => {
-      if (id !== requestIdRef.current) return
-      pendingDeltaRef.current += text
-      if (rafRef.current === null) rafRef.current = requestAnimationFrame(flushDelta)
-    })
-    const offToolCall = window.api.agent.onToolCall((id, call: AgentToolCallEvent) => {
-      if (id !== requestIdRef.current) return
-      patchLastAssistant((t) => {
-        const segments = t.segments ? [...t.segments] : [{ kind: 'text' as const, text: t.text }]
-        segments.push({ kind: 'tool', callId: call.id })
-        return {
-          ...t,
-          toolCalls: [
-            ...t.toolCalls,
-            {
-              id: call.id,
-              name: call.name,
-              input: call.input,
-              state: call.state,
-              dangerReason: call.dangerReason
-            }
-          ],
-          segments
-        }
-      })
-      if (call.state === 'confirming') setAgentUi({ confirming: true })
-    })
-    const offToolResult = window.api.agent.onToolResult((id, r: AgentToolResultEvent) => {
-      if (id !== requestIdRef.current) return
-      patchLastAssistant((t) => ({
-        ...t,
-        toolCalls: t.toolCalls.map((c) =>
-          c.id === r.id
-            ? {
-                ...c,
-                state: (r.denied ? 'denied' : r.ok ? 'ok' : 'error') as AgentToolCall['state'],
-                result: r.result
-              }
-            : c
-        )
-      }))
-      setAgentUi({ confirming: false })
-      const sid = sessionIdRef.current
-      if (sid) persist(sid, turnsRef.current)
-    })
-    const offDone = window.api.agent.onDone((id, payload) => {
-      if (id !== requestIdRef.current) return
-      const fixed = finalizeTurns(turnsRef.current)
-      if (fixed.length > 0 && fixed[fixed.length - 1].role === 'assistant') {
-        const last = fixed[fixed.length - 1] as AssistantTurn
-        fixed[fixed.length - 1] = { ...last, text: payload.text || last.text }
-      }
-      applyTurns(fixed)
-      const sid = sessionIdRef.current
-      if (sid) persist(sid, fixed)
-      setDoneInfo(payload)
-      setRunning(false)
-      requestIdRef.current = null
-      setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: true } })
-    })
-    const offError = window.api.agent.onError((id, message) => {
-      if (id !== requestIdRef.current) return
-      const fixed = finalizeTurns(turnsRef.current)
-      applyTurns(fixed)
-      const sid = sessionIdRef.current
-      if (sid) persist(sid, fixed)
-      setError(message)
-      setRunning(false)
-      requestIdRef.current = null
-      setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: false } })
-    })
-    const offSub = window.api.agent.onSubEvent((id, ev) => {
-      if (id !== requestIdRef.current) return
-      setSubProcs((prev) => {
-        const cur: SubProc = prev[ev.parentId] ?? {
-          task: '',
-          role: '',
-          text: '',
-          tools: [],
-          running: true
-        }
-        switch (ev.type) {
-          case 'start':
-            return { ...prev, [ev.parentId]: { ...cur, task: ev.task, role: ev.role } }
-          case 'delta':
-            return { ...prev, [ev.parentId]: { ...cur, text: cur.text + ev.text } }
-          case 'toolCall':
-            return { ...prev, [ev.parentId]: { ...cur, tools: [...cur.tools, ev.call] } }
-          case 'toolResult':
-            return {
-              ...prev,
-              [ev.parentId]: {
-                ...cur,
-                tools: cur.tools.map((c) =>
-                  c.id === ev.id
-                    ? {
-                        ...c,
-                        state: (ev.ok ? 'ok' : 'error') as AgentToolCall['state'],
-                        result: ev.result
-                      }
-                    : c
-                )
-              }
-            }
-          case 'done':
-            return { ...prev, [ev.parentId]: { ...cur, running: false, text: ev.text } }
-          case 'error':
-            return { ...prev, [ev.parentId]: { ...cur, running: false } }
-        }
-      })
-    })
-    return () => {
-      offDelta()
-      offToolCall()
-      offToolResult()
-      offDone()
-      offError()
-      offSub()
-      if (rafRef.current !== null) {
-        cancelAnimationFrame(rafRef.current)
-        rafRef.current = null
-      }
-    }
-  }, [applyTurns, patchLastAssistant, persist, flushDelta])
+    void queryClient.invalidateQueries({ queryKey: qk.agentSessions(projectId) })
+  }, [projectId, queryClient])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
@@ -566,55 +340,16 @@ export default function Agent({ projectId }: { projectId: string }) {
     return [...ids]
   })()
 
-  const confirmTarget = (() => {
-    if (!running || turns.length === 0) return null
-    const last = turns[turns.length - 1]
-    if (last.role !== 'assistant') return null
-    return last.toolCalls.find((c) => c.state === 'confirming') ?? null
-  })()
-
   const send = (): void => {
-    if (!input.trim() || running || !projectId || !model) return
-    const sid = sessionId ?? crypto.randomUUID()
-    if (!sessionId) {
-      setSession(sid)
-      sessionCreatedAtRef.current = Date.now()
-    }
-    const ts = Date.now()
-    const next: AgentTurn[] = [
-      ...turns,
-      { role: 'user', text: input.trim(), ts },
-      { role: 'assistant', text: '', toolCalls: [], segments: [], ts }
-    ]
-    applyTurns(next)
+    if (!input.trim() || running || !model) return
+    startRun(input, model)
     setInput('')
-    setError('')
-    setDoneInfo(null)
-    setSubProcs({})
-    setRunning(true)
-    setAgentUi({ running: true, confirming: false, ended: null })
     atBottomRef.current = true
     setShowJump(false)
-    cancelPendingDelta()
-    persist(sid, next)
-    void window.api.agent
-      .run({ projectId, messages: turnsToMessages(next), model })
-      .then((id) => {
-        requestIdRef.current = id
-      })
-      .catch((err: unknown) => {
-        setError((err as Error).message)
-        setRunning(false)
-      })
   }
 
   const stop = (): void => {
-    if (requestIdRef.current) void window.api.agent.abort(requestIdRef.current)
-  }
-
-  const resolveConfirm = (allow: boolean, always: boolean): void => {
-    if (!requestIdRef.current || !confirmTarget) return
-    void window.api.agent.resolve(requestIdRef.current, confirmTarget.id, allow, always)
+    stopRun()
   }
 
   const openInstructions = (): void => {
@@ -647,42 +382,13 @@ export default function Agent({ projectId }: { projectId: string }) {
       })
   }
 
-  const cancelPendingDelta = (): void => {
-    pendingDeltaRef.current = ''
-    if (rafRef.current !== null) {
-      cancelAnimationFrame(rafRef.current)
-      rafRef.current = null
-    }
-  }
-
-  const switchSession = (id: string): void => {
-    if (running) stop()
-    requestIdRef.current = null
-    setRunning(false)
-    setAgentUi({ running: false, confirming: false })
+  const handleSwitchSession = (id: string): void => {
+    switchSessionRun(id || null)
     setPanelOpen(false)
     setRenamingId(null)
     setConfirmDeleteId(null)
     atBottomRef.current = true
     setShowJump(false)
-    cancelPendingDelta()
-    if (!id) {
-      setSession(null)
-      applyTurns([])
-      setError('')
-      setDoneInfo(null)
-      setSubProcs({})
-      return
-    }
-    void window.api.agent.sessionLoad(id).then((session) => {
-      if (!session) return
-      setSession(session.id)
-      applyTurns(session.turns)
-      sessionCreatedAtRef.current = session.createdAt
-      setError('')
-      setDoneInfo(null)
-      setSubProcs({})
-    })
   }
 
   const renameSession = (id: string, title: string): void => {
@@ -697,12 +403,7 @@ export default function Agent({ projectId }: { projectId: string }) {
 
   const deleteSessionById = (id: string): void => {
     void window.api.agent.sessionDelete(id).then(() => {
-      if (id === sessionIdRef.current) {
-        setSession(null)
-        applyTurns([])
-        setError('')
-        setDoneInfo(null)
-      }
+      if (id === sessionId) switchSessionRun(null)
       setConfirmDeleteId(null)
       refreshSessions(projectId)
     })
@@ -755,7 +456,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                 <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
                   <button
                     type="button"
-                    onClick={() => switchSession('')}
+                    onClick={() => handleSwitchSession('')}
                     disabled={running}
                     className="flex w-full cursor-pointer items-center px-2.5 py-2 text-left text-xs text-amber-400 transition-colors hover:bg-zinc-800/60 disabled:cursor-not-allowed disabled:text-zinc-600"
                   >
@@ -827,7 +528,7 @@ export default function Agent({ projectId }: { projectId: string }) {
                           <>
                             <button
                               type="button"
-                              onClick={() => switchSession(s.id)}
+                              onClick={() => handleSwitchSession(s.id)}
                               disabled={running || active}
                               className="min-w-0 flex-1 cursor-pointer rounded px-1 py-0.5 text-left disabled:cursor-default"
                             >
@@ -849,7 +550,9 @@ export default function Agent({ projectId }: { projectId: string }) {
                                 setRenamingId(s.id)
                                 setRenameText(s.title)
                               }}
-                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                              // 运行中的当前会话正被 persistRun 持续落库，重命名会以旧 turns 整体回写丢增量
+                              disabled={running && s.id === sessionId}
+                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
                             >
                               改
                             </button>

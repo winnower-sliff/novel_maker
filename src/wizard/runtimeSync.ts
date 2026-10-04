@@ -7,7 +7,9 @@ import type { CanonSyncResult, RuntimeSnapshot } from '@shared/types'
 import type { DonePayload } from '../preload/index'
 import { qk } from '../renderer/src/lib/queries'
 import { queryClient } from '../renderer/src/lib/queryClient'
+import { agentRunActive, syncAgentFromSnapshot } from './agentRunStore'
 import { ingestCanonSync } from './canonStore'
+import { ensureBridge } from './ensureBridge'
 import { notify } from './notify'
 import { pollPending } from './pipeline'
 import { pushToast } from './toastStore'
@@ -24,7 +26,6 @@ const POLL_MS = 10_000
 /** 空闲期降频拉取：本地看似无任务，也可能存在「另一端启动/响应丢失未落 store」的任务 */
 const IDLE_POLL_MS = 60_000
 
-let ready = false
 let lastTickAt = 0
 let lastPullAt = 0
 /** 上次快照中各 run/batch 的状态：检测迁移用（首次不通知，避免历史完成重复打扰） */
@@ -46,6 +47,9 @@ function fire(title: string, body: string, tone: 'success' | 'error', missed: bo
 
 function applySnapshot(snap: RuntimeSnapshot): void {
   const st = useWriteRunStore.getState()
+
+  // —— agent run：在途补拉 + 刷新/断连恢复（含 pendingConfirm 重建确认层）——
+  syncAgentFromSnapshot(snap)
 
   // —— 批量：当前项目的快照落 store + 完成迁移通知 ——
   const curPid = st.batch?.projectId
@@ -156,6 +160,7 @@ function isActive(snap: RuntimeSnapshot): boolean {
     snap.runs.some((r) => r.status === 'running') ||
     snap.batches.some((b) => b.running) ||
     watchedRuns.size > 0 ||
+    agentRunActive() ||
     pollPending()
   )
 }
@@ -169,6 +174,7 @@ function tick(force = false): void {
       (st.batch?.running ?? false) ||
       (st.run !== null && !st.run.finished) ||
       watchedRuns.size > 0 ||
+      agentRunActive() ||
       pollPending()
     // 空闲期不完全跳过：降频兜底拉取，否则「本地无记录的进行中任务」永远无法被发现
     if (!localActive && Date.now() - lastPullAt < IDLE_POLL_MS) return
@@ -188,19 +194,18 @@ function tick(force = false): void {
 
 /** 挂中央同步器（幂等）。在两端 App 根组件挂载（连接就绪）后调用即可 */
 export function ensureRuntimeSync(): void {
-  if (ready || typeof window === 'undefined') return
-  ready = true
+  ensureBridge('runtimeSync', () => {
+    const onWake = (): void => tick(true)
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible') onWake()
+    })
+    window.addEventListener('nm-sse-state', ((e: CustomEvent<string>) => {
+      if (e.detail === 'open') onWake()
+    }) as EventListener)
 
-  const onWake = (): void => tick(true)
-  document.addEventListener('visibilitychange', () => {
-    if (document.visibilityState === 'visible') onWake()
+    // 定时器常开：活跃任务 10s 兜底轮询；空闲期降频 60s 拉一次（发现响应丢失/跨端启动的任务）
+    setInterval(() => tick(false), POLL_MS)
+    // 启动即拉一次：刷新/重开页面后恢复在途任务显示
+    tick(true)
   })
-  window.addEventListener('nm-sse-state', ((e: CustomEvent<string>) => {
-    if (e.detail === 'open') onWake()
-  }) as EventListener)
-
-  // 定时器常开：活跃任务 10s 兜底轮询；空闲期降频 60s 拉一次（发现响应丢失/跨端启动的任务）
-  setInterval(() => tick(false), POLL_MS)
-  // 启动即拉一次：刷新/重开页面后恢复在途任务显示
-  tick(true)
 }

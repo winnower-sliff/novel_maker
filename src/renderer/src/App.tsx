@@ -1,8 +1,10 @@
 import { providerPreset } from '@shared/providers'
 import { useQuery } from '@tanstack/react-query'
 import { lazy, type ReactElement, Suspense, useCallback, useEffect, useState } from 'react'
+import { ensureAgentRuntime } from '../../wizard/agentRunStore'
 import { CanonPreviewPanel } from '../../wizard/CanonPreviewPanel'
 import { ensureRuntimeSync } from '../../wizard/runtimeSync'
+import AgentConfirmOverlay from './components/AgentConfirmOverlay'
 import { Toaster } from './components/Toaster'
 import { markAgentSeen, useAgentNavBadge } from './lib/agentUiStore'
 import { desktopWizardUi } from './lib/desktopWizardUi'
@@ -301,6 +303,8 @@ export default function App() {
   // 中央同步器：运行态「拉为兜底」，不依赖事件到达（幂等，App 级挂一次）
   useEffect(() => {
     ensureRuntimeSync()
+    // 智能体事件桥模块级挂载：切页/卸载 Agent 页面不影响后台任务
+    ensureAgentRuntime()
   }, [])
 
   const statsQ = useQuery({ ...queries.usageStats(), refetchInterval: 30_000 })
@@ -410,6 +414,7 @@ export default function App() {
     <div className="flex h-full flex-col">
       <CanonPreviewPanel ui={desktopWizardUi} />
       <Toaster />
+      <AgentConfirmOverlay hidden={page === 'agent'} />
       {sseDown && (
         <div className="flex shrink-0 items-center justify-center gap-2 bg-amber-600/90 px-3 py-1.5 text-xs text-white">
           <span className="h-2 w-2 animate-pulse rounded-full bg-white" aria-hidden="true" />
