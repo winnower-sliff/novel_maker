@@ -58,7 +58,8 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
   // busy = 本地生成 || 后台在途 run（切页/刷新后生成继续，重挂时恢复 busy 态防重复触发）
-  const outlineActive = useOutlineRunActive(projectId)
+  const outlineRun = useOutlineRunActive(projectId)
+  const outlineActive = outlineRun.active
   const busy = localBusy || outlineActive
 
   useEffect(() => {
@@ -377,7 +378,10 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
         </div>
         {localBusy && <OutlineProgress text={delta} />}
         {outlineActive && !localBusy && (
-          <div className="text-xs text-amber-400">后台大纲生成中，完成后会自动导入（可离开此页）</div>
+          <>
+            <OutlineProgress text={outlineRun.tail} />
+            <div className="text-xs text-amber-400">后台大纲生成中，完成后会自动导入（可离开此页）</div>
+          </>
         )}
         {error && <div className="text-xs text-red-400">{error}</div>}
         {result && !busy && <div className="text-xs text-emerald-400">{result}</div>}

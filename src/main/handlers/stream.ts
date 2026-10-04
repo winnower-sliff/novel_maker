@@ -179,6 +179,9 @@ export function startStream(
 
       const send = (text: string): void => {
         if (!sink.isClosed()) sink.send('llm:delta', requestId, text)
+        // 同步写注册表尾部：页面切走/刷新后经 runtime:snapshot 恢复进度显示
+        const rec = runRecords.get(requestId)
+        if (rec) rec.textTail = ((rec.textTail ?? '') + text).slice(-2000)
       }
 
       let fullText = ''

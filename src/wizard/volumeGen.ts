@@ -60,16 +60,20 @@ export function deriveStartNo(
 }
 
 /**
- * 该项目是否有在途的大纲生成 run（主进程视角）。
+ * 该项目是否有在途的大纲生成 run（主进程视角），并带回其流式文本尾部。
  * 页面切走/刷新后生成照常在后台跑（主进程 afterDone 落库）；
- * 组件重挂时据此恢复「生成中」busy 态，避免用户重复触发导致两个 run 并行互踩。
+ * 组件重挂时据此恢复「生成中」busy 态与进度显示（tail 来自主进程注册表的 textTail），
+ * 避免用户重复触发导致两个 run 并行互踩。
  * 完成通知与 outlines 缓存失效由中央同步器（runtimeSync）负责，这里只管 busy 态。
  */
-export function useOutlineRunActive(projectId: string | null): boolean {
-  const [active, setActive] = useState(false)
+export function useOutlineRunActive(projectId: string | null): { active: boolean; tail: string } {
+  const [state, setState] = useState<{ active: boolean; tail: string }>({
+    active: false,
+    tail: ''
+  })
   useEffect(() => {
     if (!projectId) {
-      setActive(false)
+      setState({ active: false, tail: '' })
       return
     }
     let stopped = false
@@ -79,14 +83,14 @@ export function useOutlineRunActive(projectId: string | null): boolean {
         .snapshot()
         .then((snap) => {
           if (stopped) return
-          const running = snap.runs.some(
+          const run = snap.runs.find(
             (r) =>
               r.status === 'running' &&
               r.meta?.action === 'outline' &&
               r.meta?.projectId === projectId
           )
-          setActive(running)
-          if (running) timer = setTimeout(check, 5000)
+          setState({ active: !!run, tail: run?.textTail ?? '' })
+          if (run) timer = setTimeout(check, 5000)
         })
         .catch(() => {})
     }
@@ -96,7 +100,7 @@ export function useOutlineRunActive(projectId: string | null): boolean {
       if (timer) clearTimeout(timer)
     }
   }, [projectId])
-  return active
+  return state
 }
 
 /**

@@ -11,7 +11,7 @@ import {
   rememberVolumePlan,
   useOutlineRunActive
 } from '../../../wizard/volumeGen'
-import { ExpandableTextarea, NumberField } from '../../../wizard/widgets'
+import { ExpandableTextarea, NumberField, OutlineProgress } from '../../../wizard/widgets'
 import { loadProjectPlan, saveProjectPlan, type WizardPlanFull } from '../../../wizard/wizardPlan'
 import { EmptyGuide } from '../components/EmptyGuide'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
@@ -78,7 +78,8 @@ export default function Outline({
   const [count, setCount] = useState(30)
   const [generating, setGenerating] = useState(false)
   // 后台在途 outline run（切页/刷新后生成继续，重挂时恢复禁用态防重复触发）
-  const outlineActive = useOutlineRunActive(projectId)
+  const outlineRun = useOutlineRunActive(projectId)
+  const outlineActive = outlineRun.active
   const genBusy = generating || outlineActive
   const [genOutput, setGenOutput] = useState('')
   const [ideaBusy, setIdeaBusy] = useState(false)
@@ -720,6 +721,7 @@ export default function Outline({
               {genOutput || '等待模型输出…'}
             </pre>
           )}
+          {outlineActive && !generating && <OutlineProgress text={outlineRun.tail} />}
         </Card>
       )}
 

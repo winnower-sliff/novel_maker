@@ -148,6 +148,8 @@ export interface RunRecordPayload {
   donePayload?: unknown
   error?: string
   meta?: RunMeta
+  /** running 期间的流式文本尾部（后台/重挂页面经 snapshot 恢复进度显示用，done 后不再更新） */
+  textTail?: string
 }
 
 /** 带 requestId 的运行记录（runtime:snapshot 返回） */
