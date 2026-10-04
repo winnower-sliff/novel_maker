@@ -1,12 +1,31 @@
 // APK 更新分发：把构建好的 NovelMaker.apk 部署到 Electron userData/mobile/，
 // 经内嵌服务器 /api/mobile/version|file 下发（manifest 白名单防穿越）。
 // bundle 界面资源已不再单独下发——UI 更新统一走 APK 安装。
+import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
+
+/** 本次更新说明：自上一个 v* tag 以来的 commit 主题行（version.mjs 已在构建前打好本次 tag） */
+function gitNotes() {
+  try {
+    const tags = execSync('git tag --sort=-creatordate --list v*', { encoding: 'utf8' })
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+    const range = tags.length >= 2 ? `${tags[1]}..${tags[0]}` : '-20'
+    return execSync(`git log --pretty=%s ${range}`, { encoding: 'utf8' })
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .slice(0, 20)
+  } catch {
+    return []
+  }
+}
 
 function appDataDir() {
   if (process.platform === 'win32') {
@@ -41,7 +60,7 @@ async function main() {
   const manifest = {
     version,
     buildAt: new Date().toISOString(),
-    apk: { version, versionCode, path: rel, size: buf.length },
+    apk: { version, versionCode, path: rel, size: buf.length, notes: gitNotes() },
     files: [
       { path: rel, hash: createHash('sha256').update(buf).digest('hex'), size: buf.length }
     ]

@@ -10,7 +10,7 @@ type ApkState =
   | { kind: 'idle' }
   | { kind: 'checking' }
   | { kind: 'latest'; buildAt: string | null }
-  | { kind: 'available'; version: string; size: number; buildAt: string | null }
+  | { kind: 'available'; version: string; size: number; buildAt: string | null; notes: string[] }
   | { kind: 'downloading'; done: number; total: number }
   | { kind: 'ready' }
   | { kind: 'grant' }
@@ -69,7 +69,8 @@ export default function More() {
             kind: 'available',
             version: remote.apk.version,
             size: remote.apk.size,
-            buildAt: remote.buildAt
+            buildAt: remote.buildAt,
+            notes: remote.apk.notes ?? []
           })
         }
       }
@@ -161,6 +162,24 @@ export default function More() {
                     {fmtBuildAt(apkState.buildAt) && ` · ${fmtBuildAt(apkState.buildAt)}`} ·{' '}
                     {fmtBytes(apkState.size)}
                   </span>
+                  {apkState.notes.length > 0 && (
+                    <div className="w-full rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
+                      <div className="mb-1 text-[11px] text-zinc-500">本次更新</div>
+                      <ul className="space-y-0.5">
+                        {apkState.notes.slice(0, 6).map((n, i) => (
+                          // biome-ignore lint/suspicious/noArrayIndexKey: 只读日志列表，追加序号即可稳定
+                          <li key={i} className="text-[11px] leading-relaxed text-zinc-300">
+                            · {n}
+                          </li>
+                        ))}
+                      </ul>
+                      {apkState.notes.length > 6 && (
+                        <div className="mt-1 text-[11px] text-zinc-600">
+                          等 {apkState.notes.length} 项
+                        </div>
+                      )}
+                    </div>
+                  )}
                   <Button className="px-3 py-1.5 text-xs" onClick={() => void downloadApk()}>
                     下载并安装
                   </Button>
