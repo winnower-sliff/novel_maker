@@ -1,3 +1,4 @@
+import { friendlyLlmMessage } from '@shared/llmError'
 import type { ChatParams, PipelineAction, RunRecordPayload } from '@shared/types'
 import type { Api, DonePayload } from '../preload/index'
 
@@ -36,7 +37,7 @@ export function pollPending(): boolean {
           run.resolve(rec.donePayload as DonePayload)
         } else if (rec.status === 'error') {
           pendingRuns.delete(rid)
-          run.reject(new Error(rec.error ?? '生成失败'))
+          run.reject(new Error(friendlyLlmMessage(rec.error ?? '生成失败')))
         }
       }
       live = pendingRuns.size > 0
@@ -91,7 +92,7 @@ export function subscribeStream(
               resolve(rec.donePayload as DonePayload)
             } else if (rec.status === 'error') {
               cleanup()
-              reject(new Error(rec.error ?? '生成失败'))
+              reject(new Error(friendlyLlmMessage(rec.error ?? '生成失败')))
             } else {
               armWatchdog()
             }
@@ -121,10 +122,10 @@ export function subscribeStream(
               resolve(payload)
             }
           }),
-          window.api.llm.onError((rid, message) => {
+          window.api.llm.onError((rid, message, hint) => {
             if (rid === id) {
               cleanup()
-              reject(new Error(message))
+              reject(new Error(friendlyLlmMessage(message, hint)))
             }
           })
         )

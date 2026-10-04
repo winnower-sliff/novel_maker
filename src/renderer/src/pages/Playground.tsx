@@ -1,4 +1,5 @@
-import type { ModelProbeResult, SettingsView } from '@shared/types'
+import { classifyLlmError } from '@shared/llmError'
+import type { LlmErrorHint, ModelProbeResult, SettingsView } from '@shared/types'
 import { useEffect, useRef, useState } from 'react'
 import { Markdown } from '../components/Markdown'
 import { Badge, Button, Card, Label, Select, Textarea } from '../components/ui'
@@ -14,6 +15,7 @@ export default function Playground() {
   const [output, setOutput] = useState('')
   const [running, setRunning] = useState(false)
   const [error, setError] = useState('')
+  const [errHint, setErrHint] = useState<LlmErrorHint | null>(null)
   const [result, setResult] = useState<DonePayload | null>(null)
   const requestIdRef = useRef<string | null>(null)
   const outputEndRef = useRef<HTMLDivElement>(null)
@@ -48,9 +50,10 @@ export default function Playground() {
         setRunning(false)
       }
     })
-    const offError = window.api.llm.onError((id, message) => {
+    const offError = window.api.llm.onError((id, message, hint) => {
       if (id === requestIdRef.current) {
         setError(message)
+        setErrHint(hint ?? classifyLlmError(message))
         setRunning(false)
       }
     })
@@ -87,6 +90,7 @@ export default function Playground() {
     if (!input.trim() || !model || running) return
     setOutput('')
     setError('')
+    setErrHint(null)
     setResult(null)
     setRunning(true)
     void window.api.llm
@@ -102,7 +106,9 @@ export default function Playground() {
         requestIdRef.current = id
       })
       .catch((err: unknown) => {
-        setError((err as Error).message)
+        const message = (err as Error).message
+        setError(message)
+        setErrHint(classifyLlmError(message))
         setRunning(false)
       })
   }
@@ -162,7 +168,12 @@ export default function Playground() {
         {(result || error) && (
           <div className="border-t border-zinc-800 px-4 py-2.5">
             {error ? (
-              <div className="text-sm text-red-400">{error}</div>
+              <div className="text-sm text-red-400">
+                {errHint?.friendly && <div>{errHint.friendly}</div>}
+                <div className={errHint?.friendly ? 'mt-1 break-all text-xs text-zinc-500' : ''}>
+                  {error}
+                </div>
+              </div>
             ) : result ? (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-zinc-400">
                 <span>

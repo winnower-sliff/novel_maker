@@ -1,7 +1,9 @@
 // 写作页运行态全局容器：批量自动写作与单章生成的进度/结果全部存放于此，
 // 组件（桌面 Writing / 手机 Write）切走再回来不丢进度，生成在模块级闭包中继续。
 // 事件桥在本模块首次使用时挂一次 llm 订阅，按 requestId 路由，不依赖任何组件存活。
-import type { ChapterBrief, ContextPart, ReviewResult } from '@shared/types'
+
+import { friendlyLlmMessage } from '@shared/llmError'
+import type { ChapterBrief, ContextPart, LlmErrorHint, ReviewResult } from '@shared/types'
 import { create } from 'zustand'
 import { fmtTokens } from '../renderer/src/lib/format'
 import type { DonePayload } from '../renderer/src/lib/ipc'
@@ -253,10 +255,14 @@ export async function applyRunDone(id: string, payload: DonePayload): Promise<vo
   }
 }
 
-export function applyRunError(id: string, message: string): void {
+export function applyRunError(id: string, message: string, hint?: LlmErrorHint): void {
   const { run } = S.getState()
   if (!run || run.requestId !== id) return
-  S.setState({ busy: null, notice: `出错：${message}`, run: { ...run, finished: true } })
+  S.setState({
+    busy: null,
+    notice: `出错：${friendlyLlmMessage(message, hint)}`,
+    run: { ...run, finished: true }
+  })
 }
 
 /** 挂全局 llm 事件桥（幂等）。在写作页组件挂载时调用即可，事件处理不依赖组件存活 */
@@ -286,7 +292,7 @@ export function ensureWriteRunBridge(): void {
 
     window.api.llm.onDone((id, payload) => applyRunDone(id, payload))
 
-    window.api.llm.onError((id, message) => applyRunError(id, message))
+    window.api.llm.onError((id, message, hint) => applyRunError(id, message, hint))
 
     window.api.llm.onNotice((_id, message) => {
       S.setState({ notice: message })

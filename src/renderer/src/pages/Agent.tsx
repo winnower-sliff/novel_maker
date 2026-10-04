@@ -2,6 +2,7 @@ import type {
   AgentInstructionsView,
   AgentToolCall,
   AgentTurn,
+  LlmErrorHint,
   ModelProbeResult,
   SettingsView
 } from '@shared/types'
@@ -25,6 +26,25 @@ import { fmtDuration, fmtRelative, fmtTokens } from '../lib/format'
 import { qk, queries } from '../lib/queries'
 
 type AssistantTurn = Extract<AgentTurn, { role: 'assistant' }>
+
+/** 错误提示块：有分类 hint 时 friendly 主行 + 原始报错折叠小字；无则原样展示 */
+function ErrorHintBlock({ message, hint }: { message: string; hint: LlmErrorHint | null }) {
+  const friendly = hint?.friendly
+  if (!friendly) return <div className="text-sm text-red-400">{message}</div>
+  return (
+    <div className="text-sm text-red-400">
+      <div>{friendly}</div>
+      <details className="mt-1">
+        <summary className="cursor-pointer select-none text-xs text-zinc-500 hover:text-zinc-400">
+          详细信息
+        </summary>
+        <div className="mt-1 break-all font-mono text-xs leading-relaxed text-zinc-500">
+          {message}
+        </div>
+      </details>
+    </div>
+  )
+}
 
 const STATE_DOT: Record<AgentToolCall['state'], string> = {
   running: 'bg-amber-500 animate-pulse',
@@ -263,6 +283,7 @@ export default function Agent({ projectId }: { projectId: string }) {
   const turns = useAgentRunStore((s) => s.turns)
   const running = useAgentRunStore((s) => s.running)
   const error = useAgentRunStore((s) => s.error)
+  const errorHint = useAgentRunStore((s) => s.errorHint)
   const doneInfo = useAgentRunStore((s) => s.doneInfo)
   const subProcs = useAgentRunStore((s) => s.subProcs)
   const sessionId = useAgentRunStore((s) => s.sessionId)
@@ -673,7 +694,7 @@ export default function Agent({ projectId }: { projectId: string }) {
         {(doneInfo || error) && (
           <div className="border-t border-zinc-800 px-4 py-2.5">
             {error ? (
-              <div className="text-sm text-red-400">{error}</div>
+              <ErrorHintBlock message={error} hint={errorHint} />
             ) : doneInfo ? (
               <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-zinc-400">
                 <span>

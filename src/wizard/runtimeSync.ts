@@ -3,6 +3,7 @@
 // 事件到达照常更新，但任何丢失的事件都会在触发时机（回前台/SSE 重连/活跃 10s、空闲 60s 定期）
 // 被 runtime:snapshot 拉取纠正。组件只读 store，不关心事件是否到达。
 
+import { friendlyLlmMessage } from '@shared/llmError'
 import type { CanonSyncResult, RuntimeSnapshot } from '@shared/types'
 import type { DonePayload } from '../preload/index'
 import { qk } from '../renderer/src/lib/queries'
@@ -139,11 +140,11 @@ function applySnapshot(snap: RuntimeSnapshot): void {
       const missed = r.finishedAt !== undefined && r.finishedAt < lastTickAt
       if (m?.outlineId) {
         if (r.status === 'done') fire('章节生成完成', '正文已就绪', 'success', missed)
-        else fire('章节生成失败', r.error ?? '未知错误', 'error', missed)
+        else fire('章节生成失败', friendlyLlmMessage(r.error ?? '未知错误'), 'error', missed)
       } else if (m?.action === 'outline' && m.projectId) {
         // 大纲分批生成在后台完成/失败：补通知 + 失效大纲缓存（列表页自动刷新）
         if (r.status === 'done') fire('大纲生成完成', '新大纲已导入', 'success', missed)
-        else fire('大纲生成失败', r.error ?? '未知错误', 'error', missed)
+        else fire('大纲生成失败', friendlyLlmMessage(r.error ?? '未知错误'), 'error', missed)
         void queryClient.invalidateQueries({ queryKey: qk.outlines(m.projectId) })
       } else if (m?.action === 'canonSync' && m.projectId && r.status === 'done') {
         // 设定同步在后台完成：结果 ingest（挂预览/纯人物 toast，防重与文案由 canonStore 统一处理）；失败按共识静默

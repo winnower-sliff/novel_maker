@@ -1,7 +1,8 @@
 import type { DonePayload } from '@shared/contract'
+import { friendlyLlmMessage } from '@shared/llmError'
 import type { ChatParams } from '@shared/types'
 
-/** llm:chat 流式封装（与桌面 lib/ipc.ts chatStream 同构） */
+/** llm:chat 流式封装（与桌面 lib/ipc.ts chatStream 同构）；错误 reject 为友好提示文案 */
 export function chatStream(
   params: ChatParams,
   onDelta?: (text: string) => void
@@ -27,10 +28,10 @@ export function chatStream(
               resolve(payload)
             }
           }),
-          window.api.llm.onError((rid, message) => {
+          window.api.llm.onError((rid, message, hint) => {
             if (rid === id) {
               cleanup()
-              reject(new Error(message))
+              reject(new Error(friendlyLlmMessage(message, hint)))
             }
           })
         )

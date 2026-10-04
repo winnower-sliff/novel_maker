@@ -197,6 +197,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const turns = useAgentRunStore((s) => s.turns)
   const running = useAgentRunStore((s) => s.running)
   const error = useAgentRunStore((s) => s.error)
+  const errorHint = useAgentRunStore((s) => s.errorHint)
   const sessionId = useAgentRunStore((s) => s.sessionId)
   const confirmTarget = useAgentConfirmTarget()
 
@@ -361,7 +362,13 @@ export default function AgentChat({ projectId }: { projectId: string }) {
           )}
           {error && (
             <div className="rounded-lg border border-red-900/50 bg-red-950/40 px-3 py-2 text-xs leading-5 text-red-300">
-              {error}
+              {errorHint?.friendly || error}
+              {errorHint?.friendly && (
+                <details className="mt-1">
+                  <summary className="cursor-pointer select-none text-zinc-500">详细信息</summary>
+                  <div className="mt-1 break-all font-mono text-zinc-500">{error}</div>
+                </details>
+              )}
             </div>
           )}
         </div>

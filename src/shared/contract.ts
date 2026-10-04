@@ -18,6 +18,7 @@ import type {
   ContentBlock,
   EmbeddingStatus,
   Foreshadow,
+  LlmErrorHint,
   ModelProbeResult,
   ModelRouting,
   OutlineItem,
@@ -573,13 +574,13 @@ export type RetOfApi<C extends ApiChannel> = C extends InvokeChannels
 export interface EventContract {
   'llm:delta': [requestId: string, text: string]
   'llm:done': [requestId: string, payload: DonePayload]
-  'llm:error': [requestId: string, message: string]
+  'llm:error': [requestId: string, message: string, hint?: LlmErrorHint]
   'llm:notice': [requestId: string, message: string]
   'agent:delta': [requestId: string, text: string]
   'agent:toolCall': [requestId: string, call: AgentToolCallEvent]
   'agent:toolResult': [requestId: string, result: AgentToolResultEvent]
   'agent:done': [requestId: string, payload: AgentDonePayload]
-  'agent:error': [requestId: string, message: string]
+  'agent:error': [requestId: string, message: string, hint?: LlmErrorHint]
   'agent:subEvent': [requestId: string, event: SubagentEvent]
   'write:batch': [projectId: string, snapshot: BatchSnapshot]
 }
