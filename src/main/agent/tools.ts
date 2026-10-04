@@ -1,6 +1,10 @@
 import { splitTags } from '../../shared/tags'
 import type { OutlineItem, ToolDef } from '../../shared/types'
+import { chatStream, pickRatelimitHeaders } from '../llm'
+import { applyVolumeSummaryResult, buildVolumeSummaryRequest } from '../pipeline'
+import { resolveRequestAuth } from '../settings'
 import * as store from '../store'
+import { appendUsage } from '../usage'
 import { runSubAgent } from './subagent'
 import {
   type AgentTool,
@@ -9,11 +13,13 @@ import {
   FULL_PAGE_DEFAULT,
   getOutlineOwned,
   MAX_CHAPTER_CHARS,
+  optArr,
   optB,
   optN,
   optNum,
   optS,
   optStr,
+  optStrArr,
   reqStr,
   s,
   schema
@@ -314,7 +320,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'list_outlines',
       description:
-        '列出大纲条目（id、卷号、章号、标题、梗概、状态），按卷号与章号排序。可选 volume 按卷过滤、offset/limit 分页（默认全部）。做全局检查类任务时应分批读取直至 hasMore=false',
+        '列出大纲条目（id、卷号、章号、标题、梗概、场景序列 scenes、状态），按卷号与章号排序。可选 volume 按卷过滤、offset/limit 分页（默认全部）。做全局检查类任务时应分批读取直至 hasMore=false',
       input_schema: schema(
         {
           volume: optN('按卷号过滤'),
@@ -342,6 +348,7 @@ const TOOLS: AgentTool[] = [
           chapterNo: o.chapterNo,
           title: o.title,
           synopsis: o.synopsis,
+          scenes: o.scenes,
           role: o.role,
           suspense: o.suspense,
           twist: o.twist,
@@ -356,7 +363,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_outline',
       description:
-        '新建或修改大纲条目。传 id 表示修改既有条目；不传 id 表示新建（volume 与 chapterNo 必填）。可选元数据：role（章节定位）、suspense（悬念密度）、twist（认知颠覆1-5）、hook（结尾钩子设计）、foreshadowOps（伏笔操作，如 埋设(A)→回收(B)）；修改时未传字段保留原值',
+        '新建或修改大纲条目。传 id 表示修改既有条目；不传 id 表示新建（volume 与 chapterNo 必填）。可选元数据：title（章节标题）、synopsis（梗概：50字纯剧情概要，只回答「这章讲什么」）、scenes（场景序列 string[]：2-4 条「人物+动作/冲突」场景句，回答「这章怎么演」，主要戏份排前面）、role（章节定位）、suspense（悬念密度）、twist（认知颠覆1-5）、hook（结尾钩子设计）、foreshadowOps（伏笔操作，如 埋设(A)→回收(B)）；修改时未传字段保留原值，scenes 传空数组表示清空',
       input_schema: schema(
         {
           id: optS('要修改的大纲 id（新建时省略）'),
@@ -364,6 +371,7 @@ const TOOLS: AgentTool[] = [
           chapterNo: optN('章号（新建必填）'),
           title: optS('章节标题'),
           synopsis: optS('章节梗概'),
+          scenes: optArr('场景序列，每条一句「人物+动作/冲突」'),
           role: optS('章节定位（情节推进/人物深化/氛围营造/过渡衔接/高潮转折）'),
           suspense: optS('悬念密度（紧凑/渐进/爆发）'),
           twist: optN('认知颠覆强度 1-5'),
@@ -394,6 +402,7 @@ const TOOLS: AgentTool[] = [
         chapterNo,
         title: optStr(input, 'title'),
         synopsis: optStr(input, 'synopsis'),
+        scenes: optStrArr(input, 'scenes'),
         role: optStr(input, 'role'),
         suspense: optStr(input, 'suspense'),
         twist: twist === undefined ? undefined : Math.min(5, Math.max(0, Math.round(twist))),
@@ -491,7 +500,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'list_summaries',
       description:
-        '按章列出已定稿的结构化摘要（概要/关键事件/时间线/人物状态），供检索前情。可选 volume 按卷过滤；默认返回全部',
+        '按章列出已定稿的结构化摘要（概要/关键事件/时间线/人物状态/硬账 ledger），供检索前情与数字对账。可选 volume 按卷过滤；默认返回全部',
       input_schema: schema({ volume: optN('按卷号过滤') }, [])
     },
     danger: false,
@@ -513,7 +522,8 @@ const TOOLS: AgentTool[] = [
           summary: s.summary,
           events: s.events,
           timeline: s.timeline,
-          characterStates: s.characterStates
+          characterStates: s.characterStates,
+          ledger: s.ledger
         })
       }
       return { count: items.length, items }
@@ -714,7 +724,7 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'list_foreshadows',
-      description: '列出当前项目全部伏笔（含 id、内容、埋设章节、状态）',
+      description: '列出当前项目全部伏笔（含 id、内容、埋设章节、状态、计划回收点、优先级）',
       input_schema: schema({}, [])
     },
     danger: false,
@@ -724,7 +734,9 @@ const TOOLS: AgentTool[] = [
         content: f.content,
         plantedChapter: f.plantedChapter,
         status: f.status,
-        resolvedChapter: f.resolvedChapter
+        resolvedChapter: f.resolvedChapter,
+        plannedResolve: f.plannedResolve,
+        priority: f.priority
       }))
   },
   {
@@ -799,6 +811,59 @@ const TOOLS: AgentTool[] = [
         task: reqStr(input, 'task'),
         role: optStr(input, 'role')?.trim() ?? ''
       })
+  },
+  {
+    def: {
+      name: 'refresh_volume_summary',
+      description:
+        '重新生成并落库某一卷的卷摘要（走与自动写作相同的生成链：汇总该卷各章已定稿摘要+未回收伏笔+末章人物状态，覆盖旧摘要）。写完一卷/批量改稿后刷新，get_book_digest 里的卷摘要随之更新。该卷没有大纲或没有任何已定稿章节摘要时报错。生成需要一些时间，期间无输出属正常',
+      input_schema: schema({ volume: s('卷号，如 1') }, ['volume'])
+    },
+    danger: false,
+    handler: () => {
+      throw new Error('refresh_volume_summary 需要流式上下文，当前环境不支持')
+    },
+    execCtx: async (input, ctx) => {
+      const volume = optNum(input, 'volume')
+      if (volume === undefined || !Number.isInteger(volume) || volume < 1)
+        throw new Error('volume 必须为正整数卷号')
+      const request = buildVolumeSummaryRequest(ctx.projectId, volume)
+      const auth = await resolveRequestAuth(request.purpose)
+      if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
+      const result = await chatStream(
+        {
+          ...request,
+          model: auth.model,
+          cacheSystem: auth.promptCache
+        },
+        { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+        () => {},
+        ctx.signal
+      )
+      ctx.usage.inputTokens += result.usage.inputTokens
+      ctx.usage.outputTokens += result.usage.outputTokens
+      ctx.usage.cacheReadTokens += result.usage.cacheReadTokens
+      ctx.usage.cacheCreationTokens += result.usage.cacheCreationTokens
+      appendUsage({
+        ts: Date.now(),
+        model: result.model,
+        purpose: 'summary',
+        inputTokens: result.usage.inputTokens,
+        outputTokens: result.usage.outputTokens,
+        cacheReadTokens: result.usage.cacheReadTokens,
+        cacheCreationTokens: result.usage.cacheCreationTokens,
+        durationMs: result.durationMs,
+        ratelimit: pickRatelimitHeaders(result.headers)
+      })
+      const saved = applyVolumeSummaryResult(ctx.projectId, volume, result.text)
+      if (!saved.parsed) throw new Error('卷摘要生成结果为空，请稍后重试或检查模型配置')
+      return {
+        ok: true,
+        volume,
+        summaryChars: saved.summaryChars,
+        note: `第 ${volume} 卷卷摘要已重新生成并保存（${saved.summaryChars} 字）${auth.fallbackReason ? `。注意：${auth.fallbackReason}` : ''}`
+      }
+    }
   }
 ]
 

@@ -63,6 +63,10 @@ export function optB(desc: string): Record<string, unknown> {
   return { type: 'boolean', description: `${desc}（可选）` }
 }
 
+export function optArr(desc: string): Record<string, unknown> {
+  return { type: 'array', items: { type: 'string' }, description: `${desc}（可选）` }
+}
+
 export function reqStr(input: ToolInput, key: string): string {
   const v = input[key]
   if (typeof v !== 'string' || !v.trim()) throw new Error(`参数 ${key} 缺失或为空`)
@@ -83,6 +87,12 @@ function _reqNum(input: ToolInput, key: string): number {
 export function optNum(input: ToolInput, key: string): number | undefined {
   const v = input[key]
   return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+}
+
+export function optStrArr(input: ToolInput, key: string): string[] | undefined {
+  const v = input[key]
+  if (!Array.isArray(v)) return undefined
+  return v.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
 }
 
 export function clip(text: string, max: number): { text: string; truncated: boolean } {
