@@ -55,6 +55,8 @@ let pendingDelta = ''
 let rafId: number | null = null
 /** run 代际：switchSession/syncProject/stop 递增，使迟到 run rid / sessionLoad 失效 */
 let genToken = 0
+/** 快照里已接管恢复过的 agent run（防每 tick 重复接管；记录 TTL 10min 后自然消失） */
+const recoveredRuns = new Set<string>()
 
 function findConfirmTarget(s: AgentRunState): AgentToolCall | null {
   if (!s.running || s.turns.length === 0) return null
@@ -89,6 +91,35 @@ function patchLastAssistant(fn: (t: Extract<AgentTurn, { role: 'assistant' }>) =
   const last = prev[prev.length - 1]
   if (last.role !== 'assistant') return
   useAgentRunStore.setState({ turns: [...prev.slice(0, -1), fn(last)] })
+}
+
+/**
+ * 工具结果对账：把最后 assistant turn 里 running 态且已有主进程结果的卡校正为终态（幂等）。
+ * full 提供时回填 result 全文（done payload 一次下发）；仅轻量状态表时补占位文案。
+ * 修复刷新窗口 toolResult 事件丢失后 run 收尾误标「（已中断）」的问题。
+ */
+function reconcileToolCalls(
+  statuses: readonly { id: string; ok: boolean; denied?: boolean }[],
+  full?: Map<string, string>
+): void {
+  if (statuses.length === 0) return
+  const last = useAgentRunStore.getState().turns.at(-1)
+  if (last?.role !== 'assistant') return
+  if (!last.toolCalls.some((c) => c.state === 'running' && statuses.some((x) => x.id === c.id)))
+    return
+  patchLastAssistant((t) => ({
+    ...t,
+    toolCalls: t.toolCalls.map((c) => {
+      if (c.state !== 'running') return c
+      const st = statuses.find((x) => x.id === c.id)
+      if (!st) return c
+      return {
+        ...c,
+        state: (st.denied ? 'denied' : st.ok ? 'ok' : 'error') as AgentToolCall['state'],
+        result: full?.get(c.id) || c.result || '（后台已完成，详情未同步）'
+      }
+    })
+  }))
 }
 
 function appendDelta(chunk: string): void {
@@ -225,7 +256,8 @@ export function switchSession(id: string | null): void {
     useAgentRunStore.setState({
       sessionId: session.id,
       sessionCreatedAt: session.createdAt,
-      turns: session.turns
+      // 非运行态加载的历史会话：在途卡视为已中断（不再有事件来校正），防 spinner 永转
+      turns: finalizeTurns(session.turns)
     })
   })
 }
@@ -237,6 +269,9 @@ export function switchSession(id: string | null): void {
 export function syncProject(projectId: string): void {
   const s = useAgentRunStore.getState()
   if (s.projectId === projectId) return
+  // 运行中（含刷新恢复的接管）优先于项目切换：任务未收尾前不覆盖运行会话视图，
+  // 也不 abort——恢复接管被当「项目变化」清杀会让刷新恢复失效；先停或等收尾后再切
+  if (s.running && s.requestId) return
   const token = ++genToken
   if (s.requestId) void window.api.agent.abort(s.requestId)
   cancelPendingDelta()
@@ -264,7 +299,7 @@ export function syncProject(projectId: string): void {
         useAgentRunStore.setState({
           sessionId: session.id,
           sessionCreatedAt: session.createdAt,
-          turns: session.turns
+          turns: finalizeTurns(session.turns)
         })
       })
     })
@@ -344,11 +379,17 @@ export function applyAgentDone(id: string, payload: AgentDonePayload): boolean {
   const s = useAgentRunStore.getState()
   if (!s.running || id !== s.requestId) return false
   flushDelta()
-  const fixed = finalizeTurns(useAgentRunStore.getState().turns)
+  if (payload.toolResults?.length)
+    reconcileToolCalls(
+      payload.toolResults,
+      new Map(payload.toolResults.map((r) => [r.id, r.result]))
+    )
+  let fixed = finalizeTurns(useAgentRunStore.getState().turns)
   if (fixed.length > 0 && fixed[fixed.length - 1].role === 'assistant') {
     const last = fixed[fixed.length - 1] as Extract<AgentTurn, { role: 'assistant' }>
     fixed[fixed.length - 1] = { ...last, text: payload.text || last.text }
   }
+  fixed = applyCompactRewrite(fixed, payload.compact?.summary)
   useAgentRunStore.setState({
     turns: fixed,
     running: false,
@@ -358,6 +399,28 @@ export function applyAgentDone(id: string, payload: AgentDonePayload): boolean {
   persistRun()
   setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: true } })
   return true
+}
+
+/**
+ * 压缩落账：把会话内最后一次 compact_context 调用（含其之前的全部历史）折叠为一条
+ * 合成 user 摘要 turn，与主进程 run 内 messages 整体替换的语义对齐，后续 turn 保持原序。
+ * 找不到压缩点（历史会话缺卡等）时原样返回，绝不丢数据
+ */
+function applyCompactRewrite(turns: AgentTurn[], summary?: string): AgentTurn[] {
+  if (!summary) return turns
+  let idx = -1
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i]
+    if (t.role === 'assistant' && t.toolCalls.some((c) => c.name === 'compact_context')) {
+      idx = i
+      break
+    }
+  }
+  if (idx < 0) return turns
+  return [
+    { role: 'user', text: `【上下文压缩】以下摘要替代了此前的对话历史：\n${summary}`, ts: Date.now() },
+    ...turns.slice(idx + 1)
+  ]
 }
 
 /** 事件与同步器补拉共用收尾路径；id/running 守卫使二次应用幂等 */
@@ -398,19 +461,31 @@ export function syncAgentFromSnapshot(snap: RuntimeSnapshot): void {
       if (applyAgentError(rec.id, rec.error ?? '生成失败')) {
         pushToast('error', `后台智能体任务失败：${rec.error ?? '未知错误'}`)
       }
+    } else if (rec?.toolStatuses?.length) {
+      // running 期间轻量对账：校正刷新窗口丢失 toolResult 的工具卡（10s tick 周期收敛）
+      reconcileToolCalls(rec.toolStatuses)
     }
     return
   }
   if (s.running || s.requestId) return
 
-  const orphan = snap.runs.find(
-    (r) => r.status === 'running' && r.kind === 'agent' && r.meta?.projectId
+  // 已恢复过一次的 run 不再重复接管（快照记录 TTL 10min 内每次 tick 都会出现）。
+  // running 记录优先（续流）；无 running 才看 ended——只取 5min 内最新一条（刷新窗口内
+  // 刚收尾的那个任务），更早的历史 done 记录不属于本次恢复语义，接管反而会污染当前会话
+  const candidates = snap.runs.filter(
+    (r) => r.kind === 'agent' && r.meta?.projectId && !recoveredRuns.has(r.id)
   )
+  const orphan =
+    candidates.find((r) => r.status === 'running') ??
+    [...candidates]
+      .reverse()
+      .find((r) => r.finishedAt !== undefined && Date.now() - r.finishedAt < 5 * 60_000)
   if (!orphan?.meta?.projectId) return
   const projectId = orphan.meta.projectId
   // 只在无项目上下文（刷新后）或同项目时接管；异项目不接管也不提示——
   // 接管后用户一切页 syncProject 就会按「项目变化」abort，误杀另一端正在跑的任务
   if (s.projectId !== null && s.projectId !== projectId) return
+  recoveredRuns.add(orphan.id)
   const pending = orphan.pendingConfirm
   const token = ++genToken
   // 同项目且已有会话内容时直接在现有 turns 上绑定（syncProject 已加载过），否则清空走完整加载
@@ -425,14 +500,30 @@ export function syncAgentFromSnapshot(snap: RuntimeSnapshot): void {
     ...(keepTurns ? {} : { sessionId: null, sessionCreatedAt: Date.now(), turns: [] })
   })
   setAgentUi({ running: true, confirming: !!pending })
+  // run 已在重载窗口内收尾：加载会话后按记录终态收尾（applyAgentDone/Error 内部做
+  // toolResults 全量校正 + finalizeTurns + persist，把会话文件里停在 running 的卡修正掉）
+  const settleIfEnded = (): boolean => {
+    if (orphan.status === 'done') {
+      const payload = orphan.donePayload as AgentDonePayload | undefined
+      if (payload) return applyAgentDone(orphan.id, payload)
+      return applyAgentError(orphan.id, '任务已完成，但结果未同步')
+    }
+    if (orphan.status === 'error') return applyAgentError(orphan.id, orphan.error ?? '生成失败')
+    return false
+  }
   if (keepTurns) {
     rebuildPendingTurn(pending)
+    settleIfEnded()
     return
   }
   void window.api.agent
     .sessions(projectId)
     .then((list) => {
-      if (token !== genToken || list.length === 0) return
+      if (token !== genToken) return
+      if (list.length === 0) {
+        settleIfEnded()
+        return
+      }
       void window.api.agent.sessionLoad(list[0].id).then((session) => {
         if (token !== genToken) return
         useAgentRunStore.setState({
@@ -441,6 +532,7 @@ export function syncAgentFromSnapshot(snap: RuntimeSnapshot): void {
           turns: session?.turns ?? []
         })
         rebuildPendingTurn(pending)
+        settleIfEnded()
       })
     })
     .catch((err: unknown) => {

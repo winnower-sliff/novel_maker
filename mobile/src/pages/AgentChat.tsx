@@ -201,9 +201,10 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const confirmTarget = useAgentConfirmTarget()
 
   // 项目变化：中断旧任务并加载新项目最近会话（同项目重复挂载为幂等 no-op）
+  // 项目对账：运行中被守卫推迟后，收尾时靠 running 变化重触发补对账
   useEffect(() => {
     syncProject(projectId)
-  }, [projectId])
+  }, [projectId, running])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {

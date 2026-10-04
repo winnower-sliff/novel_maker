@@ -272,9 +272,14 @@ export default function Agent({ projectId }: { projectId: string }) {
     void queryClient.invalidateQueries({ queryKey: qk.agentSessions(pid) })
   }
 
-  // 项目变化：中断旧任务并加载新项目最近会话（同一项目重复挂载为幂等 no-op）
+  // 项目对账：运行中（含恢复接管）被 syncProject 守卫推迟后，收尾时靠 running 变化重触发补对账
+  // biome-ignore lint/correctness/useExhaustiveDependencies: running 是故意的重触发信号（收尾时补对账）
   useEffect(() => {
     syncProject(projectId)
+  }, [projectId, running])
+
+  // 项目变化：加载模型配置与失效会话列表（同一项目重复挂载为幂等 no-op）
+  useEffect(() => {
     if (!projectId) return
     void (async () => {
       const s = await window.api.settings.get()
