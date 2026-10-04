@@ -15,10 +15,11 @@ body,
    组件类名不改：Tailwind v4 utilities 编译为 var(--color-*)，定义在 @layer theme，
    此处无层级规则覆写同名变量即可全局换色。amber 即强调色，重映射到所选主题色。 */
 html {
-  /* WebView 背景（capacitor backgroundColor 之外的双保险：overscroll/首帧不露白） */
-  background: var(--nm-bg, #09090b);
-  --nm-bg: #09090b;
-  --nm-fg: #e4e4e7;
+  /* WebView 背景（capacitor backgroundColor 之外的双保险：overscroll/首帧不露白）。
+     基础值取护眼橙：启动页/水合前首帧即橙，无「先深后变色」的闪 */
+  background: var(--nm-bg, #f1e7d0);
+  --nm-bg: #f1e7d0;
+  --nm-fg: #443b28;
   /* 强调色档位默认 = 琥珀本色（data-accent 缺省时也有正确值，避免首帧透明） */
   --nm-acc-100: #fef3c7;
   --nm-acc-200: #fde68a;
@@ -141,8 +142,8 @@ html[data-appearance='sepia'] {
 
 body {
   margin: 0;
-  background: var(--nm-bg, #09090b);
-  color: var(--nm-fg, #e4e4e7);
+  background: var(--nm-bg, #f1e7d0);
+  color: var(--nm-fg, #443b28);
   font-family:
     -apple-system, "Segoe UI", Roboto, "Microsoft YaHei", "PingFang SC", sans-serif;
   -webkit-tap-highlight-color: transparent;

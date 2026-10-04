@@ -1,4 +1,4 @@
-import { Button, Empty } from '@mobile/components/ui'
+import { Button, Empty, Spinner } from '@mobile/components/ui'
 import { ReaderSettingsSheet } from '@mobile/components/ReaderSettingsSheet'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { useTocStore } from '@mobile/lib/tocStore'
@@ -8,12 +8,23 @@ import {
   getCachedBriefs,
   getCachedChapter,
   putBriefs,
-  putChapters
+  putChapters,
+  type CachedChapter
 } from '@mobile/lib/readerCache'
-import { useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { pushToast } from '@wizard/toastStore'
+import { useQueries, useQuery } from '@tanstack/react-query'
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent,
+  type ReactNode
+} from 'react'
 import { groupChapterSegments, SEGMENT_SIZE } from '@shared/chapterSegments'
-import type { ChapterBrief } from '@shared/types'
+import type { Chapter, ChapterBrief } from '@shared/types'
 
 /** 剥掉章节正文的 md 标题行与 [[链接]] 语法，得到纯文本段落 */
 export function parseParagraphs(content: string): string[] {
@@ -26,7 +37,371 @@ export function parseParagraphs(content: string): string[] {
     .filter(Boolean)
 }
 
-/** 阅读页：卷分组目录（只列已写章）+ 排版阅读（字号可调）+ 上下章 + 进度记忆（重进续读）。
+/** 拼接流窗口上限（章）：超出后砍掉最旧的头部并补偿 scrollTop */
+const MAX_FLOW = 15
+/** 距底部小于该距离（px）时预追加下一章 */
+const APPEND_AHEAD = 1500
+/** 触发上下栏收/展的滚动方向变化阈值（px） */
+const SCROLL_DIR_THRESHOLD = 8
+
+/** 阅读正文态：无缝拼接流（滚近底部自动追加下一章，窗口超限砍头重置）+ 聚焦模式
+ *  （下滚收上下栏 / 上滚展 / 点屏幕中央切换，顶部保留细进度条）+ 自动滚动
+ *  （底栏开关、速度在设置抽屉调、触摸或开抽屉时暂停、末章到底即停）。 */
+function ReaderFlow({
+  projectId,
+  written,
+  startIdx,
+  onExit
+}: {
+  projectId: string
+  written: ChapterBrief[]
+  startIdx: number
+  onExit: () => void
+}) {
+  const [flow, setFlow] = useState({ start: startIdx, end: startIdx })
+  const [chrome, setChrome] = useState(true)
+  const [autoOn, setAutoOn] = useState(false)
+  const [topIdx, setTopIdx] = useState(startIdx)
+  const [sheetOpen, setSheetOpen] = useState(false)
+  const font = useSettingsStore((s) => s.font)
+  const speed = useSettingsStore((s) => s.autoScrollSpeed)
+  const offlineChapter = useReaderStore((s) => s.offlineChapter)
+  const setOffline = useReaderStore((s) => s.setOffline)
+  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const progressRef = useRef<HTMLDivElement | null>(null)
+  const lastTopRef = useRef(0)
+  const touchPauseRef = useRef(false)
+  const resumeTimerRef = useRef<number | null>(null)
+  const trimRef = useRef<{ cutH: number } | null>(null)
+  const jumpRef = useRef<number | null>(null)
+  // 走了离线缓存的章 id 集合：任一命中即顶栏标「离线」，全部新鲜才清除（避免并发覆盖闪烁）
+  const offlineIdsRef = useRef(new Set<string>())
+
+  const flowBriefs = useMemo(
+    () => written.slice(flow.start, flow.end + 1),
+    [written, flow.start, flow.end]
+  )
+
+  const fetchChapter = useCallback(
+    async (b: ChapterBrief): Promise<Chapter | CachedChapter> => {
+      const syncOffline = (): void => {
+        setOffline('chapter', offlineIdsRef.current.size > 0)
+      }
+      try {
+        const fresh = await window.api.novel.chapter(b.id)
+        if (!fresh) throw new Error('chapter not written')
+        offlineIdsRef.current.delete(b.id)
+        syncOffline()
+        void putChapters([
+          {
+            id: b.id,
+            projectId,
+            volume: b.volume,
+            chapterNo: b.chapterNo,
+            title: b.title,
+            content: fresh.content,
+            wordCount: fresh.wordCount,
+            cachedAt: Date.now()
+          }
+        ])
+        return fresh
+      } catch (err) {
+        const cached = await getCachedChapter(b.id)
+        if (cached) {
+          offlineIdsRef.current.add(b.id)
+          syncOffline()
+          return cached
+        }
+        throw err
+      }
+    },
+    [projectId, setOffline]
+  )
+
+  const chapterQueries = useQueries({
+    queries: flowBriefs.map((b) => ({
+      queryKey: ['novel', 'chapter', b.id],
+      queryFn: () => fetchChapter(b)
+    }))
+  })
+
+  // 砍头补偿 / 跳章定位：flow 变化后的绘制前修正，避免视口跳动
+  useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    const trim = trimRef.current
+    if (trim) {
+      trimRef.current = null
+      el.scrollTop -= trim.cutH
+    }
+    const jump = jumpRef.current
+    if (jump != null) {
+      jumpRef.current = null
+      const sec = el.querySelector<HTMLElement>(`[data-flow-idx="${jump}"]`)
+      if (sec) el.scrollTop = sec.offsetTop
+    }
+    lastTopRef.current = el.scrollTop
+  }, [flow])
+
+  // 进度记忆：跟随视口顶部所在章（setReadPos 内部防抖持久化）
+  useEffect(() => {
+    const b = written[topIdx]
+    if (b) useSettingsStore.getState().setReadPos(projectId, b.id)
+  }, [topIdx, projectId, written])
+
+  const loadingFlow = chapterQueries.some((q) => q.isLoading)
+
+  // 进入阅读态先清掉上一次会话残留的「离线」标记，由本流 fetch 结果重算
+  useEffect(() => {
+    setOffline('chapter', false)
+  }, [setOffline])
+
+  // 触摸结束后的惯性滚动宽限期：期间不叠加 rAF 推进，避免瞬时加速
+  useEffect(
+    () => () => {
+      if (resumeTimerRef.current != null) clearTimeout(resumeTimerRef.current)
+    },
+    []
+  )
+
+  // 自动滚动：rAF 匀速推进；触摸或设置抽屉打开时暂停；流内全部加载完且到末章底部才停并提示
+  useEffect(() => {
+    if (!autoOn) return
+    let raf = 0
+    let last = performance.now()
+    let stopped = false
+    const step = (now: number): void => {
+      raf = requestAnimationFrame(step)
+      const el = scrollRef.current
+      if (!el) return
+      const dt = Math.min(0.1, (now - last) / 1000)
+      last = now
+      if (touchPauseRef.current || sheetOpen || stopped) return
+      el.scrollTop += speed * dt
+      if (
+        !loadingFlow &&
+        flow.end >= written.length - 1 &&
+        el.scrollTop + el.clientHeight >= el.scrollHeight - 2
+      ) {
+        stopped = true
+        setAutoOn(false)
+        pushToast('success', '已到最后一章')
+      }
+    }
+    raf = requestAnimationFrame(step)
+    return () => cancelAnimationFrame(raf)
+  }, [autoOn, speed, sheetOpen, loadingFlow, flow.end, written.length])
+
+  // 返回键：设置抽屉优先关，再回目录（后注册者在栈顶）
+  useBackHandler(onExit, true)
+  useBackHandler(() => setSheetOpen(false), sheetOpen)
+
+  /** 跳到目标章章首：在流内直接定位，否则扩流/重建流后由 layoutEffect 定位 */
+  const jumpTo = (targetIdx: number): void => {
+    if (targetIdx < 0 || targetIdx >= written.length) return
+    if (targetIdx >= flow.start && targetIdx <= flow.end) {
+      const el = scrollRef.current
+      const sec = el?.querySelector<HTMLElement>(`[data-flow-idx="${targetIdx}"]`)
+      if (el && sec) {
+        el.scrollTop = sec.offsetTop
+        lastTopRef.current = el.scrollTop
+      }
+      return
+    }
+    jumpRef.current = targetIdx
+    if (targetIdx < flow.start) setFlow({ start: targetIdx, end: Math.max(targetIdx, flow.end) })
+    else setFlow({ start: flow.start, end: targetIdx })
+  }
+
+  const handleScroll = (): void => {
+    const el = scrollRef.current
+    if (!el) return
+    const st = el.scrollTop
+    const delta = st - lastTopRef.current
+    if (Math.abs(delta) > SCROLL_DIR_THRESHOLD) setChrome(delta < 0)
+    lastTopRef.current = st
+
+    // 所在章 = 视口顶部（+40px 容差）落进的 section；滚动容器 relative，offsetTop 即内容坐标
+    const secs = el.querySelectorAll<HTMLElement>('[data-flow-idx]')
+    let cur = -1
+    secs.forEach((s) => {
+      if (s.offsetTop <= st + 40) cur = Number(s.dataset.flowIdx)
+    })
+    if (cur < 0 && secs.length > 0) cur = Number(secs[0].dataset.flowIdx)
+    setTopIdx(cur)
+
+    // 细进度条：所在章章内进度（直接改 style，不经过 state）
+    const sec = el.querySelector<HTMLElement>(`[data-flow-idx="${cur}"]`)
+    if (progressRef.current && sec) {
+      const span = sec.offsetHeight - el.clientHeight
+      const p = span > 0 ? (st - sec.offsetTop) / span : st >= sec.offsetTop ? 1 : 0
+      progressRef.current.style.width = `${Math.min(100, Math.max(0, p * 100))}%`
+    }
+
+  // 滚近底部追加下一章；流末章未加载完时暂缓（防止 Spinner 矮内容连环占满窗口）；
+  // 窗口超上限时砍头（先量被砍高度，绘制前补偿 scrollTop）
+  const tailLoading = chapterQueries[chapterQueries.length - 1]?.isLoading ?? false
+  if (
+    !tailLoading &&
+    flow.end < written.length - 1 &&
+    el.scrollHeight - st - el.clientHeight < APPEND_AHEAD
+  ) {
+      const newEnd = flow.end + 1
+      const overflow = newEnd - flow.start + 1 - MAX_FLOW
+      if (overflow > 0) {
+        let cutH = 0
+        for (let i = flow.start; i < flow.start + overflow; i++) {
+          cutH += el.querySelector<HTMLElement>(`[data-flow-idx="${i}"]`)?.offsetHeight ?? 0
+        }
+        trimRef.current = { cutH }
+        setFlow({ start: flow.start + overflow, end: newEnd })
+      } else {
+        setFlow({ start: flow.start, end: newEnd })
+      }
+    }
+  }
+
+  // 点屏幕中央 1/3 区域手动切换上下栏显隐
+  const handleBodyClick = (e: MouseEvent): void => {
+    const el = scrollRef.current
+    if (!el) return
+    const y = e.clientY - el.getBoundingClientRect().top
+    if (y > el.clientHeight * 0.3 && y < el.clientHeight * 0.7) setChrome((v) => !v)
+  }
+
+  const chromeWrap = (inner: ReactNode): ReactNode => (
+    <div
+      className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+        chrome ? 'grid-rows-[1fr]' : 'grid-rows-[0fr]'
+      }`}
+    >
+      <div className="min-h-0 overflow-hidden">{inner}</div>
+    </div>
+  )
+
+  return (
+    <div className="relative flex h-full flex-col">
+      <div
+        ref={progressRef}
+        aria-hidden="true"
+        className="pointer-events-none absolute inset-x-0 top-0 z-10 h-0.5 bg-amber-500"
+        style={{ width: 0 }}
+      />
+      {chromeWrap(
+        <div className="flex items-center gap-1 border-b border-zinc-800 bg-zinc-950/95 px-2 py-1.5">
+          <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={onExit}>
+            目录
+          </Button>
+          <div className="min-w-0 flex-1 truncate text-center text-xs text-zinc-400">
+            {offlineChapter && !loadingFlow && (
+              <span className="mr-1 text-amber-500/90">离线</span>
+            )}
+            {written[topIdx] ? `第${written[topIdx].chapterNo}章 ${written[topIdx].title || ''}` : ''}
+          </div>
+          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setSheetOpen(true)}>
+            Aa
+          </Button>
+        </div>
+      )}
+      <div
+        ref={scrollRef}
+        className="relative min-h-0 flex-1 overflow-y-auto px-5 py-4 leading-loose"
+        onScroll={handleScroll}
+        onClick={handleBodyClick}
+        onTouchStart={() => {
+          if (resumeTimerRef.current != null) clearTimeout(resumeTimerRef.current)
+          touchPauseRef.current = true
+        }}
+        onTouchEnd={() => {
+          // 惯性滚动宽限期后恢复自动推进，避免与 momentum 叠加瞬时加速
+          if (resumeTimerRef.current != null) clearTimeout(resumeTimerRef.current)
+          resumeTimerRef.current = window.setTimeout(() => {
+            touchPauseRef.current = false
+          }, 500)
+        }}
+        onTouchCancel={() => {
+          if (resumeTimerRef.current != null) clearTimeout(resumeTimerRef.current)
+          resumeTimerRef.current = window.setTimeout(() => {
+            touchPauseRef.current = false
+          }, 500)
+        }}
+      >
+        {flow.start > 0 && (
+          <button
+            type="button"
+            className="mx-auto mb-4 block rounded-full border border-zinc-800 px-4 py-1.5 text-xs text-zinc-500 active:bg-zinc-900"
+            onClick={(e) => {
+              e.stopPropagation()
+              jumpTo(flow.start - 1)
+            }}
+          >
+            · 回到第 {written[flow.start - 1].chapterNo} 章 ·
+          </button>
+        )}
+        {flowBriefs.map((b, i) => {
+          const q = chapterQueries[i]
+          if (!q) return null
+          return (
+            <section key={b.id} data-flow-idx={flow.start + i} className="mb-10">
+              <h2 className="mb-4 font-medium text-zinc-100" style={{ fontSize: font + 3 }}>
+                第{b.chapterNo}章 {b.title || '（未命名）'}
+              </h2>
+              {q.isLoading ? (
+                <Spinner />
+              ) : q.isError ? (
+                <div className="text-xs text-zinc-500">本章正文未缓存，联网后重试</div>
+              ) : (
+                parseParagraphs(q.data?.content ?? '').map((p, pi) => (
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 一次性渲染的静态段落，无重排语义
+                  <p
+                    key={pi}
+                    className="mb-3 text-zinc-200 indent-[2em]"
+                    style={{ fontSize: `${font}px` }}
+                  >
+                    {p}
+                  </p>
+                ))
+              )}
+            </section>
+          )
+        })}
+      </div>
+      {chromeWrap(
+        <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950/95 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+          <Button
+            variant="ghost"
+            className="flex-1 px-3 py-2 text-xs"
+            disabled={topIdx <= 0}
+            onClick={() => jumpTo(topIdx - 1)}
+          >
+            ← 上一章
+          </Button>
+          <Button
+            variant="ghost"
+            className={`px-3 py-2 text-xs ${autoOn ? 'text-amber-400' : ''}`}
+            onClick={() => setAutoOn((v) => !v)}
+          >
+            {autoOn ? '停止' : '自动'}
+          </Button>
+          <span className="text-[11px] text-zinc-600">
+            {topIdx + 1}/{written.length}
+          </span>
+          <Button
+            variant="ghost"
+            className="flex-1 px-3 py-2 text-xs"
+            disabled={topIdx >= written.length - 1}
+            onClick={() => jumpTo(topIdx + 1)}
+          >
+            下一章 →
+          </Button>
+        </div>
+      )}
+      {sheetOpen && <ReaderSettingsSheet onClose={() => setSheetOpen(false)} />}
+    </div>
+  )
+}
+
+/** 阅读页：卷分组目录（只列已写章）+ 拼接流正文阅读 + 进度记忆（重进续读）。
  *  整本预取在进书时由 Book 层触发（不依赖本页挂载）；断网时目录/正文自动回退缓存（顶栏标「离线」）。 */
 export default function Read({ projectId, title }: { projectId: string; title?: string }) {
   const { data: briefs = [], isLoading } = useQuery({
@@ -54,44 +429,10 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
   )
   const [openId, setOpenId] = useState<string | null>(null)
   const [hlId, setHlId] = useState<string | null>(null)
-  const font = useSettingsStore((s) => s.font)
   const setOffline = useReaderStore((s) => s.setOffline)
-  const offlineChapter = useReaderStore((s) => s.offlineChapter)
-  const scrollRef = useRef<HTMLDivElement | null>(null)
+  const openSegs = useTocStore((s) => s.openSegs)
+  const toggleSeg = useTocStore((s) => s.toggleSeg)
   const idx = openId ? written.findIndex((b) => b.id === openId) : -1
-  const current = idx >= 0 ? (written[idx] ?? null) : null
-  const { data: chapter, isLoading: loadingChapter, isError: chapterError } = useQuery({
-    queryKey: ['novel', 'chapter', current?.id],
-    queryFn: async () => {
-      if (!current) throw new Error('no chapter')
-      try {
-        const fresh = await window.api.novel.chapter(current.id)
-        if (!fresh) throw new Error('chapter not written')
-        setOffline('chapter', false)
-        void putChapters([
-          {
-            id: current.id,
-            projectId,
-            volume: current.volume,
-            chapterNo: current.chapterNo,
-            title: current.title,
-            content: fresh.content,
-            wordCount: fresh.wordCount,
-            cachedAt: Date.now()
-          }
-        ])
-        return fresh
-      } catch (err) {
-        const cached = await getCachedChapter(current.id)
-        if (cached) {
-          setOffline('chapter', true)
-          return cached
-        }
-        throw err
-      }
-    },
-    enabled: !!current
-  })
 
   // 进度记忆：只在拿到书目后首次进入时续读上次章节；
   // 之后用户退出阅读（点目录/返回键）不再自动弹回（修复回目录被续读吞掉的 bug）
@@ -124,94 +465,18 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
     }
   }, [openId, written, projectId])
 
-  useEffect(() => {
-    if (current) useSettingsStore.getState().setReadPos(projectId, current.id)
-  }, [current, projectId])
-
-  // 阅读中返回键先回目录；设置抽屉打开时优先关抽屉（后注册者在栈顶）
-  useBackHandler(() => setOpenId(null), openId !== null)
-  const [sheetOpen, setSheetOpen] = useState(false)
-  useBackHandler(() => setSheetOpen(false), sheetOpen)
-
-  const openSegs = useTocStore((s) => s.openSegs)
-  const toggleSeg = useTocStore((s) => s.toggleSeg)
-
-  const go = (next: number): void => {
-    const target = written[next]
-    if (!target) return
-    setOpenId(target.id)
-    setSheetOpen(false)
-    scrollRef.current?.scrollTo({ top: 0 })
-  }
-
   if (isLoading) return <Empty text="加载中…" />
   if (written.length === 0) return <Empty text="还没有已写的章节——先去「写作」子页生成" />
 
-  if (current)
+  if (idx >= 0)
     return (
-      <div className="flex h-full flex-col">
-        <div className="flex items-center gap-1 border-b border-zinc-800 bg-zinc-950/95 px-2 py-1.5">
-          <Button
-            variant="ghost"
-            className="px-2.5 py-1.5 text-xs"
-            onClick={() => {
-              setOpenId(null)
-              setSheetOpen(false)
-            }}
-          >
-            目录
-          </Button>
-          <div className="min-w-0 flex-1 truncate text-center text-xs text-zinc-400">
-            {offlineChapter && !loadingChapter && (
-              <span className="mr-1 text-amber-500/90">离线</span>
-            )}
-            第{current.chapterNo}章 {current.title || ''}
-          </div>
-          <Button variant="ghost" className="px-2 py-1.5 text-xs" onClick={() => setSheetOpen(true)}>
-            Aa
-          </Button>
-        </div>
-        <div ref={scrollRef} className="min-h-0 flex-1 overflow-y-auto px-5 py-4 leading-loose">
-          {loadingChapter ? (
-            <Empty text="加载中…" />
-          ) : chapterError && !chapter ? (
-            <Empty text="本章正文未缓存，联网后重试" />
-          ) : (
-            (parseParagraphs(chapter?.content ?? '') ?? []).map((p, i) => (
-              // biome-ignore lint/suspicious/noArrayIndexKey: 一次性渲染的静态段落，无重排语义
-              <p
-                key={i}
-                className="mb-3 text-zinc-200 indent-[2em]"
-                style={{ fontSize: `${font}px` }}
-              >
-                {p}
-              </p>
-            ))
-          )}
-        </div>
-        <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950/95 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          <Button
-            variant="ghost"
-            className="flex-1 px-3 py-2 text-xs"
-            disabled={idx <= 0}
-            onClick={() => go(idx - 1)}
-          >
-            ← 上一章
-          </Button>
-          <span className="text-[11px] text-zinc-600">
-            {idx + 1}/{written.length}
-          </span>
-          <Button
-            variant="ghost"
-            className="flex-1 px-3 py-2 text-xs"
-            disabled={idx >= written.length - 1}
-            onClick={() => go(idx + 1)}
-          >
-            下一章 →
-          </Button>
-        </div>
-        {sheetOpen && <ReaderSettingsSheet onClose={() => setSheetOpen(false)} />}
-      </div>
+      <ReaderFlow
+        key={openId}
+        projectId={projectId}
+        written={written}
+        startIdx={idx}
+        onExit={() => setOpenId(null)}
+      />
     )
 
   const groups = groupChapterSegments(written)

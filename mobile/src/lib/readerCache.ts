@@ -1,19 +1,21 @@
-import type { ChapterBrief, Project } from '@shared/types'
+import type { ChapterBrief } from '@shared/types'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 
 /**
  * 阅读离线缓存：IndexedDB（整本正文缓存体量在 MB 级，localStorage 会爆配额）。
  * - chapters store：已预取的章节正文（keyPath id，projectId 二级索引支持按书统计/清除）
  * - briefs store：每本书的目录快照（离线时章节列表仍可用）
- * - projects store：项目列表快照（离线时书架仍可进书）
+ * - projects store：旧版项目列表快照（已由 qsnap 承载，仅保留清理路径）
+ * - qsnap store：写作页列表数据快照（冷启动首帧不空屏，见 querySnapshot.ts）
  * 所有失败路径静默降级（返回空/null），绝不能影响在线主链路。
  */
 
 const DB_NAME = 'nm-reader-cache'
-const DB_VERSION = 2
+const DB_VERSION = 3
 const CH_STORE = 'chapters'
 const BRIEF_STORE = 'briefs'
 const PROJECT_STORE = 'projects'
+const QSNAP_STORE = 'qsnap'
 
 export interface CachedChapter {
   id: string
@@ -60,6 +62,9 @@ function openDb(): Promise<IDBDatabase | null> {
         }
         if (!db.objectStoreNames.contains(PROJECT_STORE)) {
           db.createObjectStore(PROJECT_STORE, { keyPath: 'id' })
+        }
+        if (!db.objectStoreNames.contains(QSNAP_STORE)) {
+          db.createObjectStore(QSNAP_STORE, { keyPath: 'key' })
         }
       }
       req.onsuccess = () => resolve(req.result)
@@ -116,34 +121,7 @@ export async function putBriefs(entry: CachedBriefs): Promise<void> {
   await tx<IDBValidKey>(BRIEF_STORE, 'readwrite', (s) => s.put(entry))
 }
 
-// —— 项目列表快照：离线时书架/进书仍可用 ——
-
-export async function saveProjects(projects: Project[]): Promise<void> {
-  const db = await openDb()
-  if (!db) return
-  await new Promise<void>((resolve) => {
-    try {
-      const t = db.transaction(PROJECT_STORE, 'readwrite')
-      const store = t.objectStore(PROJECT_STORE)
-      store.clear()
-      for (const p of projects) store.put(p)
-      t.oncomplete = () => resolve()
-      t.onerror = () => resolve()
-      t.onabort = () => resolve()
-    } catch {
-      resolve()
-    }
-  })
-}
-
-export async function getCachedProjects(): Promise<Project[] | null> {
-  const rows = await tx<Project[]>(
-    PROJECT_STORE,
-    'readonly',
-    (s) => s.getAll() as IDBRequest<Project[]>
-  )
-  return rows && rows.length > 0 ? rows : null
-}
+// —— 项目列表：改由 qsnap 快照承载（querySnapshot.withSnapshot），此 store 仅保留清理路径 ——
 
 async function cachedCount(projectId: string): Promise<number> {
   const db = await openDb()
@@ -195,6 +173,7 @@ function clearBookProgress(projectId: string): void {
 
 export async function clearBook(projectId: string): Promise<void> {
   clearBookProgress(projectId)
+  await clearProjectSnapshots(projectId)
   const db = await openDb()
   if (!db) return
   // IDBIndex 无 delete：先取该书全部主键，再逐键删正文
@@ -214,16 +193,72 @@ export async function clearBook(projectId: string): Promise<void> {
   })
 }
 
+// —— 写作页 query 快照：冷启动首帧不空屏（每次进页仍从服务器刷新） ——
+
+export interface QuerySnapshot {
+  /** JSON.stringify(queryKey) */
+  key: string
+  data: unknown
+  savedAt: number
+}
+
+export async function saveSnapshot(key: string, data: unknown): Promise<void> {
+  await tx<IDBValidKey>(QSNAP_STORE, 'readwrite', (s) =>
+    s.put({ key, data, savedAt: Date.now() })
+  )
+}
+
+export async function getSnapshot(key: string): Promise<QuerySnapshot | null> {
+  return tx<QuerySnapshot>(QSNAP_STORE, 'readonly', (s) => s.get(key) as IDBRequest<QuerySnapshot>)
+}
+
+export async function getAllSnapshots(): Promise<QuerySnapshot[]> {
+  const rows = await tx<QuerySnapshot[]>(
+    QSNAP_STORE,
+    'readonly',
+    (s) => s.getAll() as IDBRequest<QuerySnapshot[]>
+  )
+  return rows ?? []
+}
+
+/** 删某本书相关的快照（query key 数组里含该 projectId 的条目） */
+async function clearProjectSnapshots(projectId: string): Promise<void> {
+  const rows = await getAllSnapshots()
+  const hit = rows.filter((r) => {
+    try {
+      const arr = JSON.parse(r.key) as unknown
+      return Array.isArray(arr) && arr.includes(projectId)
+    } catch {
+      return false
+    }
+  })
+  if (hit.length === 0) return
+  const db = await openDb()
+  if (!db) return
+  await new Promise<void>((resolve) => {
+    try {
+      const t = db.transaction(QSNAP_STORE, 'readwrite')
+      for (const r of hit) t.objectStore(QSNAP_STORE).delete(r.key)
+      t.oncomplete = () => resolve()
+      t.onerror = () => resolve()
+      t.onabort = () => resolve()
+    } catch {
+      resolve()
+    }
+  })
+}
+
 export async function clearAllBooks(): Promise<void> {
   useSettingsStore.getState().clearReadPos()
   const db = await openDb()
   if (!db) return
   await new Promise<void>((resolve) => {
     try {
-      const t = db.transaction([CH_STORE, BRIEF_STORE, PROJECT_STORE], 'readwrite')
+      const t = db.transaction([CH_STORE, BRIEF_STORE, PROJECT_STORE, QSNAP_STORE], 'readwrite')
       t.objectStore(CH_STORE).clear()
       t.objectStore(BRIEF_STORE).clear()
       t.objectStore(PROJECT_STORE).clear()
+      t.objectStore(QSNAP_STORE).clear()
       t.oncomplete = () => resolve()
       t.onerror = () => resolve()
       t.onabort = () => resolve()

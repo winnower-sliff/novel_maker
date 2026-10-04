@@ -1,5 +1,6 @@
 import { create } from 'zustand'
 import { loadJson, localKeys, removeJson, saveJson } from '@mobile/lib/persist'
+import { applySystemBars } from '@mobile/lib/systemBars'
 
 export type Appearance = 'dark' | 'light' | 'sepia'
 export type Accent = 'amber' | 'emerald' | 'sky' | 'violet' | 'rose'
@@ -9,6 +10,12 @@ const KEY = 'nm_settings_v1'
 const FONT_MIN = 12
 const FONT_MAX = 28
 const FONT_DEFAULT = 17
+
+const SPEED_MIN = 30
+const SPEED_MAX = 150
+const SPEED_DEFAULT = 60
+/** 自动滚动速度调节步长（px/秒），抽屉调速控件用 */
+export const SPEED_STEP = 10
 
 /** 主题色色板（color 为色板代表色，用于设置页圆点，固定本色不随外观变） */
 export const ACCENTS: Array<{ id: Accent; label: string; color: string }> = [
@@ -43,6 +50,8 @@ interface SettingsData {
   preSepia: Appearance
   /** 阅读正文字号（px），设置页与阅读页共用 */
   font: number
+  /** 自动滚动速度（px/秒） */
+  autoScrollSpeed: number
   /** 连接页记忆的服务器地址 */
   lastBase: string
   /** 各书 tab/子页位置：pid → 位置 */
@@ -52,20 +61,23 @@ interface SettingsData {
 }
 
 const DEFAULTS: SettingsData = {
-  appearance: 'dark',
+  // 默认护眼：冷启动首帧即护眼橙，新装用户也直接进护眼模式
+  appearance: 'sepia',
   accent: 'amber',
   preSepia: 'dark',
   font: FONT_DEFAULT,
+  autoScrollSpeed: SPEED_DEFAULT,
   lastBase: '',
   bookUi: {},
   readPos: {}
 }
 
-/** 把外观/主题色写到 <html> data 属性，驱动 styles.css 的色板变量重映射 */
+/** 把外观/主题色写到 <html> data 属性，驱动 styles.css 的色板变量重映射；系统栏同步跟随 */
 function applyTheme(s: Pick<SettingsData, 'appearance' | 'accent'>): void {
   const el = document.documentElement
   el.dataset.appearance = s.appearance
   el.dataset.accent = s.accent
+  applySystemBars(s.appearance)
 }
 
 interface SettingsState extends SettingsData {
@@ -76,6 +88,7 @@ interface SettingsState extends SettingsData {
   /** 护眼快捷开关：切到护眼 / 切回之前的外观 */
   toggleSepia: () => void
   setFont: (v: number) => void
+  setAutoScrollSpeed: (v: number) => void
   setLastBase: (base: string) => void
   setBookUi: (pid: string, ui: Partial<BookUiPos>) => void
   /** 记录阅读进度：翻章频繁，走防抖写 */
@@ -89,6 +102,7 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
     accent: patch.accent ?? s.accent,
     preSepia: patch.preSepia ?? s.preSepia,
     font: patch.font ?? s.font,
+    autoScrollSpeed: patch.autoScrollSpeed ?? s.autoScrollSpeed,
     lastBase: patch.lastBase ?? s.lastBase,
     bookUi: patch.bookUi ?? s.bookUi,
     readPos: patch.readPos ?? s.readPos
@@ -125,6 +139,10 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
       else persist({ appearance: 'sepia', preSepia: s.appearance })
     },
     setFont: (v) => persist({ font: Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(v))) }),
+    setAutoScrollSpeed: (v) =>
+      persist({
+        autoScrollSpeed: Math.min(SPEED_MAX, Math.max(SPEED_MIN, Math.round(v / SPEED_STEP) * SPEED_STEP))
+      }),
     setLastBase: (lastBase) => persist({ lastBase }),
     setBookUi: (pid, ui) => {
       const bookUi = get().bookUi
@@ -151,6 +169,11 @@ export const useSettingsStore = create<SettingsState>((set, get) => {
 function clampFont(v: unknown): number {
   if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULTS.font
   return Math.min(FONT_MAX, Math.max(FONT_MIN, Math.round(v)))
+}
+
+function clampSpeed(v: unknown): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return DEFAULTS.autoScrollSpeed
+  return Math.min(SPEED_MAX, Math.max(SPEED_MIN, Math.round(v / SPEED_STEP) * SPEED_STEP))
 }
 
 function cleanBookUi(v: unknown): Record<string, BookUiPos> {
@@ -228,6 +251,7 @@ void (async () => {
         accent: isAccent(saved.accent) ? saved.accent : DEFAULTS.accent,
         preSepia: isAppearance(saved.preSepia) ? saved.preSepia : DEFAULTS.preSepia,
         font: clampFont(saved.font),
+        autoScrollSpeed: clampSpeed(saved.autoScrollSpeed),
         lastBase: typeof saved.lastBase === 'string' ? saved.lastBase : DEFAULTS.lastBase,
         bookUi: cleanBookUi(saved.bookUi),
         readPos: cleanStrMap(saved.readPos)
