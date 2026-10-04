@@ -2,7 +2,7 @@
   "appId": "com.novelmaker.mobile",
   "appName": "Novel Maker",
   "webDir": "www",
-  "backgroundColor": "#09090b",
+  "backgroundColor": "#f1e7d0",
   "android": {
     "allowMixedContent": true,
     "adjustMarginsForEdgeToEdge": "auto"
