@@ -1,3 +1,4 @@
+import type { OutlineRunProgress } from '@shared/types'
 import { useEffect, useState } from 'react'
 import { fireCanonSync } from './canonStore'
 import { startPipeline } from './pipeline'
@@ -66,14 +67,19 @@ export function deriveStartNo(
  * 避免用户重复触发导致两个 run 并行互踩。
  * 完成通知与 outlines 缓存失效由中央同步器（runtimeSync）负责，这里只管 busy 态。
  */
-export function useOutlineRunActive(projectId: string | null): { active: boolean; tail: string } {
-  const [state, setState] = useState<{ active: boolean; tail: string }>({
-    active: false,
-    tail: ''
-  })
+export function useOutlineRunActive(projectId: string | null): {
+  active: boolean
+  tail: string
+  progress: OutlineRunProgress | undefined
+} {
+  const [state, setState] = useState<{
+    active: boolean
+    tail: string
+    progress: OutlineRunProgress | undefined
+  }>({ active: false, tail: '', progress: undefined })
   useEffect(() => {
     if (!projectId) {
-      setState({ active: false, tail: '' })
+      setState({ active: false, tail: '', progress: undefined })
       return
     }
     let stopped = false
@@ -89,8 +95,21 @@ export function useOutlineRunActive(projectId: string | null): { active: boolean
               r.meta?.action === 'outline' &&
               r.meta?.projectId === projectId
           )
-          setState({ active: !!run, tail: run?.textTail ?? '' })
-          if (run) timer = setTimeout(check, 5000)
+          const next = {
+            active: !!run,
+            tail: run?.textTail ?? '',
+            progress: run?.progress
+          }
+          // 1s 轮询下避免无变化 re-render（progress 不变时保持原引用）
+          setState((prev) =>
+            prev.active === next.active &&
+            prev.tail === next.tail &&
+            JSON.stringify(prev.progress) === JSON.stringify(next.progress)
+              ? prev
+              : next
+          )
+          // 活跃期间 1s 轮询：驱动真进度条（主进程已做增量解析，快照很轻）
+          if (run) timer = setTimeout(check, 1000)
         })
         .catch(() => {})
     }
@@ -177,6 +196,22 @@ export function generateVolume(opts: VolumeGenOpts): {
   const { projectId, volume, idea, startNo, count, hasWritten, onDelta } = opts
   // 旧章集合必须在管线启动前捕获：生成后列表已变，事后拉取会漏判孤儿章
   const oldVolPromise = window.api.novel.outlines(projectId)
+  // 启动即写参数记忆与当前卷（单次读-合并-写）：完成前参数只存在组件 state 里，
+  // 不立刻落库的话生成中切页/刷新重挂会被旧记忆或默认值（outlineCount=20）覆盖表单
+  void (async () => {
+    try {
+      const cur = await loadProjectPlan(projectId)
+      await saveProjectPlan(projectId, {
+        volume,
+        volumePlans: {
+          ...(cur?.volumePlans ?? {}),
+          [String(volume)]: { idea, startNo, count, rules: opts.rules ?? '' }
+        }
+      })
+    } catch {
+      // 记忆写入失败不阻塞生成本身
+    }
+  })()
   const { done, abort } = startPipeline(
     'outline',
     {

@@ -10,6 +10,7 @@
 export {
   cancelAgentConfirms,
   getAgentPendingConfirm,
+  getAgentToolResultStatuses,
   resolveAgentConfirm,
   runAgent
 } from './run'

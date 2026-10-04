@@ -118,6 +118,7 @@ export const pipelineHandlers = {
               action,
               meta: { projectId: params.projectId },
               afterDone: (r) => applyOutlineResult(params, r.text),
+              progressTotal: total,
               multiRound: {
                 // 每批 1 次截断续写机会 + 批间切换，留足余量
                 maxRounds: segments * 2 + 1,
@@ -149,7 +150,8 @@ export const pipelineHandlers = {
           meta: { projectId: params.projectId },
           afterDone: (r) => applyOutlineResult(params, r.text),
           // 大章数输出超长被截断时自动续写拼接（与 worldbuild 同机制）
-          continueOnMaxTokens: 3
+          continueOnMaxTokens: 3,
+          progressTotal: params.count
         })
       }
       case 'volumeIdea': {

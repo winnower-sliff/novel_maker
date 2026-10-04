@@ -1,3 +1,4 @@
+import { friendlyLlmMessage } from '@shared/llmError'
 import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -102,6 +103,8 @@ export default function Outline({
   const [openVolumeSummary, setOpenVolumeSummary] = useState<number | null>(null)
   const volSummaryRequestId = useRef<string | null>(null)
   const alignRequestId = useRef<string | null>(null)
+  // 预填签名去重（见下方预填 effect 注释）
+  const filledSig = useRef('')
   const [alignBusy, setAlignBusy] = useState(false)
   const [alignNotice, setAlignNotice] = useState('')
   const [alignRevisions, setAlignRevisions] = useState<AlignRevision[] | null>(null)
@@ -160,6 +163,8 @@ export default function Outline({
         setCount(p?.outlineCount ?? 30)
         setIdea(p?.outlineIdea ?? '')
         setGlobalRules(p?.outlineRules ?? '')
+        // 重挂回到最近操作的卷（生成启动时已写入），配合 volumePlans 预填恢复本次参数
+        if (p && Number.isInteger(p.volume) && p.volume >= 1) setVolume(p.volume)
       })
       .catch(() => {})
     return () => {
@@ -168,10 +173,13 @@ export default function Outline({
   }, [projectId])
 
   // 换卷时按 volumePlans 预填该卷上次生成参数；无记忆则清空（起始章号生成时全自动推导）
-  // biome-ignore lint/correctness/useExhaustiveDependencies: 预填只在卷号或存档变化时执行
+  // 守卫用签名去重而非 generating：重挂时 snapshot 先到、plan 后到，generating=true 会
+  // 拦掉恢复预填，表单被锁死在顶层旧值（手机端 100 章实锤，两端同构）
   useEffect(() => {
-    if (generating) return
     const memo = plan?.volumePlans?.[String(volume)]
+    const sig = `${volume}:${memo ? JSON.stringify(memo) : ''}`
+    if (filledSig.current === sig) return
+    filledSig.current = sig
     if (memo) {
       setIdea(memo.idea)
       setCount(memo.count)
@@ -224,12 +232,13 @@ export default function Outline({
         else setAlignRevisions(d.revisions)
       }
     })
-    const offError = window.api.llm.onError((id, message) => {
-      if (id === volSummaryRequestId.current) setVolNotice(`出错：${message}`)
+    const offError = window.api.llm.onError((id, message, hint) => {
+      const notice = `出错：${friendlyLlmMessage(message, hint)}`
+      if (id === volSummaryRequestId.current) setVolNotice(notice)
       if (id === alignRequestId.current) {
         alignRequestId.current = null
         setAlignBusy(false)
-        setAlignNotice(`出错：${message}`)
+        setAlignNotice(notice)
       }
     })
     return () => {
@@ -741,7 +750,9 @@ export default function Outline({
               {genOutput || '等待模型输出…'}
             </pre>
           )}
-          {outlineActive && !generating && <OutlineProgress text={outlineRun.tail} />}
+          {outlineActive && (
+            <OutlineProgress progress={outlineRun.progress} text={outlineRun.tail} />
+          )}
         </Card>
       )}
 

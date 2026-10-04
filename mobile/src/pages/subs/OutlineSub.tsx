@@ -1,7 +1,7 @@
 import { Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   deriveStartNo,
   generateRulesRefine,
@@ -62,6 +62,9 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const [delta, setDelta] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [result, setResult] = useState<string | null>(null)
+  // 已预填的 `${volume}:${memo}` 签名去重：不能拿 busy 当守卫——重挂时 snapshot 先到、
+  // plan 后到，busy=true 会拦掉恢复预填，表单被锁死在顶层旧值（手机端 100 章实锤）
+  const filledSig = useRef('')
   // busy = 本地生成 || 后台在途 run（切页/刷新后生成继续，重挂时恢复 busy 态防重复触发）
   const outlineRun = useOutlineRunActive(projectId)
   const outlineActive = outlineRun.active
@@ -76,6 +79,8 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
         setCount(p?.outlineCount ?? 20)
         setIdea(p?.outlineIdea ?? '')
         setGlobalRules(p?.outlineRules ?? '')
+        // 重挂回到最近操作的卷（生成启动时已写入），配合 volumePlans 预填恢复本次参数
+        if (p && Number.isInteger(p.volume) && p.volume >= 1) setVolume(p.volume)
       })
       .catch(() => {})
     return () => {
@@ -100,8 +105,10 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   // 换卷时按 volumePlans 预填该卷上次生成参数；无记忆则清空（起始章号生成时全自动推导）
   // biome-ignore lint/correctness/useExhaustiveDependencies: 预填只在卷号或存档变化时执行
   useEffect(() => {
-    if (busy) return
     const memo = plan?.volumePlans?.[String(volume)]
+    const sig = `${volume}:${memo ? JSON.stringify(memo) : ''}`
+    if (filledSig.current === sig) return
+    filledSig.current = sig
     if (memo) {
       setIdea(memo.idea)
       setCount(memo.count)
@@ -401,12 +408,14 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           <Label>章数</Label>
           <NumberField input={Input} value={count} min={1} onChange={setCount} disabled={busy} className="w-full" />
         </div>
-        {localBusy && <OutlineProgress text={delta} />}
+        {(localBusy || outlineActive) && (
+          <OutlineProgress
+            progress={outlineRun.progress}
+            text={localBusy ? delta : outlineRun.tail}
+          />
+        )}
         {outlineActive && !localBusy && (
-          <>
-            <OutlineProgress text={outlineRun.tail} />
-            <div className="text-xs text-amber-400">后台大纲生成中，完成后会自动导入（可离开此页）</div>
-          </>
+          <div className="text-xs text-amber-400">后台大纲生成中，完成后会自动导入（可离开此页）</div>
         )}
         {error && <div className="text-xs text-red-400">{error}</div>}
         {result && !busy && <div className="text-xs text-emerald-400">{result}</div>}

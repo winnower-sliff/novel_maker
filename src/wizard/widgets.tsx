@@ -1,4 +1,5 @@
-import type { PremiseDraftResult } from '@shared/types'
+import { createOutlineScanMachine, feedOutlineScan } from '@shared/outlineScan'
+import type { OutlineRunProgress, PremiseDraftResult } from '@shared/types'
 import type { ComponentType, ReactNode } from 'react'
 import { useEffect, useRef, useState } from 'react'
 import { OverlayCard } from './OverlayCard'
@@ -81,49 +82,45 @@ export function NumberField({
   )
 }
 
-/** 扫描大纲流文本中已配平的章节对象，取标题做实时进度（坏对象/半截对象忽略） */
+/** 扫描大纲流文本中已配平的章节对象，取标题做实时进度（坏对象/半截对象忽略）。
+ * 一次性喂入整段文本的薄包装；主进程增量解析见 shared/outlineScan.ts */
 export function scanOutlineProgress(text: string): { count: number; lastTitles: string[] } {
-  const titles: string[] = []
-  let depth = 0
-  let inStr = false
-  let esc = false
-  let start = -1
-  for (let i = 0; i < text.length; i++) {
-    const ch = text[i]
-    if (inStr) {
-      if (esc) esc = false
-      else if (ch === '\\') esc = true
-      else if (ch === '"') inStr = false
-      continue
-    }
-    if (ch === '"') inStr = true
-    else if (ch === '{') {
-      if (depth === 0) start = i
-      depth++
-    } else if (ch === '}') {
-      depth--
-      if (depth === 0 && start >= 0) {
-        try {
-          const obj = JSON.parse(text.slice(start, i + 1)) as { title?: unknown }
-          if (obj && typeof obj.title === 'string') titles.push(obj.title)
-        } catch {
-          // 解析失败的单个对象直接跳过
-        }
-        start = -1
-      }
-    }
-  }
-  return { count: titles.length, lastTitles: titles.slice(-3) }
+  const m = createOutlineScanMachine()
+  feedOutlineScan(m, text)
+  return { count: m.count, lastTitles: m.titles }
 }
 
-/** 大纲生成进度框：与世界观生成进度框同款式（不裸露原始流） */
-export function OutlineProgress({ text }: { text: string }) {
-  const prog = scanOutlineProgress(text)
+/** 大纲生成进度框：带结构化进度（主进程 1s 轮询）时显示 N/M 章进度条，
+ * 否则退化为对本地流文本的实时解析计数 */
+export function OutlineProgress({
+  text,
+  progress
+}: {
+  text?: string
+  progress?: OutlineRunProgress
+}) {
+  const prog = progress ?? {
+    ...scanOutlineProgress(text ?? ''),
+    total: 0
+  }
+  const pct = prog.total > 0 ? Math.min(100, Math.round((prog.count / prog.total) * 100)) : null
   return (
     <div className="rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
       <div className="text-amber-300">
-        {prog.count > 0 ? `生成中 · 已解析 ${prog.count} 章` : '生成中'}
+        {pct !== null
+          ? `生成中 · ${prog.count} / ${prog.total} 章（${pct}%）`
+          : prog.count > 0
+            ? `生成中 · 已解析 ${prog.count} 章`
+            : '生成中'}
       </div>
+      {pct !== null && (
+        <div className="mt-1 h-1 overflow-hidden rounded bg-zinc-800">
+          <div
+            className="h-full bg-amber-400 transition-all duration-500"
+            style={{ width: `${pct}%` }}
+          />
+        </div>
+      )}
       {prog.lastTitles.length > 0 && (
         <div className="mt-1 truncate text-zinc-500">{prog.lastTitles.join(' / ')}</div>
       )}

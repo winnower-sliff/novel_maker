@@ -1,15 +1,18 @@
 import { randomUUID } from 'node:crypto'
+import { classifyLlmError } from '../../shared/llmError'
+import { createOutlineScanMachine, feedOutlineScan } from '../../shared/outlineScan'
 import type {
   ChatMessage,
   ChatParams,
   ChatResult,
+  LlmErrorHint,
   PipelineAction,
   RunMeta,
   RunRecordPayload,
   RuntimeRunRecord,
   WorldbuildGenParams
 } from '../../shared/types'
-import { getAgentPendingConfirm, runAgent } from '../agent'
+import { getAgentPendingConfirm, getAgentToolResultStatuses, runAgent } from '../agent'
 import { LONG_CHAPTER_THRESHOLD, runChapterCandidates, runLongChapter } from '../chapterRunner'
 import { enqueueEmbedding } from '../embedding'
 import type { EventSink } from '../eventSink'
@@ -30,6 +33,13 @@ const activeAgentRuns = new Map<string, AbortController>()
 
 /** 批量编排（主进程）等待单次生成完成的回调：error 为 null 表示成功 */
 export type SettleCb = (error: string | null, payload?: unknown) => void
+
+/** 错误事件附带的分类提示；用户主动中止（message='已停止'）不产生提示 */
+function buildErrorHint(err: unknown, message: string): LlmErrorHint | undefined {
+  if (message === '已停止') return undefined
+  if (err instanceof LlmError) return classifyLlmError(err.message, err.status)
+  return classifyLlmError(message)
+}
 
 // 运行注册表：requestId → 结果快照。SSE/窗口断连期间 done/error 事件丢失时，
 // 渲染端经 llm:poll 补拉，避免 UI 永远卡「生成中」。完成后保留 10 分钟。
@@ -80,7 +90,14 @@ export function listRuns(): RuntimeRunRecord[] {
   return [...runRecords.entries()].map(([id, rec]) => {
     if (rec.kind === 'agent' && rec.status === 'running') {
       const pendingConfirm = getAgentPendingConfirm(id)
-      if (pendingConfirm) return { id, ...rec, pendingConfirm }
+      const toolStatuses = getAgentToolResultStatuses(id)
+      if (pendingConfirm || toolStatuses.length > 0)
+        return {
+          id,
+          ...rec,
+          ...(pendingConfirm && { pendingConfirm }),
+          ...(toolStatuses.length > 0 && { toolStatuses })
+        }
     }
     return { id, ...rec }
   })
@@ -123,7 +140,7 @@ export function startAgentRun(
         : ((err as Error)?.message ?? String(err))
       recordError(requestId, message)
       if (!sink.isClosed()) {
-        sink.send('agent:error', requestId, message)
+        sink.send('agent:error', requestId, message, buildErrorHint(err, message))
       }
       return
     } finally {
@@ -165,12 +182,23 @@ export function startStream(
     }
     onSettled?: SettleCb
     meta?: RunMeta
+    /** 传入目标章数即启用结构化进度：send() 对已确认文本增量解析章数（仅 outline 用） */
+    progressTotal?: number
   }
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
   activeRequests.set(requestId, controller)
   recordRunning(requestId, 'llm', { ...opts?.meta, action: opts?.action ?? opts?.meta?.action })
+
+  // 大纲进度扫描器：跨 chunk 状态机，只吃 send() 的已确认文本
+  const progressTotal =
+    typeof opts?.progressTotal === 'number' && opts.progressTotal > 0 ? opts.progressTotal : 0
+  const scan = progressTotal > 0 ? createOutlineScanMachine() : null
+  if (scan) {
+    const rec = runRecords.get(requestId)
+    if (rec) rec.progress = { count: 0, total: progressTotal, lastTitles: [] }
+  }
 
   void (async () => {
     try {
@@ -188,6 +216,11 @@ export function startStream(
         // 同步写注册表尾部：页面切走/刷新后经 runtime:snapshot 恢复进度显示
         const rec = runRecords.get(requestId)
         if (rec) rec.textTail = ((rec.textTail ?? '') + text).slice(-2000)
+        // 结构化进度增量推进：仅已确认文本进入此处，重试丢弃的半截输出不会虚增计数
+        if (scan && rec) {
+          feedOutlineScan(scan, text)
+          rec.progress = { count: scan.count, total: progressTotal, lastTitles: [...scan.titles] }
+        }
       }
 
       let fullText = ''
@@ -324,14 +357,15 @@ export function startStream(
       opts?.onSettled?.(null, donePayload)
       if (!sink.isClosed()) sink.send('llm:done', requestId, donePayload)
     } catch (err) {
-      const message =
-        err instanceof LlmError
+      const message = controller.signal.aborted
+        ? '已停止'
+        : err instanceof LlmError
           ? `[${err.status ?? '网络'}] ${err.message}`
           : ((err as Error)?.message ?? String(err))
       recordError(requestId, message)
       opts?.onSettled?.(message)
       if (!sink.isClosed()) {
-        sink.send('llm:error', requestId, message)
+        sink.send('llm:error', requestId, message, buildErrorHint(err, message))
       }
     } finally {
       activeRequests.delete(requestId)
@@ -400,7 +434,7 @@ export function startLongChapterStream(
       recordError(requestId, message)
       onSettled?.(message)
       if (!sink.isClosed()) {
-        sink.send('llm:error', requestId, message)
+        sink.send('llm:error', requestId, message, buildErrorHint(err, message))
       }
     } finally {
       activeRequests.delete(requestId)
@@ -480,7 +514,7 @@ export function startChapterCandidatesStream(
       recordError(requestId, message)
       onSettled?.(message)
       if (!sink.isClosed()) {
-        sink.send('llm:error', requestId, message)
+        sink.send('llm:error', requestId, message, buildErrorHint(err, message))
       }
     } finally {
       activeRequests.delete(requestId)

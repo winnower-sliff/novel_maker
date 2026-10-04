@@ -80,7 +80,7 @@ function categoryFromStatus(status: number | undefined): LlmErrorCategory | null
 export function classifyLlmError(message: string, status?: number): LlmErrorHint {
   const m = /^\[(\d{3})\]\s|^HTTP\s*(\d{3})\b/.exec(message)
   const st = status ?? (m ? Number(m[1] ?? m[2]) : undefined)
-  let category: LlmErrorCategory =
+  const category: LlmErrorCategory =
     KEYWORD_RULES.find((r) => r.pattern.test(message))?.category ??
     categoryFromStatus(st) ??
     'unknown'
