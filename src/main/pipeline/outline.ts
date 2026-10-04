@@ -92,10 +92,11 @@ export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): 
       `【未回收伏笔台账（规划新章节时应安排合理回收点，并在对应章节的 foreshadow_ops 中写明）】\n${openFore}`,
     p.rules?.trim() &&
       `【硬性节奏规则（用户制定，逐章严格执行，优先级高于下方结构原则与核心创意；每条规则须映射到具体章号，并把规则要求的剧情写成该章 scenes 中的具体场景，禁止只在 synopsis 点名；规则中的绝对章号若超出本次生成范围（第 ${p.startNo}~${p.startNo + p.count - 1} 章），将其要求顺延或并入范围内相近章节执行，不得因超出范围而整体忽略）】\n${p.rules.trim()}`,
+    // 覆盖重写（allowUpdate:true）刻意不注入旧大纲：整卷重写时旧标题/梗概只会牵引 AI 复刻旧框架，
+    // 用户预期是按新创意另起；仅非覆盖模式（同章号跳过语义）需要旧大纲做衔接参考
     outlineCtx &&
-      (p.allowUpdate
-        ? `【第 ${p.volume} 卷已有大纲（新章节须与之自然衔接；若新创意要求调整已有章节，可在结果中输出该章的修订条目——volume 与 chapter_no 与原章保持一致，synopsis 为融合后的完整修订梗概，该修订会覆盖更新原章梗概，无必要时不要修订）】\n${outlineCtx}`
-        : `【第 ${p.volume} 卷已有大纲（新章节须与之自然衔接；已存在的同章号章节会被跳过，不会重复生成）】\n${outlineCtx}`)
+      !p.allowUpdate &&
+      `【第 ${p.volume} 卷已有大纲（新章节须与之自然衔接；已存在的同章号章节会被跳过，不会重复生成）】\n${outlineCtx}`
   ]
     .filter(Boolean)
     .join('\n\n')
