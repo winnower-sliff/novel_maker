@@ -25,6 +25,34 @@ import {
   schema
 } from './toolkit'
 
+/** 大纲生成页的向导参数存档（projects.wizard_plan JSON）：主进程侧读-合并-写，保留未知字段 */
+interface PlanRaw {
+  [key: string]: unknown
+  volumePlans?: Record<string, unknown>
+}
+
+function readPlanRaw(projectId: string): { raw: PlanRaw; currentVolume: number } {
+  const p = store.listProjects().find((x) => x.id === projectId)
+  if (!p) throw new Error('项目不存在')
+  let raw: PlanRaw = {}
+  try {
+    const v = JSON.parse(p.wizardPlan || '{}') as unknown
+    if (v && typeof v === 'object' && !Array.isArray(v)) raw = v as PlanRaw
+  } catch {
+    raw = {}
+  }
+  if (!raw.volumePlans || typeof raw.volumePlans !== 'object' || Array.isArray(raw.volumePlans))
+    raw.volumePlans = {}
+  const currentVolume =
+    typeof raw.volume === 'number' && raw.volume >= 1 ? Math.floor(raw.volume) : 1
+  return { raw, currentVolume }
+}
+
+function readPlanEntry(raw: PlanRaw, volume: number): Record<string, unknown> {
+  const v = raw.volumePlans?.[String(volume)]
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
+}
+
 const TOOLS: AgentTool[] = [
   {
     def: {
@@ -124,7 +152,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_character',
       description:
-        '新建或修改人物卡。传 id 表示修改既有人物；不传 id 表示新建。tags 为标签（逗号分隔，2-4 个；新建时建议提供，修改时省略则保留原标签；优先复用已有标签，没有合适的就新建可被多个人物共享的主题标签）。修改时应先 list_characters 取原文再改',
+        '新建或修改人物卡。传 id 表示修改既有人物；不传 id 表示新建。tags 为标签（逗号分隔，2-4 个；新建时建议提供，修改时省略则保留原标签；优先复用已有标签，没有合适的就新建可被多个人物共享的主题标签）。card 文末建议带「关联：」行（[[世界观条目|关系短语]]，1-3 个）；链接只允许指向世界观条目，严禁 [[ ]] 链人物名。修改时应先 list_characters 取原文再改',
       input_schema: schema(
         {
           id: optS('要修改的人物 id（新建时省略）'),
@@ -231,7 +259,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_worldbuild',
       description:
-        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）；keys 为检索别名（逗号分隔，同一概念的其他叫法/简称/别称，供写作上下文按名命中，如「青云宗,青云,青宗」）',
+        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）；keys 为检索别名（逗号分隔，同一概念的其他叫法/简称/别称，供写作上下文按名命中，如「青云宗,青云,青宗」）。正文 [[ ]] 链接只允许指向世界观条目标题，严禁链人物名（提及人物直接写名字）',
       input_schema: schema(
         {
           id: optS('要修改的词条 id（新建时省略）'),
@@ -417,6 +445,79 @@ const TOOLS: AgentTool[] = [
         title: saved.title,
         created: !id
       }
+    }
+  },
+  {
+    def: {
+      name: 'get_outline_plan',
+      description:
+        '读取大纲生成页的卷创意与规则参数（存在项目向导存档里，非正式大纲条目）：outlineRules 全书通用规则、currentVolume 向导当前卷、指定卷的 idea 本卷创意（多自然段软分段形态）/rules 本卷节奏规则/count 计划章数。volume 缺省读当前卷；该卷尚无参数时 hasPlan=false',
+      input_schema: schema({ volume: optN('卷号，缺省=向导当前卷') }, [])
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const { raw, currentVolume } = readPlanRaw(projectId)
+      const volume = optNum(input, 'volume') ?? currentVolume
+      if (!Number.isInteger(volume) || volume < 1) throw new Error('volume 必须为正整数卷号')
+      const memo = readPlanEntry(raw, volume)
+      return {
+        volume,
+        currentVolume,
+        outlineRules: typeof raw.outlineRules === 'string' ? raw.outlineRules : '',
+        hasPlan: Object.keys(memo).length > 0,
+        idea: typeof memo.idea === 'string' ? memo.idea : '',
+        rules: typeof memo.rules === 'string' ? memo.rules : '',
+        count: typeof memo.count === 'number' ? memo.count : undefined,
+        startNo: typeof memo.startNo === 'number' ? memo.startNo : undefined
+      }
+    }
+  },
+  {
+    def: {
+      name: 'save_outline_plan',
+      description:
+        '保存大纲生成页的卷创意与规则参数（只改参数，不生成大纲条目）：idea=某卷的本卷创意（应为 3-5 个自然段的软分段卷创意：每段以「开篇章（卷首）：」等相对位置短语开头，禁写死章号）、rules=该卷节奏规则、outlineRules=全书通用规则。volume 缺省为向导当前卷；未传字段保留原值，传空串清空；生成正式大纲条目用 save_outline',
+      input_schema: schema(
+        {
+          volume: optN('目标卷号，缺省=向导当前卷'),
+          idea: optS('本卷创意全文'),
+          rules: optS('本卷节奏规则'),
+          outlineRules: optS('全书通用规则')
+        },
+        []
+      )
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const idea = optStr(input, 'idea')
+      const rules = optStr(input, 'rules')
+      const outlineRules = optStr(input, 'outlineRules')
+      if (idea === undefined && rules === undefined && outlineRules === undefined)
+        throw new Error('未提供任何要保存的字段（idea/rules/outlineRules 至少传一个）')
+      const { raw, currentVolume } = readPlanRaw(projectId)
+      const volume = optNum(input, 'volume') ?? currentVolume
+      if (!Number.isInteger(volume) || volume < 1) throw new Error('volume 必须为正整数卷号')
+      if (outlineRules !== undefined) raw.outlineRules = outlineRules
+      const saved: Record<string, unknown> = {}
+      if (idea !== undefined || rules !== undefined) {
+        const plans = raw.volumePlans ?? {}
+        // 新建条目必须补 count 基底：Outline.tsx 换卷预填会把 undefined count 写进输入框变 NaN
+        const next = { ...readPlanEntry(raw, volume) }
+        if (idea !== undefined) next.idea = idea
+        if (rules !== undefined) next.rules = rules
+        if (typeof next.count !== 'number') {
+          const owned = store.listOutlines(projectId).filter((o) => o.volume === volume).length
+          next.count = owned > 0 ? owned : 30
+        }
+        plans[String(volume)] = next
+        raw.volumePlans = plans
+        saved.volume = volume
+        saved.idea = next.idea
+        saved.rules = next.rules
+        saved.count = next.count
+      }
+      store.updateProject(projectId, { wizardPlan: JSON.stringify(raw) })
+      return { ok: true, ...saved, ...(outlineRules !== undefined ? { outlineRules } : {}) }
     }
   },
   {
@@ -880,6 +981,7 @@ export const READ_TOOLS = new Set([
   'list_worldbuild',
   'get_worldbuild',
   'list_outlines',
+  'get_outline_plan',
   'list_chapter_briefs',
   'get_chapter',
   'get_chapter_tail',

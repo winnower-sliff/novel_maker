@@ -72,6 +72,8 @@ export function buildProjectGraph(projectId: string): ProjectGraph {
         continue
       }
       if (targetId === sourceId) continue
+      // 链接方向纪律：只允许人物卡单向链接世界观；世界观反向链人物不入图（不建边、不计度数、不进子图邻居）
+      if (sourceId.startsWith('wb:') && targetId.startsWith('char:')) continue
       const key = edgeKey(sourceId, targetId)
       const existing = edgeByKey.get(key)
       if (existing) {

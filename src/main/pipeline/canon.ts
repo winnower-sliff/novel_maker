@@ -70,7 +70,7 @@ export function buildCanonSyncRequest(projectId: string, volume: number): ChatPa
     '',
     '【世界观新增】',
     '## [类型] 标题 #标签1 #标签2',
-    '（markdown 要点式正文，2-4 个要点共 50-150 字，至少 2 个 [[条目标题]] 交叉链接）',
+    '（markdown 要点式正文，2-4 个要点共 50-150 字，至少 2 个 [[条目标题]] 交叉链接；链接只指向世界观条目，禁止链人物名）',
     '',
     '【世界观修订】',
     '## 原条目标题',
