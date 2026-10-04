@@ -26,9 +26,16 @@ function collectOutlineMaterials(projectId: string, volume: number) {
     .sort((a, b) => a.chapterNo - b.chapterNo)
     .map((o) => `- 第${o.chapterNo}章《${o.title}》：${o.synopsis.slice(0, 200)}`)
     .join('\n')
+  // 注入防御上限：只取 20 条（有优先级标注的优先，其余新登记优先），防伏笔累积撑爆 prompt
   const openFore = store
     .listForeshadows(projectId)
     .filter((f) => f.status === 'open')
+    .sort((a, b) => {
+      const pa = a.priority.trim() ? 1 : 0
+      const pb = b.priority.trim() ? 1 : 0
+      return pb - pa || b.createdAt - a.createdAt
+    })
+    .slice(0, 20)
     .map(
       (f) =>
         `- ${f.content}（埋于${f.plantedChapter || '?'}${f.plannedResolve ? `，计划回收：${f.plannedResolve}` : ''}${f.priority ? `，优先级：${f.priority}` : ''}）`
@@ -46,12 +53,19 @@ export interface OutlineBatch {
   prevTail?: string
 }
 
+/** 规则块文案：通用/本卷分开标注，共用逐章严格执行要求 */
+function rulesBlock(kind: '通用规则' | '本卷规则', text: string, p: OutlineGenParams): string {
+  const scope = kind === '通用规则' ? '全书各卷适用' : `仅第 ${p.volume} 卷适用`
+  return `【${kind}（用户制定，${scope}，逐章严格执行，优先级高于下方结构原则与核心创意；每条规则须映射到具体章号，并把规则要求的剧情写成该章 scenes 中的具体场景，禁止只在 synopsis 点名；规则中的绝对章号若超出本次生成范围（第 ${p.startNo}~${p.startNo + p.count - 1} 章），将其要求顺延或并入范围内相近章节执行，不得因超出范围而整体忽略）】\n${text}`
+}
+
 export function outlineUserPrompt(p: OutlineGenParams, b: OutlineBatch | null): string {
   const idea = `核心创意：${p.idea}`
   const scope = b
     ? `本次生成第 ${p.volume} 卷、第 ${b.start} 章至第 ${b.start + b.count - 1} 章的大纲（本批共 ${b.count} 章；全卷计划生成第 ${b.totalStart} 章至第 ${b.totalStart + b.total - 1} 章共 ${b.total} 章，分批生成中，后续批次将自动续写）。严格按约定的 JSON 数组格式只输出本批章节，不要输出其他内容。`
     : `请生成第 ${p.volume} 卷、第 ${p.startNo} 章到第 ${p.startNo + p.count - 1} 章的大纲（共 ${p.count} 章），严格按约定的 JSON 数组格式输出，不要输出其他内容。`
-  const rulesNote = p.rules?.trim()
+  const hasRules = !!(p.rules?.trim() || p.globalRules?.trim())
+  const rulesNote = hasRules
     ? '\n硬性节奏规则区中的每一条都必须落实到具体章节，不得省略或合并；规则要求的剧情必须写成对应章 scenes 里的具体场景，禁止只在 synopsis 点名。'
     : ''
   const tailNote = b?.prevTail
@@ -90,8 +104,8 @@ export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): 
     chars && `【已有人物】\n${chars}`,
     openFore &&
       `【未回收伏笔台账（规划新章节时应安排合理回收点，并在对应章节的 foreshadow_ops 中写明）】\n${openFore}`,
-    p.rules?.trim() &&
-      `【硬性节奏规则（用户制定，逐章严格执行，优先级高于下方结构原则与核心创意；每条规则须映射到具体章号，并把规则要求的剧情写成该章 scenes 中的具体场景，禁止只在 synopsis 点名；规则中的绝对章号若超出本次生成范围（第 ${p.startNo}~${p.startNo + p.count - 1} 章），将其要求顺延或并入范围内相近章节执行，不得因超出范围而整体忽略）】\n${p.rules.trim()}`,
+    p.globalRules?.trim() && rulesBlock('通用规则', p.globalRules.trim(), p),
+    p.rules?.trim() && rulesBlock('本卷规则', p.rules.trim(), p),
     // 覆盖重写（allowUpdate:true）刻意不注入旧大纲：整卷重写时旧标题/梗概只会牵引 AI 复刻旧框架，
     // 用户预期是按新创意另起；仅非覆盖模式（同章号跳过语义）需要旧大纲做衔接参考
     outlineCtx &&
@@ -118,7 +132,8 @@ export function buildVolumeIdeaRequest(
   projectId: string,
   volume: number,
   idea: string,
-  rulesText?: string
+  rulesText?: string,
+  globalRulesText?: string
 ): ChatParams {
   const req = idea.trim()
   if (!req) throw new Error('请先在创意框写下你对这一卷的要求')
@@ -130,11 +145,14 @@ export function buildVolumeIdeaRequest(
     .map((v) => `【第${v.volume}卷完成摘要】${v.summary.slice(0, 600)}`)
     .join('\n\n')
   const rules = rulesText?.trim()
+  const globalRules = globalRulesText?.trim()
   const system = [
     '你是小说项目的卷策划。基于已有设定与前情，把用户的本卷要求扩写成一份可直接执行的卷创意。只输出一段纯文字，不要标题、列表、JSON 或任何解释。',
     '卷创意要求（200-300字）：写清这一卷要讲的故事——承接前情的起点、本卷主线冲突与阶段推进、关键人物的作用、本卷收束点与引向下卷的钩子；必须与已有世界观、人物关系咬合，合理安排未回收伏笔的回收或推进。',
+    globalRules &&
+      `【用户的通用规则（全书各卷适用；创意叙事必须与这些规则兼容，但不要在创意正文里复述规则本身）】\n${globalRules}`,
     rules &&
-      `【用户的硬性节奏规则（创意叙事必须与这些规则兼容，但不要在创意正文里复述规则本身）】\n${rules}`,
+      `【用户的本卷硬性节奏规则（创意叙事必须与这些规则兼容，但不要在创意正文里复述规则本身）】\n${rules}`,
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
     wb && `【已有世界观】\n${wb}`,
     chars && `【已有人物】\n${chars}`,
@@ -157,7 +175,8 @@ export function buildVolumeIdeaRequest(
 export function buildRulesRefineRequest(
   projectId: string,
   volume: number,
-  rules: string
+  rules: string,
+  globalRulesText?: string
 ): ChatParams {
   const raw = rules.trim()
   if (!raw) throw new Error('请先在规则框写下你的要求')
@@ -185,6 +204,8 @@ export function buildRulesRefineRequest(
     wb && `世界观条目：\n${wb.slice(0, 800)}`,
     chars && `人物：\n${chars.slice(0, 500)}`,
     outlineCtx && `本卷已有大纲章节：\n${outlineCtx}`,
+    globalRulesText?.trim() &&
+      `通用规则（全书各卷适用，优化结果须与之兼容、不得冲突）：\n${globalRulesText.trim()}`,
     '',
     `【用户的原始规则】\n${raw}`
   ]
@@ -408,10 +429,13 @@ export function applySummaryResult(
   )
 
   const existingOpen = store.listForeshadows(projectId).filter((f) => f.status === 'open')
+  // 代码兜底上限：AI 摘要偶发过量登记（曾致单项目累积 1300+ open），每章登记/回收各最多 3 条
+  const FORE_PER_CHAPTER_LIMIT = 3
   let plantedCount = 0
   for (const f of Array.isArray(obj.foreshadows_planted)
     ? (obj.foreshadows_planted as Array<Record<string, unknown>>)
     : []) {
+    if (plantedCount >= FORE_PER_CHAPTER_LIMIT) break
     const content = String(f.content ?? '').trim()
     if (!content) continue
     if (existingOpen.some((x) => x.content === content)) continue
@@ -429,6 +453,7 @@ export function applySummaryResult(
     ? obj.foreshadows_resolved.map(String)
     : []
   for (const content of resolvedList) {
+    if (resolvedCount >= FORE_PER_CHAPTER_LIMIT) break
     const target = existingOpen.find(
       (x) => content.includes(x.content) || x.content.includes(content)
     )
