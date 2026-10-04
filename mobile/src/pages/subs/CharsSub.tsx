@@ -1,6 +1,6 @@
-import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { Button, Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
+import { withSnapshot } from '@mobile/lib/querySnapshot'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
@@ -26,7 +26,9 @@ export default function CharsSub({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
   const { data: list = [], isLoading } = useQuery({
     queryKey: ['novel', 'characters', projectId],
-    queryFn: () => window.api.novel.characters(projectId)
+    queryFn: withSnapshot(['novel', 'characters', projectId], () =>
+      window.api.novel.characters(projectId)
+    )
   })
   const [editId, setEditId] = useState<string | null>(null)
   const [draftOpen, setDraftOpen] = useState(false)
@@ -51,7 +53,7 @@ export default function CharsSub({ projectId }: { projectId: string }) {
     )
 
   return (
-    <PullToRefresh className="p-3">
+    <div className="h-full overflow-y-auto overscroll-contain p-3">
       <CharacterGenPanel ui={mobileWizardUi} projectId={projectId} onChanged={invalidate} />
 
       <div className="mt-4">
@@ -79,7 +81,7 @@ export default function CharsSub({ projectId }: { projectId: string }) {
           </div>
         )}
       </div>
-    </PullToRefresh>
+    </div>
   )
 }
 
@@ -109,7 +111,9 @@ function CharacterEditor({
   const regen = useCharacterRegen(projectId)
   const { data: appearances } = useQuery({
     queryKey: ['novel', 'characterAppearances', projectId],
-    queryFn: () => window.api.novel.characterAppearances(projectId),
+    queryFn: withSnapshot(['novel', 'characterAppearances', projectId], () =>
+      window.api.novel.characterAppearances(projectId)
+    ),
     enabled: !!character.id
   })
   const app = character.id ? appearances?.[character.id] : undefined

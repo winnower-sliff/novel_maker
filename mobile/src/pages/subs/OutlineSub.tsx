@@ -1,4 +1,3 @@
-import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -15,6 +14,7 @@ import { fireCanonSync } from '@wizard/canonStore'
 import { ExpandableTextarea, NumberField, OutlineProgress } from '@wizard/widgets'
 import { loadProjectPlan, type WizardPlanFull, saveProjectPlan } from '@wizard/wizardPlan'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
+import { withSnapshot } from '@mobile/lib/querySnapshot'
 import type { Foreshadow, OutlineItem } from '@shared/types'
 
 const FORESHADOW_STATUS = ['planted', 'resolved', 'abandoned']
@@ -24,11 +24,15 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
   const { data: outlines = [] } = useQuery({
     queryKey: ['novel', 'outlines', projectId],
-    queryFn: () => window.api.novel.outlines(projectId)
+    queryFn: withSnapshot(['novel', 'outlines', projectId], () =>
+      window.api.novel.outlines(projectId)
+    )
   })
   const { data: briefs = [] } = useQuery({
     queryKey: ['novel', 'chapterBriefs', projectId],
-    queryFn: () => window.api.novel.chapterBriefs(projectId)
+    queryFn: withSnapshot(['novel', 'chapterBriefs', projectId], () =>
+      window.api.novel.chapterBriefs(projectId)
+    )
   })
   const [editId, setEditId] = useState<string | null>(null)
   const editing = outlines.find((o) => o.id === editId) ?? null
@@ -190,7 +194,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
     )
 
   return (
-    <PullToRefresh className="p-3">
+    <div className="h-full overflow-y-auto overscroll-contain p-3">
       <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="mr-0.5 text-xs text-zinc-500">选择卷</span>
@@ -504,7 +508,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
       </div>
 
       <ForeshadowList projectId={projectId} onEdit={setFeditId} />
-    </PullToRefresh>
+    </div>
   )
 }
 
@@ -601,7 +605,9 @@ function ForeshadowList({
 }) {
   const { data: list = [] } = useQuery({
     queryKey: ['novel', 'foreshadows', projectId],
-    queryFn: () => window.api.novel.foreshadows(projectId)
+    queryFn: withSnapshot(['novel', 'foreshadows', projectId], () =>
+      window.api.novel.foreshadows(projectId)
+    )
   })
 
   return (
@@ -650,7 +656,9 @@ function ForeshadowEdit({
   const qc = useQueryClient()
   const { data: list = [] } = useQuery({
     queryKey: ['novel', 'foreshadows', projectId],
-    queryFn: () => window.api.novel.foreshadows(projectId)
+    queryFn: withSnapshot(['novel', 'foreshadows', projectId], () =>
+      window.api.novel.foreshadows(projectId)
+    )
   })
   const item = list.find((f) => f.id === editId) ?? null
   if (!item) return <Empty text="伏笔不存在或已被删除" />

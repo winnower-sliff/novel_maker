@@ -1,4 +1,3 @@
-import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AiBar } from '@mobile/components/AiBar'
@@ -6,6 +5,7 @@ import { useBackHandler } from '@mobile/lib/backHandler'
 import { Badge, Button, Empty, Spinner } from '@mobile/components/ui'
 import { fmtWords } from '@mobile/lib/format'
 import { useWriteListStore } from '@mobile/lib/writeListStore'
+import { withSnapshot } from '@mobile/lib/querySnapshot'
 import { ChainBanner } from '../../../src/wizard/ChainBanner'
 import { suggestBatchRange, useWriteRunStore } from '../../../src/wizard/writeRunStore'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
@@ -163,7 +163,9 @@ export default function Write({ projectId }: { projectId: string }) {
   const toggleSeg = useWriteListStore((s) => s.toggleSeg)
   const { data: briefs = [], isLoading } = useQuery({
     queryKey: ['novel', 'chapterBriefs', projectId],
-    queryFn: () => window.api.novel.chapterBriefs(projectId),
+    queryFn: withSnapshot(['novel', 'chapterBriefs', projectId], () =>
+      window.api.novel.chapterBriefs(projectId)
+    ),
     enabled: !!projectId
   })
 
@@ -207,7 +209,7 @@ export default function Write({ projectId }: { projectId: string }) {
   const volumeGroups = groupChapterSegments(briefs)
 
   return (
-    <PullToRefresh className="p-3">
+    <div className="h-full overflow-y-auto overscroll-contain p-3">
       {briefs.length === 0 ? (
         <Empty text="该项目还没有大纲章节，请先在电脑端生成大纲" />
       ) : (
@@ -316,7 +318,7 @@ export default function Write({ projectId }: { projectId: string }) {
           ))}
         </>
       )}
-    </PullToRefresh>
+    </div>
   )
 }
 

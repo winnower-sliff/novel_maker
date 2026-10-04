@@ -1,4 +1,3 @@
-import { PullToRefresh } from '@mobile/components/PullToRefresh'
 import { Empty, Input, Label, Textarea } from '@mobile/components/ui'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { DetailShell, EditBar, Row } from '@mobile/pages/subs/parts'
@@ -7,6 +6,7 @@ import { useEffect, useRef, useState } from 'react'
 import { startGen, useWbGenTasks, useWbLiveEntries } from '@wizard/wbGenStore'
 import { NumberField } from '@wizard/widgets'
 import { loadProjectPlan, saveProjectPlan } from '@wizard/wizardPlan'
+import { withSnapshot } from '@mobile/lib/querySnapshot'
 import type { WorldbuildEntry } from '@shared/types'
 
 /** 世界观子页：方向/类型/条目数 → 后台流式生成入库（wbGenStore）+ 分类分组列表 + 条目编辑 */
@@ -15,7 +15,9 @@ export default function WorldSub({ projectId }: { projectId: string }) {
   const { Badge: B, Button: Btn } = mobileWizardUi
   const { data: list = [], isLoading } = useQuery({
     queryKey: ['novel', 'worldbuild', projectId],
-    queryFn: () => window.api.novel.worldbuild(projectId)
+    queryFn: withSnapshot(['novel', 'worldbuild', projectId], () =>
+      window.api.novel.worldbuild(projectId)
+    )
   })
   const [editId, setEditId] = useState<string | null>(null)
   const editing = list.find((w) => w.id === editId) ?? null
@@ -103,7 +105,7 @@ export default function WorldSub({ projectId }: { projectId: string }) {
   const groups = [...new Set(list.map((w) => w.category))]
 
   return (
-    <PullToRefresh className="p-3">
+    <div className="h-full overflow-y-auto overscroll-contain p-3">
       <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
         <div className="flex items-center gap-2">
           <Label>世界观方向（AI 生成条目的需求描述）</Label>
@@ -187,7 +189,7 @@ export default function WorldSub({ projectId }: { projectId: string }) {
           ))
         )}
       </div>
-    </PullToRefresh>
+    </div>
   )
 }
 

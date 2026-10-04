@@ -1,4 +1,5 @@
 import { useBackHandler } from '@mobile/lib/backHandler'
+import AgentConfirmBanner from '@mobile/components/AgentConfirmBanner'
 import AgentChat from '@mobile/pages/AgentChat'
 import Read from '@mobile/pages/Read'
 import Write from '@mobile/pages/Write'
@@ -6,7 +7,7 @@ import CharsSub from '@mobile/pages/subs/CharsSub'
 import OutlineSub from '@mobile/pages/subs/OutlineSub'
 import PremiseSub from '@mobile/pages/subs/PremiseSub'
 import WorldSub from '@mobile/pages/subs/WorldSub'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import type { ChapterBrief, Project } from '@shared/types'
 import { prefetchBook, putBriefs, getCachedBriefs } from '@mobile/lib/readerCache'
@@ -77,6 +78,20 @@ export default function Book({
 
   // Book 内子视图（编辑器/阅读页/AiBar）各自注册返回键；都没注册（栈里只剩 Book）时，返回键回书架
   useBackHandler(onClose)
+
+  const qc = useQueryClient()
+  const [refreshing, setRefreshing] = useState(false)
+  // 顶栏手动刷新：等价原下拉刷新（全量 novel），外加当前书智能体会话
+  const refreshBook = (): void => {
+    if (refreshing) return
+    setRefreshing(true)
+    void Promise.all([
+      qc.invalidateQueries({ queryKey: ['novel'] }),
+      qc.invalidateQueries({ queryKey: ['agentSessions', projectId] })
+    ])
+      .catch(() => {})
+      .finally(() => setRefreshing(false))
+  }
 
   // —— 弱引导数据（只用于标「下一步」，不阻塞进书与位置恢复；创建模式不查）——
   const enabled = !!projectId
@@ -179,7 +194,27 @@ export default function Book({
         <div className="min-w-0 flex-1 truncate py-1.5 text-center text-sm font-medium text-zinc-200">
           {title}
         </div>
-        <div className="w-14" />
+        <div className="flex w-14 items-center justify-center">
+          <button
+            type="button"
+            aria-label="刷新"
+            onClick={refreshBook}
+            className="cursor-pointer p-1.5 text-zinc-400 active:text-zinc-200"
+          >
+            <svg
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className={`h-4 w-4 ${refreshing ? 'animate-spin' : ''}`}
+            >
+              <path d="M21 12a9 9 0 1 1-9-9c2.52 0 4.93 1 6.74 2.74L21 8" />
+              <path d="M21 3v5h-5" />
+            </svg>
+          </button>
+        </div>
       </div>
       <div className="flex border-b border-zinc-800 bg-zinc-950/95">
         {TABS.map((t) => (
@@ -231,6 +266,7 @@ export default function Book({
           </>
         )}
       </main>
+      <AgentConfirmBanner hidden={tab === 'agent'} />
     </div>
   )
 }
