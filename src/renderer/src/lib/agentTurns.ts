@@ -22,7 +22,13 @@ export const TOOL_LABELS: Record<string, string> = {
   delete_foreshadow: '伏笔·删除',
   get_agent_instructions: '指令·读取',
   set_agent_instructions: '指令·修改',
-  spawn_subagent: '子智能体·委派'
+  spawn_subagent: '子智能体·委派',
+  get_entity: '内容·读取',
+  delete_entity: '内容·删除',
+  worldbuild_type: '世界观·类型管理',
+  set_worldbuild_category: '世界观·改类型',
+  grep_project: '全项目·查找',
+  compact_context: '上下文·压缩'
 }
 
 function str(input: Record<string, unknown>, key: string): string {
@@ -98,6 +104,33 @@ export function toolSummary(call: AgentToolCall): string {
     case 'spawn_subagent': {
       const t = str(i, 'task')
       return `${str(i, 'role') || '调研'}：${t.slice(0, 40)}${t.length > 40 ? '…' : ''}`
+    }
+    case 'get_entity': {
+      const kindName =
+        { character: '人物', worldbuild: '词条', chapter: '章节' }[str(i, 'kind')] ?? str(i, 'kind')
+      return `读取${kindName}全文（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
+    }
+    case 'delete_entity': {
+      const kindName =
+        { character: '人物', worldbuild: '词条', outline: '大纲', foreshadow: '伏笔' }[
+          str(i, 'kind')
+        ] ?? str(i, 'kind')
+      return `删除${kindName}（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
+    }
+    case 'worldbuild_type': {
+      const op = str(i, 'op')
+      const opName = { create: '新建类型', delete: '删除类型', reorder: '调整顺序' }[op] ?? op
+      return `世界观类型·${opName}：${str(i, 'name')}`
+    }
+    case 'set_worldbuild_category':
+      return `词条改类型：${str(i, 'category')}（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
+    case 'grep_project': {
+      const p = str(i, 'pattern')
+      return `全项目查找：${p.slice(0, 30)}${p.length > 30 ? '…' : ''}${str(i, 'regex') ? '（正则）' : ''}`
+    }
+    case 'compact_context': {
+      const s2 = str(i, 'summary')
+      return `压缩对话历史（摘要 ${s2.length} 字）`
     }
     default:
       return call.name

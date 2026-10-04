@@ -1,4 +1,4 @@
-import type { OutlineStatus, Purpose } from './contract'
+import type { AgentToolResultEvent, OutlineStatus, Purpose } from './contract'
 import type { ProviderId } from './providers'
 
 // 输入类型与枚举已收敛到 contract.ts（zod 单一事实源），这里统一再导出兼容旧路径
@@ -148,6 +148,16 @@ export interface PendingConfirmInfo {
   dangerReason?: string
 }
 
+/** 大纲生成实时进度（主进程增量解析已确认流文本维护，runtime:snapshot 轮询恢复） */
+export interface OutlineRunProgress {
+  /** 已配平解析出的章数 */
+  count: number
+  /** 本次生成目标章数 */
+  total: number
+  /** 最近解析的章节标题（≤3 个） */
+  lastTitles: string[]
+}
+
 /** 运行注册表条目（llm:poll/runtime:snapshot 补拉用）：断连期间 done/error 事件丢失时的结果快照 */
 export interface RunRecordPayload {
   status: 'running' | 'done' | 'error'
@@ -158,8 +168,12 @@ export interface RunRecordPayload {
   meta?: RunMeta
   /** running 期间的流式文本尾部（后台/重挂页面经 snapshot 恢复进度显示用，done 后不再更新） */
   textTail?: string
+  /** outline run 的结构化进度（1s 轮询驱动真进度条，跨 chunk 增量解析） */
+  progress?: OutlineRunProgress
   /** agent run 的待应答确认（仅 running 时由 listRuns 实时附加） */
   pendingConfirm?: PendingConfirmInfo
+  /** agent run 已完成工具的轻量状态表（仅 running 时附加，渲染端对账校正刷新窗口丢失的卡） */
+  toolStatuses?: AgentToolResultStatus[]
 }
 
 /** 带 requestId 的运行记录（runtime:snapshot 返回） */
@@ -518,6 +532,26 @@ export type SubagentEvent =
   | { type: 'done'; parentId: string; text: string; turns: number }
   | { type: 'error'; parentId: string; message: string }
 
+/** LLM 服务商错误分类（llm:error / agent:error 事件随附，供前端展示可操作的友好提示） */
+export type LlmErrorCategory =
+  | 'insufficient_balance'
+  | 'auth'
+  | 'rate_limit'
+  | 'model_not_found'
+  | 'context_too_long'
+  | 'network'
+  | 'server_error'
+  | 'content_filter'
+  | 'unknown'
+
+export interface LlmErrorHint {
+  category: LlmErrorCategory
+  /** 面向用户的可操作提示文案 */
+  friendly: string
+  /** 服务商原始报错（排查用，UI 折叠展示） */
+  raw: string
+}
+
 export interface AgentDonePayload {
   text: string
   turns: number
@@ -529,6 +563,17 @@ export interface AgentDonePayload {
   usage: UsageInfo
   model: string
   durationMs: number
+  /** 全部工具结果流水（run 收尾一次性下发，供渲染端校正刷新窗口丢失的工具卡终态） */
+  toolResults?: AgentToolResultEvent[]
+  /** 本 run 内发生过上下文压缩时携带最后一次压缩摘要（渲染端据此把压缩点之前的 turns 替换为合成摘要 turn） */
+  compact?: { summary: string }
+}
+
+/** 工具结果轻量状态表（runtime:snapshot 周期对账用，不带 result 全文避免大 payload 反复传输） */
+export interface AgentToolResultStatus {
+  id: string
+  ok: boolean
+  denied?: boolean
 }
 
 export interface AgentToolDefView {

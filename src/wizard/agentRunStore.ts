@@ -3,11 +3,13 @@
 // Agent / AgentChat 只是 store 的视图：挂载时 syncProject(projectId) 对账即可，
 // 卸载不影响事件处理与持久化。跨端风格对齐 writeRunStore（容器进 zustand，可变量留模块级）。
 import type { AgentToolCallEvent, AgentToolResultEvent } from '@shared/contract'
+import { classifyLlmError } from '@shared/llmError'
 import type {
   AgentDonePayload,
   AgentSession,
   AgentToolCall,
   AgentTurn,
+  LlmErrorHint,
   RuntimeSnapshot
 } from '@shared/types'
 import { create } from 'zustand'
@@ -34,6 +36,7 @@ interface AgentRunState {
   turns: AgentTurn[]
   running: boolean
   error: string
+  errorHint: LlmErrorHint | null
   doneInfo: AgentDonePayload | null
   subProcs: Record<string, SubProc>
 }
@@ -46,6 +49,7 @@ export const useAgentRunStore = create<AgentRunState>(() => ({
   turns: [],
   running: false,
   error: '',
+  errorHint: null,
   doneInfo: null,
   subProcs: {}
 }))
@@ -202,6 +206,7 @@ export function startRun(input: string, model?: string): void {
     turns: next,
     running: true,
     error: '',
+    errorHint: null,
     doneInfo: null,
     subProcs: {},
     requestId: null
@@ -217,7 +222,12 @@ export function startRun(input: string, model?: string): void {
     })
     .catch((err: unknown) => {
       if (token !== genToken) return
-      useAgentRunStore.setState({ error: (err as Error).message, running: false })
+      const message = (err as Error).message
+      useAgentRunStore.setState({
+        error: message,
+        errorHint: classifyLlmError(message),
+        running: false
+      })
       setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: false } })
     })
 }
@@ -246,6 +256,7 @@ export function switchSession(id: string | null): void {
     requestId: null,
     running: false,
     error: '',
+    errorHint: null,
     doneInfo: null,
     subProcs: {},
     ...(id ? {} : { sessionId: null, sessionCreatedAt: Date.now(), turns: [] })
@@ -286,6 +297,7 @@ export function syncProject(projectId: string): void {
     sessionCreatedAt: Date.now(),
     turns: [],
     error: '',
+    errorHint: null,
     doneInfo: null,
     subProcs: {}
   })
@@ -368,8 +380,8 @@ export function ensureAgentRuntime(): void {
       applyAgentDone(id, payload)
     })
 
-    window.api.agent.onError((id, message) => {
-      applyAgentError(id, message)
+    window.api.agent.onError((id, message, hint) => {
+      applyAgentError(id, message, hint)
     })
   })
 }
@@ -418,18 +430,29 @@ function applyCompactRewrite(turns: AgentTurn[], summary?: string): AgentTurn[] 
   }
   if (idx < 0) return turns
   return [
-    { role: 'user', text: `【上下文压缩】以下摘要替代了此前的对话历史：\n${summary}`, ts: Date.now() },
+    {
+      role: 'user',
+      text: `【上下文压缩】以下摘要替代了此前的对话历史：\n${summary}`,
+      ts: Date.now()
+    },
     ...turns.slice(idx + 1)
   ]
 }
 
-/** 事件与同步器补拉共用收尾路径；id/running 守卫使二次应用幂等 */
-export function applyAgentError(id: string, message: string): boolean {
+/** 事件与同步器补拉共用收尾路径；id/running 守卫使二次应用幂等。
+ * hint 缺失（快照补拉/旧记录）时从 message 兜底反推分类 */
+export function applyAgentError(id: string, message: string, hint?: LlmErrorHint): boolean {
   const s = useAgentRunStore.getState()
   if (!s.running || id !== s.requestId) return false
   flushDelta()
   const fixed = finalizeTurns(useAgentRunStore.getState().turns)
-  useAgentRunStore.setState({ turns: fixed, running: false, requestId: null, error: message })
+  useAgentRunStore.setState({
+    turns: fixed,
+    running: false,
+    requestId: null,
+    error: message,
+    errorHint: hint ?? classifyLlmError(message)
+  })
   persistRun()
   setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: false } })
   return true
@@ -458,8 +481,15 @@ export function syncAgentFromSnapshot(snap: RuntimeSnapshot): void {
         pushToast('success', '后台智能体任务已完成')
       }
     } else if (rec?.status === 'error') {
-      if (applyAgentError(rec.id, rec.error ?? '生成失败')) {
-        pushToast('error', `后台智能体任务失败：${rec.error ?? '未知错误'}`)
+      const message = rec.error ?? '生成失败'
+      if (applyAgentError(rec.id, message)) {
+        const { errorHint } = useAgentRunStore.getState()
+        pushToast(
+          'error',
+          errorHint?.friendly
+            ? `后台智能体任务失败：${errorHint.friendly}`
+            : `后台智能体任务失败：${message}`
+        )
       }
     } else if (rec?.toolStatuses?.length) {
       // running 期间轻量对账：校正刷新窗口丢失 toolResult 的工具卡（10s tick 周期收敛）
@@ -495,6 +525,7 @@ export function syncAgentFromSnapshot(snap: RuntimeSnapshot): void {
     running: true,
     requestId: orphan.id,
     error: '',
+    errorHint: null,
     doneInfo: null,
     subProcs: {},
     ...(keepTurns ? {} : { sessionId: null, sessionCreatedAt: Date.now(), turns: [] })

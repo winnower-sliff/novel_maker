@@ -1,6 +1,7 @@
-import type { EventChannels, EventContract } from '../../shared/contract'
+import type { AgentToolResultEvent, EventChannels, EventContract } from '../../shared/contract'
 import type {
   AgentDonePayload,
+  AgentToolResultStatus,
   ChatMessage,
   ContentBlock,
   PendingConfirmInfo,
@@ -30,12 +31,17 @@ export function getAgentToolDefs(): ToolDef[] {
 /** 确认等待超时：渲染端刷新/断连后无人应答时自动拒绝，防 run 在主进程死等（对齐 runRecords TTL） */
 const CONFIRM_TIMEOUT_MS = 10 * 60 * 1000
 
+/** 输入 token 超过该阈值时在工具结果里软提示建议压缩（不强制，每轮至多一次） */
+const COMPACT_NUDGE_TOKENS = 100_000
+
 interface RunState {
   confirms: Map<
     string,
     PendingConfirmInfo & { resolve: (allow: boolean) => void; timer: ReturnType<typeof setTimeout> }
   >
   alwaysAllowed: Set<string>
+  /** 已发出的工具结果全量流水：done 一次性下发 + snapshot 轻量对账，供渲染端校正刷新窗口丢失的工具卡 */
+  toolResults: AgentToolResultEvent[]
 }
 
 const activeRuns = new Map<string, RunState>()
@@ -50,6 +56,14 @@ export function getAgentPendingConfirm(requestId: string): PendingConfirmInfo | 
     input: pending.input,
     dangerReason: pending.dangerReason
   }
+}
+
+/** running 期间已完成工具的轻量状态表（runtime:snapshot 周期对账用，不带 result 全文） */
+export function getAgentToolResultStatuses(requestId: string): AgentToolResultStatus[] {
+  return (
+    activeRuns.get(requestId)?.toolResults.map((r) => ({ id: r.id, ok: r.ok, denied: r.denied })) ??
+    []
+  )
 }
 
 export function resolveAgentConfirm(
@@ -112,13 +126,15 @@ function buildSystemPrompt(projectId: string): string {
     '6. 用户要求模糊时（如"优化一下大纲"），先读取现状再决定改法，必要时先说明你的计划',
     '7. 全局性任务（矛盾检查、一致性审校、批量统计或修改）必须覆盖全部相关条目：先看 total/hasMore/byCategory 规划分批，逐批读取直至 hasMore=false，再下结论并在结论中说明覆盖范围；结果被截断时改用 category/volume 过滤、offset/limit 分页或 detail=summary 重试，禁止基于不完整数据下最终结论',
     '8. 写入世界观词条或人物卡时遵循标签纪律：每条至少 2 个标签，优先复用现有标签，没有合适的就新建可被多条共享的上位主题标签（体系名/时代名/事件名/族群名等），禁止无标签条目或让标签留空；[[ ]] 链接有单向纪律：只允许人物卡单向链接世界观条目（卡末尾「关联：」行写 [[世界观条目|关系短语]]），世界观条目之间可互链（优先写 [[目标|关系短语]]，关系短语写清「是什么关系」，简单提及才用裸 [[目标]]），但世界观条目严禁反向链人物名——提及人物直接写名字或纯文本描述，不加双方括号；关系化链接会被知识图谱解析成带语义的边',
-    '9. 写章节正文前的固定序列（顺序不可省略）：① list_outlines 找到上一章大纲 id，同时取出本章大纲（标题写在 outline.title 上；scenes 场景序列是「这章怎么演」的逐场依据，正文须逐场落实）；② get_chapter_tail 回读上一章结尾，找回语气、当前悬念与情绪落点，开头自然承接、禁止复述；③ 读取本章出场人物的 get_character（关注动态状态 state）；④ list_foreshadows 核对未回收伏笔（关注 plannedResolve 计划回收点与 priority 优先级，本章该埋/该收的在梗概或 foreshadowOps 里）；⑤ list_summaries 取上一章摘要，按其 ledger 硬账对齐数字（人数/金额/库存/伤势程度等不得无故跳变）；⑥ 然后才动笔',
-    '10. 找"与某主题相关的设定/人物/章节"时优先用 search_project 语义搜索，比翻页浏览高效；返回为空再回退 list_* 分页浏览',
+    '9. 写章节正文前的固定序列（顺序不可省略）：① list_outlines 找到上一章大纲 id，同时取出本章大纲（标题写在 outline.title 上；scenes 场景序列是「这章怎么演」的逐场依据，正文须逐场落实）；② get_chapter_tail 回读上一章结尾，找回语气、当前悬念与情绪落点，开头自然承接、禁止复述；③ 读取本章出场人物的 get_entity(kind=character)（关注动态状态 state）；④ list_foreshadows 核对未回收伏笔（关注 plannedResolve 计划回收点与 priority 优先级，本章该埋/该收的在梗概或 foreshadowOps 里）；⑤ list_summaries 取上一章摘要，按其 ledger 硬账对齐数字（人数/金额/库存/伤势程度等不得无故跳变）；⑥ 然后才动笔',
+    '10. 找"与某主题相关的设定/人物/章节"时优先用 search_project 语义搜索，比翻页浏览高效；要找「哪些地方写了某个确切字符串」（如 [[链接名]] 的引用处、改名前的旧标题、专名出现位置）用 grep_project 精确定位；两者都空再回退 list_* 分页浏览',
     '11. 回答全书级问题（整体脉络/主题/长线走向）前先用 get_book_digest 拿全局概览，再按需深入具体卷章；不要靠翻页拼凑全局判断',
     '12. 完成写章任务后，若人物状态发生变化（伤势/物品/信息/立场），顺手用 update_character_state 更新其状态文档（旧条目可删，保持紧凑）',
     '13. 大范围调研/核对（全书矛盾检查、批量统计、跨卷一致性）若预计要翻阅大量条目，用 spawn_subagent 委派只读子智能体代劳，拿到报告后再执行写入决策；委派时 task 必须写全调查范围、判断标准与期望报告格式，一个子任务聚焦一件事，需要写入的修改由你亲自执行',
     '14. 刷新某卷卷摘要一律用 refresh_volume_summary（走与自动写作相同的生成链，自动落库），不要自己拼一段文字当卷摘要写；重新规划章节时用 save_outline 的 scenes 参数逐场排「人物+动作/冲突」场景序列（synopsis 只写「这章讲什么」，怎么演落在 scenes）',
-    '15. 卷创意与本卷/通用节奏规则存在大纲生成页的向导参数里：读取用 get_outline_plan，保存用 save_outline_plan（未传字段保留原值，空串清空）；为某卷起草新卷创意时写成 3-5 个自然段的软分段形态，每段以「开篇章（卷首）：」等相对位置短语开头（禁写死章号），段间渐进过渡，总长 400-600 字'
+    '15. 卷创意与本卷/通用节奏规则存在大纲生成页的向导参数里：读取用 get_outline_plan，保存用 save_outline_plan（未传字段保留原值，空串清空）；为某卷起草新卷创意时写成 3-5 个自然段的软分段形态，每段以「开篇章（卷首）：」等相对位置短语开头（禁写死章号），段间渐进过渡，总长 400-600 字',
+    '16. 世界观类型管理：优先复用现有类型；条目换类型用 set_worldbuild_category（目标类型不存在会自动创建）；确需新类型用 worldbuild_type 的 op=create（可同时带 before/after/first/last 之一插到语义相邻处）；删类型用 op=delete（类型下还有条目时先逐条 set_worldbuild_category 迁走再删）',
+    '17. 长任务（批量改写、全书检查、跨卷校对）中收到「上下文过大」系统提示、或确认早前细节已处理完时，主动用 compact_context 把历史压成摘要再继续；摘要必须包含任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定，宁可写长不可漏关键 id'
   ].join('\n')
 }
 
@@ -153,8 +169,14 @@ export async function runAgent(opts: {
   if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
   const system = buildSystemPrompt(projectId)
 
-  const runState: RunState = { confirms: new Map(), alwaysAllowed: new Set() }
+  const runState: RunState = { confirms: new Map(), alwaysAllowed: new Set(), toolResults: [] }
   activeRuns.set(requestId, runState)
+
+  /** 发工具结果事件并登记流水（done 收尾时随 payload 下发，snapshot 期间轻量对账） */
+  const emitToolResult = (ev: AgentToolResultEvent): void => {
+    runState.toolResults.push(ev)
+    send('agent:toolResult', ev)
+  }
 
   const usage: UsageInfo = {
     inputTokens: 0,
@@ -175,6 +197,9 @@ export async function runAgent(opts: {
     promptCache: auth.promptCache
   }
   let subagentCount = 0
+  let pendingCompact: string | null = null
+  let compacted = false
+  let compactSummary = ''
 
   const messages = [...opts.messages]
   const tools = getAgentToolDefs()
@@ -236,6 +261,25 @@ export async function runAgent(opts: {
 
       const resultBlocks: ContentBlock[] = []
       for (const tu of result.toolUses) {
+        if (tu.name === 'compact_context') {
+          const summary = typeof tu.input?.summary === 'string' ? tu.input.summary.trim() : ''
+          send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'running' })
+          if (!summary) {
+            resultBlocks.push({
+              type: 'tool_result',
+              tool_use_id: tu.id,
+              content: '错误: summary 不能为空（把任务目标、已完成修改含 id、待办写进摘要再压缩）',
+              is_error: true
+            })
+            emitToolResult({ id: tu.id, ok: false, result: 'summary 不能为空' })
+            continue
+          }
+          pendingCompact = summary
+          const msg = '已压缩：此前全部对话历史已替换为该摘要，请轻装继续后续工作'
+          resultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: msg })
+          emitToolResult({ id: tu.id, ok: true, result: msg })
+          continue
+        }
         const tool = TOOL_MAP.get(tu.name)
         if (!tool) {
           resultBlocks.push({
@@ -244,7 +288,7 @@ export async function runAgent(opts: {
             content: `错误: 未知工具 ${tu.name}`,
             is_error: true
           })
-          send('agent:toolResult', { id: tu.id, ok: false, result: `未知工具 ${tu.name}` })
+          emitToolResult({ id: tu.id, ok: false, result: `未知工具 ${tu.name}` })
           continue
         }
 
@@ -281,7 +325,7 @@ export async function runAgent(opts: {
               content: msg,
               is_error: true
             })
-            send('agent:toolResult', { id: tu.id, ok: false, result: msg, denied: true })
+            emitToolResult({ id: tu.id, ok: false, result: msg, denied: true })
             continue
           }
         } else {
@@ -313,9 +357,26 @@ export async function runAgent(opts: {
           content: out,
           is_error: ok ? undefined : true
         })
-        send('agent:toolResult', { id: tu.id, ok, result: out })
+        emitToolResult({ id: tu.id, ok, result: out })
+      }
+      if (result.usage.inputTokens > COMPACT_NUDGE_TOKENS && resultBlocks.length > 0) {
+        const last = resultBlocks[resultBlocks.length - 1]
+        if (last.type === 'tool_result')
+          last.content += `\n[系统提示：本次请求输入约 ${result.usage.inputTokens} tokens，上下文偏大。若早前细节已不再需要，建议调用 compact_context 压缩历史（先把任务目标、已完成修改含 id、待办事项写进摘要）]`
       }
       messages.push({ role: 'user', content: resultBlocks })
+
+      if (pendingCompact !== null) {
+        // 压缩必须在本轮 tool_use/tool_result 全部落账后整体替换，保证配对约束不被破坏
+        messages.length = 0
+        messages.push({
+          role: 'user',
+          content: `【上下文压缩】以下摘要替代了此前全部对话历史：\n${pendingCompact}`
+        })
+        compacted = true
+        compactSummary = pendingCompact
+        pendingCompact = null
+      }
 
       if (turn === MAX_TURNS - 1) hitLimit = true
     }
@@ -334,6 +395,8 @@ export async function runAgent(opts: {
     subagents: subagentCount,
     usage,
     model: lastModel,
-    durationMs: Date.now() - started
+    durationMs: Date.now() - started,
+    toolResults: runState.toolResults,
+    ...(compacted ? { compact: { summary: compactSummary } } : {})
   }
 }

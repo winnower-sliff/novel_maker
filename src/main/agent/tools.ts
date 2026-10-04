@@ -142,15 +142,63 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
-      name: 'get_character',
-      description: '按 id 读取单张人物卡全文（含动态状态 state，修改前取原文用）',
-      input_schema: schema({ id: s('人物 id') }, ['id'])
+      name: 'get_entity',
+      description:
+        '按 id 读取单条内容全文（修改前取原文用）。kind=character 返回人物卡（含动态状态 state）；kind=worldbuild 返回世界观词条全文（含 category/tags/keys）；kind=chapter 传大纲条目 id，返回该章正文全文（超长会截断）',
+      input_schema: schema(
+        {
+          kind: s('内容类型：character / worldbuild / chapter'),
+          id: s('条目 id（chapter 传大纲条目 id）')
+        },
+        ['kind', 'id']
+      )
     },
     danger: false,
     handler: (input, projectId) => {
-      const c = store.listCharacters(projectId).find((x) => x.id === reqStr(input, 'id'))
-      if (!c) throw new Error('未找到该人物')
-      return { id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card, state: c.state }
+      const kind = reqStr(input, 'kind')
+      const id = reqStr(input, 'id')
+      if (kind === 'character') {
+        const c = store.listCharacters(projectId).find((x) => x.id === id)
+        if (!c) throw new Error('未找到该人物')
+        return {
+          kind,
+          id: c.id,
+          name: c.name,
+          role: c.role,
+          tags: c.tags,
+          card: c.card,
+          state: c.state
+        }
+      }
+      if (kind === 'worldbuild') {
+        const e = store.listWorldbuild(projectId).find((x) => x.id === id)
+        if (!e) throw new Error('未找到该词条')
+        return {
+          kind,
+          id: e.id,
+          category: e.category,
+          title: e.title,
+          tags: e.tags,
+          keys: e.keys,
+          content: e.content
+        }
+      }
+      if (kind === 'chapter') {
+        const o = getOutlineOwned(id, projectId)
+        const chapter = store.getChapterByOutline(o.id)
+        if (!chapter) return { kind, exists: false, note: '该章节还没有正文' }
+        const c = clip(chapter.content, MAX_CHAPTER_CHARS)
+        return {
+          kind,
+          exists: true,
+          chapterNo: o.chapterNo,
+          title: o.title,
+          wordCount: chapter.wordCount,
+          truncated: c.truncated,
+          content: c.text
+        }
+      }
+      throw new Error("kind 必须是 'character' / 'worldbuild' / 'chapter'")
     }
   },
   {
@@ -184,16 +232,45 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
-      name: 'delete_character',
-      description: '删除人物卡（不可恢复，需用户确认）',
-      input_schema: schema({ id: s('要删除的人物 id') }, ['id'])
+      name: 'delete_entity',
+      description:
+        '删除内容（不可恢复，需用户确认）。kind=character 删人物卡；kind=worldbuild 删世界观词条；kind=outline 删大纲条目；kind=foreshadow 删伏笔',
+      input_schema: schema(
+        {
+          kind: s('内容类型：character / worldbuild / outline / foreshadow'),
+          id: s('要删除的条目 id')
+        },
+        ['kind', 'id']
+      )
     },
     danger: true,
     handler: (input, projectId) => {
-      const c = store.listCharacters(projectId).find((x) => x.id === reqStr(input, 'id'))
-      if (!c) throw new Error('未找到该人物')
-      store.deleteCharacter(c.id)
-      return { ok: true, deleted: c.name }
+      const kind = reqStr(input, 'kind')
+      const id = reqStr(input, 'id')
+      if (kind === 'character') {
+        const c = store.listCharacters(projectId).find((x) => x.id === id)
+        if (!c) throw new Error('未找到该人物')
+        store.deleteCharacter(c.id)
+        return { ok: true, kind, deleted: c.name }
+      }
+      if (kind === 'worldbuild') {
+        const e = store.listWorldbuild(projectId).find((x) => x.id === id)
+        if (!e) throw new Error('未找到该词条')
+        store.deleteWorldbuild(e.id)
+        return { ok: true, kind, deleted: e.title }
+      }
+      if (kind === 'outline') {
+        const o = getOutlineOwned(id, projectId)
+        store.deleteOutline(o.id)
+        return { ok: true, kind, deleted: `第${o.chapterNo}章 ${o.title}` }
+      }
+      if (kind === 'foreshadow') {
+        const f = store.listForeshadows(projectId).find((x) => x.id === id)
+        if (!f) throw new Error('未找到该伏笔')
+        store.deleteForeshadow(f.id)
+        return { ok: true, kind, deleted: f.content }
+      }
+      throw new Error("kind 必须是 'character' / 'worldbuild' / 'outline' / 'foreshadow'")
     }
   },
   {
@@ -237,26 +314,6 @@ const TOOLS: AgentTool[] = [
             ? { content: clip(e.content, 3000).text }
             : { brief: briefOf(e.content), contentChars: e.content.length })
         }))
-      }
-    }
-  },
-  {
-    def: {
-      name: 'get_worldbuild',
-      description: '按 id 读取单条世界观词条全文（修改前取原文用）',
-      input_schema: schema({ id: s('词条 id') }, ['id'])
-    },
-    danger: false,
-    handler: (input, projectId) => {
-      const e = store.listWorldbuild(projectId).find((x) => x.id === reqStr(input, 'id'))
-      if (!e) throw new Error('未找到该词条')
-      return {
-        id: e.id,
-        category: e.category,
-        title: e.title,
-        tags: e.tags,
-        keys: e.keys,
-        content: e.content
       }
     }
   },
@@ -310,43 +367,69 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
-      name: 'delete_worldbuild',
-      description: '删除世界观词条（不可恢复，需用户确认）',
-      input_schema: schema({ id: s('要删除的词条 id') }, ['id'])
-    },
-    danger: true,
-    handler: (input, projectId) => {
-      const e = store.listWorldbuild(projectId).find((x) => x.id === reqStr(input, 'id'))
-      if (!e) throw new Error('未找到该词条')
-      store.deleteWorldbuild(e.id)
-      return { ok: true, deleted: e.title }
-    }
-  },
-  {
-    def: {
-      name: 'reorder_worldbuild_type',
+      name: 'worldbuild_type',
       description:
-        '调整世界观类型在筛选栏中的显示顺序。类型按优先级展示（内置顺序：地理、势力、历史、力量体系、物品在前，「其他」恒最后；新建类型默认排在「其他」之前；同优先级按拼音序）。新建类型后可调用本工具把它插到语义相邻的类型旁；before/after/first/last 恰好提供一个',
+        '管理世界观类型（op 三选一）。op=create 新建类型，可同时带 before/after/first/last 之一插到语义相邻位置（省一轮 reorder；内置顺序：地理、势力、历史、力量体系、物品在前，「其他」恒最后，新建类型默认排在「其他」之前）；op=delete 删除空类型——类型下还有条目时报错，先用 set_worldbuild_category 把条目迁走；op=reorder 调整类型在筛选栏中的显示顺序，before/after/first/last 恰好提供一个',
       input_schema: schema(
         {
-          name: s('要调整位置的类型名'),
-          before: optS('移到该类型之前'),
-          after: optS('移到该类型之后（不能是「其他」）'),
-          first: optB('移到最前'),
-          last: optB('移到最后（「其他」之前）')
+          op: s("操作：'create' / 'delete' / 'reorder'"),
+          name: s('类型名'),
+          before: optS('create/reorder：移到该类型之前'),
+          after: optS('create/reorder：移到该类型之后（不能是「其他」）'),
+          first: optB('create/reorder：移到最前'),
+          last: optB('create/reorder：移到最后（「其他」之前）')
         },
-        ['name']
+        ['op', 'name']
       )
     },
     danger: false,
     handler: (input, projectId) => {
-      const order = store.reorderWorldbuildType(projectId, reqStr(input, 'name'), {
+      const op = reqStr(input, 'op')
+      const name = reqStr(input, 'name')
+      const pos = {
         before: optStr(input, 'before'),
         after: optStr(input, 'after'),
         first: input.first === true,
         last: input.last === true
-      })
-      return { ok: true, order }
+      }
+      const hasPos = [pos.before, pos.after, pos.first, pos.last].some(Boolean)
+      if (op === 'create') {
+        store.createWorldbuildType(projectId, name)
+        if (hasPos) store.reorderWorldbuildType(projectId, name, pos)
+        return { ok: true, op, created: name, order: store.listWorldbuildTypes(projectId) }
+      }
+      if (op === 'delete') {
+        store.deleteWorldbuildType(projectId, name)
+        return { ok: true, op, deleted: name, order: store.listWorldbuildTypes(projectId) }
+      }
+      if (op === 'reorder') {
+        const order = store.reorderWorldbuildType(projectId, name, pos)
+        return { ok: true, op, order }
+      }
+      throw new Error("op 必须是 'create' / 'delete' / 'reorder'")
+    }
+  },
+  {
+    def: {
+      name: 'set_worldbuild_category',
+      description:
+        '只改某条世界观词条的类型（不动正文与标签）。目标类型不存在时自动创建（与现有标签重名会报错）。用 id 定位词条，改前可先 list_worldbuild 确认',
+      input_schema: schema({ id: s('词条 id'), category: s('新类型名') }, ['id', 'category'])
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const e = store.listWorldbuild(projectId).find((x) => x.id === reqStr(input, 'id'))
+      if (!e) throw new Error('未找到该词条')
+      const category = reqStr(input, 'category').slice(0, 12)
+      if (!store.listWorldbuildTypes(projectId).includes(category)) {
+        try {
+          store.createWorldbuildType(projectId, category)
+        } catch {
+          /* 与现有类型/标签冲突时交由 saveWorldbuild 保持原值兜底 */
+        }
+      }
+      const saved = store.saveWorldbuild({ id: e.id, projectId, category, title: e.title })
+      return { ok: true, id: saved.id, title: saved.title, category: saved.category }
     }
   },
   {
@@ -557,28 +640,6 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
-      name: 'get_chapter',
-      description: '读取某一章的正文全文（超长会截断）',
-      input_schema: schema({ outlineId: s('大纲条目 id') }, ['outlineId'])
-    },
-    danger: false,
-    handler: (input, projectId) => {
-      const o = getOutlineOwned(reqStr(input, 'outlineId'), projectId)
-      const chapter = store.getChapterByOutline(o.id)
-      if (!chapter) return { exists: false, note: '该章节还没有正文' }
-      const c = clip(chapter.content, MAX_CHAPTER_CHARS)
-      return {
-        exists: true,
-        chapterNo: o.chapterNo,
-        title: o.title,
-        wordCount: chapter.wordCount,
-        truncated: c.truncated,
-        content: c.text
-      }
-    }
-  },
-  {
-    def: {
       name: 'get_chapter_tail',
       description:
         '读取某一章正文的结尾片段（默认 800 字）。写新章前用它回读上一章结尾，找回语气、悬念与情绪落点',
@@ -696,6 +757,152 @@ const TOOLS: AgentTool[] = [
               : null
           })
           .filter(Boolean)
+      }
+    }
+  },
+  {
+    def: {
+      name: 'grep_project',
+      description:
+        '全项目字面量搜索：在世界观（标题/标签/检索别名/正文）、人物（姓名/卡面/动态状态）、章节正文（含章节标题）中查找包含 pattern 的条目。要找「哪些地方写了某个确切字符串」（如 [[链接名]] 的引用处、改名前的旧标题、专名统计）用它，比逐条翻页快得多；按含义找相关内容用 search_project。默认字面量子串匹配（区分大小写）；regex=true 时按 JS 正则解释。scope 可限定板块。返回每条命中（命中字段、上下文片段、命中次数）与 matchedItems/totalMatches/byKind 汇总',
+      input_schema: schema(
+        {
+          pattern: s('要查找的字符串（regex=true 时为正则表达式）'),
+          regex: optB('按 JS 正则解释 pattern（默认字面量子串）'),
+          scope: optS('限定板块：worldbuild / character / chapter（默认全部）'),
+          limit: optN('最多返回的命中条目数，默认 30')
+        },
+        ['pattern']
+      )
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const pattern = reqStr(input, 'pattern')
+      if (!pattern.trim()) throw new Error('pattern 不能为空')
+      const scopeRaw = optStr(input, 'scope')?.trim()
+      if (scopeRaw && !['worldbuild', 'character', 'chapter'].includes(scopeRaw))
+        throw new Error("scope 必须是 'worldbuild' / 'character' / 'chapter'")
+      const scopes = new Set(scopeRaw ? [scopeRaw] : ['worldbuild', 'character', 'chapter'])
+      let re: RegExp | null = null
+      if (input.regex === true) {
+        try {
+          re = new RegExp(pattern, 'g')
+        } catch (err) {
+          throw new Error(`正则表达式不合法：${(err as Error)?.message ?? String(err)}`)
+        }
+      }
+      // 正则执行时间预算：防灾难性回溯长时间阻塞主进程（单次 exec 内部的回溯无法中断，
+      // 时间预算至少能把「每个字段都慢」的多调用场景拦住）
+      const REGEX_TIME_BUDGET_MS = 2000
+      const regexDeadline = Date.now() + REGEX_TIME_BUDGET_MS
+      const matcher = (text: string): Array<{ index: number; length: number }> => {
+        const out: Array<{ index: number; length: number }> = []
+        if (re) {
+          re.lastIndex = 0
+          let m: RegExpExecArray | null = re.exec(text)
+          while (m) {
+            out.push({ index: m.index, length: m[0].length || 1 })
+            if (m.index === re.lastIndex) re.lastIndex++
+            if (out.length >= 50) break
+            if (Date.now() > regexDeadline)
+              throw new Error('正则执行超时（疑似灾难性回溯），请化简正则或改用字面量匹配')
+            m = re.exec(text)
+          }
+        } else {
+          let i = text.indexOf(pattern)
+          while (i !== -1) {
+            out.push({ index: i, length: pattern.length })
+            i = text.indexOf(pattern, i + pattern.length)
+          }
+        }
+        return out
+      }
+      const sources: Array<{
+        kind: string
+        id: string
+        title: string
+        fields: Array<{ field: string; text: string }>
+      }> = []
+      if (scopes.has('worldbuild'))
+        for (const e of store.listWorldbuild(projectId))
+          sources.push({
+            kind: 'worldbuild',
+            id: e.id,
+            title: `[${e.category}] ${e.title}`,
+            fields: [
+              { field: 'title', text: e.title },
+              { field: 'tags', text: e.tags },
+              { field: 'keys', text: e.keys },
+              { field: 'content', text: e.content }
+            ]
+          })
+      if (scopes.has('character'))
+        for (const c of store.listCharacters(projectId))
+          sources.push({
+            kind: 'character',
+            id: c.id,
+            title: c.name,
+            fields: [
+              { field: 'name', text: c.name },
+              { field: 'card', text: c.card },
+              { field: 'state', text: c.state }
+            ]
+          })
+      if (scopes.has('chapter'))
+        for (const o of store.listOutlines(projectId)) {
+          const ch = store.getChapterByOutline(o.id)
+          if (!ch) continue
+          sources.push({
+            kind: 'chapter',
+            id: o.id,
+            title: `第${o.chapterNo}章 ${o.title}`,
+            fields: [
+              { field: 'title', text: o.title },
+              { field: 'content', text: ch.content }
+            ]
+          })
+        }
+      const limit = Math.min(100, Math.max(1, optNum(input, 'limit') ?? 30))
+      const FRAGMENT_CTX = 40
+      const MAX_HITS_PER_ITEM = 3
+      const items: unknown[] = []
+      let matchedItems = 0
+      let totalMatches = 0
+      const byKind: Record<string, number> = {}
+      for (const src of sources) {
+        let count = 0
+        const hits: Array<{ field: string; fragment: string }> = []
+        for (const f of src.fields) {
+          if (!f.text) continue
+          for (const m of matcher(f.text)) {
+            count++
+            if (hits.length < MAX_HITS_PER_ITEM) {
+              const start = Math.max(0, m.index - FRAGMENT_CTX)
+              const end = Math.min(f.text.length, m.index + m.length + FRAGMENT_CTX)
+              hits.push({
+                field: f.field,
+                fragment: `${start > 0 ? '…' : ''}${f.text.slice(start, end)}${end < f.text.length ? '…' : ''}`
+              })
+            }
+          }
+        }
+        if (count === 0) continue
+        matchedItems++
+        totalMatches += count
+        byKind[src.kind] = (byKind[src.kind] ?? 0) + 1
+        if (items.length < limit)
+          items.push({ kind: src.kind, id: src.id, title: src.title, count, hits })
+      }
+      return {
+        matchedItems,
+        returned: items.length,
+        hasMore: matchedItems > items.length,
+        totalMatches,
+        byKind,
+        items,
+        ...(matchedItems > items.length
+          ? { note: '命中条目超出 limit，可缩小 scope 或加大 limit 继续' }
+          : {})
       }
     }
   },
@@ -880,23 +1087,9 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
-      name: 'delete_foreshadow',
-      description: '删除伏笔（不可恢复，需用户确认）',
-      input_schema: schema({ id: s('要删除的伏笔 id') }, ['id'])
-    },
-    danger: true,
-    handler: (input, projectId) => {
-      const f = store.listForeshadows(projectId).find((x) => x.id === reqStr(input, 'id'))
-      if (!f) throw new Error('未找到该伏笔')
-      store.deleteForeshadow(f.id)
-      return { ok: true, deleted: f.content }
-    }
-  },
-  {
-    def: {
       name: 'spawn_subagent',
       description:
-        '委派一个只读子智能体独立完成调研/分析类子任务。子智能体拥有独立上下文与步数预算（仅只读工具：get_project/list_*/get_*/search_project/get_book_digest），不能写入；适合「通读全书找矛盾」「批量核对设定与人物一致性」「大范围语义调研」这类会耗尽你上下文的任务。task 必须自带完整上下文（调查范围、判断标准、期望报告格式），子智能体看不到你们的对话历史。返回其最终报告',
+        '委派一个只读子智能体独立完成调研/分析类子任务。子智能体拥有独立上下文与步数预算（仅只读工具：get_project/list_*/get_entity/grep_project/search_project/get_book_digest），不能写入；适合「通读全书找矛盾」「批量核对设定与人物一致性」「大范围语义调研」这类会耗尽你上下文的任务。task 必须自带完整上下文（调查范围、判断标准、期望报告格式），子智能体看不到你们的对话历史。返回其最终报告',
       input_schema: schema(
         {
           task: s(
@@ -1009,6 +1202,21 @@ const TOOLS: AgentTool[] = [
       writeProjectInstructions(projectId, text)
       return { ok: true, scope, chars: text.length, note: '本项目指令已更新，下次任务生效' }
     }
+  },
+  {
+    def: {
+      name: 'compact_context',
+      description:
+        '压缩对话历史：把此前全部对话替换为你写的 summary（单段进展摘要）。长任务（批量改写、全书检查、跨卷校对）收到「上下文过大」系统提示、或感觉早前细节已处理完时应主动调用，再轻装继续。调用前把后续仍需要的关键信息写进 summary：任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定。summary 写得越完整，压缩后信息损失越小',
+      input_schema: schema(
+        { summary: s('此前对话的进展摘要（任务目标/已完成修改含 id/待办/关键发现）') },
+        ['summary']
+      )
+    },
+    danger: false,
+    handler: () => {
+      throw new Error('compact_context 由运行时直接处理，不应到达 handler')
+    }
   }
 ]
 
@@ -1021,16 +1229,15 @@ export function getToolDefs(): ToolDef[] {
 export const READ_TOOLS = new Set([
   'get_project',
   'list_characters',
-  'get_character',
+  'get_entity',
   'list_worldbuild',
-  'get_worldbuild',
   'list_outlines',
   'get_outline_plan',
   'list_chapter_briefs',
-  'get_chapter',
   'get_chapter_tail',
   'list_summaries',
   'search_project',
+  'grep_project',
   'get_book_digest',
   'get_agent_instructions',
   'list_foreshadows'
