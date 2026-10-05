@@ -267,6 +267,8 @@ export interface WorldbuildEntry {
   tags: string
   keys: string
   content: string
+  /** 人物/剧情关联：该条目与人物卡人物或剧情线的绑定关系，空串为未填 */
+  relation: string
   createdAt: number
   updatedAt: number
 }
@@ -276,6 +278,8 @@ export interface OutlineItem {
   projectId: string
   volume: number
   chapterNo: number
+  /** 排序事实：章号由该值的位置派生（缓存），插删移动只改此值 */
+  sortKey: number
   title: string
   synopsis: string
   scenes: string[]
@@ -363,6 +367,10 @@ export interface Foreshadow {
   resolvedChapter: string
   plannedResolve: string
   priority: string
+  /** 章节引用 uid：有效时展示层解析为当前章号，文本字段仅作悬空/无引用时的回退 */
+  plantedOutlineId: string
+  plannedResolveOutlineId: string
+  resolvedOutlineId: string
   createdAt: number
   updatedAt: number
 }
@@ -385,6 +393,7 @@ export interface WorldbuildPreviewEntry {
   title: string
   tags: string[]
   content: string
+  relation?: string
   isNewType: boolean
 }
 
@@ -395,6 +404,8 @@ export interface CanonWorldUpdate {
   category: string
   tags: string[]
   content: string
+  /** 人物/剧情关联修订：未传保留原条目 relation */
+  relation?: string
 }
 
 /** canonSync 管线 done payload.data：人物已自动落库，世界观进预览确认 */
@@ -565,7 +576,9 @@ export interface AgentDonePayload {
   durationMs: number
   /** 全部工具结果流水（run 收尾一次性下发，供渲染端校正刷新窗口丢失的工具卡终态） */
   toolResults?: AgentToolResultEvent[]
-  /** 本 run 内发生过上下文压缩时携带最后一次压缩摘要（渲染端据此把压缩点之前的 turns 替换为合成摘要 turn） */
+  /** 自动续跑次数：检测到任务中途停摆（压缩后停顿/征询语）时主进程自动注入「继续」的次数 */
+  autoContinues?: number
+  /** 本 run 内发生过上下文压缩时携带最后一次压缩摘要（渲染端据此在压缩点渲染折叠条） */
   compact?: { summary: string }
 }
 

@@ -207,8 +207,13 @@ function WorldEditor({
   const [title, setTitle] = useState(entry.title)
   const [tags, setTags] = useState(entry.tags)
   const [content, setContent] = useState(entry.content)
+  const [relation, setRelation] = useState(entry.relation)
   const [saving, setSaving] = useState(false)
-  const dirty = title !== entry.title || tags !== entry.tags || content !== entry.content
+  const dirty =
+    title !== entry.title ||
+    tags !== entry.tags ||
+    content !== entry.content ||
+    relation !== entry.relation
 
   const save = async (): Promise<void> => {
     setSaving(true)
@@ -219,7 +224,8 @@ function WorldEditor({
         category: entry.category,
         title,
         tags,
-        content
+        content,
+        relation
       })
       onSaved()
       onBack()
@@ -242,6 +248,14 @@ function WorldEditor({
       <Label>
         标签
         <Input value={tags} onChange={(e) => setTags(e.target.value)} />
+      </Label>
+      <Label>
+        人物/剧情关联（与主要人物或剧情线的关系，可含 [[条目名]] 链接）
+        <Input
+          value={relation}
+          onChange={(e) => setRelation(e.target.value)}
+          placeholder="如：[[丹塔]] 是主角曾依附的势力"
+        />
       </Label>
       <Label>
         内容

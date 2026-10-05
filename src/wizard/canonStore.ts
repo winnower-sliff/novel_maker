@@ -134,7 +134,8 @@ export async function confirmCanon(): Promise<void> {
         category: u.category,
         title: u.title,
         tags: u.tags.join(','),
-        content: u.content
+        content: u.content,
+        relation: u.relation
       })
     }
     pushToast('success', `已入库 ${picks.length} 条新设定、修订 ${updates.length} 条`)

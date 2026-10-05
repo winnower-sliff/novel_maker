@@ -487,12 +487,13 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_outline',
       description:
-        '新建或修改大纲条目。传 id 表示修改既有条目；不传 id 表示新建（volume 与 chapterNo 必填）。可选元数据：title（章节标题）、synopsis（梗概：50字纯剧情概要，只回答「这章讲什么」）、scenes（场景序列 string[]：2-4 条「人物+动作/冲突」场景句，回答「这章怎么演」，主要戏份排前面）、role（章节定位）、suspense（悬念密度）、twist（认知颠覆1-5）、hook（结尾钩子设计）、foreshadowOps（伏笔操作，如 埋设(A)→回收(B)）；修改时未传字段保留原值，scenes 传空数组表示清空',
+        '新建或修改大纲条目。传 id 表示修改既有条目；不传 id 表示新建：volume 必填，chapterNo=插到该章号之前（0 或缺省=追加到全书末尾），也可传 afterOutlineId 精确插到某章之后；章号由系统按位置自动重排，无需关心绝对编号。可选元数据：title（章节标题）、synopsis（梗概：50字纯剧情概要，只回答「这章讲什么」）、scenes（场景序列 string[]：2-4 条「人物+动作/冲突」场景句，回答「这章怎么演」，主要戏份排前面）、role（章节定位）、suspense（悬念密度）、twist（认知颠覆1-5）、hook（结尾钩子设计）、foreshadowOps（伏笔操作，如 埋设(A)→回收(B)）；修改时未传字段保留原值，scenes 传空数组表示清空；修改时传 chapterNo 表示移动到该章号位置、afterOutlineId 表示移动到该章之后',
       input_schema: schema(
         {
           id: optS('要修改的大纲 id（新建时省略）'),
           volume: optN('卷号（新建必填）'),
-          chapterNo: optN('章号（新建必填）'),
+          chapterNo: optN('新建=插到该章号之前（0/缺省=追加末尾）；修改=移动到该章号位置'),
+          afterOutlineId: optS('新建=插到此章 id 之后；修改=移动到此章之后（优先于 chapterNo）'),
           title: optS('章节标题'),
           synopsis: optS('章节梗概'),
           scenes: optArr('场景序列，每条一句「人物+动作/冲突」'),
@@ -509,24 +510,14 @@ const TOOLS: AgentTool[] = [
     danger: false,
     handler: (input, projectId) => {
       const id = optStr(input, 'id')
+      const afterOutlineId = optStr(input, 'afterOutlineId')
       let volume = optNum(input, 'volume')
       let chapterNo = optNum(input, 'chapterNo')
-      if (id) {
-        const cur = getOutlineOwned(id, projectId)
-        volume = volume ?? cur.volume
-        chapterNo = chapterNo ?? cur.chapterNo
-      }
-      if (volume === undefined || chapterNo === undefined)
-        throw new Error('新建时 volume 与 chapterNo 必填')
       const twist = optNum(input, 'twist')
       const status = optStr(input, 'status')
       if (status !== undefined && !['draft', 'approved', 'written', 'polished'].includes(status))
         throw new Error("status 必须是 'draft' / 'approved' / 'written' / 'polished'")
-      const saved = store.saveOutline({
-        id,
-        projectId,
-        volume,
-        chapterNo,
+      const fields = {
         title: optStr(input, 'title'),
         synopsis: optStr(input, 'synopsis'),
         scenes: optStrArr(input, 'scenes'),
@@ -536,13 +527,56 @@ const TOOLS: AgentTool[] = [
         hook: optStr(input, 'hook'),
         foreshadowOps: optStr(input, 'foreshadowOps'),
         status: status as never
-      })
+      }
+      if (!id) {
+        if (volume === undefined) throw new Error('新建时 volume 必填')
+        const afterWinsNew =
+          afterOutlineId !== undefined && chapterNo !== undefined && chapterNo > 0
+        let beforeOutlineId: string | undefined
+        if (!afterOutlineId && chapterNo !== undefined && chapterNo > 0) {
+          const target = store.listOutlines(projectId).find((o) => o.chapterNo === chapterNo)
+          if (!target)
+            throw new Error(
+              `章号 ${chapterNo} 不存在（新建时 chapterNo=插到该章号之前，0 或缺省=追加末尾）`
+            )
+          beforeOutlineId = target.id
+        }
+        const created = store.insertOutline({
+          projectId,
+          volume,
+          beforeOutlineId,
+          afterOutlineId: afterOutlineId || undefined
+        })
+        const saved = store.saveOutline({
+          id: created.id,
+          projectId,
+          volume,
+          chapterNo: created.chapterNo,
+          ...fields
+        })
+        return {
+          ok: true,
+          id: saved.id,
+          chapterNo: saved.chapterNo,
+          title: saved.title,
+          created: true,
+          ...(afterWinsNew ? { note: 'chapterNo 已被忽略，按 afterOutlineId 插入' } : {})
+        }
+      }
+      const cur = getOutlineOwned(id, projectId)
+      // afterOutlineId 优先：避免与 chapterNo 双重移动
+      const afterWinsMove = afterOutlineId !== undefined && chapterNo !== undefined
+      chapterNo = afterOutlineId ? cur.chapterNo : (chapterNo ?? cur.chapterNo)
+      volume = volume ?? cur.volume
+      const saved = store.saveOutline({ id, projectId, volume, chapterNo, ...fields })
+      if (afterOutlineId) store.moveOutline({ id, afterOutlineId })
       return {
         ok: true,
         id: saved.id,
         chapterNo: saved.chapterNo,
         title: saved.title,
-        created: !id
+        created: false,
+        ...(afterWinsMove ? { note: 'chapterNo 已被忽略，按 afterOutlineId 移动' } : {})
       }
     }
   },
@@ -1221,7 +1255,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'compact_context',
       description:
-        '压缩对话历史：把此前全部对话替换为你写的 summary（单段进展摘要）。长任务（批量改写、全书检查、跨卷校对）收到「上下文过大」系统提示、或感觉早前细节已处理完时应主动调用，再轻装继续。调用前把后续仍需要的关键信息写进 summary：任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定。summary 写得越完整，压缩后信息损失越小',
+        '压缩对话历史：把此前全部对话替换为你写的 summary（单段进展摘要）。长任务（批量改写、全书检查、跨卷校对）收到「上下文过大」系统提示、或感觉早前细节已处理完时应主动调用，再轻装继续。调用前把后续仍需要的关键信息写进 summary：任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定。summary 写得越完整，压缩后信息损失越小。压缩完成后不要输出确认性文字，直接继续调用工具执行下一步',
       input_schema: schema(
         { summary: s('此前对话的进展摘要（任务目标/已完成修改含 id/待办/关键发现）') },
         ['summary']

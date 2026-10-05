@@ -5,7 +5,7 @@ import { useBackHandler } from '@mobile/lib/backHandler'
 import { Markdown } from '@mobile/components/Markdown'
 import { Badge, Button, Empty, Textarea } from '@mobile/components/ui'
 import { fmtRelative } from '@mobile/lib/format'
-import { toolLabel, toolSummary } from '@mobile/lib/agentTurns'
+import { findCompactPoint, toolLabel, toolSummary } from '@mobile/lib/agentTurns'
 import {
   resolveConfirm,
   startRun,
@@ -187,6 +187,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const [instrSaved, setInstrSaved] = useState(false)
   const [instrErr, setInstrErr] = useState('')
   const [showJump, setShowJump] = useState(false)
+  const [historyOpen, setHistoryOpen] = useState(false)
   // 会话选择器打开时，返回键先关闭它
   useBackHandler(useCallback(() => setPickerOpen(false), []), pickerOpen)
   const scrollRef = useRef<HTMLDivElement | null>(null)
@@ -286,9 +287,38 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const handleSwitchSession = (id: string | null): void => {
     switchSessionRun(id)
     setPickerOpen(false)
+    setHistoryOpen(false)
     atBottomRef.current = true
     setShowJump(false)
   }
+
+  const compactPoint = findCompactPoint(turns)
+
+  const renderTurn = (turn: AgentTurn, idx: number) =>
+    turn.role === 'user' ? (
+      <div key={idx} className="flex justify-end">
+        <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-amber-600/90 px-3.5 py-2 text-sm leading-6 text-white">
+          {turn.text}
+        </div>
+      </div>
+    ) : (
+      <div key={idx} className="space-y-2">
+        {buildRenderItems(turn).map((item) =>
+          item.kind === 'text' ? (
+            <div key={item.key} className="rounded-2xl rounded-bl-md bg-zinc-900 px-3.5 py-2.5">
+              <Markdown text={item.text} className="text-sm leading-6 text-zinc-200" />
+            </div>
+          ) : (
+            <MobileToolGroup
+              key={item.key}
+              calls={item.calls}
+              confirmTargetId={confirmTarget?.id ?? null}
+              onResolve={resolveConfirm}
+            />
+          )
+        )}
+      </div>
+    )
 
   return (
     <div className="flex h-full flex-col pb-[var(--kb,0px)]">
@@ -331,34 +361,24 @@ export default function AgentChat({ projectId }: { projectId: string }) {
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full space-y-3 overflow-y-auto p-3">
           {turns.length === 0 && <Empty text="给智能体下指令，例如「把第 3 章重写得更紧凑」" />}
-          {turns.map((t, i) =>
-            t.role === 'user' ? (
-              <div key={i} className="flex justify-end">
-                <div className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-br-md bg-amber-600/90 px-3.5 py-2 text-sm leading-6 text-white">
-                  {t.text}
-                </div>
+          {compactPoint && historyOpen &&
+            turns.slice(0, compactPoint.index + 1).map((t, i) => renderTurn(t, i))}
+          {compactPoint && (
+            <button
+              type="button"
+              onClick={() => setHistoryOpen((v) => !v)}
+              className="w-full cursor-pointer rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-left active:bg-zinc-800"
+            >
+              <div className="text-xs font-medium text-zinc-400">
+                已压缩历史（{compactPoint.index + 1} 轮对话{historyOpen ? '，点击收起' : ''}）
               </div>
-            ) : (
-              <div key={i} className="space-y-2">
-                {buildRenderItems(t).map((item) =>
-                  item.kind === 'text' ? (
-                    <div
-                      key={item.key}
-                      className="rounded-2xl rounded-bl-md bg-zinc-900 px-3.5 py-2.5"
-                    >
-                      <Markdown text={item.text} className="text-sm leading-6 text-zinc-200" />
-                    </div>
-                  ) : (
-                    <MobileToolGroup
-                      key={item.key}
-                      calls={item.calls}
-                      confirmTargetId={confirmTarget?.id ?? null}
-                      onResolve={resolveConfirm}
-                    />
-                  )
-                )}
+              <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-zinc-500">
+                {compactPoint.summary}
               </div>
-            )
+            </button>
+          )}
+          {(compactPoint ? turns.slice(compactPoint.index + 1) : turns).map((t, i) =>
+            renderTurn(t, i)
           )}
           {error && (
             <div className="rounded-lg border border-red-900/50 bg-red-950/40 px-3 py-2 text-xs leading-5 text-red-300">

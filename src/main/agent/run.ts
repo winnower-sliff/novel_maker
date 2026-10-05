@@ -34,6 +34,37 @@ const CONFIRM_TIMEOUT_MS = 10 * 60 * 1000
 /** 输入 token 超过该阈值时在工具结果里软提示建议压缩（不强制，每轮至多一次） */
 const COMPACT_NUDGE_TOKENS = 100_000
 
+/** 自动续跑预算：检测到疑似中途停摆时自动注入「继续」的次数上限，防失控烧钱 */
+const MAX_AUTO_CONTINUES = 2
+
+/** 征询语特征：模型任务未完却停下等指示时的高频措辞 */
+const STOP_PHRASES = [
+  /是否继续/,
+  /是否需要我/,
+  /请确认/,
+  /请指示/,
+  /等你?确认/,
+  /等你?指示/,
+  /等待.{0,6}(指示|确认|指令|批准)/,
+  /需要我(继续|接着|往下)/,
+  /要我(继续|接着|往下)/,
+  /可以继续吗/,
+  /还要继续吗/
+]
+
+/**
+ * 疑似中途停摆判定：本 run 做过实际工作（有工具调用）且收尾文本呈现
+ * 压缩后停顿或征询语特征。纯问答（无工具调用）不算，绝不打扰正常对话。
+ */
+function looksLikePaused(text: string, toolUseCount: number, compacted: boolean): boolean {
+  if (toolUseCount === 0) return false
+  const t = text.trim()
+  if (!t) return false
+  if (compacted) return true
+  if (/[?？]\s*$/.test(t)) return true
+  return STOP_PHRASES.some((re) => re.test(t))
+}
+
 interface RunState {
   confirms: Map<
     string,
@@ -132,9 +163,11 @@ function buildSystemPrompt(projectId: string): string {
     '12. 完成写章任务后，若人物状态发生变化（伤势/物品/信息/立场），顺手用 update_character_state 更新其状态文档（旧条目可删，保持紧凑）',
     '13. 大范围调研/核对（全书矛盾检查、批量统计、跨卷一致性）若预计要翻阅大量条目，用 spawn_subagent 委派只读子智能体代劳，拿到报告后再执行写入决策；委派时 task 必须写全调查范围、判断标准与期望报告格式，一个子任务聚焦一件事，需要写入的修改由你亲自执行',
     '14. 刷新某卷卷摘要一律用 refresh_volume_summary（走与自动写作相同的生成链，自动落库），不要自己拼一段文字当卷摘要写；重新规划章节时用 save_outline 的 scenes 参数逐场排「人物+动作/冲突」场景序列（synopsis 只写「这章讲什么」，怎么演落在 scenes）',
-    '15. 卷创意与本卷/通用节奏规则存在大纲生成页的向导参数里：读取用 get_outline_plan，保存用 save_outline_plan（未传字段保留原值，空串清空）；为某卷起草新卷创意时写成 3-5 个自然段的软分段形态，每段以「开篇章（卷首）：」等相对位置短语开头（禁写死章号），段间渐进过渡，总长 400-600 字',
-    '16. 世界观类型管理：优先复用现有类型；条目换类型用 set_worldbuild_category（目标类型不存在会自动创建）；确需新类型用 worldbuild_type 的 op=create（可同时带 before/after/first/last 之一插到语义相邻处）；删类型用 op=delete（类型下还有条目时先逐条 set_worldbuild_category 迁走再删）',
-    '17. 长任务（批量改写、全书检查、跨卷校对）中收到「上下文过大」系统提示、或确认早前细节已处理完时，主动用 compact_context 把历史压成摘要再继续；摘要必须包含任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定，宁可写长不可漏关键 id'
+    '15. 章节编号由系统按位置自动重排：引用其他章节用章节标题或大纲 id，不要在 synopsis/scenes/正文里写死「第N章」（插删章后会漂移）；需要插章用 save_outline 的插入语义（chapterNo=插到该章号之前、afterOutlineId=插到某章之后、缺省追加末尾），移动/改卷用 save_outline 修改 chapterNo 或传 afterOutlineId',
+    '16. 卷创意与本卷/通用节奏规则存在大纲生成页的向导参数里：读取用 get_outline_plan，保存用 save_outline_plan（未传字段保留原值，空串清空）；为某卷起草新卷创意时写成 3-5 个自然段的软分段形态，每段以「开篇章（卷首）：」等相对位置短语开头（禁写死章号），段间渐进过渡，总长 400-600 字',
+    '17. 世界观类型管理：优先复用现有类型；条目换类型用 set_worldbuild_category（目标类型不存在会自动创建）；确需新类型用 worldbuild_type 的 op=create（可同时带 before/after/first/last 之一插到语义相邻处）；删类型用 op=delete（类型下还有条目时先逐条 set_worldbuild_category 迁走再删）',
+    '18. 长任务（批量改写、全书检查、跨卷校对）中收到「上下文过大」系统提示、或确认早前细节已处理完时，主动用 compact_context 把历史压成摘要再继续；摘要必须包含任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定，宁可写长不可漏关键 id',
+    '19. 任务未完成时禁止停下征询意见或等待指示：直接继续调用工具执行下一步。只有两种情况可以停下：任务真正全部完成（此时输出最终总结），或遇到必须由用户决策的分叉（此时明确列出选项与你的建议）。压缩上下文后不要回复确认性文字，直接继续干活'
   ].join('\n')
 }
 
@@ -200,6 +233,8 @@ export async function runAgent(opts: {
   let pendingCompact: string | null = null
   let compacted = false
   let compactSummary = ''
+  let toolUseCount = 0
+  let autoContinues = 0
 
   const messages = [...opts.messages]
   const tools = getAgentToolDefs()
@@ -249,6 +284,28 @@ export async function runAgent(opts: {
 
       if (result.toolUses.length === 0) {
         finalText = result.text
+        // 自动续跑：任务疑似中途停摆（压缩后停顿/征询语）时注入合成消息继续，
+        // 预算用尽即止；被中断（signal.aborted）不续，尊重用户停止意图
+        if (
+          !signal.aborted &&
+          autoContinues < MAX_AUTO_CONTINUES &&
+          looksLikePaused(finalText, toolUseCount, compacted)
+        ) {
+          autoContinues++
+          messages.push({
+            role: 'user',
+            content: [
+              '（系统自动续跑）检测到你可能在中途停下。请直接继续调用工具完成任务，无需征询意见；',
+              '若确已全部完成，直接输出最终总结后停止；若存在必须由用户决策的分叉，列出选项后停止。',
+              ...(autoContinues >= MAX_AUTO_CONTINUES
+                ? [
+                    '注意：自动续跑机会已用完，若本轮结束任务仍未完成，请明确交代已完成什么、还剩什么、为何停止。'
+                  ]
+                : [])
+            ].join('')
+          })
+          continue
+        }
         break
       }
 
@@ -261,6 +318,7 @@ export async function runAgent(opts: {
 
       const resultBlocks: ContentBlock[] = []
       for (const tu of result.toolUses) {
+        toolUseCount++
         if (tu.name === 'compact_context') {
           const summary = typeof tu.input?.summary === 'string' ? tu.input.summary.trim() : ''
           send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'running' })
@@ -275,7 +333,8 @@ export async function runAgent(opts: {
             continue
           }
           pendingCompact = summary
-          const msg = '已压缩：此前全部对话历史已替换为该摘要，请轻装继续后续工作'
+          const msg =
+            '已压缩：此前全部对话历史已替换为该摘要。不要输出确认性文字，直接继续调用工具执行下一步工作'
           resultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: msg })
           emitToolResult({ id: tu.id, ok: true, result: msg })
           continue
@@ -362,7 +421,7 @@ export async function runAgent(opts: {
       if (result.usage.inputTokens > COMPACT_NUDGE_TOKENS && resultBlocks.length > 0) {
         const last = resultBlocks[resultBlocks.length - 1]
         if (last.type === 'tool_result')
-          last.content += `\n[系统提示：本次请求输入约 ${result.usage.inputTokens} tokens，上下文偏大。若早前细节已不再需要，建议调用 compact_context 压缩历史（先把任务目标、已完成修改含 id、待办事项写进摘要）]`
+          last.content += `\n[系统提示：本次请求输入约 ${result.usage.inputTokens} tokens，上下文偏大。若早前细节已不再需要，建议调用 compact_context 压缩历史（先把任务目标、已完成修改含 id、待办事项写进摘要），压缩后直接继续调用工具，不要停下来等待确认]`
       }
       messages.push({ role: 'user', content: resultBlocks })
 
@@ -397,6 +456,7 @@ export async function runAgent(opts: {
     model: lastModel,
     durationMs: Date.now() - started,
     toolResults: runState.toolResults,
+    autoContinues,
     ...(compacted ? { compact: { summary: compactSummary } } : {})
   }
 }

@@ -18,6 +18,15 @@ function EntryBody({ text }: { text: string }) {
   )
 }
 
+function EntryRelation({ text }: { text?: string }) {
+  if (!text?.trim()) return null
+  return (
+    <p className="mt-1 line-clamp-2 text-xs leading-relaxed text-amber-500/80">
+      人物/剧情关联：<span className="text-zinc-300">{text}</span>
+    </p>
+  )
+}
+
 export function CanonPreviewPanel({ ui }: { ui: WizardUi }) {
   const pending = useCanonStore((s) => s.pending)
   const { Badge, Button } = ui
@@ -73,6 +82,7 @@ export function CanonPreviewPanel({ ui }: { ui: WizardUi }) {
                       <span className="text-xs font-medium text-zinc-100">{e.title}</span>
                     </span>
                     <EntryBody text={e.content} />
+                    <EntryRelation text={e.relation} />
                   </span>
                 </label>
               ))}
@@ -103,6 +113,7 @@ export function CanonPreviewPanel({ ui }: { ui: WizardUi }) {
                       <span className="text-xs font-medium text-zinc-100">{u.title}</span>
                     </span>
                     <EntryBody text={u.content} />
+                    <EntryRelation text={u.relation} />
                   </span>
                 </label>
               ))}

@@ -1,3 +1,4 @@
+import { buildOutlineNoIndex, formatChapterRef } from '../shared/foreRef'
 import { splitTags } from '../shared/tags'
 import type {
   BuiltContext,
@@ -58,7 +59,8 @@ function renderWorldbuildFull(projectId: string): { text: string; detail: string
     .map((e) => {
       const tags = splitTags(e.tags)
       const tagSuffix = tags.length > 0 ? `（标签：${tags.join('、')}）` : ''
-      return `### [${e.category}] ${e.title}${tagSuffix}\n${e.content}`
+      const rel = e.relation.trim()
+      return `### [${e.category}] ${e.title}${tagSuffix}\n${e.content}${rel ? `\n（人物/剧情关联：${rel}）` : ''}`
     })
     .join('\n\n')
   return { text, detail: `${entries.length} 条（全文）` }
@@ -158,7 +160,8 @@ async function pickWorldbuildSubgraph(
     .map((e) => {
       const tags = splitTags(e.tags)
       const tagSuffix = tags.length > 0 ? `（标签：${tags.join('、')}）` : ''
-      return `### [${e.category}] ${e.title}${tagSuffix}\n${e.content.slice(0, WB_CLIP)}`
+      const rel = e.relation.trim()
+      return `### [${e.category}] ${e.title}${tagSuffix}\n${e.content.slice(0, WB_CLIP)}${rel ? `\n（人物/剧情关联：${rel}）` : ''}`
     })
     .join('\n\n')
   const restTitles = entries
@@ -277,6 +280,11 @@ function renderVolumeSummaries(
 function renderForeshadows(projectId: string): { text: string; detail: string } {
   const open = store.listForeshadows(projectId).filter((f) => f.status === 'open')
   if (open.length === 0) return { text: '', detail: '无' }
+  const nosById = buildOutlineNoIndex(store.listOutlines(projectId))
+  const refOf = (text: string, uid: string): string => {
+    const r = formatChapterRef(text, uid, nosById)
+    return r === null ? '原定章节已删除，待重设' : r
+  }
   // 分层：主线/人物级全量注入；氛围级仅计数——重复登记的钩子多为氛围级，全量注入会淹没主线
   const major = open.filter((f) => f.priority.trim() !== '氛围')
   const ambienceCount = open.length - major.length
@@ -284,9 +292,13 @@ function renderForeshadows(projectId: string): { text: string; detail: string } 
     .map((f) => {
       const extras: string[] = []
       if (f.priority) extras.push(f.priority)
-      if (f.plannedResolve) extras.push(`计划回收：${f.plannedResolve}`)
+      if (f.plannedResolve.trim() || f.plannedResolveOutlineId)
+        extras.push(`计划回收：${refOf(f.plannedResolve, f.plannedResolveOutlineId)}`)
       const suffix = extras.length > 0 ? `（${extras.join('，')}）` : ''
-      return `- ${f.content}${suffix}（埋于${f.plantedChapter || '?'}）`
+      const planted = f.plantedOutlineId
+        ? refOf(f.plantedChapter, f.plantedOutlineId)
+        : f.plantedChapter || '?'
+      return `- ${f.content}${suffix}（埋于${planted}）`
     })
     .join('\n')
   const note =

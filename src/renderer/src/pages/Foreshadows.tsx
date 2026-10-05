@@ -1,6 +1,7 @@
+import { buildOutlineNoIndex, formatChapterRef, isDanglingRef } from '@shared/foreRef'
 import type { Foreshadow } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Badge, Button, Card, Input, Label, Select } from '../components/ui'
 import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
@@ -14,11 +15,20 @@ export default function Foreshadows({
 }) {
   const queryClient = useQueryClient()
   const { data: list = [] } = useQuery(queries.foreshadows(projectId))
+  const { data: outlines = [] } = useQuery(queries.outlines(projectId))
   const [content, setContent] = useState('')
   const [planted, setPlanted] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
-  const [editPlanned, setEditPlanned] = useState('')
+  const [editPlannedId, setEditPlannedId] = useState('')
   const [editPriority, setEditPriority] = useState('')
+
+  const nosById = useMemo(() => buildOutlineNoIndex(outlines), [outlines])
+  /** 「第N章」→ uid：能对上章号才落 uid，对不上仅存文本 */
+  const parseToUid = (text: string): string | undefined => {
+    const m = /第\s*(\d+)\s*章/.exec(text)
+    if (!m) return undefined
+    return outlines.find((x) => x.chapterNo === Number(m[1]))?.id
+  }
 
   const load = (): void => {
     void queryClient.invalidateQueries({ queryKey: qk.foreshadows(projectId) })
@@ -38,8 +48,15 @@ export default function Foreshadows({
 
   const add = (): void => {
     if (!content.trim()) return
+    const text = planted.trim()
+    const uid = text ? parseToUid(text) : undefined
     void window.api.novel
-      .foreshadowSave({ projectId, content: content.trim(), plantedChapter: planted.trim() })
+      .foreshadowSave({
+        projectId,
+        content: content.trim(),
+        plantedChapter: text,
+        plantedOutlineId: uid
+      })
       .then(() => {
         setContent('')
         setPlanted('')
@@ -49,17 +66,19 @@ export default function Foreshadows({
 
   const startEdit = (f: Foreshadow): void => {
     setEditingId(f.id)
-    setEditPlanned(f.plannedResolve)
+    setEditPlannedId(f.plannedResolveOutlineId)
     setEditPriority(f.priority)
   }
 
   const saveEdit = (f: Foreshadow): void => {
+    const target = outlines.find((o) => o.id === editPlannedId)
     void window.api.novel
       .foreshadowSave({
         id: f.id,
         projectId,
         content: f.content,
-        plannedResolve: editPlanned.trim(),
+        plannedResolve: target ? `第${target.chapterNo}章` : '',
+        plannedResolveOutlineId: editPlannedId,
         priority: editPriority.trim()
       })
       .then(() => {
@@ -71,14 +90,17 @@ export default function Foreshadows({
   const toggle = (f: Foreshadow): void => {
     if (f.status === 'open') {
       const where = window.prompt('回收于（如：第42章）', '') ?? ''
+      const uid = where ? parseToUid(where) : undefined
       void window.api.novel
         .foreshadowSave({
           id: f.id,
           projectId,
           content: f.content,
           plantedChapter: f.plantedChapter,
+          plantedOutlineId: f.plantedOutlineId,
           status: 'resolved',
-          resolvedChapter: where
+          resolvedChapter: where,
+          resolvedOutlineId: uid ?? ''
         })
         .then(load)
     } else {
@@ -88,8 +110,10 @@ export default function Foreshadows({
           projectId,
           content: f.content,
           plantedChapter: f.plantedChapter,
+          plantedOutlineId: f.plantedOutlineId,
           status: 'open',
-          resolvedChapter: ''
+          resolvedChapter: '',
+          resolvedOutlineId: ''
         })
         .then(load)
     }
@@ -138,17 +162,45 @@ export default function Foreshadows({
                 </span>
               )}
               <span className="min-w-0 flex-1 text-sm leading-6 text-zinc-300">{f.content}</span>
-              <span className="shrink-0 text-xs text-zinc-600">{f.plantedChapter || '?'}</span>
-              {f.plannedResolve && (
-                <span className="shrink-0 text-xs text-sky-500/80" title="计划回收点">
-                  →{f.plannedResolve}
+              {isDanglingRef(f.plantedOutlineId, nosById) ? (
+                <span
+                  className="shrink-0 rounded bg-red-900/50 px-1.5 py-0.5 text-[10px] text-red-300"
+                  title={`原记录：${f.plantedChapter || '?'}（章节已删除）`}
+                >
+                  埋设章已删除
+                </span>
+              ) : (
+                <span className="shrink-0 text-xs text-zinc-600">
+                  {formatChapterRef(f.plantedChapter, f.plantedOutlineId, nosById) || '?'}
                 </span>
               )}
-              {f.status !== 'open' && (
-                <span className="shrink-0 text-xs text-emerald-500">
-                  → {f.resolvedChapter || '?'}
+              {isDanglingRef(f.plannedResolveOutlineId, nosById) ? (
+                <span
+                  className="shrink-0 rounded bg-red-900/50 px-1.5 py-0.5 text-[10px] text-red-300"
+                  title="计划回收章节已被删除，请重新规划"
+                >
+                  待重设
                 </span>
+              ) : (
+                formatChapterRef(f.plannedResolve, f.plannedResolveOutlineId, nosById) && (
+                  <span className="shrink-0 text-xs text-sky-500/80" title="计划回收点">
+                    →{formatChapterRef(f.plannedResolve, f.plannedResolveOutlineId, nosById)}
+                  </span>
+                )
               )}
+              {f.status !== 'open' &&
+                (isDanglingRef(f.resolvedOutlineId, nosById) ? (
+                  <span
+                    className="shrink-0 rounded bg-red-900/50 px-1.5 py-0.5 text-[10px] text-red-300"
+                    title={`原记录：${f.resolvedChapter || '?'}（章节已删除）`}
+                  >
+                    回收章已删除
+                  </span>
+                ) : (
+                  <span className="shrink-0 text-xs text-emerald-500">
+                    → {formatChapterRef(f.resolvedChapter, f.resolvedOutlineId, nosById) || '?'}
+                  </span>
+                ))}
               <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
                 {f.status === 'open' && (
                   <Button
@@ -176,14 +228,25 @@ export default function Foreshadows({
             </div>
             {editingId === f.id && (
               <div className="mt-2 flex flex-wrap items-end gap-2 rounded-md border border-zinc-800 bg-zinc-950 p-2">
-                <div className="w-44">
-                  <Label>计划回收点</Label>
-                  <Input
-                    value={editPlanned}
-                    onChange={(e) => setEditPlanned(e.target.value)}
-                    placeholder="如 第2卷30-35章"
+                <div className="w-64">
+                  <Label>计划回收章节</Label>
+                  <Select
+                    value={editPlannedId}
+                    onChange={(e) => setEditPlannedId(e.target.value)}
                     className="py-1 text-xs"
-                  />
+                  >
+                    <option value="">（未指定）</option>
+                    {outlines.map((o) => (
+                      <option key={o.id} value={o.id}>
+                        第{o.chapterNo}章 {o.title || '（未命名）'}
+                      </option>
+                    ))}
+                  </Select>
+                  {f.plannedResolve && !f.plannedResolveOutlineId && (
+                    <p className="mt-1 text-[10px] leading-4 text-zinc-600">
+                      原文本「{f.plannedResolve}」未关联章节，保存选择后将被替换
+                    </p>
+                  )}
                 </div>
                 <div className="w-32">
                   <Label>优先级</Label>

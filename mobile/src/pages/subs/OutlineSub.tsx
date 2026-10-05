@@ -16,6 +16,7 @@ import { loadProjectPlan, type WizardPlanFull, saveProjectPlan } from '@wizard/w
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { withSnapshot } from '@mobile/lib/querySnapshot'
 import type { Foreshadow, OutlineItem } from '@shared/types'
+import { buildOutlineNoIndex, formatChapterRef, isDanglingRef } from '@shared/foreRef'
 
 const FORESHADOW_STATUS = ['planted', 'resolved', 'abandoned']
 
@@ -453,19 +454,38 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
         {sorted.length === 0 ? (
           <Empty text="暂无大纲章节" />
         ) : (
-          volumes.map((vol) => (
-            <div key={vol} className="mb-4">
-              <div className="mb-1.5 flex items-center gap-2 px-1 text-xs font-medium text-zinc-500">
-                <span>第 {vol} 卷</span>
-                <span className="text-zinc-600">
-                  {sorted.filter((o) => o.volume === vol).length} 章
-                  {volWritten(vol) > 0 && ` · 已写 ${volWritten(vol)}`}
-                </span>
-              </div>
-              <div className="space-y-1.5">
-                {sorted
-                  .filter((o) => o.volume === vol)
-                  .map((o) => {
+          volumes.map((vol) => {
+            const volList = sorted.filter((o) => o.volume === vol)
+            return (
+              <div key={vol} className="mb-4">
+                <div className="mb-1.5 flex items-center gap-2 px-1 text-xs font-medium text-zinc-500">
+                  <span>第 {vol} 卷</span>
+                  <span className="text-zinc-600">
+                    {volList.length} 章
+                    {volWritten(vol) > 0 && ` · 已写 ${volWritten(vol)}`}
+                  </span>
+                  <button
+                    type="button"
+                    className="ml-auto cursor-pointer rounded-full border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 active:bg-zinc-900"
+                    onClick={() => {
+                      void window.api.novel
+                        .outlineInsert({
+                          projectId,
+                          volume: vol,
+                          beforeOutlineId: volList[0]?.id
+                        })
+                        .then(() =>
+                          void qc.invalidateQueries({
+                            queryKey: ['novel', 'outlines', projectId]
+                          })
+                        )
+                    }}
+                  >
+                    + 插入章
+                  </button>
+                </div>
+                <div className="space-y-1.5">
+                  {volList.map((o, idx) => {
                     const scenesOpen = openScenes.has(o.id)
                     return (
                       <div
@@ -478,8 +498,54 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                           if (e.key === 'Enter') setEditId(o.id)
                         }}
                       >
-                        <div className="truncate text-sm text-zinc-200">
-                          第{o.chapterNo}章 {o.title || '（未命名）'}
+                        <div className="flex items-center gap-2">
+                          <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">
+                            第{o.chapterNo}章 {o.title || '（未命名）'}
+                          </span>
+                          <button
+                            type="button"
+                            disabled={idx === 0}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (idx === 0) return
+                              void window.api.novel
+                                .outlineMove({ id: o.id, beforeOutlineId: volList[idx - 1].id })
+                                .then(() =>
+                                  void qc.invalidateQueries({
+                                    queryKey: ['novel', 'outlines', projectId]
+                                  })
+                                )
+                            }}
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
+                              idx === 0
+                                ? 'text-zinc-700'
+                                : 'cursor-pointer text-zinc-500 active:bg-zinc-800'
+                            }`}
+                          >
+                            ↑
+                          </button>
+                          <button
+                            type="button"
+                            disabled={idx >= volList.length - 1}
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              if (idx >= volList.length - 1) return
+                              void window.api.novel
+                                .outlineMove({ id: o.id, afterOutlineId: volList[idx + 1].id })
+                                .then(() =>
+                                  void qc.invalidateQueries({
+                                    queryKey: ['novel', 'outlines', projectId]
+                                  })
+                                )
+                            }}
+                            className={`shrink-0 rounded-full px-2 py-0.5 text-[11px] ${
+                              idx >= volList.length - 1
+                                ? 'text-zinc-700'
+                                : 'cursor-pointer text-zinc-500 active:bg-zinc-800'
+                            }`}
+                          >
+                            ↓
+                          </button>
                         </div>
                         <div className="mt-0.5 line-clamp-2 text-xs leading-4 text-zinc-500">
                           {o.synopsis}
@@ -510,9 +576,10 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                       </div>
                     )
                   })}
+                </div>
               </div>
-            </div>
-          ))
+            )
+          })
         )}
       </div>
 
@@ -601,6 +668,20 @@ function OutlineEditor({
         场景（每行一条「人物+动作/冲突」，写章时按序注入）
         <Textarea rows={4} value={scenes} onChange={(e) => setScenes(e.target.value)} />
       </Label>
+      <button
+        type="button"
+        className="mt-2 cursor-pointer rounded-lg border border-red-900/60 px-3.5 py-2 text-sm text-red-400 active:bg-red-950/40"
+        onClick={() => {
+          if (!window.confirm(`删除第${item.chapterNo}章大纲？正文与摘要将一并删除，后续章号自动前移。`))
+            return
+          void window.api.novel.outlineDelete(item.id).then(() => {
+            onSaved()
+            onBack()
+          })
+        }}
+      >
+        删除本章
+      </button>
     </DetailShell>
   )
 }
@@ -618,6 +699,17 @@ function ForeshadowList({
       window.api.novel.foreshadows(projectId)
     )
   })
+  const { data: outlines = [] } = useQuery({
+    queryKey: ['novel', 'outlines', projectId],
+    queryFn: withSnapshot(['novel', 'outlines', projectId], () =>
+      window.api.novel.outlines(projectId)
+    )
+  })
+  const nosById = buildOutlineNoIndex(outlines)
+  const plannedRef = (f: Foreshadow): string | null =>
+    f.plannedResolve || f.plannedResolveOutlineId
+      ? formatChapterRef(f.plannedResolve, f.plannedResolveOutlineId, nosById)
+      : null
 
   return (
     <div className="mt-4">
@@ -626,27 +718,40 @@ function ForeshadowList({
         <Empty text="暂无伏笔（写章/摘要时自动登记）" />
       ) : (
         <div className="space-y-1.5">
-          {list.map((f: Foreshadow) => (
-            <Row
-              key={f.id}
-              title={f.content}
-              sub={`埋设 ${f.plantedChapter || '?'}${f.plannedResolve ? ` · 计划回收 ${f.plannedResolve}` : ''}`}
-              right={
-                <span
-                  className={`rounded-full px-2 py-0.5 text-[10px] ${
-                    f.status === 'resolved'
-                      ? 'bg-emerald-600/15 text-emerald-400'
-                      : f.status === 'abandoned'
-                        ? 'bg-zinc-700/40 text-zinc-400'
-                        : 'bg-amber-600/15 text-amber-400'
-                  }`}
-                >
-                  {f.status}
-                </span>
-              }
-              onClick={() => onEdit(f.id)}
-            />
-          ))}
+          {list.map((f: Foreshadow) => {
+            const planned = plannedRef(f)
+            return (
+              <Row
+                key={f.id}
+                title={f.content}
+                sub={
+                  isDanglingRef(f.plantedOutlineId, nosById)
+                    ? '埋设章已删除'
+                    : `埋设 ${formatChapterRef(f.plantedChapter, f.plantedOutlineId, nosById) || '?'}${
+                        planned === null
+                          ? isDanglingRef(f.plannedResolveOutlineId, nosById)
+                            ? ' · 计划回收待重设'
+                            : ''
+                          : ` · 计划回收 ${planned}`
+                      }`
+                }
+                right={
+                  <span
+                    className={`rounded-full px-2 py-0.5 text-[10px] ${
+                      f.status === 'resolved'
+                        ? 'bg-emerald-600/15 text-emerald-400'
+                        : f.status === 'abandoned'
+                          ? 'bg-zinc-700/40 text-zinc-400'
+                          : 'bg-amber-600/15 text-amber-400'
+                    }`}
+                  >
+                    {f.status}
+                  </span>
+                }
+                onClick={() => onEdit(f.id)}
+              />
+            )
+          })}
         </div>
       )}
     </div>
@@ -695,20 +800,28 @@ function ForeshadowEditor({
 }) {
   const [content, setContent] = useState(item.content)
   const [status, setStatus] = useState(item.status)
-  const [plannedResolve, setPlannedResolve] = useState(item.plannedResolve)
+  const [plannedId, setPlannedId] = useState(item.plannedResolveOutlineId)
   const [saving, setSaving] = useState(false)
+  const { data: outlines = [] } = useQuery({
+    queryKey: ['novel', 'outlines', projectId],
+    queryFn: withSnapshot(['novel', 'outlines', projectId], () =>
+      window.api.novel.outlines(projectId)
+    )
+  })
   const dirty =
-    content !== item.content || status !== item.status || plannedResolve !== item.plannedResolve
+    content !== item.content || status !== item.status || plannedId !== item.plannedResolveOutlineId
 
   const save = async (): Promise<void> => {
     setSaving(true)
     try {
+      const target = outlines.find((o) => o.id === plannedId)
       await window.api.novel.foreshadowSave({
         id: item.id,
         projectId,
         content,
         status,
-        plannedResolve
+        plannedResolve: target ? `第${target.chapterNo}章` : '',
+        plannedResolveOutlineId: plannedId
       })
       onSaved()
       onBack()
@@ -745,10 +858,26 @@ function ForeshadowEditor({
           ))}
         </div>
       </div>
-      <Label>
-        计划回收于（章节描述）
-        <Input value={plannedResolve} onChange={(e) => setPlannedResolve(e.target.value)} />
-      </Label>
+      <div>
+        <Label>计划回收章节</Label>
+        <select
+          value={plannedId}
+          onChange={(e) => setPlannedId(e.target.value)}
+          className="w-full rounded-lg border border-zinc-800 bg-zinc-900 px-3 py-2 text-sm text-zinc-200"
+        >
+          <option value="">（未指定）</option>
+          {outlines.map((o) => (
+            <option key={o.id} value={o.id}>
+              第{o.chapterNo}章 {o.title || '（未命名）'}
+            </option>
+          ))}
+        </select>
+        {item.plannedResolve && !item.plannedResolveOutlineId && (
+          <p className="mt-1 text-[11px] leading-4 text-zinc-600">
+            原文本「{item.plannedResolve}」未关联章节，保存选择后将被替换
+          </p>
+        )}
+      </div>
       <div className="rounded-lg bg-zinc-900 p-2.5 text-xs text-zinc-500">
         埋设于 {item.plantedChapter || '（未记录）'}
         {item.resolvedChapter ? ` · 已回收于 ${item.resolvedChapter}` : ''}

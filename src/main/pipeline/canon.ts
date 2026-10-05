@@ -71,10 +71,11 @@ export function buildCanonSyncRequest(projectId: string, volume: number): ChatPa
     '【世界观新增】',
     '## [类型] 标题 #标签1 #标签2',
     '（markdown 要点式正文，2-4 个要点共 50-150 字，至少 2 个 [[条目标题]] 交叉链接；链接只指向世界观条目，禁止链人物名）',
+    '（可选：正文首行可加一行「关联：<与主要人物/剧情线的关系说明>」，说明该条目服务于哪个人物或哪条剧情；没有就整行省略）',
     '',
     '【世界观修订】',
     '## 原条目标题',
-    '（融合新设定后的完整修订正文，标题必须与已有条目逐字一致）',
+    '（融合新设定后的完整修订正文，标题必须与已有条目逐字一致；可选：正文首行加一行「关联：…」，与新增段同规则，不写则保留原条目的关联）',
     '',
     '【新增人物】',
     '## 人物名（一句话定位） #标签1 #标签2',
@@ -146,7 +147,8 @@ export function parseCanonSyncResult(projectId: string, text: string): ParsedCan
       title: hit.title,
       category: hit.category,
       tags: e.tags.length > 0 ? e.tags : splitTags(hit.tags),
-      content: e.content
+      content: e.content,
+      relation: e.relation || undefined
     })
   }
 

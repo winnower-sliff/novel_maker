@@ -172,9 +172,33 @@ export function toolSummary(call: AgentToolCall): string {
   }
 }
 
+/** 找最后一个 compact_context 调用点（压缩边界）；历史原样保留，仅用于查看与回灌裁剪 */
+export function findCompactPoint(turns: AgentTurn[]): { index: number; summary: string } | null {
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i]
+    if (t.role !== 'assistant') continue
+    const call = t.toolCalls.find((c) => c.name === 'compact_context')
+    if (!call) continue
+    const summary = str(call.input, 'summary').trim()
+    if (summary) return { index: i, summary }
+  }
+  return null
+}
+
 export function turnsToMessages(turns: AgentTurn[]): ChatMessage[] {
   const messages: ChatMessage[] = []
-  for (const turn of turns) {
+  // 压缩感知：与主进程 run 内整体替换语义对齐——压缩点之前的全部历史只以摘要回灌，
+  // 原始 turns 仅用于界面查看；找不到压缩点（老数据）时回退全量，宁可多带不丢上下文
+  let effective = turns
+  const cp = findCompactPoint(turns)
+  if (cp) {
+    messages.push({
+      role: 'user',
+      content: `【上下文压缩】以下摘要替代了此前全部对话历史：\n${cp.summary}`
+    })
+    effective = turns.slice(cp.index + 1)
+  }
+  for (const turn of effective) {
     if (turn.role === 'user') {
       messages.push({ role: 'user', content: turn.text })
       continue

@@ -10,6 +10,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import type { SubProc } from '../../../wizard/agentRunStore'
 import {
+  renameSessionTitle,
   resolveConfirm,
   startRun,
   stopRun,
@@ -21,7 +22,7 @@ import {
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
 import { Badge, Button, Card, Select, Textarea } from '../components/ui'
-import { makeSessionTitle, toolLabel, toolSummary } from '../lib/agentTurns'
+import { findCompactPoint, toolLabel, toolSummary } from '../lib/agentTurns'
 import { fmtDuration, fmtRelative, fmtTokens } from '../lib/format'
 import { qk, queries } from '../lib/queries'
 
@@ -413,18 +414,15 @@ export default function Agent({ projectId }: { projectId: string }) {
     setPanelOpen(false)
     setRenamingId(null)
     setConfirmDeleteId(null)
+    setHistoryOpen(false)
     atBottomRef.current = true
     setShowJump(false)
   }
 
   const renameSession = (id: string, title: string): void => {
-    void window.api.agent.sessionLoad(id).then((session) => {
-      if (!session) return
-      const next = title.trim() || makeSessionTitle(session.turns)
-      void window.api.agent
-        .sessionSave({ ...session, title: next })
-        .then(() => refreshSessions(projectId))
-    })
+    const next = title.trim()
+    if (!next) return
+    void renameSessionTitle(id, projectId, next).then(() => refreshSessions(projectId))
   }
 
   const deleteSessionById = (id: string): void => {
@@ -434,6 +432,35 @@ export default function Agent({ projectId }: { projectId: string }) {
       refreshSessions(projectId)
     })
   }
+
+  const [historyOpen, setHistoryOpen] = useState(false)
+  const compactPoint = findCompactPoint(turns)
+
+  const renderTurn = (turn: AgentTurn, idx: number) =>
+    turn.role === 'user' ? (
+      <div key={idx} className="flex justify-end">
+        <div className="max-w-[75%] whitespace-pre-wrap rounded-lg bg-amber-600/90 px-3.5 py-2 text-sm leading-6 text-zinc-950">
+          {turn.text}
+        </div>
+      </div>
+    ) : (
+      <div key={idx} className="space-y-2">
+        {buildRenderItems(turn).map((item) =>
+          item.kind === 'text' ? (
+            <Markdown key={item.key} text={item.text} className="text-sm leading-7 text-zinc-200" />
+          ) : (
+            <ToolGroup
+              key={item.key}
+              calls={item.calls}
+              running={running}
+              confirmTargetId={confirmTarget?.id ?? null}
+              onResolve={resolveConfirm}
+              subProcs={subProcs}
+            />
+          )
+        )}
+      </div>
+    )
 
   if (!projectId) {
     return (
@@ -642,37 +669,35 @@ export default function Agent({ projectId }: { projectId: string }) {
             </div>
           )}
           <div className="space-y-4">
-            {turns.map((turn, idx) =>
-              turn.role === 'user' ? (
-                // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
-                <div key={idx} className="flex justify-end">
-                  <div className="max-w-[75%] whitespace-pre-wrap rounded-lg bg-amber-600/90 px-3.5 py-2 text-sm leading-6 text-zinc-950">
-                    {turn.text}
-                  </div>
+            {compactPoint &&
+              historyOpen &&
+              turns.slice(0, compactPoint.index + 1).map((turn, idx) => renderTurn(turn, idx))}
+            {compactPoint && (
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((v) => !v)}
+                className="w-full cursor-pointer rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2 text-left transition-colors hover:border-zinc-700"
+              >
+                <div className="flex items-center gap-1.5 text-xs font-medium text-zinc-400">
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className={`h-3 w-3 shrink-0 text-zinc-500 transition-transform ${historyOpen ? 'rotate-180' : ''}`}
+                  >
+                    <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                  已压缩历史（{compactPoint.index + 1} 轮对话，不回灌模型上下文）
                 </div>
-              ) : (
-                // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
-                <div key={idx} className="space-y-2">
-                  {buildRenderItems(turn).map((item) =>
-                    item.kind === 'text' ? (
-                      <Markdown
-                        key={item.key}
-                        text={item.text}
-                        className="text-sm leading-7 text-zinc-200"
-                      />
-                    ) : (
-                      <ToolGroup
-                        key={item.key}
-                        calls={item.calls}
-                        running={running}
-                        confirmTargetId={confirmTarget?.id ?? null}
-                        onResolve={resolveConfirm}
-                        subProcs={subProcs}
-                      />
-                    )
-                  )}
+                <div className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
+                  {compactPoint.summary}
                 </div>
-              )
+              </button>
+            )}
+            {(compactPoint ? turns.slice(compactPoint.index + 1) : turns).map((turn, idx) =>
+              renderTurn(turn, idx)
             )}
             {running && (
               <div className="flex items-center gap-2 text-xs text-zinc-500">
@@ -729,6 +754,9 @@ export default function Agent({ projectId }: { projectId: string }) {
                 {doneInfo.changed && <Badge tone="green">已修改资料库</Badge>}
                 {doneInfo.denied && <Badge tone="amber">有操作被拒绝</Badge>}
                 {doneInfo.hitLimit && <Badge tone="red">达到步数上限</Badge>}
+                {!!doneInfo.autoContinues && doneInfo.autoContinues > 0 && (
+                  <Badge tone="amber">自动续跑 ×{doneInfo.autoContinues}</Badge>
+                )}
                 {doneInfo.subagents > 0 && (
                   <Badge tone="amber">子任务 {doneInfo.subagents} 次</Badge>
                 )}

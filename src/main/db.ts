@@ -34,6 +34,7 @@ CREATE TABLE IF NOT EXISTS worldbuild (
   content TEXT DEFAULT '',
   tags TEXT DEFAULT '',
   keys TEXT DEFAULT '',
+  relation TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -50,6 +51,7 @@ CREATE TABLE IF NOT EXISTS outlines (
   project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
   volume INTEGER NOT NULL DEFAULT 1,
   chapter_no INTEGER NOT NULL,
+  sort_key REAL,
   title TEXT DEFAULT '',
   synopsis TEXT DEFAULT '',
   status TEXT DEFAULT 'draft',
@@ -83,6 +85,9 @@ CREATE TABLE IF NOT EXISTS foreshadows (
   resolved_chapter TEXT DEFAULT '',
   planned_resolve TEXT DEFAULT '',
   priority TEXT DEFAULT '',
+  planted_outline_id TEXT DEFAULT '',
+  planned_resolve_outline_id TEXT DEFAULT '',
+  resolved_outline_id TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -134,6 +139,9 @@ function migrate(d: DatabaseSync): void {
   if (!cols.some((c) => c.name === 'keys')) {
     d.exec("ALTER TABLE worldbuild ADD COLUMN keys TEXT DEFAULT ''")
   }
+  if (!cols.some((c) => c.name === 'relation')) {
+    d.exec("ALTER TABLE worldbuild ADD COLUMN relation TEXT DEFAULT ''")
+  }
   const typeCols = d.prepare('PRAGMA table_info(worldbuild_types)').all() as Array<{ name: string }>
   if (!typeCols.some((c) => c.name === 'priority')) {
     d.exec('ALTER TABLE worldbuild_types ADD COLUMN priority REAL NOT NULL DEFAULT 100')
@@ -152,6 +160,19 @@ function migrate(d: DatabaseSync): void {
   if (!outlineCols.some((c) => c.name === 'scenes')) {
     d.exec("ALTER TABLE outlines ADD COLUMN scenes TEXT DEFAULT '[]'")
   }
+  if (!outlineCols.some((c) => c.name === 'sort_key')) {
+    d.exec('ALTER TABLE outlines ADD COLUMN sort_key REAL')
+    // 排序事实初始化：按既有 (volume, chapter_no) 序稠密化 1..n，此后章号由位置派生
+    d.exec(`
+      WITH ranked AS (
+        SELECT id, ROW_NUMBER() OVER (
+          PARTITION BY project_id ORDER BY volume, chapter_no, created_at, id
+        ) AS rn
+        FROM outlines
+      )
+      UPDATE outlines SET sort_key = (SELECT rn FROM ranked WHERE ranked.id = outlines.id)
+    `)
+  }
   const charCols = d.prepare('PRAGMA table_info(characters)').all() as Array<{ name: string }>
   if (!charCols.some((c) => c.name === 'state')) {
     d.exec("ALTER TABLE characters ADD COLUMN state TEXT DEFAULT ''")
@@ -161,11 +182,82 @@ function migrate(d: DatabaseSync): void {
     d.exec("ALTER TABLE foreshadows ADD COLUMN planned_resolve TEXT DEFAULT ''")
     d.exec("ALTER TABLE foreshadows ADD COLUMN priority TEXT DEFAULT ''")
   }
+  if (!foreCols.some((c) => c.name === 'planted_outline_id')) {
+    d.exec("ALTER TABLE foreshadows ADD COLUMN planted_outline_id TEXT DEFAULT ''")
+    d.exec("ALTER TABLE foreshadows ADD COLUMN planned_resolve_outline_id TEXT DEFAULT ''")
+    d.exec("ALTER TABLE foreshadows ADD COLUMN resolved_outline_id TEXT DEFAULT ''")
+    backfillForeOutlineIds(d)
+  }
   const projCols = d.prepare('PRAGMA table_info(projects)').all() as Array<{ name: string }>
   if (!projCols.some((c) => c.name === 'wizard_plan')) {
     d.exec("ALTER TABLE projects ADD COLUMN wizard_plan TEXT DEFAULT ''")
   }
   if (!projCols.some((c) => c.name === 'agent_instructions')) {
     d.exec("ALTER TABLE projects ADD COLUMN agent_instructions TEXT DEFAULT ''")
+  }
+}
+
+/** 伏笔章号文本 → 大纲 uid 存量回填：只填空列，解析失败保持空（展示层回退旧文本） */
+function backfillForeOutlineIds(d: DatabaseSync): void {
+  const outlines = d
+    .prepare('SELECT id, project_id, volume, chapter_no FROM outlines ORDER BY volume, chapter_no')
+    .all() as Array<{ id: string; project_id: string; volume: number; chapter_no: number }>
+  const byNo = new Map<string, Map<number, string>>()
+  const volNos = new Map<string, number[]>()
+  for (const o of outlines) {
+    let m = byNo.get(o.project_id)
+    if (!m) {
+      m = new Map()
+      byNo.set(o.project_id, m)
+    }
+    // 同项目重复章号取最小卷（章号应为全书连续，重复属脏数据，兜底取首个）
+    if (!m.has(o.chapter_no)) m.set(o.chapter_no, o.id)
+    const vk = `${o.project_id}:${o.volume}`
+    const arr = volNos.get(vk)
+    if (arr) arr.push(o.chapter_no)
+    else volNos.set(vk, [o.chapter_no])
+  }
+  const volPattern = /第\s*(\d+)\s*卷\s*(\d+)\s*(?:[-–—~～至到]\s*\d+)?\s*章/
+  const rangePattern = /第\s*(\d+)\s*[-–—~～至到]\s*\d+\s*章/
+  const plainPattern = /第\s*(\d+)\s*章/
+  const resolve = (projectId: string, text: string): string => {
+    let vol: number | null = null
+    let no = 0
+    const vm = volPattern.exec(text)
+    if (vm) {
+      vol = Number(vm[1])
+      no = Number(vm[2])
+    } else {
+      const rm = rangePattern.exec(text) ?? plainPattern.exec(text)
+      if (!rm) return ''
+      no = Number(rm[1])
+    }
+    if (!no || Number.isNaN(no)) return ''
+    if (vol !== null) {
+      const arr = (volNos.get(`${projectId}:${vol}`) ?? []).filter((n) => n >= no)
+      if (arr.length === 0) return ''
+      return byNo.get(projectId)?.get(Math.min(...arr)) ?? ''
+    }
+    return byNo.get(projectId)?.get(no) ?? ''
+  }
+  const rows = d
+    .prepare(
+      'SELECT id, project_id, planted_chapter, planned_resolve, resolved_chapter FROM foreshadows'
+    )
+    .all() as Array<{
+    id: string
+    project_id: string
+    planted_chapter: string | null
+    planned_resolve: string | null
+    resolved_chapter: string | null
+  }>
+  const upd = d.prepare(
+    'UPDATE foreshadows SET planted_outline_id = ?, planned_resolve_outline_id = ?, resolved_outline_id = ? WHERE id = ?'
+  )
+  for (const r of rows) {
+    const planted = r.planted_chapter ? resolve(r.project_id, r.planted_chapter) : ''
+    const planned = r.planned_resolve ? resolve(r.project_id, r.planned_resolve) : ''
+    const resolved = r.resolved_chapter ? resolve(r.project_id, r.resolved_chapter) : ''
+    if (planted || planned || resolved) upd.run(planted, planned, resolved, r.id)
   }
 }

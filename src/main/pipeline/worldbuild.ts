@@ -212,6 +212,19 @@ export interface ParsedWorldbuildEntry {
   title: string
   tags: string[]
   content: string
+  relation: string
+}
+
+/** 抽出条目正文里的独立「关联：」行（人物/剧情关联，允许多条合并；不匹配 `- 关联：` 等列表形态） */
+function extractRelationLine(content: string): { content: string; relation: string } {
+  const found: string[] = []
+  const kept: string[] = []
+  for (const line of content.split(/\r?\n/)) {
+    const m = /^关联[:：]\s*(.+?)\s*$/.exec(line.trim())
+    if (m) found.push(m[1])
+    else kept.push(line)
+  }
+  return { content: kept.join('\n'), relation: found.join('；').slice(0, 200) }
 }
 
 export function parseWorldbuildEntries(
@@ -234,7 +247,8 @@ export function parseWorldbuildEntries(
         category: category.slice(0, 12),
         title: title || '未命名条目',
         tags,
-        content: ''
+        content: '',
+        relation: ''
       }
     } else if (current) {
       current.content += (current.content ? '\n' : '') + line
@@ -242,15 +256,20 @@ export function parseWorldbuildEntries(
   }
   if (current) sections.push(current)
   const cleaned = sections
-    .map((s) => ({ ...s, content: s.content.replace(/^\n+|\n+$/g, '') }))
-    .filter((s) => s.title || s.content)
+    .map((s) => {
+      const ex = extractRelationLine(s.content.replace(/^\n+|\n+$/g, ''))
+      return { ...s, content: ex.content.replace(/^\n+|\n+$/g, ''), relation: ex.relation }
+    })
+    .filter((s) => s.title || s.content || s.relation)
   if (cleaned.length > 0) return cleaned
+  const fb = extractRelationLine(text.trim())
   return [
     {
       category: fallbackCategory(),
       title: '未命名条目',
       tags: [],
-      content: text.trim()
+      content: fb.content,
+      relation: fb.relation
     }
   ]
 }
@@ -310,7 +329,14 @@ export function normalizeWorldbuildParsed(
     const tags = splitTags(e.tags.join(','))
       .filter((t) => !knownTypes.has(t))
       .slice(0, 6)
-    out.push({ category, title: e.title, tags, content: e.content, isNewType })
+    out.push({
+      category,
+      title: e.title,
+      tags,
+      content: e.content,
+      relation: e.relation || undefined,
+      isNewType
+    })
   }
   linkMissingTags(out, new Set(store.listWorldbuild(projectId).map((e) => e.title.trim())))
   return out
@@ -345,7 +371,8 @@ export function saveWorldbuildBatch(
       category: knownTypes.has(e.category) ? e.category : '其他',
       title: e.title,
       tags: tags.join(','),
-      content: e.content
+      content: e.content,
+      relation: e.relation
     })
     entryIds.push(saved.id)
   }
@@ -396,7 +423,8 @@ export function commitWorldbuildChunk(
       category: entry.category,
       title: entry.title,
       tags: entry.tags.length > 0 ? entry.tags.join(',') : undefined,
-      content: entry.content
+      content: entry.content,
+      relation: entry.relation
     })
     if (revised) revisedIds.push(id)
     else updatedIds.push(id)

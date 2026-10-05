@@ -63,6 +63,7 @@ function mapWorldbuild(r: Row): WorldbuildEntry {
     tags: (r.tags as string) ?? '',
     keys: (r.keys as string) ?? '',
     content: (r.content as string) ?? '',
+    relation: (r.relation as string) ?? '',
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number
   }
@@ -83,6 +84,7 @@ function mapOutline(r: Row): OutlineItem {
     projectId: r.project_id as string,
     volume: r.volume as number,
     chapterNo: r.chapter_no as number,
+    sortKey: (r.sort_key as number) ?? (r.chapter_no as number),
     title: (r.title as string) ?? '',
     synopsis: (r.synopsis as string) ?? '',
     scenes: parseScenes(r.scenes),
@@ -205,6 +207,7 @@ function propagateWikiRenames(
   let changed = 0
   const pairs: Array<[string, string]> = [
     ['worldbuild', 'content'],
+    ['worldbuild', 'relation'],
     ['characters', 'card'],
     ['outlines', 'synopsis'],
     ['chapters', 'content']
@@ -231,13 +234,14 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
       propagateWikiRenames(db, input.projectId, cur.title, input.title)
     }
     db.prepare(
-      'UPDATE worldbuild SET category = ?, title = ?, tags = ?, keys = ?, content = ?, updated_at = ? WHERE id = ?'
+      'UPDATE worldbuild SET category = ?, title = ?, tags = ?, keys = ?, content = ?, relation = ?, updated_at = ? WHERE id = ?'
     ).run(
       input.category,
       input.title,
       input.tags ?? cur.tags,
       input.keys ?? cur.keys,
       input.content ?? cur.content,
+      input.relation ?? cur.relation,
       ts,
       input.id
     )
@@ -245,7 +249,7 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
   }
   const id = randomUUID()
   db.prepare(
-    'INSERT INTO worldbuild (id, project_id, category, title, tags, keys, content, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO worldbuild (id, project_id, category, title, tags, keys, content, relation, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     id,
     input.projectId,
@@ -254,6 +258,7 @@ export function saveWorldbuild(input: WorldbuildInput & { id?: string }): Worldb
     input.tags ?? '',
     input.keys ?? '',
     input.content ?? '',
+    input.relation ?? '',
     ts,
     ts
   )
@@ -424,6 +429,33 @@ export function getOutline(id: string): OutlineItem | null {
   return r ? mapOutline(r) : null
 }
 
+/**
+ * 章号缓存重算：sort_key 是排序事实，chapter_no 由全局位置派生。
+ * 临时把章号整体抬入高位段规避 UNIQUE(project_id, volume, chapter_no) 碰撞，再按位置稠密回写。
+ */
+function refreshStructure(projectId: string): void {
+  const db = getDb()
+  db.exec('BEGIN')
+  try {
+    db.prepare('UPDATE outlines SET chapter_no = chapter_no + 100000 WHERE project_id = ?').run(
+      projectId
+    )
+    const rows = db
+      .prepare(
+        'SELECT id FROM outlines WHERE project_id = ? ORDER BY COALESCE(sort_key, 9e15), created_at, id'
+      )
+      .all(projectId) as Array<{ id: string }>
+    const upd = db.prepare('UPDATE outlines SET sort_key = ?, chapter_no = ? WHERE id = ?')
+    rows.forEach((r, i) => {
+      upd.run(i + 1, i + 1, r.id)
+    })
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+}
+
 export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem {
   const db = getDb()
   const ts = now()
@@ -432,8 +464,8 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
     db.prepare(
       'UPDATE outlines SET volume = ?, chapter_no = ?, title = ?, synopsis = ?, scenes = ?, role = ?, suspense = ?, twist = ?, hook = ?, foreshadow_ops = ?, status = ?, updated_at = ? WHERE id = ?'
     ).run(
-      input.volume,
-      input.chapterNo,
+      input.volume ?? cur.volume,
+      input.chapterNo ?? cur.chapterNo,
       input.title ?? cur.title,
       input.synopsis ?? cur.synopsis,
       input.scenes ? JSON.stringify(input.scenes) : JSON.stringify(cur.scenes),
@@ -446,15 +478,27 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
       ts,
       input.id
     )
+    if (
+      (input.volume !== undefined && input.volume !== cur.volume) ||
+      (input.chapterNo !== undefined && input.chapterNo !== cur.chapterNo)
+    ) {
+      // 卷/章号变化 = 结构移动：以请求章号为排序槽位，随后按位置重算
+      db.prepare('UPDATE outlines SET sort_key = ? WHERE id = ?').run(
+        input.chapterNo ?? cur.chapterNo,
+        input.id
+      )
+      refreshStructure(cur.projectId)
+    }
     return mapOutline(db.prepare('SELECT * FROM outlines WHERE id = ?').get(input.id) as Row)
   }
   const id = randomUUID()
   db.prepare(
-    'INSERT INTO outlines (id, project_id, volume, chapter_no, title, synopsis, scenes, role, suspense, twist, hook, foreshadow_ops, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO outlines (id, project_id, volume, chapter_no, sort_key, title, synopsis, scenes, role, suspense, twist, hook, foreshadow_ops, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   ).run(
     id,
     input.projectId,
     input.volume,
+    input.chapterNo,
     input.chapterNo,
     input.title ?? '',
     input.synopsis ?? '',
@@ -468,7 +512,87 @@ export function saveOutline(input: OutlineInput & { id?: string }): OutlineItem 
     ts,
     ts
   )
+  refreshStructure(input.projectId)
   return mapOutline(db.prepare('SELECT * FROM outlines WHERE id = ?').get(id) as Row)
+}
+
+/** 结构操作：在指定章前插入（缺省目标 = 追加全书末尾），sort_key 取半步槽位后按位置稠密化 */
+export function insertOutline(input: {
+  projectId: string
+  volume: number
+  beforeOutlineId?: string
+  afterOutlineId?: string
+}): OutlineItem {
+  const db = getDb()
+  let sortKey: number
+  if (input.beforeOutlineId) {
+    const t = getOutline(input.beforeOutlineId)
+    if (!t) throw new Error('插入目标章不存在')
+    if (t.projectId !== input.projectId) throw new Error('插入目标章不属于当前项目')
+    sortKey = t.sortKey - 0.5
+  } else if (input.afterOutlineId) {
+    const t = getOutline(input.afterOutlineId)
+    if (!t) throw new Error('插入目标章不存在')
+    if (t.projectId !== input.projectId) throw new Error('插入目标章不属于当前项目')
+    sortKey = t.sortKey + 0.5
+  } else {
+    const max = db
+      .prepare('SELECT MAX(sort_key) AS m FROM outlines WHERE project_id = ?')
+      .get(input.projectId) as { m: number | null }
+    sortKey = (max.m ?? 0) + 1
+  }
+  const id = randomUUID()
+  const ts = now()
+  db.prepare(
+    'INSERT INTO outlines (id, project_id, volume, chapter_no, sort_key, title, synopsis, scenes, role, suspense, twist, hook, foreshadow_ops, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+  ).run(
+    id,
+    input.projectId,
+    input.volume,
+    0,
+    sortKey,
+    '',
+    '',
+    '[]',
+    '',
+    '',
+    0,
+    '',
+    '',
+    'draft',
+    ts,
+    ts
+  )
+  refreshStructure(input.projectId)
+  return mapOutline(db.prepare('SELECT * FROM outlines WHERE id = ?').get(id) as Row)
+}
+
+/** 结构操作：移动章节（可改卷）；目标章均缺省 = 移到全书末尾，卷变化不改变全局位置 */
+export function moveOutline(input: {
+  id: string
+  volume?: number
+  beforeOutlineId?: string
+  afterOutlineId?: string
+}): OutlineItem {
+  const db = getDb()
+  const cur = getOutline(input.id)
+  if (!cur) throw new Error('章节不存在')
+  let sortKey = cur.sortKey
+  const targetId = input.beforeOutlineId ?? input.afterOutlineId
+  if (targetId && targetId !== input.id) {
+    const t = getOutline(targetId)
+    if (!t) throw new Error('移动目标章不存在')
+    if (t.projectId !== cur.projectId) throw new Error('移动目标章不属于当前项目')
+    sortKey = input.beforeOutlineId ? t.sortKey - 0.5 : t.sortKey + 0.5
+  }
+  db.prepare('UPDATE outlines SET volume = ?, sort_key = ?, updated_at = ? WHERE id = ?').run(
+    input.volume ?? cur.volume,
+    sortKey,
+    now(),
+    input.id
+  )
+  refreshStructure(cur.projectId)
+  return mapOutline(db.prepare('SELECT * FROM outlines WHERE id = ?').get(input.id) as Row)
 }
 
 export function deleteOutline(id: string): void {
@@ -478,6 +602,7 @@ export function deleteOutline(id: string): void {
     | undefined
   db.prepare('DELETE FROM outlines WHERE id = ?').run(id)
   if (!row) return
+  refreshStructure(row.project_id)
   // 大纲变动后，基于旧大纲写的衍生数据一并清除（正文/章摘要经 CASCADE 已删）
   clearVolumeSummary(row.project_id, row.volume)
   db.prepare("DELETE FROM embeddings WHERE kind = 'summary' AND ref_id = ?").run(id)
@@ -655,6 +780,9 @@ interface ForeshadowRow {
   resolved_chapter: string
   planned_resolve: string
   priority: string
+  planted_outline_id: string
+  planned_resolve_outline_id: string
+  resolved_outline_id: string
   created_at: number
   updated_at: number
 }
@@ -669,6 +797,9 @@ function mapForeshadow(r: ForeshadowRow): Foreshadow {
     resolvedChapter: r.resolved_chapter ?? '',
     plannedResolve: r.planned_resolve ?? '',
     priority: r.priority ?? '',
+    plantedOutlineId: r.planted_outline_id ?? '',
+    plannedResolveOutlineId: r.planned_resolve_outline_id ?? '',
+    resolvedOutlineId: r.resolved_outline_id ?? '',
     createdAt: r.created_at,
     updatedAt: r.updated_at
   }
@@ -689,7 +820,7 @@ export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foresh
       db.prepare('SELECT * FROM foreshadows WHERE id = ?').get(input.id) as unknown as ForeshadowRow
     )
     db.prepare(
-      'UPDATE foreshadows SET content = ?, planted_chapter = ?, status = ?, resolved_chapter = ?, planned_resolve = ?, priority = ?, updated_at = ? WHERE id = ?'
+      'UPDATE foreshadows SET content = ?, planted_chapter = ?, status = ?, resolved_chapter = ?, planned_resolve = ?, priority = ?, planted_outline_id = ?, planned_resolve_outline_id = ?, resolved_outline_id = ?, updated_at = ? WHERE id = ?'
     ).run(
       input.content,
       input.plantedChapter ?? cur.plantedChapter,
@@ -697,13 +828,16 @@ export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foresh
       input.resolvedChapter ?? cur.resolvedChapter,
       input.plannedResolve ?? cur.plannedResolve,
       input.priority ?? cur.priority,
+      input.plantedOutlineId ?? cur.plantedOutlineId,
+      input.plannedResolveOutlineId ?? cur.plannedResolveOutlineId,
+      input.resolvedOutlineId ?? cur.resolvedOutlineId,
       ts,
       input.id
     )
   } else {
     const id = randomUUID()
     db.prepare(
-      'INSERT INTO foreshadows (id, project_id, content, planted_chapter, status, resolved_chapter, planned_resolve, priority, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO foreshadows (id, project_id, content, planted_chapter, status, resolved_chapter, planned_resolve, priority, planted_outline_id, planned_resolve_outline_id, resolved_outline_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
     ).run(
       id,
       input.projectId,
@@ -713,6 +847,9 @@ export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foresh
       input.resolvedChapter ?? '',
       input.plannedResolve ?? '',
       input.priority ?? '',
+      input.plantedOutlineId ?? '',
+      input.plannedResolveOutlineId ?? '',
+      input.resolvedOutlineId ?? '',
       ts,
       ts
     )

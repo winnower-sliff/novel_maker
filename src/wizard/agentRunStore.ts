@@ -61,6 +61,13 @@ let rafId: number | null = null
 let genToken = 0
 /** 快照里已接管恢复过的 agent run（防每 tick 重复接管；记录 TTL 10min 后自然消失） */
 const recoveredRuns = new Set<string>()
+/**
+ * 会话标题覆盖表：文件里的标题优先于 makeSessionTitle 启发式。
+ * persist 每次都会重建 session 对象，没有这张表，手动改名/自动起名会被下一次 persist 冲掉
+ */
+const titleOverrides = new Map<string, string>()
+/** 已触发/完成过自动起名的会话（每会话至多一次） */
+const autoNamedSessions = new Set<string>()
 
 function findConfirmTarget(s: AgentRunState): AgentToolCall | null {
   if (!s.running || s.turns.length === 0) return null
@@ -166,7 +173,7 @@ function persistSession(
   const session: AgentSession = {
     id: sid,
     projectId,
-    title: makeSessionTitle(turns),
+    title: titleOverrides.get(sid) ?? makeSessionTitle(turns),
     createdAt,
     updatedAt: Date.now(),
     turns
@@ -179,6 +186,46 @@ function persistSession(
     .catch((err: unknown) => {
       console.warn('[agentRunStore] sessionSave failed:', err)
     })
+}
+
+/** 手动改名/自动起名的统一入口：覆盖表置位 + 落库 + 失效列表（供 Agent 页调用） */
+export function renameSessionTitle(sid: string, projectId: string, title: string): Promise<void> {
+  titleOverrides.set(sid, title)
+  return window.api.agent
+    .sessionLoad(sid)
+    .then((session) => {
+      if (!session) return
+      return window.api.agent.sessionSave({ ...session, title })
+    })
+    .then(() => {
+      void queryClient.invalidateQueries({ queryKey: qk.agentSessions(projectId) })
+    })
+}
+
+/**
+ * 会话自动起名：首轮 run 收尾后用小 LLM 请求生成短标题。
+ * 每会话至多一次；任一时刻发现标题已被手动改过（≠ 启发式标题）即放弃，绝不覆盖用户命名
+ */
+async function autoTitleSession(sid: string, turns: AgentTurn[]): Promise<void> {
+  if (autoNamedSessions.has(sid) || !sid) return
+  autoNamedSessions.add(sid)
+  try {
+    const heuristic = makeSessionTitle(turns)
+    const session = await window.api.agent.sessionLoad(sid)
+    if (!session || session.title !== heuristic) return
+    const userText = turns.find((t) => t.role === 'user')?.text ?? ''
+    if (!userText.trim()) return
+    const lastAssistant = [...turns].reverse().find((t) => t.role === 'assistant')
+    const assistantText = lastAssistant?.role === 'assistant' ? lastAssistant.text : ''
+    const title = await window.api.agent.sessionTitle(userText, assistantText)
+    if (!title) return
+    // LLM 请求期间用户可能已手动改名：二次校验再落库
+    const latest = await window.api.agent.sessionLoad(sid)
+    if (!latest || latest.title !== heuristic) return
+    await renameSessionTitle(sid, latest.projectId, title)
+  } catch (err) {
+    console.warn('[agentRunStore] session auto title failed:', err)
+  }
 }
 
 function persistRun(): void {
@@ -264,6 +311,7 @@ export function switchSession(id: string | null): void {
   if (!id) return
   void window.api.agent.sessionLoad(id).then((session) => {
     if (token !== genToken || !session) return
+    titleOverrides.set(session.id, session.title)
     useAgentRunStore.setState({
       sessionId: session.id,
       sessionCreatedAt: session.createdAt,
@@ -308,6 +356,7 @@ export function syncProject(projectId: string): void {
       if (token !== genToken || list.length === 0) return
       void window.api.agent.sessionLoad(list[0].id).then((session) => {
         if (token !== genToken || !session) return
+        titleOverrides.set(session.id, session.title)
         useAgentRunStore.setState({
           sessionId: session.id,
           sessionCreatedAt: session.createdAt,
@@ -396,12 +445,11 @@ export function applyAgentDone(id: string, payload: AgentDonePayload): boolean {
       payload.toolResults,
       new Map(payload.toolResults.map((r) => [r.id, r.result]))
     )
-  let fixed = finalizeTurns(useAgentRunStore.getState().turns)
+  const fixed = finalizeTurns(useAgentRunStore.getState().turns)
   if (fixed.length > 0 && fixed[fixed.length - 1].role === 'assistant') {
     const last = fixed[fixed.length - 1] as Extract<AgentTurn, { role: 'assistant' }>
     fixed[fixed.length - 1] = { ...last, text: payload.text || last.text }
   }
-  fixed = applyCompactRewrite(fixed, payload.compact?.summary)
   useAgentRunStore.setState({
     turns: fixed,
     running: false,
@@ -410,33 +458,10 @@ export function applyAgentDone(id: string, payload: AgentDonePayload): boolean {
   })
   persistRun()
   setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: true } })
+  // 压缩历史原样保留在 turns 里（仅 UI 折叠 + turnsToMessages 裁剪），不再物理改写
+  if (s.sessionId && fixed.filter((t) => t.role === 'user').length === 1)
+    void autoTitleSession(s.sessionId, fixed)
   return true
-}
-
-/**
- * 压缩落账：把会话内最后一次 compact_context 调用（含其之前的全部历史）折叠为一条
- * 合成 user 摘要 turn，与主进程 run 内 messages 整体替换的语义对齐，后续 turn 保持原序。
- * 找不到压缩点（历史会话缺卡等）时原样返回，绝不丢数据
- */
-function applyCompactRewrite(turns: AgentTurn[], summary?: string): AgentTurn[] {
-  if (!summary) return turns
-  let idx = -1
-  for (let i = turns.length - 1; i >= 0; i--) {
-    const t = turns[i]
-    if (t.role === 'assistant' && t.toolCalls.some((c) => c.name === 'compact_context')) {
-      idx = i
-      break
-    }
-  }
-  if (idx < 0) return turns
-  return [
-    {
-      role: 'user',
-      text: `【上下文压缩】以下摘要替代了此前的对话历史：\n${summary}`,
-      ts: Date.now()
-    },
-    ...turns.slice(idx + 1)
-  ]
 }
 
 /** 事件与同步器补拉共用收尾路径；id/running 守卫使二次应用幂等。
@@ -557,6 +582,7 @@ export function syncAgentFromSnapshot(snap: RuntimeSnapshot): void {
       }
       void window.api.agent.sessionLoad(list[0].id).then((session) => {
         if (token !== genToken) return
+        if (session) titleOverrides.set(session.id, session.title)
         useAgentRunStore.setState({
           sessionId: session?.id ?? null,
           sessionCreatedAt: session?.createdAt ?? Date.now(),

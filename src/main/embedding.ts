@@ -271,7 +271,12 @@ export async function rebuildEmbeddings(projectId?: string): Promise<number> {
   let n = 0
   for (const pid of ids) {
     for (const e of listWorldbuild(pid)) {
-      enqueueEmbedding(pid, 'worldbuild', e.id, `${e.title} ${e.keys} ${e.tags} ${e.content}`)
+      enqueueEmbedding(
+        pid,
+        'worldbuild',
+        e.id,
+        `${e.title} ${e.keys} ${e.tags} ${e.content} ${e.relation}`
+      )
       n++
     }
     for (const c of listCharacters(pid)) {

@@ -298,17 +298,18 @@ export function parsePremiseDraft(text: string): PremiseDraftResult {
   }
 }
 
-/** 解析章级 foreshadow_plan 并更新台账：planned_resolve=该章章号，priority 受控值才落（否则保留原值） */
-function applyForePlanItems(
+/**
+ * 解析章级 foreshadow_plan：只校验与去重，返回引用到的伏笔 id 及可选优先级；
+ * planned_resolve 的文本与 uid 落库在 outline 行确定后统一执行（见 applyPlannedResolve）。
+ */
+function parseForePlanItems(
   plan: unknown,
-  chapterNo: number,
-  projectId: string,
   foreMapping: Map<string, string>,
   foreById: Map<string, Foreshadow>,
   seen: Set<string>
-): number {
-  if (!Array.isArray(plan)) return 0
-  let applied = 0
+): Array<{ id: string; priority: string }> {
+  if (!Array.isArray(plan)) return []
+  const items: Array<{ id: string; priority: string }> = []
   for (const item of plan) {
     const r = (item ?? {}) as Record<string, unknown>
     const ref = String(r.ref ?? '')
@@ -318,18 +319,32 @@ function applyForePlanItems(
     const id = foreMapping.get(ref)
     const target = id ? foreById.get(id) : undefined
     if (target?.status !== 'open' || seen.has(target.id)) continue
-    const priority = typeof r.priority === 'string' ? r.priority.trim() : ''
+    seen.add(target.id)
+    items.push({ id: target.id, priority: typeof r.priority === 'string' ? r.priority.trim() : '' })
+  }
+  return items
+}
+
+/** outline 行落库后回填计划回收点：uid 为结构事实，文本仅作悬空回退展示 */
+function applyPlannedResolve(
+  items: Array<{ id: string; priority: string }>,
+  outline: OutlineItem,
+  projectId: string,
+  foreById: Map<string, Foreshadow>
+): number {
+  for (const it of items) {
+    const target = foreById.get(it.id)
+    if (!target) continue
     store.saveForeshadow({
-      id: target.id,
+      id: it.id,
       projectId,
       content: target.content,
-      plannedResolve: `第${chapterNo}章`,
-      priority: FORE_PRIORITIES.find((x) => x === priority)
+      plannedResolve: `第${outline.chapterNo}章`,
+      plannedResolveOutlineId: outline.id,
+      priority: FORE_PRIORITIES.find((x) => x === it.priority)
     })
-    seen.add(target.id)
-    applied++
   }
-  return applied
+  return items.length
 }
 
 export function applyOutlineResult(
@@ -355,14 +370,7 @@ export function applyOutlineResult(
     const volume = Number(r.volume) || p.volume
     const chapterNo = Number(r.chapter_no ?? r.chapterNo)
     if (!chapterNo || Number.isNaN(chapterNo)) continue
-    forePlans += applyForePlanItems(
-      r.foreshadow_plan,
-      chapterNo,
-      p.projectId,
-      foreMapping,
-      foreById,
-      plannedFores
-    )
+    const planFores = parseForePlanItems(r.foreshadow_plan, foreMapping, foreById, plannedFores)
     const key = `${volume}:${chapterNo}`
     const hit = existing.get(key)
     const meta = {
@@ -387,7 +395,7 @@ export function applyOutlineResult(
     }
     if (hit !== undefined) {
       if (hit && p.allowUpdate) {
-        store.saveOutline({
+        const saved = store.saveOutline({
           id: hit.id,
           projectId: p.projectId,
           volume,
@@ -397,13 +405,16 @@ export function applyOutlineResult(
           status: hit.status,
           ...meta
         })
+        forePlans += applyPlannedResolve(planFores, saved, p.projectId, foreById)
         updated++
       } else {
+        // 跳过落库也要应用伏笔计划（与旧行为对齐）；hit 为 null 表示同批次键重复，计划已随首个条目应用
+        if (hit) forePlans += applyPlannedResolve(planFores, hit, p.projectId, foreById)
         skipped++
       }
       continue
     }
-    store.saveOutline({
+    const saved = store.saveOutline({
       projectId: p.projectId,
       volume,
       chapterNo,
@@ -412,6 +423,7 @@ export function applyOutlineResult(
       status: 'draft',
       ...meta
     })
+    forePlans += applyPlannedResolve(planFores, saved, p.projectId, foreById)
     existing.set(key, null)
     created++
   }
@@ -498,6 +510,7 @@ export function applySummaryResult(
       projectId,
       content,
       plantedChapter: `第${outline.chapterNo}章`,
+      plantedOutlineId: outline.id,
       status: 'open',
       priority: FORE_PRIORITIES.find((x) => x === priority) ?? ''
     })
@@ -528,7 +541,8 @@ export function applySummaryResult(
         content: target.content,
         plantedChapter: target.plantedChapter,
         status: 'resolved',
-        resolvedChapter: `第${outline.chapterNo}章`
+        resolvedChapter: `第${outline.chapterNo}章`,
+        resolvedOutlineId: outline.id
       })
       resolvedSeen.add(target.id)
       resolvedCount++

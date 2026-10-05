@@ -136,7 +136,8 @@ export const WorldbuildInputSchema = z.object({
   title: z.string(),
   tags: z.string().optional(),
   keys: z.string().optional(),
-  content: z.string().optional()
+  content: z.string().optional(),
+  relation: z.string().optional()
 })
 
 export const OutlineInputSchema = z.object({
@@ -161,7 +162,10 @@ export const ForeshadowInputSchema = z.object({
   status: z.string().optional(),
   resolvedChapter: z.string().optional(),
   plannedResolve: z.string().optional(),
-  priority: z.string().optional()
+  priority: z.string().optional(),
+  plantedOutlineId: z.string().optional(),
+  plannedResolveOutlineId: z.string().optional(),
+  resolvedOutlineId: z.string().optional()
 })
 
 export const SettingsPatchSchema = z.object({
@@ -253,6 +257,7 @@ export const WorldbuildPreviewEntrySchema = z.object({
   title: z.string(),
   tags: z.array(z.string()),
   content: z.string(),
+  relation: z.string().optional(),
   isNewType: z.boolean()
 })
 
@@ -422,6 +427,10 @@ export const invokeContract = {
     ret: ret<void>()
   },
   'agent:sessionDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
+  'agent:sessionTitle': {
+    args: z.tuple([z.string(), z.string()]),
+    ret: ret<string | null>()
+  },
   'agent:instructionsGet': {
     args: z.tuple([z.string()]),
     ret: ret<AgentInstructionsView>()
@@ -497,6 +506,30 @@ export const invokeContract = {
   'novel:outlines': { args: z.tuple([z.string()]), ret: ret<OutlineItem[]>() },
   'novel:outlineSave': {
     args: z.tuple([OutlineInputSchema.extend({ id: z.string().optional() })]),
+    ret: ret<OutlineItem>()
+  },
+  // 在指定章之前插入空章（均缺省 = 追加到全书末尾），章号自动重排
+  'novel:outlineInsert': {
+    args: z.tuple([
+      z.object({
+        projectId: z.string(),
+        volume: z.number(),
+        beforeOutlineId: z.string().optional(),
+        afterOutlineId: z.string().optional()
+      })
+    ]),
+    ret: ret<OutlineItem>()
+  },
+  // 移动章节：可改卷、可指定插入点（beforeOutlineId 优先于 afterOutlineId，均缺省 = 移到全书末尾）
+  'novel:outlineMove': {
+    args: z.tuple([
+      z.object({
+        id: z.string(),
+        volume: z.number().optional(),
+        beforeOutlineId: z.string().optional(),
+        afterOutlineId: z.string().optional()
+      })
+    ]),
     ret: ret<OutlineItem>()
   },
   'novel:outlineDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
@@ -666,6 +699,8 @@ export interface Api {
     worldbuildTypeReorder: InvokeFn<'novel:worldbuildTypeReorder'>
     outlines: InvokeFn<'novel:outlines'>
     outlineSave: InvokeFn<'novel:outlineSave'>
+    outlineInsert: InvokeFn<'novel:outlineInsert'>
+    outlineMove: InvokeFn<'novel:outlineMove'>
     outlineDelete: InvokeFn<'novel:outlineDelete'>
     clearVolumeContent: InvokeFn<'novel:clearVolumeContent'>
     chapterBriefs: InvokeFn<'novel:chapterBriefs'>
@@ -701,6 +736,7 @@ export interface Api {
     sessionLoad: InvokeFn<'agent:sessionLoad'>
     sessionSave: InvokeFn<'agent:sessionSave'>
     sessionDelete: InvokeFn<'agent:sessionDelete'>
+    sessionTitle: InvokeFn<'agent:sessionTitle'>
     instructionsGet: InvokeFn<'agent:instructionsGet'>
     instructionsSave: InvokeFn<'agent:instructionsSave'>
     onDelta: SubscribeFn<'agent:delta'>

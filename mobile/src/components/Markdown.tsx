@@ -70,6 +70,24 @@ export const Markdown = memo(function Markdown({
             <a href={href} className="text-amber-400/90 underline underline-offset-2">
               {children}
             </a>
+          ),
+          table: ({ children }) => (
+            <div className="my-2 overflow-x-auto rounded-lg border border-zinc-800/80">
+              <table className="w-max min-w-full border-collapse text-xs leading-5">
+                {children}
+              </table>
+            </div>
+          ),
+          thead: ({ children }) => <thead className="bg-zinc-800/50">{children}</thead>,
+          th: ({ children }) => (
+            <th className="whitespace-nowrap px-2 py-1.5 text-left font-medium text-zinc-300">
+              {children}
+            </th>
+          ),
+          td: ({ children }) => (
+            <td className="whitespace-nowrap border-t border-zinc-800/70 px-2 py-1.5 align-top">
+              {children}
+            </td>
           )
         }}
       >

@@ -773,6 +773,9 @@ export default function Outline({
               value={edit.chapterNo}
               onChange={(e) => setEdit({ ...edit, chapterNo: e.target.value })}
             />
+            <p className="mt-1 text-[10px] leading-4 text-zinc-600">
+              改卷/章号即移动：章号按全书位置自动重排，其余章节顺延
+            </p>
           </div>
           <div className="col-span-2 sm:col-span-4">
             <Label>章节名</Label>
@@ -905,6 +908,26 @@ export default function Outline({
               <span className="ml-2 text-xs font-normal text-zinc-600">{list.length} 章</span>
             </span>
             <div className="ml-auto flex items-center gap-2">
+              <Button
+                variant="ghost"
+                className="px-2 py-0.5 text-xs"
+                title="在本卷最前插入一个空章，后续章号自动顺延"
+                onClick={() => {
+                  // 空卷（仅计划）时锚定相邻卷：后卷首章之前 / 前卷末章之后，避免落到全书末尾
+                  const first = list[0]
+                  const nextVolFirst = items.find((o) => o.volume > vol)
+                  const anchor = first
+                    ? { beforeOutlineId: first.id }
+                    : nextVolFirst
+                      ? { beforeOutlineId: nextVolFirst.id }
+                      : { afterOutlineId: items.filter((o) => o.volume < vol).at(-1)?.id }
+                  void window.api.novel
+                    .outlineInsert({ projectId, volume: vol, ...anchor })
+                    .then(load)
+                }}
+              >
+                插入章
+              </Button>
               {volSummaries[vol] && (
                 <Button
                   variant="ghost"
@@ -934,7 +957,7 @@ export default function Outline({
             </div>
           )}
           <div className="divide-y divide-zinc-800/60">
-            {list.map((it) => {
+            {list.map((it, idx) => {
               const s = statusLabel(it.status)
               const chips: Array<[string, string]> = []
               if (it.role) chips.push(['定位', it.role])
@@ -993,6 +1016,34 @@ export default function Outline({
                     )}
                   </div>
                   <div className="flex shrink-0 gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    <Button
+                      variant="ghost"
+                      className="px-2 py-1"
+                      disabled={idx === 0}
+                      title="上移（同卷内换位）"
+                      onClick={() => {
+                        if (idx === 0) return
+                        void window.api.novel
+                          .outlineMove({ id: it.id, beforeOutlineId: list[idx - 1].id })
+                          .then(load)
+                      }}
+                    >
+                      ↑
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      className="px-2 py-1"
+                      disabled={idx === list.length - 1}
+                      title="下移（同卷内换位）"
+                      onClick={() => {
+                        if (idx >= list.length - 1) return
+                        void window.api.novel
+                          .outlineMove({ id: it.id, afterOutlineId: list[idx + 1].id })
+                          .then(load)
+                      }}
+                    >
+                      ↓
+                    </Button>
                     <Button
                       variant="ghost"
                       className="px-2 py-1"

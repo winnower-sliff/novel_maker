@@ -53,9 +53,10 @@ interface EditState {
   tags: string
   keys: string
   content: string
+  relation: string
 }
 
-const EMPTY: EditState = { category: '', title: '', tags: '', keys: '', content: '' }
+const EMPTY: EditState = { category: '', title: '', tags: '', keys: '', content: '', relation: '' }
 
 type Preview = { type: 'entry'; entry: WorldbuildEntry } | { type: 'char'; char: Character } | null
 
@@ -406,7 +407,8 @@ export default function Worldbuild({
       title: e.title,
       tags: e.tags,
       keys: e.keys,
-      content: e.content
+      content: e.content,
+      relation: e.relation
     }
     setEdit(next)
     editInitialRef.current = next
@@ -434,7 +436,8 @@ export default function Worldbuild({
       edit.content !== editInitialRef.current.content ||
       edit.category !== editInitialRef.current.category ||
       edit.tags !== editInitialRef.current.tags ||
-      edit.keys !== editInitialRef.current.keys)
+      edit.keys !== editInitialRef.current.keys ||
+      edit.relation !== editInitialRef.current.relation)
 
   const closeEdit = useCallback((): void => {
     if (editDirty && !window.confirm('有未保存的修改，确定放弃并关闭？')) return
@@ -514,7 +517,8 @@ export default function Worldbuild({
           title: edit.title.trim(),
           tags: tags.join(','),
           keys: splitTags(edit.keys).join(','),
-          content: edit.content
+          content: edit.content,
+          relation: edit.relation.trim()
         })
         .then(() => {
           setEditOpen(false)
@@ -1025,6 +1029,15 @@ export default function Worldbuild({
                 onKeyDown={saveOnEnter}
               />
             </div>
+            <div className="col-span-2 sm:col-span-12">
+              <Label>人物/剧情关联（该条目与主要人物或剧情线的关系，可含 [[条目名]] 链接）</Label>
+              <Input
+                value={edit.relation}
+                onChange={(e) => setEdit({ ...edit, relation: e.target.value })}
+                onKeyDown={saveOnEnter}
+                placeholder="如：[[丹塔]] 是主角曾依附的势力，主角在此获得第一件法器"
+              />
+            </div>
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
             <Label>条目内容（markdown，要点式；选中文字可用 AI 改写；[[条目名]] 可建立链接）</Label>
@@ -1084,7 +1097,11 @@ export default function Worldbuild({
               title={preview.entry.title}
               badge={{ label: preview.entry.category, color: typeColor(preview.entry.category) }}
               tags={preview.entry.tags}
-              text={preview.entry.content}
+              text={
+                preview.entry.relation.trim()
+                  ? `> 人物/剧情关联：${preview.entry.relation}\n\n${preview.entry.content}`
+                  : preview.entry.content
+              }
               wiki={{ resolve: resolveLink, onOpen: openByName }}
               onClose={() => setPreview(null)}
               footer={

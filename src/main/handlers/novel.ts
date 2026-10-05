@@ -101,6 +101,8 @@ export const novelHandlers = {
     store.reorderWorldbuildType(projectId, name, pos),
   'novel:outlines': (_ctx, [projectId]) => store.listOutlines(projectId),
   'novel:outlineSave': (_ctx, [input]) => store.saveOutline(input),
+  'novel:outlineInsert': (_ctx, [input]) => store.insertOutline(input),
+  'novel:outlineMove': (_ctx, [input]) => store.moveOutline(input),
   'novel:outlineDelete': (_ctx, [id]) => store.deleteOutline(id),
   'novel:clearVolumeContent': (_ctx, [projectId, volume]) => ({
     removed: store.clearVolumeContent(projectId, volume)
