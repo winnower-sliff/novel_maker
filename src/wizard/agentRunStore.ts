@@ -69,6 +69,10 @@ interface AgentRunState {
   errorHint: LlmErrorHint | null
   doneInfo: AgentDonePayload | null
   subProcs: Record<string, SubProc>
+  /** 当前项目正在运行（含 invoke 在途）的会话 id 集——tab/徽章/导航圆点消费 */
+  runningIds: string[]
+  /** active 会话事件拉取失败（区别于 run 错误，可重试） */
+  loadFailed: boolean
 }
 
 export const useAgentRunStore = create<AgentRunState>(() => ({
@@ -83,7 +87,9 @@ export const useAgentRunStore = create<AgentRunState>(() => ({
   error: '',
   errorHint: null,
   doneInfo: null,
-  subProcs: {}
+  subProcs: {},
+  runningIds: [],
+  loadFailed: false
 }))
 
 // —— 模块级可变结构 ——
@@ -207,8 +213,18 @@ function mirrorOf(sid: string, buf: SessionBuf): Partial<AgentRunState> {
     error: buf.error || buf.loadFail,
     errorHint: buf.errorHint,
     doneInfo: buf.doneInfo,
-    subProcs: buf.subProcs
+    subProcs: buf.subProcs,
+    loadFailed: !!buf.loadFail
   }
+}
+
+/** 由 sessions + pendingStarts 派生运行中的会话 id 集 */
+function runningIdsOf(sessions: Record<string, SessionBuf>): string[] {
+  const ids: string[] = []
+  for (const sid of Object.keys(sessions)) {
+    if (sessions[sid].running || pendingStarts.has(sid)) ids.push(sid)
+  }
+  return ids
 }
 
 /** 所有会话写入的统一入口：mutate buf → 重投影 → active 则镜像 + agentUi 同步 */
@@ -219,7 +235,10 @@ function applyBuf(sid: string, fn: (b: SessionBuf) => void): void {
   fn(buf)
   buf.lastTouch = Date.now()
   buf.turns = projectTurns(buf)
-  const patch: Partial<AgentRunState> = { sessions: { ...s.sessions, [sid]: buf } }
+  const patch: Partial<AgentRunState> = {
+    sessions: { ...s.sessions, [sid]: buf },
+    runningIds: runningIdsOf({ ...s.sessions, [sid]: buf })
+  }
   if (s.activeId === sid) Object.assign(patch, mirrorOf(sid, buf))
   useAgentRunStore.setState(patch)
   if (s.activeId === sid) {
@@ -257,7 +276,9 @@ function refreshView(): void {
     error: draftError,
     errorHint: draftErrorHint,
     doneInfo: null,
-    subProcs: {}
+    subProcs: {},
+    runningIds: runningIdsOf(useAgentRunStore.getState().sessions),
+    loadFailed: false
   })
 }
 
@@ -554,7 +575,9 @@ export function syncProject(projectId: string): void {
     error: '',
     errorHint: null,
     doneInfo: null,
-    subProcs: {}
+    subProcs: {},
+    runningIds: [],
+    loadFailed: false
   })
   setAgentUi({ running: false, confirming: false })
   if (!projectId) return
@@ -618,6 +641,22 @@ export function agentRunActive(): boolean {
   const s = useAgentRunStore.getState()
   if (Object.values(s.sessions).some((b) => b.running)) return true
   return foreignRunning.size > 0
+}
+
+/** 任意会话（含草稿起步）在运行——导航圆点/全局徽章用 */
+export function useAnyAgentRunning(): boolean {
+  return useAgentRunStore((s) => s.running || s.runningIds.length > 0)
+}
+
+/** 事件拉取失败后的手动重试：清 loadFail 并立即补拉 active 会话 */
+export function retryLoadActive(): void {
+  const s = useAgentRunStore.getState()
+  if (!s.activeId) return
+  const sid = s.activeId
+  applyBuf(sid, (b) => {
+    b.loadFail = ''
+  })
+  fetchEvents(sid)
 }
 
 type SnapRun = RuntimeSnapshot['runs'][number]

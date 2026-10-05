@@ -8,6 +8,7 @@ import { fmtRelative } from '@mobile/lib/format'
 import { findCompactPoint, toolLabel, toolSummary } from '@mobile/lib/agentTurns'
 import {
   resolveConfirm,
+  retryLoadActive,
   startRun,
   stopRun,
   switchSession as switchSessionRun,
@@ -15,6 +16,7 @@ import {
   useAgentConfirmTarget,
   useAgentRunStore
 } from '@wizard/agentRunStore'
+import { useAgentTabsStore } from '@wizard/agentTabsStore'
 import { OverlayCard } from '@wizard/OverlayCard'
 
 type AssistantTurn = Extract<AgentTurn, { role: 'assistant' }>
@@ -177,7 +179,6 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     queryKey: ['agentSessions', projectId],
     queryFn: () => window.api.agent.sessions(projectId)
   })
-  const [input, setInput] = useState('')
   const [pickerOpen, setPickerOpen] = useState(false)
   const [instrOpen, setInstrOpen] = useState(false)
   const [instrTab, setInstrTab] = useState<'global' | 'project'>('global')
@@ -200,19 +201,53 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const error = useAgentRunStore((s) => s.error)
   const errorHint = useAgentRunStore((s) => s.errorHint)
   const sessionId = useAgentRunStore((s) => s.sessionId)
+  const loadFailed = useAgentRunStore((s) => s.loadFailed)
+  const runningIds = useAgentRunStore((s) => s.runningIds)
   const confirmTarget = useAgentConfirmTarget()
 
-  // 项目变化：中断旧任务并加载新项目最近会话（同项目重复挂载为幂等 no-op）
-  // 项目对账：运行中被守卫推迟后，收尾时靠 running 变化重触发补对账
+  // tab 会话模型：每项目一组 tab（含至多一个草稿 tab），草稿/滚动随 tab 保留
+  const tabsState = useAgentTabsStore((s) => s.byProject[projectId])
+  const activeKey = tabsState?.activeKey ?? ''
+  const tabs = tabsState?.tabs ?? []
+  const input = useAgentTabsStore((s) => (activeKey ? s.drafts[activeKey] ?? '' : ''))
+
+  // 项目变化：不中断旧任务，加载新项目最近会话（同项目重复挂载为幂等 no-op）
   useEffect(() => {
     syncProject(projectId)
+    useAgentTabsStore.getState().ensure(projectId)
   }, [projectId, running])
+
+  // active tab 跟随运行 store 的会话（草稿起步建会话/项目恢复对账）
+  useEffect(() => {
+    useAgentTabsStore.getState().syncActiveSession(projectId, sessionId)
+  }, [projectId, sessionId])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
     const el = scrollRef.current
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight
   }, [turns])
+
+  // 切 tab 恢复该 tab 的滚动位置（无记录则贴底）
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !activeKey) return
+    const saved = useAgentTabsStore.getState().scrolls[activeKey]
+    if (saved !== undefined) {
+      el.scrollTop = saved
+      atBottomRef.current = false
+      setShowJump(true)
+    } else {
+      el.scrollTop = el.scrollHeight
+      atBottomRef.current = true
+    }
+    // biome-ignore lint/correctness/useExhaustiveDependencies: 仅在 tab 切换时执行
+  }, [activeKey])
+
+  const saveScroll = useCallback((): void => {
+    const el = scrollRef.current
+    if (el && activeKey) useAgentTabsStore.getState().setScroll(activeKey, el.scrollTop)
+  }, [activeKey])
 
   const handleScroll = (): void => {
     const el = scrollRef.current
@@ -242,10 +277,53 @@ export default function AgentChat({ projectId }: { projectId: string }) {
 
   if (!projectId) return <Empty text="请先在「书架」选择项目" />
 
+  const tabTitle = (sid: string | null): string =>
+    sid ? (sessions.find((s) => s.id === sid)?.title ?? '会话') : '新会话'
+  const tabBusy = (sid: string | null, key: string): boolean =>
+    sid ? runningIds.includes(sid) : key === activeKey && running
+
+  const activateTab = (key: string, sid: string | null): void => {
+    saveScroll()
+    useAgentTabsStore.getState().setActive(projectId, key)
+    switchSessionRun(sid)
+    setPickerOpen(false)
+  }
+
+  const closeTab = (key: string): void => {
+    saveScroll()
+    useAgentTabsStore.getState().closeTab(projectId, key)
+    const st = useAgentTabsStore.getState().byProject[projectId]
+    const next = st?.tabs.find((t) => t.key === st.activeKey)
+    if (key === activeKey) switchSessionRun(next?.sessionId ?? null)
+  }
+
+  const newDraft = (): void => {
+    saveScroll()
+    const st = useAgentTabsStore.getState()
+    const cur = st.byProject[projectId]
+    const draft = cur?.tabs.find((t) => t.sessionId === null)
+    if (draft && draft.key === cur?.activeKey) return
+    if (draft) {
+      st.setActive(projectId, draft.key)
+    } else {
+      st.newDraftTab(projectId)
+    }
+    switchSessionRun(null)
+    setHistoryOpen(false)
+  }
+
+  const openSession = (id: string): void => {
+    saveScroll()
+    useAgentTabsStore.getState().openTab(projectId, id)
+    switchSessionRun(id)
+    setPickerOpen(false)
+    setHistoryOpen(false)
+  }
+
   const send = (): void => {
     if (!input.trim() || running) return
     startRun(input)
-    setInput('')
+    if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, '')
     atBottomRef.current = true
     setShowJump(false)
   }
@@ -284,15 +362,9 @@ export default function AgentChat({ projectId }: { projectId: string }) {
       })
   }
 
-  const handleSwitchSession = (id: string | null): void => {
-    switchSessionRun(id)
-    setPickerOpen(false)
-    setHistoryOpen(false)
-    atBottomRef.current = true
-    setShowJump(false)
-  }
-
   const compactPoint = findCompactPoint(turns)
+  // 运行中不折叠压缩前的历史，只插分隔条；run 结束/静态加载才折叠
+  const liveHistory = !!compactPoint && running
 
   const renderTurn = (turn: AgentTurn, idx: number) =>
     turn.role === 'user' ? (
@@ -322,48 +394,111 @@ export default function AgentChat({ projectId }: { projectId: string }) {
 
   return (
     <div className="flex h-full flex-col pb-[var(--kb,0px)]">
-      <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-950/95 px-3 py-2">
-        <button
-          type="button"
-          onClick={() => setPickerOpen((v) => !v)}
-          className="min-w-0 flex-1 cursor-pointer truncate rounded-lg bg-zinc-900 px-3 py-1.5 text-left text-xs text-zinc-300 active:bg-zinc-800"
-        >
-          {sessions.find((s) => s.id === sessionId)?.title ?? '新会话'}
-        </button>
-        <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={() => handleSwitchSession(null)}>
-          新建
+      <div className="flex items-center gap-1 border-b border-zinc-800 bg-zinc-950/95 px-2 py-1.5">
+        <div className="flex min-w-0 flex-1 gap-1 overflow-x-auto [scrollbar-width:none]">
+          {tabs.map((t) => {
+            const active = t.key === activeKey
+            const busy = tabBusy(t.sessionId, t.key)
+            return (
+              <div
+                key={t.key}
+                className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 ${
+                  active
+                    ? 'border-amber-600/60 bg-amber-600/10'
+                    : 'border-zinc-800 bg-zinc-900 active:bg-zinc-800'
+                }`}
+              >
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${busy ? 'animate-pulse bg-amber-500' : 'bg-zinc-600'}`}
+                />
+                <button
+                  type="button"
+                  onClick={() => activateTab(t.key, t.sessionId)}
+                  className="max-w-24 cursor-pointer truncate text-xs text-zinc-200"
+                >
+                  {tabTitle(t.sessionId)}
+                </button>
+                <button
+                  type="button"
+                  aria-label="关闭标签"
+                  onClick={() => closeTab(t.key)}
+                  className="cursor-pointer rounded-full p-0.5 text-zinc-500 active:bg-zinc-800 active:text-zinc-300"
+                >
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="h-3 w-3"
+                  >
+                    <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            )
+          })}
+        </div>
+        <Button variant="ghost" className="shrink-0 px-2 py-1 text-xs" onClick={newDraft}>
+          ＋
         </Button>
-        <Button variant="ghost" className="px-2.5 py-1.5 text-xs" onClick={openInstructions}>
+        <Button
+          variant="ghost"
+          className="shrink-0 px-2 py-1 text-xs"
+          onClick={() => setPickerOpen((v) => !v)}
+        >
+          列表
+        </Button>
+        <Button variant="ghost" className="shrink-0 px-2 py-1 text-xs" onClick={openInstructions}>
           指令
         </Button>
       </div>
       {pickerOpen && (
-        <div className="max-h-56 overflow-y-auto border-b border-zinc-800 bg-zinc-900">
+        <div className="max-h-64 overflow-y-auto border-b border-zinc-800 bg-zinc-900">
           {sessions.length === 0 && <div className="p-3 text-xs text-zinc-600">暂无历史会话</div>}
-          {sessions.map((s) => (
-            <div
-              key={s.id}
-              role="button"
-              tabIndex={0}
-              className={`cursor-pointer px-4 py-2.5 text-sm active:bg-zinc-800 ${s.id === sessionId ? 'text-amber-400' : 'text-zinc-300'}`}
-              onClick={() => handleSwitchSession(s.id)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') handleSwitchSession(s.id)
-              }}
-            >
-              <div className="truncate">{s.title}</div>
-              <div className="text-[11px] text-zinc-600">{fmtRelative(s.updatedAt)}</div>
-            </div>
-          ))}
+          {sessions.map((s) => {
+            const busy = runningIds.includes(s.id)
+            return (
+              <div
+                key={s.id}
+                role="button"
+                tabIndex={0}
+                className={`cursor-pointer px-4 py-2.5 text-sm active:bg-zinc-800 ${
+                  s.id === sessionId ? 'text-amber-400' : 'text-zinc-300'
+                }`}
+                onClick={() => openSession(s.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') openSession(s.id)
+                }}
+              >
+                <div className="flex items-center gap-2">
+                  {busy && <Badge className="bg-amber-600/15 text-amber-400">运行中</Badge>}
+                  <span className="min-w-0 flex-1 truncate">{s.title}</span>
+                </div>
+                <div className="text-[11px] text-zinc-600">{fmtRelative(s.updatedAt)}</div>
+              </div>
+            )
+          })}
         </div>
       )}
 
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full space-y-3 overflow-y-auto p-3">
           {turns.length === 0 && <Empty text="给智能体下指令，例如「把第 3 章重写得更紧凑」" />}
-          {compactPoint && historyOpen &&
+          {compactPoint &&
+            (liveHistory || historyOpen) &&
             turns.slice(0, compactPoint.index + 1).map((t, i) => renderTurn(t, i))}
-          {compactPoint && (
+          {compactPoint && liveHistory && (
+            <div className="rounded-xl border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-2">
+              <div className="text-xs text-zinc-400">
+                ⇡ 以上 {compactPoint.index + 1} 轮已压缩进摘要（任务运行中，暂不折叠）
+              </div>
+              <div className="mt-1 line-clamp-2 text-[11px] leading-4 text-zinc-500">
+                {compactPoint.summary}
+              </div>
+            </div>
+          )}
+          {compactPoint && !liveHistory && (
             <button
               type="button"
               onClick={() => setHistoryOpen((v) => !v)}
@@ -389,6 +524,13 @@ export default function AgentChat({ projectId }: { projectId: string }) {
                   <div className="mt-1 break-all font-mono text-zinc-500">{error}</div>
                 </details>
               )}
+              {loadFailed && (
+                <div className="mt-2">
+                  <Button variant="ghost" className="px-3 py-1 text-xs" onClick={retryLoadActive}>
+                    重试
+                  </Button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -406,7 +548,9 @@ export default function AgentChat({ projectId }: { projectId: string }) {
       <div className="flex items-end gap-2 border-t border-zinc-800 bg-zinc-950/95 p-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
         <Textarea
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, e.target.value)
+          }}
           rows={1}
           className="max-h-32 min-h-11 flex-1 py-2.5"
           placeholder={running ? '智能体工作中…' : '输入指令…'}

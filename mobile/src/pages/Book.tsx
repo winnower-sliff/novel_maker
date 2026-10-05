@@ -10,6 +10,7 @@ import WorldSub from '@mobile/pages/subs/WorldSub'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
 import type { ChapterBrief, Project } from '@shared/types'
+import { useAnyAgentRunning } from '@wizard/agentRunStore'
 import { prefetchBook, putBriefs, getCachedBriefs } from '@mobile/lib/readerCache'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { useReaderChromeStore } from '@mobile/lib/readerChromeStore'
@@ -66,6 +67,8 @@ export default function Book({
   onCreated: (id: string) => void
 }) {
   const [tab, setTab] = useState<BookTab>(() => loadTab(projectId ?? 'new'))
+  // 智能体任意会话运行中 → 「智能体」tab 标运行圆点
+  const agentBusy = useAnyAgentRunning()
   const [sub, setSub] = useState<SubPage>(() => loadSub(projectId ?? 'new'))
   // 阅读正文态聚焦模式：书名行/tab 行与阅读页上下栏三层联动同收同展
   const chromeActive = useReaderChromeStore((s) => s.active)
@@ -242,13 +245,16 @@ export default function Book({
             type="button"
             key={t.key}
             onClick={() => setTab(t.key)}
-            className={`flex-1 cursor-pointer py-2.5 text-sm ${
+            className={`flex flex-1 cursor-pointer items-center justify-center gap-1.5 py-2.5 text-sm ${
               tab === t.key
                 ? 'border-b-2 border-amber-500 font-medium text-amber-400'
                 : 'text-zinc-500'
             }`}
           >
             {t.label}
+            {t.key === 'agent' && agentBusy && (
+              <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-amber-500" aria-label="运行中" />
+            )}
           </button>
         ))}
       </div>

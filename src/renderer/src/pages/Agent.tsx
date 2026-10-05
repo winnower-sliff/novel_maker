@@ -12,6 +12,7 @@ import type { SubProc } from '../../../wizard/agentRunStore'
 import {
   renameSessionTitle,
   resolveConfirm,
+  retryLoadActive,
   startRun,
   stopRun,
   switchSession as switchSessionRun,
@@ -19,6 +20,7 @@ import {
   useAgentConfirmTarget,
   useAgentRunStore
 } from '../../../wizard/agentRunStore'
+import { useAgentTabsStore } from '../../../wizard/agentTabsStore'
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
 import { Badge, Button, Card, Select, Textarea } from '../components/ui'
@@ -263,7 +265,6 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [model, setModel] = useState('')
   const queryClient = useQueryClient()
   const { data: sessions = [] } = useQuery(queries.agentSessions(projectId))
-  const [input, setInput] = useState('')
   const [panelOpen, setPanelOpen] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
@@ -288,7 +289,15 @@ export default function Agent({ projectId }: { projectId: string }) {
   const doneInfo = useAgentRunStore((s) => s.doneInfo)
   const subProcs = useAgentRunStore((s) => s.subProcs)
   const sessionId = useAgentRunStore((s) => s.sessionId)
+  const loadFailed = useAgentRunStore((s) => s.loadFailed)
+  const runningIds = useAgentRunStore((s) => s.runningIds)
   const confirmTarget = useAgentConfirmTarget()
+
+  // tab 会话模型：每项目一组 tab（含至多一个草稿 tab），草稿/滚动随 tab 保留
+  const tabsState = useAgentTabsStore((s) => s.byProject[projectId])
+  const activeKey = tabsState?.activeKey ?? ''
+  const tabs = tabsState?.tabs ?? []
+  const input = useAgentTabsStore((s) => (activeKey ? (s.drafts[activeKey] ?? '') : ''))
 
   const refreshSessions = (pid: string): void => {
     void queryClient.invalidateQueries({ queryKey: qk.agentSessions(pid) })
@@ -298,7 +307,13 @@ export default function Agent({ projectId }: { projectId: string }) {
   // biome-ignore lint/correctness/useExhaustiveDependencies: running 是故意的重触发信号（收尾时补对账）
   useEffect(() => {
     syncProject(projectId)
+    useAgentTabsStore.getState().ensure(projectId)
   }, [projectId, running])
+
+  // active tab 跟随运行 store 的会话（草稿起步建会话/项目恢复对账）
+  useEffect(() => {
+    useAgentTabsStore.getState().syncActiveSession(projectId, sessionId)
+  }, [projectId, sessionId])
 
   // 项目变化：加载模型配置与失效会话列表（同一项目重复挂载为幂等 no-op）
   useEffect(() => {
@@ -333,6 +348,26 @@ export default function Agent({ projectId }: { projectId: string }) {
     const el = scrollRef.current
     if (el && atBottomRef.current) el.scrollTop = el.scrollHeight
   }, [turns])
+
+  // 切 tab 恢复该 tab 的滚动位置（无记录则贴底）
+  useEffect(() => {
+    const el = scrollRef.current
+    if (!el || !activeKey) return
+    const saved = useAgentTabsStore.getState().scrolls[activeKey]
+    if (saved !== undefined) {
+      el.scrollTop = saved
+      atBottomRef.current = false
+      setShowJump(true)
+    } else {
+      el.scrollTop = el.scrollHeight
+      atBottomRef.current = true
+    }
+  }, [activeKey])
+
+  const saveScroll = (): void => {
+    const el = scrollRef.current
+    if (el && activeKey) useAgentTabsStore.getState().setScroll(activeKey, el.scrollTop)
+  }
 
   const handleScroll = (): void => {
     const el = scrollRef.current
@@ -370,7 +405,7 @@ export default function Agent({ projectId }: { projectId: string }) {
   const send = (): void => {
     if (!input.trim() || running || !model) return
     startRun(input, model)
-    setInput('')
+    if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, '')
     atBottomRef.current = true
     setShowJump(false)
   }
@@ -409,14 +444,48 @@ export default function Agent({ projectId }: { projectId: string }) {
       })
   }
 
-  const handleSwitchSession = (id: string): void => {
-    switchSessionRun(id || null)
+  const activateTab = (key: string, sid: string | null): void => {
+    saveScroll()
+    useAgentTabsStore.getState().setActive(projectId, key)
+    switchSessionRun(sid)
     setPanelOpen(false)
     setRenamingId(null)
     setConfirmDeleteId(null)
     setHistoryOpen(false)
-    atBottomRef.current = true
-    setShowJump(false)
+  }
+
+  const closeTab = (key: string): void => {
+    saveScroll()
+    useAgentTabsStore.getState().closeTab(projectId, key)
+    const st = useAgentTabsStore.getState().byProject[projectId]
+    const next = st?.tabs.find((t) => t.key === st.activeKey)
+    if (key === activeKey) switchSessionRun(next?.sessionId ?? null)
+  }
+
+  const newDraft = (): void => {
+    saveScroll()
+    const st = useAgentTabsStore.getState()
+    const cur = st.byProject[projectId]
+    const draft = cur?.tabs.find((t) => t.sessionId === null)
+    if (!(draft && draft.key === cur?.activeKey)) {
+      if (draft) st.setActive(projectId, draft.key)
+      else st.newDraftTab(projectId)
+      switchSessionRun(null)
+    }
+    setPanelOpen(false)
+    setRenamingId(null)
+    setConfirmDeleteId(null)
+    setHistoryOpen(false)
+  }
+
+  const openSession = (id: string): void => {
+    saveScroll()
+    useAgentTabsStore.getState().openTab(projectId, id)
+    switchSessionRun(id)
+    setPanelOpen(false)
+    setRenamingId(null)
+    setConfirmDeleteId(null)
+    setHistoryOpen(false)
   }
 
   const renameSession = (id: string, title: string): void => {
@@ -427,7 +496,12 @@ export default function Agent({ projectId }: { projectId: string }) {
 
   const deleteSessionById = (id: string): void => {
     void window.api.agent.sessionDelete(id).then(() => {
-      if (id === sessionId) switchSessionRun(null)
+      useAgentTabsStore.getState().dropSessionTabs(projectId, id)
+      if (id === sessionId) {
+        const st = useAgentTabsStore.getState().byProject[projectId]
+        const next = st?.tabs.find((t) => t.key === st.activeKey)
+        switchSessionRun(next?.sessionId ?? null)
+      }
       setConfirmDeleteId(null)
       refreshSessions(projectId)
     })
@@ -435,6 +509,8 @@ export default function Agent({ projectId }: { projectId: string }) {
 
   const [historyOpen, setHistoryOpen] = useState(false)
   const compactPoint = findCompactPoint(turns)
+  // 运行中不折叠压缩前的历史，只插分隔条；run 结束/静态加载才折叠
+  const liveHistory = !!compactPoint && running
 
   const renderTurn = (turn: AgentTurn, idx: number) =>
     turn.role === 'user' ? (
@@ -472,170 +548,192 @@ export default function Agent({ projectId }: { projectId: string }) {
 
   return (
     <div className="flex h-full flex-col gap-3 p-3 md:p-4">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="w-[calc(50%-0.375rem)] sm:w-56">
-          <div className="mb-1.5 text-xs font-medium text-zinc-400">会话</div>
-          <div className="relative">
-            <button
-              type="button"
-              onClick={() => setPanelOpen((v) => !v)}
-              className="flex w-full cursor-pointer items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-3 py-2 text-left text-sm text-zinc-200 transition-colors hover:border-zinc-700"
-            >
-              <span className="min-w-0 flex-1 truncate">
-                {sessions.find((s) => s.id === sessionId)?.title ?? '新会话'}
-              </span>
-              <svg
-                aria-hidden="true"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                className={`h-3 w-3 shrink-0 text-zinc-500 transition-transform ${panelOpen ? 'rotate-180' : ''}`}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex min-w-0 flex-1 items-center gap-1.5 overflow-x-auto pb-0.5">
+          {tabs.map((t) => {
+            const active = t.key === activeKey
+            const busy = t.sessionId ? runningIds.includes(t.sessionId) : active && running
+            const title = t.sessionId
+              ? (sessions.find((x) => x.id === t.sessionId)?.title ?? '会话')
+              : '新会话'
+            return (
+              <div
+                key={t.key}
+                className={`flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 transition-colors ${
+                  active
+                    ? 'border-amber-600/60 bg-amber-600/10'
+                    : 'border-zinc-800 bg-zinc-900 hover:border-zinc-700'
+                }`}
               >
-                <path d="m6 9 6 6 6-6" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
-            {panelOpen && (
-              <>
-                <div
-                  className="fixed inset-0 z-20"
-                  aria-hidden="true"
-                  onClick={() => {
-                    setPanelOpen(false)
-                    setRenamingId(null)
-                    setConfirmDeleteId(null)
-                  }}
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    busy ? 'animate-pulse bg-amber-500' : 'bg-zinc-600'
+                  }`}
                 />
-                <div className="absolute left-0 top-full z-30 mt-1 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
-                  <button
-                    type="button"
-                    onClick={() => handleSwitchSession('')}
-                    disabled={running}
-                    className="flex w-full cursor-pointer items-center px-2.5 py-2 text-left text-xs text-amber-400 transition-colors hover:bg-zinc-800/60 disabled:cursor-not-allowed disabled:text-zinc-600"
+                <button
+                  type="button"
+                  onClick={() => activateTab(t.key, t.sessionId)}
+                  className="max-w-32 cursor-pointer truncate text-xs text-zinc-200"
+                >
+                  {title}
+                </button>
+                <button
+                  type="button"
+                  aria-label="关闭标签"
+                  title="关闭标签（任务继续后台运行）"
+                  onClick={() => closeTab(t.key)}
+                  className="cursor-pointer rounded-full p-0.5 text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                >
+                  <svg
+                    aria-hidden="true"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="2"
+                    className="h-3 w-3"
                   >
-                    ＋ 新会话
-                  </button>
-                  {sessions.length === 0 && (
-                    <div className="border-t border-zinc-800/60 px-2.5 py-2 text-xs text-zinc-600">
-                      暂无历史会话
-                    </div>
-                  )}
-                  {sessions.map((s) => {
-                    const active = s.id === sessionId
-                    return (
-                      <div
-                        key={s.id}
-                        className={`flex items-center gap-1 border-t border-zinc-800/60 px-1.5 py-1.5 ${
-                          active ? 'bg-zinc-800/70' : ''
-                        }`}
-                      >
-                        {renamingId === s.id ? (
-                          <>
-                            <input
-                              // biome-ignore lint/a11y/noAutofocus: 会话重命名弹层打开时聚焦是预期交互
-                              autoFocus
-                              value={renameText}
-                              onChange={(e) => setRenameText(e.target.value)}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  renameSession(s.id, renameText)
-                                  setRenamingId(null)
-                                } else if (e.key === 'Escape') {
-                                  setRenamingId(null)
-                                }
-                              }}
-                              className="min-w-0 flex-1 rounded border border-amber-600/60 bg-zinc-950 px-1.5 py-1 text-xs text-zinc-200 outline-none"
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
+                    <path d="M18 6 6 18M6 6l12 12" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              </div>
+            )
+          })}
+          <button
+            type="button"
+            onClick={newDraft}
+            title="新会话（不影响进行中的任务）"
+            className="shrink-0 cursor-pointer rounded-full border border-zinc-800 bg-zinc-900 px-2.5 py-1 text-xs text-amber-400 transition-colors hover:border-zinc-700"
+          >
+            ＋
+          </button>
+        </div>
+        <div className="relative">
+          <Button variant="ghost" onClick={() => setPanelOpen((v) => !v)}>
+            会话管理
+          </Button>
+          {panelOpen && (
+            <>
+              <div
+                className="fixed inset-0 z-20"
+                aria-hidden="true"
+                onClick={() => {
+                  setPanelOpen(false)
+                  setRenamingId(null)
+                  setConfirmDeleteId(null)
+                }}
+              />
+              <div className="absolute right-0 top-full z-30 mt-1 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
+                {sessions.length === 0 && (
+                  <div className="px-2.5 py-2 text-xs text-zinc-600">暂无历史会话</div>
+                )}
+                {sessions.map((s) => {
+                  const active = s.id === sessionId
+                  const busy = runningIds.includes(s.id)
+                  return (
+                    <div
+                      key={s.id}
+                      className={`flex items-center gap-1 border-t border-zinc-800/60 px-1.5 py-1.5 first:border-t-0 ${
+                        active ? 'bg-zinc-800/70' : ''
+                      }`}
+                    >
+                      {renamingId === s.id ? (
+                        <>
+                          <input
+                            // biome-ignore lint/a11y/noAutofocus: 会话重命名弹层打开时聚焦是预期交互
+                            autoFocus
+                            value={renameText}
+                            onChange={(e) => setRenameText(e.target.value)}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
                                 renameSession(s.id, renameText)
                                 setRenamingId(null)
-                              }}
-                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-amber-400 hover:bg-zinc-800"
+                              } else if (e.key === 'Escape') {
+                                setRenamingId(null)
+                              }
+                            }}
+                            className="min-w-0 flex-1 rounded border border-amber-600/60 bg-zinc-950 px-1.5 py-1 text-xs text-zinc-200 outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => {
+                              renameSession(s.id, renameText)
+                              setRenamingId(null)
+                            }}
+                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-amber-400 hover:bg-zinc-800"
+                          >
+                            存
+                          </button>
+                        </>
+                      ) : confirmDeleteId === s.id ? (
+                        <>
+                          <span className="min-w-0 flex-1 truncate px-1 text-xs text-red-300">
+                            删除「{s.title}」？
+                          </span>
+                          <button
+                            type="button"
+                            onClick={() => deleteSessionById(s.id)}
+                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-red-400 hover:bg-zinc-800"
+                          >
+                            确认
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setConfirmDeleteId(null)}
+                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                          >
+                            取消
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => openSession(s.id)}
+                            className="min-w-0 flex-1 cursor-pointer rounded px-1 py-0.5 text-left"
+                          >
+                            <div
+                              className={`flex items-center gap-1.5 truncate text-xs ${
+                                active ? 'font-medium text-amber-400' : 'text-zinc-200'
+                              }`}
                             >
-                              存
-                            </button>
-                          </>
-                        ) : confirmDeleteId === s.id ? (
-                          <>
-                            <span className="min-w-0 flex-1 truncate px-1 text-xs text-red-300">
-                              删除「{s.title}」？
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => deleteSessionById(s.id)}
-                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-red-400 hover:bg-zinc-800"
-                            >
-                              确认
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => setConfirmDeleteId(null)}
-                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-                            >
-                              取消
-                            </button>
-                          </>
-                        ) : (
-                          <>
-                            <button
-                              type="button"
-                              onClick={() => handleSwitchSession(s.id)}
-                              disabled={running || active}
-                              className="min-w-0 flex-1 cursor-pointer rounded px-1 py-0.5 text-left disabled:cursor-default"
-                            >
-                              <div
-                                className={`truncate text-xs ${
-                                  active ? 'font-medium text-amber-400' : 'text-zinc-200'
-                                }`}
-                              >
-                                {s.title}
-                              </div>
-                              <div className="text-[10px] text-zinc-500">
-                                {fmtRelative(s.updatedAt)}
-                              </div>
-                            </button>
-                            <button
-                              type="button"
-                              title="重命名"
-                              onClick={() => {
-                                setRenamingId(s.id)
-                                setRenameText(s.title)
-                              }}
-                              // 运行中的当前会话正被 persistRun 持续落库，重命名会以旧 turns 整体回写丢增量
-                              disabled={running && s.id === sessionId}
-                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              改
-                            </button>
-                            <button
-                              type="button"
-                              title="删除"
-                              onClick={() => setConfirmDeleteId(s.id)}
-                              disabled={running}
-                              className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-red-400 disabled:cursor-not-allowed disabled:opacity-40"
-                            >
-                              删
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    )
-                  })}
-                </div>
-              </>
-            )}
-          </div>
+                              {busy && <Badge tone="amber">运行中</Badge>}
+                              <span className="min-w-0 truncate">{s.title}</span>
+                            </div>
+                            <div className="text-[10px] text-zinc-500">
+                              {fmtRelative(s.updatedAt)}
+                            </div>
+                          </button>
+                          <button
+                            type="button"
+                            title="重命名"
+                            onClick={() => {
+                              setRenamingId(s.id)
+                              setRenameText(s.title)
+                            }}
+                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                          >
+                            改
+                          </button>
+                          <button
+                            type="button"
+                            title="删除（进行中的任务会被停止）"
+                            onClick={() => setConfirmDeleteId(s.id)}
+                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+                          >
+                            删
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+            </>
+          )}
         </div>
         <div className="w-[calc(50%-0.375rem)] sm:w-56">
           <div className="mb-1.5 text-xs font-medium text-zinc-400">模型</div>
-          <Select
-            value={model}
-            onChange={(e) => setModel(e.target.value)}
-            disabled={running}
-            className="w-full"
-          >
+          <Select value={model} onChange={(e) => setModel(e.target.value)} className="w-full">
             {modelOptions.map((m) => (
               <option key={m} value={m}>
                 {m}
@@ -646,7 +744,7 @@ export default function Agent({ projectId }: { projectId: string }) {
         <div className="sm:pt-5">
           <Badge tone="amber">可直接读写当前项目的各板块</Badge>
         </div>
-        <div className="sm:ml-auto sm:pt-5">
+        <div className="sm:pt-5">
           <Button variant="ghost" onClick={openInstructions}>
             指令
           </Button>
@@ -670,9 +768,19 @@ export default function Agent({ projectId }: { projectId: string }) {
           )}
           <div className="space-y-4">
             {compactPoint &&
-              historyOpen &&
+              (liveHistory || historyOpen) &&
               turns.slice(0, compactPoint.index + 1).map((turn, idx) => renderTurn(turn, idx))}
-            {compactPoint && (
+            {compactPoint && liveHistory && (
+              <div className="rounded-lg border border-dashed border-zinc-700 bg-zinc-900/60 px-3 py-2">
+                <div className="text-xs text-zinc-400">
+                  ⇡ 以上 {compactPoint.index + 1} 轮已压缩进摘要（任务运行中，暂不折叠）
+                </div>
+                <div className="mt-1 line-clamp-2 text-xs leading-5 text-zinc-500">
+                  {compactPoint.summary}
+                </div>
+              </div>
+            )}
+            {compactPoint && !liveHistory && (
               <button
                 type="button"
                 onClick={() => setHistoryOpen((v) => !v)}
@@ -717,51 +825,62 @@ export default function Agent({ projectId }: { projectId: string }) {
           </button>
         )}
         {(doneInfo || error) && (
-          <div className="border-t border-zinc-800 px-4 py-2.5">
-            {error ? (
-              <ErrorHintBlock message={error} hint={errorHint} />
-            ) : doneInfo ? (
-              <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-zinc-400">
-                <span>
-                  请求 <span className="font-mono text-zinc-200">{doneInfo.requests}</span> 次
-                </span>
-                <span>
-                  输入{' '}
-                  <span className="font-mono text-zinc-200">
-                    {fmtTokens(doneInfo.usage.inputTokens)}
-                  </span>
-                </span>
-                <span>
-                  输出{' '}
-                  <span className="font-mono text-zinc-200">
-                    {fmtTokens(doneInfo.usage.outputTokens)}
-                  </span>
-                </span>
-                {doneInfo.usage.cacheReadTokens > 0 && (
+          <div className="flex items-start gap-3 border-t border-zinc-800 px-4 py-2.5">
+            <div className="min-w-0 flex-1">
+              {error ? (
+                <>
+                  <ErrorHintBlock message={error} hint={errorHint} />
+                  {loadFailed && (
+                    <div className="mt-2">
+                      <Button variant="ghost" onClick={retryLoadActive}>
+                        重试
+                      </Button>
+                    </div>
+                  )}
+                </>
+              ) : doneInfo ? (
+                <div className="flex flex-wrap items-center gap-x-4 gap-y-1.5 text-xs text-zinc-400">
                   <span>
-                    缓存读{' '}
-                    <span className="font-mono text-emerald-400">
-                      {fmtTokens(doneInfo.usage.cacheReadTokens)}
+                    请求 <span className="font-mono text-zinc-200">{doneInfo.requests}</span> 次
+                  </span>
+                  <span>
+                    输入{' '}
+                    <span className="font-mono text-zinc-200">
+                      {fmtTokens(doneInfo.usage.inputTokens)}
                     </span>
                   </span>
-                )}
-                <span>
-                  耗时{' '}
-                  <span className="font-mono text-zinc-200">
-                    {fmtDuration(doneInfo.durationMs)}
+                  <span>
+                    输出{' '}
+                    <span className="font-mono text-zinc-200">
+                      {fmtTokens(doneInfo.usage.outputTokens)}
+                    </span>
                   </span>
-                </span>
-                {doneInfo.changed && <Badge tone="green">已修改资料库</Badge>}
-                {doneInfo.denied && <Badge tone="amber">有操作被拒绝</Badge>}
-                {doneInfo.hitLimit && <Badge tone="red">达到步数上限</Badge>}
-                {!!doneInfo.autoContinues && doneInfo.autoContinues > 0 && (
-                  <Badge tone="amber">自动续跑 ×{doneInfo.autoContinues}</Badge>
-                )}
-                {doneInfo.subagents > 0 && (
-                  <Badge tone="amber">子任务 {doneInfo.subagents} 次</Badge>
-                )}
-              </div>
-            ) : null}
+                  {doneInfo.usage.cacheReadTokens > 0 && (
+                    <span>
+                      缓存读{' '}
+                      <span className="font-mono text-emerald-400">
+                        {fmtTokens(doneInfo.usage.cacheReadTokens)}
+                      </span>
+                    </span>
+                  )}
+                  <span>
+                    耗时{' '}
+                    <span className="font-mono text-zinc-200">
+                      {fmtDuration(doneInfo.durationMs)}
+                    </span>
+                  </span>
+                  {doneInfo.changed && <Badge tone="green">已修改资料库</Badge>}
+                  {doneInfo.denied && <Badge tone="amber">有操作被拒绝</Badge>}
+                  {doneInfo.hitLimit && <Badge tone="red">达到步数上限</Badge>}
+                  {!!doneInfo.autoContinues && doneInfo.autoContinues > 0 && (
+                    <Badge tone="amber">自动续跑 ×{doneInfo.autoContinues}</Badge>
+                  )}
+                  {doneInfo.subagents > 0 && (
+                    <Badge tone="amber">子任务 {doneInfo.subagents} 次</Badge>
+                  )}
+                </div>
+              ) : null}
+            </div>
           </div>
         )}
       </Card>
@@ -770,7 +889,9 @@ export default function Agent({ projectId }: { projectId: string }) {
         <Textarea
           rows={3}
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={(e) => {
+            if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, e.target.value)
+          }}
           onKeyDown={(e) => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send()
           }}
