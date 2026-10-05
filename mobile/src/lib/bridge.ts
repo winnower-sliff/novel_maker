@@ -71,9 +71,13 @@ async function rpc(channel: string, args: unknown[]): Promise<unknown> {
     res = await fetch(`${conn.baseUrl}/api/invoke/${encodeURIComponent(channel)}`, {
       method: 'POST',
       headers: { 'content-type': 'application/json', 'x-nm-token': conn.token },
-      body: JSON.stringify({ args })
+      body: JSON.stringify({ args }),
+      signal: AbortSignal.timeout(30_000)
     })
   } catch (err) {
+    const name = (err as Error).name
+    if (name === 'TimeoutError' || name === 'AbortError')
+      throw new Error('请求超时，请检查与电脑的连接后重试')
     throw new Error(`无法连接服务器: ${(err as Error).message}`)
   }
   if (res.status === 401) {
