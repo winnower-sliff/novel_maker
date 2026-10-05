@@ -65,6 +65,11 @@
 
 34. **版本号自动推进的边界（2026-10）**：`scripts/version.mjs` 按 Conventional Commits 自最新 `v*` tag 推进并自动打 tag（`npm run apk` 触发）。已知边界：①tag 打在 HEAD，而 `package.json` 的版本改动未必已提交，故 `vX.Y.Z` 指向的提交里版本号可能仍是旧值（可追溯性瑕疵，不影响基线计算）；②bump+tag 发生在构建之前，构建失败会留下「有 tag 无产物」；③`git log <tag>..HEAD` 在最新 tag 不在当前分支祖先链（多分支各自打 tag / 浅克隆）时会纳入无关提交致过度升版；④tag 已存在时**严格抛错**（不会静默写坏 package.json）；手动 `npm run apk -- X` 只补打基线 tag、不自动 bump。
 
+35. **CDP 冒烟 import 模块必须动态发现真实 URL**（2026-10-05 实锤，曾浪费多轮排查）：vite dev 下被 HMR 更新过的模块，页面真实 URL 带 `?t=<时间戳>`，与无参 URL 是**两个独立模块实例**——脚本硬编码 `import('/@fs/.../agentRunStore.ts')`（无参）拿到的是幽灵实例，读 store/手动调函数全作用在假实例上，观测全错且「手动修复成功」也是假象（此前会话能 PASS 只因测试实例刚起、无 HMR 时间戳）。修法：import 前用 `performance.getEntriesByType('resource')` 找含目标文件名且带 `?t=` 的最新 URL（无则回退无参）；脚本判定条件还要覆盖「恢复时已收尾」分支（requestId 可能已被 settle 清空）。判据：观测结果与 runRecords/快照明显矛盾时，先打印 resource URL 核对实例一致性，勿急着改代码。
+36. **测试实例与测试任务的前置检查**：①主进程有 `requestSingleInstanceLock`（index.ts）——第二实例**无痕秒退**（日志看似正常构建中），起测试实例前先杀日常实例（PowerShell 按 StartTime 过滤），起后必须确认 CDP 口真在 LISTEN 再开跑；②测试 agent 任务前确认 provider 余额（deepseek 余额耗尽会以 error 收尾，易与「恢复链路 bug」混淆判定）；测试任务措辞强硬（「立即调用 xxx 工具…不要询问」）或直接 `window.api.*` 构造数据，防弱指令遵循模型把任务带偏成文字讨论。
+
+37. **改 agent 工具集的两处映射 + CDP 事件等待模式**（2026-10 实锤，一次 300s 白等）：①工具名映射有两处——`agent/tools.ts` 定义之外，渲染端 `lib/agentTurns.ts` 的 TOOL_LABELS/toolSummary 是独立一份（缺失只退化为裸名不报错，极易漏）；新增/合并/改名工具前先全仓 grep 旧工具名（含 spawn_subagent 描述里的白名单文案、buildSystemPrompt 规则、SUB_TOOLS/READ_TOOLS）。②`window.api.agent.run()` 返回 **Promise<rid> 不是 rid**——CDP 脚本拿返回值直接与事件 id 比较永远不等，onDone 永不触发、eval 白等到超时（run 本身秒完，usage_log 有账，极具迷惑性）；正确模式：先注册收集器把 done/error 全收进数组，`await` rid 后轮询匹配并带总超时。③工具结果事件（agent:toolCall）若主进程某分支漏发，渲染端不会生成工具卡，依赖「按 name 找卡」的持久化逻辑会静默 no-op——新工具进 dispatch 流必须与老工具同样先发 toolCall 再发 toolResult。
+
 ## 约定
 - API Key 仅存主进程（safeStorage，按 provider 分别保存），渲染进程只拿到掩码；LLM 调用统一走主进程（Electron 经 IPC，浏览器经密码鉴权的内嵌 HTTP），provider 鉴权统一走 `getLlmAuth()`（Ollama 无需真实 Key，用占位符）；带 purpose 的请求一律经 `resolveRequestAuth(purpose)` 解析（跨 provider 路由 + 未配置回退）。
 - 新增桌面/浏览器共用能力时，业务逻辑写进 `handlers/` 域文件的 `sharedHandlers`（而非 `ipc.ts`），敏感/桌面专属操作放 `handlers/ipcOnly.ts` 或 `ipc.ts`；通道签名一律先改 `src/shared/contract.ts`（zod 单一事实源，preload/web-bridge/HTTP 校验三端自动派生，详见 .opencode/skill/nm-conventions）。
