@@ -10,6 +10,7 @@ import {
   listSessions,
   loadEvents,
   loadSessionFull,
+  updateTitle,
   upsertLegacySession
 } from '../agentTranscript'
 import type { PartialHandlerTable } from './context'
@@ -31,6 +32,7 @@ export const agentHandlers = {
     abortSessionRun(id)
     deleteSession(id)
   },
+  'agent:sessionRename': (_ctx, [id, title]) => updateTitle(id, title),
   'agent:sessionEvents': (_ctx, [{ sessionId, afterSeq }]) => ({
     sessionId,
     events: loadEvents(sessionId, afterSeq ?? 0),

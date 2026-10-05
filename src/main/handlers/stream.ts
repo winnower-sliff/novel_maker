@@ -232,11 +232,17 @@ export function startAgentRun(
   const controller = new AbortController()
   activeAgentRuns.set(requestId, controller)
   activeSessionRuns.set(sessionId, requestId)
-  appendEvent(sessionId, { kind: 'user', text })
+
+  /** 落库即广播：多端/多 tab 都从 agent:transcript 感知该会话的权威事件（含 seq） */
+  const persist = (ev: AgentTranscriptInput): void => {
+    const stored = appendEvent(sessionId, ev)
+    if (stored && !sink.isClosed()) {
+      sink.send('agent:transcript', requestId, sessionId, stored)
+    }
+  }
+  persist({ kind: 'user', text })
   const messages = rebuildMessages(sessionId)
   recordRunning(requestId, 'agent', { projectId: params.projectId, sessionId })
-
-  const persist = (ev: AgentTranscriptInput): void => appendEvent(sessionId, ev)
 
   void (async () => {
     let payload: Awaited<ReturnType<typeof runAgent>>

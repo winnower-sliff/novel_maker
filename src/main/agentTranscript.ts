@@ -80,19 +80,26 @@ function decodeEvent(r: EventRow): AgentTranscriptEvent {
   return { seq: r.seq, ts: r.ts, kind: r.kind, ...payload } as AgentTranscriptEvent
 }
 
-export function appendEvent(sessionId: string, input: AgentTranscriptInput): void {
+/** 追加事件并返回落库后的完整事件（含 seq/ts）；失败返回 null（调用方跳过广播，绝不杀 run） */
+export function appendEvent(
+  sessionId: string,
+  input: AgentTranscriptInput
+): AgentTranscriptEvent | null {
   try {
     const db = getDb()
     const { seq } = db
       .prepare('SELECT COALESCE(MAX(seq), 0) + 1 AS seq FROM agent_events WHERE session_id = ?')
       .get(sessionId) as { seq: number }
+    const ts = Date.now()
     const { kind, ...payload } = input
     db.prepare(
       'INSERT INTO agent_events (session_id, seq, ts, kind, payload) VALUES (?,?,?,?,?)'
-    ).run(sessionId, seq, Date.now(), kind, JSON.stringify(payload))
-    db.prepare('UPDATE agent_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId)
+    ).run(sessionId, seq, ts, kind, JSON.stringify(payload))
+    db.prepare('UPDATE agent_sessions SET updated_at = ? WHERE id = ?').run(ts, sessionId)
+    return { seq, ts, kind, ...payload } as AgentTranscriptEvent
   } catch (e) {
     console.warn('[agentTranscript] appendEvent failed:', e)
+    return null
   }
 }
 

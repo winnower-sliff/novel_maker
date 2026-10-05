@@ -6,6 +6,7 @@ import type {
   AgentSession,
   AgentSessionBrief,
   AgentToolCall,
+  AgentTranscriptEvent,
   AgentTranscriptResult,
   BatchSnapshot,
   BuiltContext,
@@ -436,6 +437,7 @@ export const invokeContract = {
     ret: ret<void>()
   },
   'agent:sessionDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
+  'agent:sessionRename': { args: z.tuple([z.string(), z.string()]), ret: ret<void>() },
   'agent:sessionEvents': {
     args: z.tuple([z.object({ sessionId: z.string(), afterSeq: z.number().optional() })]),
     ret: ret<AgentTranscriptResult>()
@@ -628,6 +630,7 @@ export interface EventContract {
   'agent:done': [requestId: string, payload: AgentDonePayload]
   'agent:error': [requestId: string, message: string, hint?: LlmErrorHint]
   'agent:subEvent': [requestId: string, event: SubagentEvent]
+  'agent:transcript': [requestId: string, sessionId: string, event: AgentTranscriptEvent]
   'write:batch': [projectId: string, snapshot: BatchSnapshot]
 }
 
@@ -642,6 +645,7 @@ export const EVENT_CHANNELS = [
   'agent:done',
   'agent:error',
   'agent:subEvent',
+  'agent:transcript',
   'write:batch'
 ] as const satisfies readonly (keyof EventContract)[]
 
@@ -749,6 +753,7 @@ export interface Api {
     sessionLoad: InvokeFn<'agent:sessionLoad'>
     sessionSave: InvokeFn<'agent:sessionSave'>
     sessionDelete: InvokeFn<'agent:sessionDelete'>
+    sessionRename: InvokeFn<'agent:sessionRename'>
     sessionEvents: InvokeFn<'agent:sessionEvents'>
     sessionTitle: InvokeFn<'agent:sessionTitle'>
     instructionsGet: InvokeFn<'agent:instructionsGet'>
@@ -759,6 +764,7 @@ export interface Api {
     onDone: SubscribeFn<'agent:done'>
     onError: SubscribeFn<'agent:error'>
     onSubEvent: SubscribeFn<'agent:subEvent'>
+    onTranscript: SubscribeFn<'agent:transcript'>
   }
   exporter: {
     run: InvokeFn<'exporter:run'>
