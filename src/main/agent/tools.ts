@@ -18,8 +18,10 @@ import {
   FULL_PAGE_DEFAULT,
   getOutlineOwned,
   MAX_CHAPTER_CHARS,
+  n,
   optArr,
   optB,
+  optBool,
   optN,
   optNum,
   optS,
@@ -180,6 +182,7 @@ const TOOLS: AgentTool[] = [
           title: e.title,
           tags: e.tags,
           keys: e.keys,
+          relation: e.relation,
           content: e.content
         }
       }
@@ -277,7 +280,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'list_worldbuild',
       description:
-        '列出世界观词条。默认摘要模式：返回各类型条数分布（byCategory）与每条的 id、类型、标题、标签、内容摘要（前 200 字）及总字数；detail=full 返回内容全文（每条截断 3000 字）。可选 category 按类型过滤、offset/limit 分页（summary 默认全部、full 默认每页 20 条）。做全局检查类任务时应分批读取直至 hasMore=false',
+        '列出世界观词条。默认摘要模式：返回各类型条数分布（byCategory）与每条的 id、类型、标题、标签、人物/剧情关联（relation）、内容摘要（前 200 字）及总字数；detail=full 返回内容全文（每条截断 3000 字）。可选 category 按类型过滤、offset/limit 分页（summary 默认全部、full 默认每页 20 条）。做全局检查类任务时应分批读取直至 hasMore=false',
       input_schema: schema(
         {
           category: optS('按类型精确过滤（如 力量体系）'),
@@ -310,6 +313,7 @@ const TOOLS: AgentTool[] = [
           title: e.title,
           tags: e.tags,
           keys: e.keys,
+          relation: e.relation || undefined,
           ...(full
             ? { content: clip(e.content, 3000).text }
             : { brief: briefOf(e.content), contentChars: e.content.length })
@@ -321,7 +325,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_worldbuild',
       description:
-        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）；keys 为检索别名（逗号分隔，同一概念的其他叫法/简称/别称，供写作上下文按名命中，如「青云宗,青云,青宗」）。正文 [[ ]] 链接只允许指向世界观条目标题，严禁链人物名（提及人物直接写名字）',
+        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）；keys 为检索别名（逗号分隔，同一概念的其他叫法/简称/别称，供写作上下文按名命中，如「青云宗,青云,青宗」）；relation 为人物/剧情关联（一句话说明该条目与哪个人物或哪条剧情线绑定、是什么关系，可含 [[世界观条目]] 链接；修改时省略保留原值，传空串清空）。正文 [[ ]] 链接只允许指向世界观条目标题，严禁链人物名（提及人物直接写名字）',
       input_schema: schema(
         {
           id: optS('要修改的词条 id（新建时省略）'),
@@ -329,7 +333,10 @@ const TOOLS: AgentTool[] = [
           title: s('标题'),
           tags: optS('标签，逗号分隔（如：精灵,森林,魔法）'),
           keys: optS('检索别名，逗号分隔（同一概念的其他叫法）'),
-          content: optS('正文内容')
+          content: optS('正文内容'),
+          relation: optS(
+            '人物/剧情关联（该条目与人物或剧情线的关系说明，可含 [[世界观条目]] 链接）'
+          )
         },
         ['category', 'title']
       )
@@ -360,7 +367,8 @@ const TOOLS: AgentTool[] = [
         title: reqStr(input, 'title'),
         tags: tags || undefined,
         keys: optStr(input, 'keys'),
-        content: optStr(input, 'content')
+        content: optStr(input, 'content'),
+        relation: optStr(input, 'relation')
       })
       return { ok: true, id: saved.id, title: saved.title, created: !optStr(input, 'id') }
     }
@@ -389,8 +397,8 @@ const TOOLS: AgentTool[] = [
       const pos = {
         before: optStr(input, 'before'),
         after: optStr(input, 'after'),
-        first: input.first === true,
-        last: input.last === true
+        first: optBool(input, 'first') === true,
+        last: optBool(input, 'last') === true
       }
       const hasPos = [pos.before, pos.after, pos.first, pos.last].some(Boolean)
       if (op === 'create') {
@@ -511,6 +519,9 @@ const TOOLS: AgentTool[] = [
       if (volume === undefined || chapterNo === undefined)
         throw new Error('新建时 volume 与 chapterNo 必填')
       const twist = optNum(input, 'twist')
+      const status = optStr(input, 'status')
+      if (status !== undefined && !['draft', 'approved', 'written', 'polished'].includes(status))
+        throw new Error("status 必须是 'draft' / 'approved' / 'written' / 'polished'")
       const saved = store.saveOutline({
         id,
         projectId,
@@ -524,7 +535,7 @@ const TOOLS: AgentTool[] = [
         twist: twist === undefined ? undefined : Math.min(5, Math.max(0, Math.round(twist))),
         hook: optStr(input, 'hook'),
         foreshadowOps: optStr(input, 'foreshadowOps'),
-        status: optStr(input, 'status') as never
+        status: status as never
       })
       return {
         ok: true,
@@ -784,7 +795,7 @@ const TOOLS: AgentTool[] = [
         throw new Error("scope 必须是 'worldbuild' / 'character' / 'chapter'")
       const scopes = new Set(scopeRaw ? [scopeRaw] : ['worldbuild', 'character', 'chapter'])
       let re: RegExp | null = null
-      if (input.regex === true) {
+      if (optBool(input, 'regex') === true) {
         try {
           re = new RegExp(pattern, 'g')
         } catch (err) {
@@ -1072,12 +1083,15 @@ const TOOLS: AgentTool[] = [
     },
     danger: false,
     handler: (input, projectId) => {
+      const status = optStr(input, 'status')
+      if (status !== undefined && !['open', 'resolved'].includes(status))
+        throw new Error("status 必须是 'open' / 'resolved'")
       const saved = store.saveForeshadow({
         id: optStr(input, 'id'),
         projectId,
         content: reqStr(input, 'content'),
         plantedChapter: optStr(input, 'plantedChapter'),
-        status: optStr(input, 'status'),
+        status,
         resolvedChapter: optStr(input, 'resolvedChapter'),
         plannedResolve: optStr(input, 'plannedResolve'),
         priority: optStr(input, 'priority')
@@ -1116,7 +1130,7 @@ const TOOLS: AgentTool[] = [
       name: 'refresh_volume_summary',
       description:
         '重新生成并落库某一卷的卷摘要（走与自动写作相同的生成链：汇总该卷各章已定稿摘要+未回收伏笔+末章人物状态，覆盖旧摘要）。写完一卷/批量改稿后刷新，get_book_digest 里的卷摘要随之更新。该卷没有大纲或没有任何已定稿章节摘要时报错。生成需要一些时间，期间无输出属正常',
-      input_schema: schema({ volume: s('卷号，如 1') }, ['volume'])
+      input_schema: schema({ volume: n('卷号，如 1') }, ['volume'])
     },
     danger: false,
     handler: () => {

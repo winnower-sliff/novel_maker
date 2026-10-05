@@ -51,6 +51,10 @@ export function s(desc: string): Record<string, unknown> {
   return { type: 'string', description: desc }
 }
 
+export function n(desc: string): Record<string, unknown> {
+  return { type: 'number', description: desc }
+}
+
 export function optS(desc: string): Record<string, unknown> {
   return { type: 'string', description: `${desc}（可选）` }
 }
@@ -86,13 +90,30 @@ function _reqNum(input: ToolInput, key: string): number {
 
 export function optNum(input: ToolInput, key: string): number | undefined {
   const v = input[key]
-  return typeof v === 'number' && Number.isFinite(v) ? v : undefined
+  if (typeof v === 'number' && Number.isFinite(v)) return v
+  if (typeof v === 'string' && /^-?\d+(\.\d+)?$/.test(v.trim())) return Number(v.trim())
+  return undefined
+}
+
+/** 宽容布尔：模型偶尔把布尔传成 "true"/"false" 字符串，静默判 false 会丢参数 */
+export function optBool(input: ToolInput, key: string): boolean | undefined {
+  const v = input[key]
+  if (typeof v === 'boolean') return v
+  if (v === 'true') return true
+  if (v === 'false') return false
+  return undefined
 }
 
 export function optStrArr(input: ToolInput, key: string): string[] | undefined {
   const v = input[key]
-  if (!Array.isArray(v)) return undefined
-  return v.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+  if (Array.isArray(v))
+    return v.filter((x): x is string => typeof x === 'string' && x.trim() !== '')
+  if (typeof v === 'string' && v.trim())
+    return v
+      .split(/[,，\n]/)
+      .map((x) => x.trim())
+      .filter(Boolean)
+  return undefined
 }
 
 export function clip(text: string, max: number): { text: string; truncated: boolean } {
