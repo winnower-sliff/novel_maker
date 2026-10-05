@@ -2,6 +2,8 @@
 // 事件订阅由 ensureAgentRuntime() 在两端 App 连接就绪后幂等安装（模块级，仅一次），
 // Agent / AgentChat 只是 store 的视图：挂载时 syncProject(projectId) 对账即可，
 // 卸载不影响事件处理与持久化。跨端风格对齐 writeRunStore（容器进 zustand，可变量留模块级）。
+
+import { makeSessionTitle, turnsToMessages } from '@shared/agentTranscript'
 import type { AgentToolCallEvent, AgentToolResultEvent } from '@shared/contract'
 import { classifyLlmError } from '@shared/llmError'
 import type {
@@ -13,7 +15,6 @@ import type {
   RuntimeSnapshot
 } from '@shared/types'
 import { create } from 'zustand'
-import { makeSessionTitle, turnsToMessages } from '../renderer/src/lib/agentTurns'
 import { setAgentUi } from '../renderer/src/lib/agentUiStore'
 import { qk } from '../renderer/src/lib/queries'
 import { queryClient } from '../renderer/src/lib/queryClient'
@@ -265,7 +266,9 @@ export function startRun(input: string, model?: string): void {
     .run({ projectId, messages: turnsToMessages(next), model })
     .then((id) => {
       if (token !== genToken) return
-      useAgentRunStore.setState({ requestId: id })
+      // 过渡期契约：旧路径（messages）返回 string rid；新路径返回 {requestId,sessionId}
+      const rid = typeof id === 'string' ? id : id.requestId
+      useAgentRunStore.setState({ requestId: rid })
     })
     .catch((err: unknown) => {
       if (token !== genToken) return

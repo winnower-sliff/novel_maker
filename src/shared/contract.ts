@@ -6,6 +6,7 @@ import type {
   AgentSession,
   AgentSessionBrief,
   AgentToolCall,
+  AgentTranscriptResult,
   BatchSnapshot,
   BuiltContext,
   Chapter,
@@ -248,7 +249,12 @@ export const WorldbuildTypePosSchema = z.object({
 
 export const AgentRunParamsSchema = z.object({
   projectId: z.string(),
-  messages: z.array(ChatMessageSchema),
+  /** 新路径：续跑已有会话（不带则服务端新建会话） */
+  sessionId: z.string().optional(),
+  /** 新路径：本轮用户输入（transcript 事实源在服务端）；旧客户端过渡用 messages */
+  text: z.string().optional(),
+  /** 旧客户端过渡：全量 messages 直跑 */
+  messages: z.array(ChatMessageSchema).optional(),
   model: z.string().optional()
 })
 
@@ -414,7 +420,10 @@ export const invokeContract = {
     ret: ret<BatchSnapshot | null>()
   },
 
-  'agent:run': { args: z.tuple([AgentRunParamsSchema]), ret: ret<string>() },
+  'agent:run': {
+    args: z.tuple([AgentRunParamsSchema]),
+    ret: ret<string | { requestId: string; sessionId: string }>()
+  },
   'agent:abort': { args: z.tuple([z.string()]), ret: ret<void>() },
   'agent:resolve': {
     args: z.tuple([z.string(), z.string(), z.boolean(), z.boolean().optional()]),
@@ -427,6 +436,10 @@ export const invokeContract = {
     ret: ret<void>()
   },
   'agent:sessionDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
+  'agent:sessionEvents': {
+    args: z.tuple([z.object({ sessionId: z.string(), afterSeq: z.number().optional() })]),
+    ret: ret<AgentTranscriptResult>()
+  },
   'agent:sessionTitle': {
     args: z.tuple([z.string(), z.string()]),
     ret: ret<string | null>()
@@ -736,6 +749,7 @@ export interface Api {
     sessionLoad: InvokeFn<'agent:sessionLoad'>
     sessionSave: InvokeFn<'agent:sessionSave'>
     sessionDelete: InvokeFn<'agent:sessionDelete'>
+    sessionEvents: InvokeFn<'agent:sessionEvents'>
     sessionTitle: InvokeFn<'agent:sessionTitle'>
     instructionsGet: InvokeFn<'agent:instructionsGet'>
     instructionsSave: InvokeFn<'agent:instructionsSave'>

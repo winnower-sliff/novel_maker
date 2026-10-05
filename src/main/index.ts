@@ -8,6 +8,7 @@ import {
   shell,
   Tray
 } from 'electron'
+import { migrateAgentSessionsJson } from './agentTranscript'
 import { getDb } from './db'
 import { registerIpc } from './ipc'
 import { startServer, stopServer } from './server'
@@ -123,6 +124,7 @@ if (!gotLock) {
   app.whenReady().then(() => {
     syncAutoLaunch()
     getDb()
+    migrateAgentSessionsJson()
     listSkills()
     registerIpc()
     void startServer()

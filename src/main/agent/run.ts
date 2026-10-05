@@ -2,6 +2,7 @@ import type { AgentToolResultEvent, EventChannels, EventContract } from '../../s
 import type {
   AgentDonePayload,
   AgentToolResultStatus,
+  AgentTranscriptInput,
   ChatMessage,
   ContentBlock,
   PendingConfirmInfo,
@@ -188,8 +189,11 @@ export async function runAgent(opts: {
   messages: ChatMessage[]
   model: string
   signal: AbortSignal
+  /** transcript 事实源落库钩子（会话事件按发生顺序持久化；内部吞错，不影响 run） */
+  persist?: (ev: AgentTranscriptInput) => void
 }): Promise<AgentDonePayload> {
   const { sink, requestId, projectId, signal } = opts
+  const persist = opts.persist ?? (() => {})
   const send = <C extends EventChannels>(
     channel: C,
     ...rest: EventContract[C] extends [unknown, ...infer R] ? R : never
@@ -208,6 +212,13 @@ export async function runAgent(opts: {
   /** 发工具结果事件并登记流水（done 收尾时随 payload 下发，snapshot 期间轻量对账） */
   const emitToolResult = (ev: AgentToolResultEvent): void => {
     runState.toolResults.push(ev)
+    persist({
+      kind: 'tool_result',
+      id: ev.id,
+      ok: ev.ok,
+      result: ev.result,
+      ...(ev.denied ? { denied: true } : {})
+    })
     send('agent:toolResult', ev)
   }
 
@@ -246,6 +257,8 @@ export async function runAgent(opts: {
   let lastModel = opts.model
   let hitLimit = false
   const started = Date.now()
+  /** 当前 chatStream 已流出但尚未按轮落库的文本（中断/异常时在 finally 兜底持久化） */
+  let pendingTurnText = ''
 
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
@@ -261,10 +274,16 @@ export async function runAgent(opts: {
           cacheSystem: auth.promptCache
         },
         { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
-        (text) => send('agent:delta', text),
+        (text) => {
+          pendingTurnText += text
+          send('agent:delta', text)
+        },
         signal
       )
       requests++
+      // transcript 按轮合并落库（空文本也落：纯工具轮的结构需要 assistant 占位）
+      persist({ kind: 'assistant', text: result.text })
+      pendingTurnText = ''
       lastModel = result.model
       usage.inputTokens += result.usage.inputTokens
       usage.outputTokens += result.usage.outputTokens
@@ -321,6 +340,10 @@ export async function runAgent(opts: {
         toolUseCount++
         if (tu.name === 'compact_context') {
           const summary = typeof tu.input?.summary === 'string' ? tu.input.summary.trim() : ''
+          persist({
+            kind: 'tool_call',
+            call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
+          })
           send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'running' })
           if (!summary) {
             resultBlocks.push({
@@ -362,6 +385,16 @@ export async function runAgent(opts: {
         }
 
         if (dangerReason && !runState.alwaysAllowed.has(tu.name)) {
+          persist({
+            kind: 'tool_call',
+            call: {
+              id: tu.id,
+              name: tu.name,
+              input: tu.input,
+              state: 'confirming',
+              dangerReason
+            }
+          })
           send('agent:toolCall', {
             id: tu.id,
             name: tu.name,
@@ -388,6 +421,10 @@ export async function runAgent(opts: {
             continue
           }
         } else {
+          persist({
+            kind: 'tool_call',
+            call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
+          })
           send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'running' })
         }
 
@@ -440,6 +477,7 @@ export async function runAgent(opts: {
       if (turn === MAX_TURNS - 1) hitLimit = true
     }
   } finally {
+    if (pendingTurnText.trim()) persist({ kind: 'assistant', text: pendingTurnText })
     cancelAgentConfirms(requestId)
     activeRuns.delete(requestId)
   }

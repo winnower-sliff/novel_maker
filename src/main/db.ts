@@ -117,6 +117,23 @@ CREATE INDEX IF NOT EXISTS idx_worldbuild_project ON worldbuild(project_id);
 CREATE INDEX IF NOT EXISTS idx_outlines_project ON outlines(project_id, volume, chapter_no);
 CREATE INDEX IF NOT EXISTS idx_chapters_project ON chapters(project_id);
 CREATE INDEX IF NOT EXISTS idx_foreshadows_project ON foreshadows(project_id);
+CREATE TABLE IF NOT EXISTS agent_sessions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  title TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS agent_events (
+  session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  seq INTEGER NOT NULL,
+  ts INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  PRIMARY KEY(session_id, seq)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_sessions_project ON agent_sessions(project_id, updated_at);
+CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id, seq);
 `
 
 export function getDb(): DatabaseSync {

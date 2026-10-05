@@ -138,6 +138,8 @@ export interface RunMeta {
   action?: string
   /** canonSync 等按卷跑的任务带卷号（迁移通知/预览挂起需要） */
   volume?: number
+  /** agent run 所属会话（客户端按会话对账认领 rid 用） */
+  sessionId?: string
 }
 
 /** agent run 在途待应答的确认（runtime:snapshot 恢复用；串行 await，同一时刻最多一个） */
@@ -587,6 +589,40 @@ export interface AgentToolResultStatus {
   id: string
   ok: boolean
   denied?: boolean
+}
+
+/** done 事件随附的 run 收尾摘要（transcript 落库用，不含工具流水全量） */
+export type AgentDoneSummary = Omit<AgentDonePayload, 'toolResults'>
+
+/**
+ * 会话 transcript 事件（服务端事实源，按 seq 单调递增落库）：
+ * delta 不落库（只走 SSE 实时流），assistant 文本在每轮 chatStream 结束后按轮合并落。
+ */
+export type AgentTranscriptEvent =
+  | { seq: number; ts: number; kind: 'user'; text: string }
+  | { seq: number; ts: number; kind: 'assistant'; text: string }
+  | { seq: number; ts: number; kind: 'tool_call'; call: AgentToolCall }
+  | {
+      seq: number
+      ts: number
+      kind: 'tool_result'
+      id: string
+      ok: boolean
+      result: string
+      denied?: boolean
+    }
+  | { seq: number; ts: number; kind: 'run_error'; message: string }
+  | { seq: number; ts: number; kind: 'done'; summary: AgentDoneSummary }
+
+/** 落库前形态（seq/ts 由服务端分配） */
+export type DistributiveOmit<T, K extends keyof never> = T extends unknown ? Omit<T, K> : never
+export type AgentTranscriptInput = DistributiveOmit<AgentTranscriptEvent, 'seq' | 'ts'>
+
+/** agent:sessionEvents 返回：增量事件 + 当前水位 */
+export interface AgentTranscriptResult {
+  sessionId: string
+  events: AgentTranscriptEvent[]
+  lastSeq: number
 }
 
 export interface AgentToolDefView {

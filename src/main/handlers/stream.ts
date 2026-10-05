@@ -1,7 +1,9 @@
 import { randomUUID } from 'node:crypto'
+import { makeSessionTitle } from '../../shared/agentTranscript'
 import { classifyLlmError } from '../../shared/llmError'
 import { createOutlineScanMachine, feedOutlineScan } from '../../shared/outlineScan'
 import type {
+  AgentTranscriptInput,
   ChatMessage,
   ChatParams,
   ChatResult,
@@ -12,7 +14,20 @@ import type {
   RuntimeRunRecord,
   WorldbuildGenParams
 } from '../../shared/types'
-import { getAgentPendingConfirm, getAgentToolResultStatuses, runAgent } from '../agent'
+import {
+  cancelAgentConfirms,
+  getAgentPendingConfirm,
+  getAgentToolResultStatuses,
+  runAgent
+} from '../agent'
+import {
+  appendEvent,
+  createSession,
+  getSession,
+  lastSeqOf,
+  rebuildMessages,
+  updateTitle
+} from '../agentTranscript'
 import { LONG_CHAPTER_THRESHOLD, runChapterCandidates, runLongChapter } from '../chapterRunner'
 import { enqueueEmbedding } from '../embedding'
 import type { EventSink } from '../eventSink'
@@ -113,14 +128,115 @@ export function abortAgentRun(requestId: string): void {
   activeAgentRuns.get(requestId)?.abort()
 }
 
+/** 每会话每时刻最多一个在途 run：sessionId → requestId */
+const activeSessionRuns = new Map<string, string>()
+
+/** 停止某会话的在途 run（删会话/会话内停止按钮用）；无在途返回 false */
+export function abortSessionRun(sessionId: string): boolean {
+  const rid = activeSessionRuns.get(sessionId)
+  if (!rid) return false
+  abortAgentRun(rid)
+  cancelAgentConfirms(rid)
+  return true
+}
+
+/** 标题清洗：剥掉首行外的内容、包裹符号与收尾标点，超长截断 */
+function cleanTitle(raw: string): string | null {
+  const line = raw.trim().split('\n')[0].trim()
+  const stripped = line
+    .replace(/^[「『"‘'《【[(（]+/, '')
+    .replace(/[」』"”'》\]）)…。.！!？?]+$/, '')
+  const t = stripped.trim()
+  if (!t) return null
+  return t.length > 16 ? t.slice(0, 16) : t
+}
+
+/** 会话自动起名：小请求生成 ≤12 字动宾式短标题；任何失败静默返回 null（回退启发式标题） */
+export async function genSessionTitle(
+  userText: string,
+  assistantText: string
+): Promise<string | null> {
+  const u = userText.trim().slice(0, 500)
+  if (!u) return null
+  try {
+    const auth = await resolveRequestAuth('agent')
+    if (!auth.apiKey && auth.needsKey) return null
+    const a = assistantText.trim().slice(0, 800)
+    const result = await chatStream(
+      {
+        model: auth.model,
+        system:
+          '为写作助手会话生成标题：输出一个不超过12字的中文动宾式短语，概括本会话的核心任务目标。不要书名号、引号、句号或任何前后缀说明，只输出标题本身',
+        messages: [
+          {
+            role: 'user',
+            content: `用户请求：${u}${a ? `\n\n助手处理结果（节选）：${a}` : ''}`
+          }
+        ],
+        maxTokens: 200,
+        purpose: 'agent'
+      },
+      { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+      () => {}
+    )
+    appendUsage({
+      ts: Date.now(),
+      model: result.model,
+      purpose: 'agent',
+      inputTokens: result.usage.inputTokens,
+      outputTokens: result.usage.outputTokens,
+      cacheReadTokens: result.usage.cacheReadTokens,
+      cacheCreationTokens: result.usage.cacheCreationTokens,
+      durationMs: result.durationMs,
+      ratelimit: pickRatelimitHeaders(result.headers)
+    })
+    return cleanTitle(result.text)
+  } catch {
+    return null
+  }
+}
+
+export interface AgentRunHandle {
+  requestId: string
+  sessionId: string
+}
+
 export function startAgentRun(
   sink: EventSink,
-  params: { projectId: string; messages: ChatMessage[]; model?: string }
-): string {
+  params: {
+    projectId: string
+    /** 新路径：传 text（可不带 sessionId，服务端建会话）；旧客户端过渡：只传 messages */
+    sessionId?: string
+    text?: string
+    messages?: ChatMessage[]
+    model?: string
+  }
+): string | AgentRunHandle {
+  // 旧客户端过渡路径：messages 直跑、不落 transcript（旧端 persistRun/sessionSave 自管）
+  if (params.text === undefined) {
+    if (!params.messages) throw new Error('缺少 text 或 messages 参数')
+    return startLegacyAgentRun(sink, params.projectId, params.messages, params.model)
+  }
+
+  const text = params.text
+  if (params.sessionId) {
+    if (activeSessionRuns.has(params.sessionId))
+      throw new Error('该会话已有进行中的任务，请先停止或等待完成')
+    if (!getSession(params.sessionId)) throw new Error('会话不存在或已删除')
+  }
+  const sessionId =
+    params.sessionId ?? createSession(params.projectId, makeSessionTitleText(text)).id
+  const isFirstTurn = lastSeqOf(sessionId) === 0
+
   const requestId = randomUUID()
   const controller = new AbortController()
   activeAgentRuns.set(requestId, controller)
-  recordRunning(requestId, 'agent', { projectId: params.projectId })
+  activeSessionRuns.set(sessionId, requestId)
+  appendEvent(sessionId, { kind: 'user', text })
+  const messages = rebuildMessages(sessionId)
+  recordRunning(requestId, 'agent', { projectId: params.projectId, sessionId })
+
+  const persist = (ev: AgentTranscriptInput): void => appendEvent(sessionId, ev)
 
   void (async () => {
     let payload: Awaited<ReturnType<typeof runAgent>>
@@ -130,8 +246,67 @@ export function startAgentRun(
         sink,
         requestId,
         projectId: params.projectId,
-        messages: params.messages,
+        messages,
         model: params.model?.trim() || auth.model,
+        signal: controller.signal,
+        persist
+      })
+    } catch (err) {
+      const message = controller.signal.aborted
+        ? '已停止'
+        : ((err as Error)?.message ?? String(err))
+      recordError(requestId, message)
+      persist({ kind: 'run_error', message })
+      if (!sink.isClosed()) {
+        sink.send('agent:error', requestId, message, buildErrorHint(err, message))
+      }
+      return
+    } finally {
+      activeAgentRuns.delete(requestId)
+      if (activeSessionRuns.get(sessionId) === requestId) activeSessionRuns.delete(sessionId)
+    }
+    recordDone(requestId, payload)
+    const { toolResults: _toolResults, ...summary } = payload
+    persist({ kind: 'done', summary })
+    if (!sink.isClosed()) sink.send('agent:done', requestId, payload)
+    // 首轮收尾后自动起名（失败静默，保留启发式标题）
+    if (isFirstTurn) {
+      void genSessionTitle(text, payload.text).then((t) => {
+        if (t) updateTitle(sessionId, t)
+      })
+    }
+  })()
+
+  return { requestId, sessionId }
+}
+
+/** 启发式标题：首条用户消息前 20 字 */
+function makeSessionTitleText(text: string): string {
+  return makeSessionTitle([{ role: 'user', text, ts: Date.now() }])
+}
+
+/** 旧客户端过渡：messages 直跑（transcript 由客户端 sessionSave 自管），返回 rid 字符串 */
+function startLegacyAgentRun(
+  sink: EventSink,
+  projectId: string,
+  messages: ChatMessage[],
+  model?: string
+): string {
+  const requestId = randomUUID()
+  const controller = new AbortController()
+  activeAgentRuns.set(requestId, controller)
+  recordRunning(requestId, 'agent', { projectId })
+
+  void (async () => {
+    let payload: Awaited<ReturnType<typeof runAgent>>
+    try {
+      const auth = await resolveRequestAuth('agent')
+      payload = await runAgent({
+        sink,
+        requestId,
+        projectId,
+        messages,
+        model: model?.trim() || auth.model,
         signal: controller.signal
       })
     } catch (err) {
