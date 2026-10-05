@@ -1,3 +1,9 @@
+import {
+  buildOutlineNoIndex,
+  formatChapterRef,
+  isDanglingRef,
+  resolveChapterRefToOutline
+} from '../../shared/foreRef'
 import { splitTags } from '../../shared/tags'
 import type { OutlineItem, ToolDef } from '../../shared/types'
 import { chatStream, pickRatelimitHeaders } from '../llm'
@@ -487,7 +493,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_outline',
       description:
-        '新建或修改大纲条目。传 id 表示修改既有条目；不传 id 表示新建：volume 必填，chapterNo=插到该章号之前（0 或缺省=追加到全书末尾），也可传 afterOutlineId 精确插到某章之后；章号由系统按位置自动重排，无需关心绝对编号。可选元数据：title（章节标题）、synopsis（梗概：50字纯剧情概要，只回答「这章讲什么」）、scenes（场景序列 string[]：2-4 条「人物+动作/冲突」场景句，回答「这章怎么演」，主要戏份排前面）、role（章节定位）、suspense（悬念密度）、twist（认知颠覆1-5）、hook（结尾钩子设计）、foreshadowOps（伏笔操作，如 埋设(A)→回收(B)）；修改时未传字段保留原值，scenes 传空数组表示清空；修改时传 chapterNo 表示移动到该章号位置、afterOutlineId 表示移动到该章之后',
+        '新建或修改大纲条目。传 id 表示修改既有条目；不传 id 表示新建：volume 必填，chapterNo=插到该章号之前（0 或缺省=追加到全书末尾），也可传 afterOutlineId 精确插到某章之后；章号由系统按位置自动重排，无需关心绝对编号。可选元数据：title（章节标题）、synopsis（梗概：50字纯剧情概要，只回答「这章讲什么」）、scenes（场景序列 string[]：2-4 条「人物+动作/冲突」场景句，回答「这章怎么演」，主要戏份排前面）、role（章节定位）、suspense（悬念密度）、twist（认知颠覆1-5）、hook（结尾钩子设计）、foreshadowOps（伏笔操作，如 埋设(A)→回收(B)）；修改时未传字段保留原值，scenes 传空数组表示清空；修改时传 chapterNo 表示移动到该章号位置、afterOutlineId 表示移动到该章之后。注意 foreshadowOps 仅是人读注记，不会联动伏笔台账；要更新伏笔的计划回收点必须另调 save_foreshadow（写「第N章」）',
       input_schema: schema(
         {
           id: optS('要修改的大纲 id（新建时省略）'),
@@ -1082,26 +1088,51 @@ const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'list_foreshadows',
-      description: '列出当前项目全部伏笔（含 id、内容、埋设章节、状态、计划回收点、优先级）',
-      input_schema: schema({}, [])
+      description:
+        '列出当前项目伏笔（含 id、内容、埋设章节、状态、计划回收点、优先级）。章节值随大纲重排实时解析；plannedResolve 为空 = 未安排回收；plannedDangling/plannedResolveDangling=true 表示关联的大纲行已不存在，需要重设。可选 status 过滤：open=未回收（写章前核对台账用）/resolved=已回收',
+      input_schema: schema(
+        {
+          status: optS('按状态过滤：open / resolved，缺省返回全部')
+        },
+        []
+      )
     },
     danger: false,
-    handler: (_input, projectId) =>
-      store.listForeshadows(projectId).map((f) => ({
-        id: f.id,
-        content: f.content,
-        plantedChapter: f.plantedChapter,
-        status: f.status,
-        resolvedChapter: f.resolvedChapter,
-        plannedResolve: f.plannedResolve,
-        priority: f.priority
-      }))
+    handler: (input, projectId) => {
+      const nosById = buildOutlineNoIndex(store.listOutlines(projectId))
+      const status = optStr(input, 'status')
+      if (status !== undefined && !['open', 'resolved'].includes(status))
+        throw new Error("status 必须是 'open' / 'resolved'")
+      return store
+        .listForeshadows(projectId)
+        .filter((f) => status === undefined || f.status === status)
+        .map((f) => {
+          const fallback = (text: string) => (text.trim() ? `第?章(原:${text})` : '')
+          return {
+            id: f.id,
+            content: f.content,
+            plantedChapter:
+              formatChapterRef(f.plantedChapter, f.plantedOutlineId, nosById) ??
+              fallback(f.plantedChapter),
+            plantedDangling: isDanglingRef(f.plantedOutlineId, nosById),
+            status: f.status,
+            resolvedChapter:
+              formatChapterRef(f.resolvedChapter, f.resolvedOutlineId, nosById) ??
+              fallback(f.resolvedChapter),
+            plannedResolve:
+              formatChapterRef(f.plannedResolve, f.plannedResolveOutlineId, nosById) ??
+              fallback(f.plannedResolve),
+            plannedResolveDangling: isDanglingRef(f.plannedResolveOutlineId, nosById),
+            priority: f.priority
+          }
+        })
+    }
   },
   {
     def: {
       name: 'save_foreshadow',
       description:
-        '新建或修改伏笔。传 id 表示修改；不传 id 表示新建。新建前必须先 list_foreshadows 对照，语义相同的伏笔改为传既有 id 更新，禁止重复登记。可选：plannedResolve（计划回收点，如 第2卷30-35章）、priority（优先级：主线/人物/氛围）；修改时未传字段保留原值',
+        '新建或修改伏笔。传 id 表示修改；不传 id 表示新建。新建前必须先 list_foreshadows 对照，语义相同的伏笔改为传既有 id 更新，禁止重复登记。可选：plannedResolve（计划回收点）、priority（优先级：主线/人物/氛围）；埋设/回收/计划回收章节写「第N章」或「第V卷N章」会自动关联对应大纲行，重排后自动跟随；区间或模糊写法（如 第30-35章、第30章前后）仅存文本不关联；显式传空串清除该字段（含关联）。修改时未传字段保留原值',
       input_schema: schema(
         {
           id: optS('要修改的伏笔 id（新建时省略）'),
@@ -1120,17 +1151,36 @@ const TOOLS: AgentTool[] = [
       const status = optStr(input, 'status')
       if (status !== undefined && !['open', 'resolved'].includes(status))
         throw new Error("status 必须是 'open' / 'resolved'")
+      const outlines = store.listOutlines(projectId)
+      const resolveRef = (text: string): string =>
+        resolveChapterRefToOutline(text, outlines)?.id ?? ''
+      const plantedChapter = optStr(input, 'plantedChapter')
+      const resolvedChapter = optStr(input, 'resolvedChapter')
+      const plannedResolve = optStr(input, 'plannedResolve')
       const saved = store.saveForeshadow({
         id: optStr(input, 'id'),
         projectId,
         content: reqStr(input, 'content'),
-        plantedChapter: optStr(input, 'plantedChapter'),
+        plantedChapter,
+        plantedOutlineId: plantedChapter === undefined ? undefined : resolveRef(plantedChapter),
         status,
-        resolvedChapter: optStr(input, 'resolvedChapter'),
-        plannedResolve: optStr(input, 'plannedResolve'),
+        resolvedChapter,
+        resolvedOutlineId: resolvedChapter === undefined ? undefined : resolveRef(resolvedChapter),
+        plannedResolve,
+        plannedResolveOutlineId:
+          plannedResolve === undefined ? undefined : resolveRef(plannedResolve),
         priority: optStr(input, 'priority')
       })
-      return { ok: true, id: saved.id, created: !optStr(input, 'id') }
+      return {
+        ok: true,
+        id: saved.id,
+        created: !optStr(input, 'id'),
+        linked: {
+          plantedChapter: saved.plantedOutlineId !== '',
+          resolvedChapter: saved.resolvedOutlineId !== '',
+          plannedResolve: saved.plannedResolveOutlineId !== ''
+        }
+      }
     }
   },
   {

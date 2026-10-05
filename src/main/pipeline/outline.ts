@@ -1,3 +1,4 @@
+import { resolveChapterRefToOutline } from '../../shared/foreRef'
 import type {
   AlignRevision,
   ChatParams,
@@ -325,16 +326,29 @@ function parseForePlanItems(
   return items
 }
 
-/** outline 行落库后回填计划回收点：uid 为结构事实，文本仅作悬空回退展示 */
+/** outline 行落库后回填计划回收点：uid 为结构事实，文本仅作悬空回退展示；回收点不晚于埋设章的 plan 直接丢弃 */
 function applyPlannedResolve(
   items: Array<{ id: string; priority: string }>,
   outline: OutlineItem,
   projectId: string,
-  foreById: Map<string, Foreshadow>
+  foreById: Map<string, Foreshadow>,
+  outlinesById: Map<string, OutlineItem>
 ): number {
+  let applied = 0
+  const allOutlines = [...outlinesById.values()]
   for (const it of items) {
     const target = foreById.get(it.id)
     if (!target) continue
+    const planted =
+      (target.plantedOutlineId ? outlinesById.get(target.plantedOutlineId) : undefined) ??
+      resolveChapterRefToOutline(target.plantedChapter, allOutlines)
+    if (planted) {
+      const later =
+        planted.volume !== outline.volume
+          ? outline.volume > planted.volume
+          : outline.chapterNo > planted.chapterNo
+      if (!later) continue
+    }
     store.saveForeshadow({
       id: it.id,
       projectId,
@@ -343,8 +357,9 @@ function applyPlannedResolve(
       plannedResolveOutlineId: outline.id,
       priority: FORE_PRIORITIES.find((x) => x === it.priority)
     })
+    applied++
   }
-  return items.length
+  return applied
 }
 
 export function applyOutlineResult(
@@ -361,9 +376,11 @@ export function applyOutlineResult(
   const foreById = new Map(store.listForeshadows(p.projectId).map((f) => [f.id, f]))
   const plannedFores = new Set<string>()
   const existing = new Map<string, OutlineItem | null>()
+  const outlinesById = new Map<string, OutlineItem>()
   for (const o of store.listOutlines(p.projectId)) {
     const key = `${o.volume}:${o.chapterNo}`
     if (!existing.has(key)) existing.set(key, o)
+    outlinesById.set(o.id, o)
   }
   for (const item of arr) {
     const r = item as Record<string, unknown>
@@ -405,11 +422,12 @@ export function applyOutlineResult(
           status: hit.status,
           ...meta
         })
-        forePlans += applyPlannedResolve(planFores, saved, p.projectId, foreById)
+        forePlans += applyPlannedResolve(planFores, saved, p.projectId, foreById, outlinesById)
         updated++
       } else {
         // 跳过落库也要应用伏笔计划（与旧行为对齐）；hit 为 null 表示同批次键重复，计划已随首个条目应用
-        if (hit) forePlans += applyPlannedResolve(planFores, hit, p.projectId, foreById)
+        if (hit)
+          forePlans += applyPlannedResolve(planFores, hit, p.projectId, foreById, outlinesById)
         skipped++
       }
       continue
@@ -423,7 +441,7 @@ export function applyOutlineResult(
       status: 'draft',
       ...meta
     })
-    forePlans += applyPlannedResolve(planFores, saved, p.projectId, foreById)
+    forePlans += applyPlannedResolve(planFores, saved, p.projectId, foreById, outlinesById)
     existing.set(key, null)
     created++
   }
