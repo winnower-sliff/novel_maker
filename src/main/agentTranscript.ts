@@ -162,18 +162,21 @@ export function rebuildMessages(sessionId: string): ChatMessage[] {
   return turnsToMessages(eventsToTurns(loadEvents(sessionId)))
 }
 
-/** 旧客户端 sessionSave / JSON 迁移共用：把历史 turns 转成事件序列 */
-export function turnsToEvents(turns: AgentSession['turns']): AgentTranscriptInput[] {
-  const out: AgentTranscriptInput[] = []
+/** 旧客户端 sessionSave / JSON 迁移共用：把历史 turns 转成事件序列（ts 沿用原 turn 时间线） */
+export function turnsToEvents(
+  turns: AgentSession['turns']
+): Array<AgentTranscriptInput & { ts?: number }> {
+  const out: Array<AgentTranscriptInput & { ts?: number }> = []
   for (const t of turns) {
     if (t.role === 'user') {
-      out.push({ kind: 'user', text: t.text })
+      out.push({ kind: 'user', text: t.text, ts: t.ts })
       continue
     }
-    if (t.text.trim()) out.push({ kind: 'assistant', text: t.text })
+    if (t.text.trim()) out.push({ kind: 'assistant', text: t.text, ts: t.ts })
     for (const call of t.toolCalls) {
       out.push({
         kind: 'tool_call',
+        ts: t.ts,
         call: {
           id: call.id,
           name: call.name,
@@ -185,6 +188,7 @@ export function turnsToEvents(turns: AgentSession['turns']): AgentTranscriptInpu
       if (call.state === 'denied') {
         out.push({
           kind: 'tool_result',
+          ts: t.ts,
           id: call.id,
           ok: false,
           result: call.result ?? '用户拒绝了该操作',
@@ -196,9 +200,15 @@ export function turnsToEvents(turns: AgentSession['turns']): AgentTranscriptInpu
         call.result === undefined
       ) {
         // 中断残留：无结果的在途卡落为中断终态
-        out.push({ kind: 'tool_result', id: call.id, ok: false, result: '（已中断）' })
+        out.push({ kind: 'tool_result', ts: t.ts, id: call.id, ok: false, result: '（已中断）' })
       } else {
-        out.push({ kind: 'tool_result', id: call.id, ok: call.state === 'ok', result: call.result })
+        out.push({
+          kind: 'tool_result',
+          ts: t.ts,
+          id: call.id,
+          ok: call.state === 'ok',
+          result: call.result
+        })
       }
     }
   }
@@ -233,7 +243,7 @@ export function upsertLegacySession(session: AgentSession): void {
   if (session.turns.length > 0) importTurns(session.id, session.turns)
 }
 
-function importTurns(sessionId: string, turns: AgentSession['turns']): void {
+function importTurns(sessionId: string, turns: AgentSession['turns']): boolean {
   try {
     const db = getDb()
     const events = turnsToEvents(turns)
@@ -244,11 +254,12 @@ function importTurns(sessionId: string, turns: AgentSession['turns']): void {
     )
     for (const ev of events) {
       seq++
-      const { kind, ...payload } = ev
-      ins.run(sessionId, seq, Date.now(), kind, JSON.stringify(payload))
+      const { kind, ts: _ts, ...payload } = ev
+      ins.run(sessionId, seq, ev.ts ?? Date.now(), kind, JSON.stringify(payload))
     }
     db.prepare('UPDATE agent_sessions SET updated_at = ? WHERE id = ?').run(Date.now(), sessionId)
     db.exec('COMMIT')
+    return true
   } catch (e) {
     try {
       getDb().exec('ROLLBACK')
@@ -256,6 +267,7 @@ function importTurns(sessionId: string, turns: AgentSession['turns']): void {
       /* 事务本就未开 */
     }
     console.warn('[agentTranscript] importTurns failed:', e)
+    return false
   }
 }
 
@@ -285,9 +297,21 @@ export function migrateAgentSessionsJson(): void {
       'INSERT INTO agent_sessions (id, project_id, title, created_at, updated_at) VALUES (?,?,?,?,?)'
     )
     let imported = 0
+    let failed = 0
     for (const s of sessions) {
       if (!s?.id || !s.projectId || !projectIds.has(s.projectId)) continue
-      if (existsStmt.get(s.id)) continue
+      if (existsStmt.get(s.id)) {
+        // 幂等：已有事件视为完整迁移；行在而事件空（上次导入中断）→ 重导 turns
+        if (eventCount(s.id) > 0) continue
+        if (Array.isArray(s.turns) && s.turns.length > 0) {
+          if (!importTurns(s.id, s.turns)) {
+            failed++
+            continue
+          }
+          imported++
+        }
+        continue
+      }
       ins.run(
         s.id,
         s.projectId,
@@ -295,8 +319,18 @@ export function migrateAgentSessionsJson(): void {
         s.createdAt || Date.now(),
         s.updatedAt || Date.now()
       )
-      if (Array.isArray(s.turns) && s.turns.length > 0) importTurns(s.id, s.turns)
+      if (Array.isArray(s.turns) && s.turns.length > 0 && !importTurns(s.id, s.turns)) {
+        failed++
+        continue
+      }
       imported++
+    }
+    if (failed > 0) {
+      // 保留 json：下次启动对「行在事件空」的会话重导 turns（自愈）
+      console.warn(
+        `[agentTranscript] migrate: ${failed} sessions failed to import turns, json kept for retry`
+      )
+      return
     }
     renameToBak(file)
     console.log(`[agentTranscript] migrated ${imported} sessions from agent_sessions.json`)

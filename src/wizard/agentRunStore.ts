@@ -19,6 +19,7 @@ import { create } from 'zustand'
 import { setAgentUi } from '../renderer/src/lib/agentUiStore'
 import { qk } from '../renderer/src/lib/queries'
 import { queryClient } from '../renderer/src/lib/queryClient'
+import { useAgentTabsStore } from './agentTabsStore'
 import { ensureBridge } from './ensureBridge'
 import { pushToast } from './toastStore'
 
@@ -296,6 +297,7 @@ function fetchEvents(sid: string): void {
     .sessionEvents({ sessionId: sid, afterSeq })
     .then((res) => {
       fetchInFlight.delete(sid)
+      let terminal = false
       applyBuf(sid, (b) => {
         // 广播与补拉按 seq 去重合并（竞态安全：既不丢广播也不丢补拉）
         const bySeq = new Map(b.events.map((e) => [e.seq, e]))
@@ -312,8 +314,10 @@ function fetchEvents(sid: string): void {
           last &&
           (last.kind === 'done' || last.kind === 'run_error')
         ) {
+          terminal = true
           b.running = false
           b.requestId = null
+          b.liveDelta = ''
           if (last.kind === 'done') {
             b.doneInfo = { ...last.summary }
             b.error = ''
@@ -324,11 +328,29 @@ function fetchEvents(sid: string): void {
           }
         }
       })
+      if (terminal && pendingDeltaSid === sid) {
+        pendingDelta = ''
+        pendingDeltaSid = null
+      }
     })
     .catch((err: unknown) => {
       fetchInFlight.delete(sid)
+      const msg = (err as Error).message || '事件同步失败'
+      // 他端已删除的会话：清缓冲与 tab，active 被清则回草稿（不留幽灵空会话）
+      if (msg.includes('会话不存在')) {
+        const st = useAgentRunStore.getState()
+        const next = { ...st.sessions }
+        delete next[sid]
+        useAgentRunStore.setState({ sessions: next, runningIds: runningIdsOf(next) })
+        if (st.projectId) {
+          useAgentTabsStore.getState().dropSessionTabs(st.projectId, sid)
+        }
+        void queryClient.invalidateQueries({ queryKey: ['agentSessions'] })
+        if (st.activeId === sid) switchSession(null)
+        return
+      }
       applyBuf(sid, (b) => {
-        b.loadFail = (err as Error).message || '事件同步失败'
+        b.loadFail = msg
       })
     })
 }
@@ -446,7 +468,6 @@ async function reconcileFailedStart(
         })
         if (useAgentRunStore.getState().activeId === null) switchSession(sid)
         else fetchEvents(sid)
-        setAgentUi({ running: true, confirming: false })
         return
       }
     } catch {
@@ -467,7 +488,13 @@ export function stopRun(): void {
     return
   }
   const sid = s.activeId
-  if (!sid) return
+  if (!sid) {
+    // 草稿起步 invoke 在途：放弃本地等待（服务端若已实际启动，快照对账会重新接管为外来运行）
+    pendingStarts.delete(null)
+    setAgentUi({ running: false, confirming: false, ended: { at: Date.now(), ok: false } })
+    refreshView()
+    return
+  }
   // requestId 未知（invoke 悬挂/刚接管未完成）：先对账再杀
   void window.api.runtime
     .snapshot()
@@ -598,6 +625,10 @@ export function applyAgentDone(id: string, payload: AgentDonePayload): boolean {
   const sid = ridIndex.get(id)
   if (!sid) return false
   const isBg = useAgentRunStore.getState().activeId !== sid
+  if (pendingDeltaSid === sid) {
+    pendingDelta = ''
+    pendingDeltaSid = null
+  }
   applyBuf(sid, (b) => {
     b.running = false
     b.requestId = null
@@ -605,6 +636,7 @@ export function applyAgentDone(id: string, payload: AgentDonePayload): boolean {
     b.error = ''
     b.errorHint = null
     b.interrupted = false
+    b.liveDelta = ''
   })
   fetchEvents(sid)
   if (isBg) pushToast('success', '后台智能体任务已完成')
@@ -615,12 +647,17 @@ export function applyAgentError(id: string, message: string, hint?: LlmErrorHint
   const sid = ridIndex.get(id)
   if (!sid) return false
   const isBg = useAgentRunStore.getState().activeId !== sid
+  if (pendingDeltaSid === sid) {
+    pendingDelta = ''
+    pendingDeltaSid = null
+  }
   applyBuf(sid, (b) => {
     b.running = false
     b.requestId = null
     b.error = message
     b.errorHint = hint ?? classifyLlmError(message)
     b.interrupted = false
+    b.liveDelta = ''
   })
   fetchEvents(sid)
   if (isBg) {
@@ -763,6 +800,7 @@ export function ensureAgentRuntime(): void {
             b.error = ''
             b.errorHint = null
             b.interrupted = false
+            b.liveDelta = ''
             break
           case 'run_error':
             b.running = false
@@ -770,11 +808,20 @@ export function ensureAgentRuntime(): void {
             b.error = ev.message
             b.errorHint = classifyLlmError(ev.message)
             b.interrupted = false
+            b.liveDelta = ''
             break
           default:
             break
         }
       })
+      // 权威事件已含全文/终态：丢弃同会话未 flush 的流式残片，防投影尾部重复
+      if (
+        (ev.kind === 'assistant' || ev.kind === 'done' || ev.kind === 'run_error') &&
+        pendingDeltaSid === sid
+      ) {
+        pendingDelta = ''
+        pendingDeltaSid = null
+      }
       if (ev.kind === 'user') {
         if (pendingStarts.get(sid) === ev.text) pendingStarts.delete(sid)
         if (pendingStarts.get(null) === ev.text) pendingStarts.delete(null)

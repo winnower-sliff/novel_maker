@@ -6,6 +6,7 @@ import {
 } from '../agent/instructions'
 import {
   deleteSession,
+  getSession,
   lastSeqOf,
   listSessions,
   loadEvents,
@@ -33,11 +34,14 @@ export const agentHandlers = {
     deleteSession(id)
   },
   'agent:sessionRename': (_ctx, [id, title]) => updateTitle(id, title),
-  'agent:sessionEvents': (_ctx, [{ sessionId, afterSeq }]) => ({
-    sessionId,
-    events: loadEvents(sessionId, afterSeq ?? 0),
-    lastSeq: lastSeqOf(sessionId)
-  }),
+  'agent:sessionEvents': (_ctx, [{ sessionId, afterSeq }]) => {
+    if (!getSession(sessionId)) throw new Error('会话不存在或已删除')
+    return {
+      sessionId,
+      events: loadEvents(sessionId, afterSeq ?? 0),
+      lastSeq: lastSeqOf(sessionId)
+    }
+  },
   'agent:sessionTitle': (_ctx, [userText, assistantText]) =>
     genSessionTitle(userText, assistantText),
   'agent:instructionsGet': (_ctx, [projectId]) => getInstructionsView(projectId),

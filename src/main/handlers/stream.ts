@@ -272,8 +272,7 @@ export function startAgentRun(
       if (activeSessionRuns.get(sessionId) === requestId) activeSessionRuns.delete(sessionId)
     }
     recordDone(requestId, payload)
-    const { toolResults: _toolResults, ...summary } = payload
-    persist({ kind: 'done', summary })
+    persist({ kind: 'done', summary: payload })
     if (!sink.isClosed()) sink.send('agent:done', requestId, payload)
     // 首轮收尾后自动起名（失败静默，保留启发式标题）
     if (isFirstTurn) {

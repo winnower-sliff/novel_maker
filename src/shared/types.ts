@@ -592,7 +592,7 @@ export interface AgentToolResultStatus {
 }
 
 /** done 事件随附的 run 收尾摘要（transcript 落库用，不含工具流水全量） */
-export type AgentDoneSummary = Omit<AgentDonePayload, 'toolResults'>
+export type AgentDoneSummary = AgentDonePayload
 
 /**
  * 会话 transcript 事件（服务端事实源，按 seq 单调递增落库）：
