@@ -4,6 +4,7 @@ import { useBackHandler } from '@mobile/lib/backHandler'
 import { useTocStore } from '@mobile/lib/tocStore'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { useReaderStore } from '@mobile/lib/readerStore'
+import { useReaderChromeStore } from '@mobile/lib/readerChromeStore'
 import {
   getCachedBriefs,
   getCachedChapter,
@@ -59,7 +60,8 @@ function ReaderFlow({
   onExit: () => void
 }) {
   const [flow, setFlow] = useState({ start: startIdx, end: startIdx })
-  const [chrome, setChrome] = useState(true)
+  const chrome = useReaderChromeStore((s) => s.visible)
+  const setChrome = useReaderChromeStore((s) => s.setVisible)
   const [autoOn, setAutoOn] = useState(false)
   const [topIdx, setTopIdx] = useState(startIdx)
   const [sheetOpen, setSheetOpen] = useState(false)
@@ -266,7 +268,7 @@ function ReaderFlow({
     const el = scrollRef.current
     if (!el) return
     const y = e.clientY - el.getBoundingClientRect().top
-    if (y > el.clientHeight * 0.3 && y < el.clientHeight * 0.7) setChrome((v) => !v)
+    if (y > el.clientHeight * 0.3 && y < el.clientHeight * 0.7) setChrome(!chrome)
   }
 
   const chromeWrap = (inner: ReactNode): ReactNode => (
@@ -443,6 +445,19 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
     const saved = useSettingsStore.getState().readPos[projectId]
     if (saved && written.some((b) => b.id === saved)) setOpenId(saved)
   }, [written, projectId])
+
+  // 正文流挂载期间启用 Book 壳层联动收展；退出复位，防目录态/换 tab 残留收起态。
+  // 依赖用「是否正文态」布尔而非 openId：换章重挂载 ReaderFlow 不经过 active=false 中间态
+  const inFlow = openId !== null
+  useEffect(() => {
+    if (!inFlow) return
+    useReaderChromeStore.getState().setActive(true)
+    return () => {
+      const st = useReaderChromeStore.getState()
+      st.setActive(false)
+      st.setVisible(true)
+    }
+  }, [inFlow])
 
   // 目录定位：每次回到目录，自动展开上次阅读章节所在段、滚动到该章并短暂高亮
   useEffect(() => {

@@ -12,6 +12,8 @@ import { useEffect, useMemo, useState } from 'react'
 import type { ChapterBrief, Project } from '@shared/types'
 import { prefetchBook, putBriefs, getCachedBriefs } from '@mobile/lib/readerCache'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
+import { useReaderChromeStore } from '@mobile/lib/readerChromeStore'
+import type { ReactNode } from 'react'
 
 type BookTab = 'read' | 'write' | 'agent'
 
@@ -65,6 +67,21 @@ export default function Book({
 }) {
   const [tab, setTab] = useState<BookTab>(() => loadTab(projectId ?? 'new'))
   const [sub, setSub] = useState<SubPage>(() => loadSub(projectId ?? 'new'))
+  // 阅读正文态聚焦模式：书名行/tab 行与阅读页上下栏三层联动同收同展
+  const chromeActive = useReaderChromeStore((s) => s.active)
+  const chromeVisible = useReaderChromeStore((s) => s.visible)
+  const chromeCollapsed = chromeActive && !chromeVisible
+
+  /** 壳层收展动画 wrapper（grid-rows 0fr/1fr，与 Read.tsx chromeWrap 同款） */
+  const collapseWrap = (inner: ReactNode): ReactNode => (
+    <div
+      className={`grid transition-[grid-template-rows] duration-200 ease-out ${
+        chromeCollapsed ? 'grid-rows-[0fr]' : 'grid-rows-[1fr]'
+      }`}
+    >
+      <div className="min-h-0 overflow-hidden">{inner}</div>
+    </div>
+  )
 
   // 换书时组件不 remount（App 无 key），渲染期检测 pid 变化同步重读位置（官方 derive-state 模式）
   const [prevPid, setPrevPid] = useState<string | null>(projectId)
@@ -183,6 +200,7 @@ export default function Book({
 
   return (
     <div className="flex h-full flex-col">
+      {collapseWrap(
       <div className="flex items-center gap-2 border-b border-zinc-800 bg-zinc-950/95 px-2">
         <button
           type="button"
@@ -216,6 +234,8 @@ export default function Book({
           </button>
         </div>
       </div>
+      )}
+      {collapseWrap(
       <div className="flex border-b border-zinc-800 bg-zinc-950/95">
         {TABS.map((t) => (
           <button
@@ -232,6 +252,7 @@ export default function Book({
           </button>
         ))}
       </div>
+      )}
       {tab === 'write' && (
         <div className="flex border-b border-zinc-800 bg-zinc-950/60">
           {SUBS.map((s) => (
