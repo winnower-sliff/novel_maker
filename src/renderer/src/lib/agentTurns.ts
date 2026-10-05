@@ -28,7 +28,16 @@ export const TOOL_LABELS: Record<string, string> = {
   worldbuild_type: '世界观·类型管理',
   set_worldbuild_category: '世界观·改类型',
   grep_project: '全项目·查找',
-  compact_context: '上下文·压缩'
+  compact_context: '上下文·压缩',
+  get_outline_plan: '大纲·卷创意读取',
+  save_outline_plan: '大纲·卷创意保存',
+  get_chapter_tail: '正文·结尾回读',
+  list_summaries: '摘要·列表',
+  search_project: '语义·搜索',
+  get_book_digest: '全书·概览',
+  update_character_state: '人物·状态更新',
+  refresh_volume_summary: '卷摘要·重建',
+  reorder_worldbuild_type: '世界观·类型排序'
 }
 
 function str(input: Record<string, unknown>, key: string): string {
@@ -132,6 +141,32 @@ export function toolSummary(call: AgentToolCall): string {
       const s2 = str(i, 'summary')
       return `压缩对话历史（摘要 ${s2.length} 字）`
     }
+    case 'get_outline_plan': {
+      const v = num(i, 'volume')
+      return `读取卷创意参数${v ? `（第${v}卷）` : ''}`
+    }
+    case 'save_outline_plan': {
+      const v = num(i, 'volume')
+      return `保存卷创意参数${v ? `（第${v}卷）` : ''}`
+    }
+    case 'get_chapter_tail':
+      return `回读章节结尾（${num(i, 'chars') ?? 800} 字）`
+    case 'list_summaries': {
+      const v = num(i, 'volume')
+      return `查看章节摘要${v ? `（第${v}卷）` : ''}`
+    }
+    case 'search_project': {
+      const q = str(i, 'query')
+      return `语义搜索：${q.slice(0, 30)}${q.length > 30 ? '…' : ''}`
+    }
+    case 'get_book_digest':
+      return '读取全书概览'
+    case 'update_character_state':
+      return `更新人物状态：${str(i, 'name') || `id 前 8 位 ${str(i, 'id').slice(0, 8)}`}`
+    case 'refresh_volume_summary':
+      return `重建第 ${str(i, 'volume') || '?'} 卷卷摘要`
+    case 'reorder_worldbuild_type':
+      return `类型排序：${str(i, 'name')}`
     default:
       return call.name
   }
