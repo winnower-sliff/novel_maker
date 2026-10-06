@@ -1,4 +1,5 @@
 import { Button, Empty, Input, Label, Spinner, Textarea } from '@mobile/components/ui'
+import { Markdown } from '@mobile/components/Markdown'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { DetailShell, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
@@ -8,6 +9,7 @@ import { NumberField } from '@wizard/widgets'
 import { loadProjectPlan, saveProjectPlan } from '@wizard/wizardPlan'
 import { withSnapshot } from '@mobile/lib/querySnapshot'
 import { qk } from '@renderer/lib/queries'
+import { splitTags } from '@shared/tags'
 import type { WorldbuildEntry } from '@shared/types'
 
 /** 剥掉 markdown/[[链接]] 语法后的内容摘要（列表行预览用） */
@@ -345,6 +347,20 @@ export default function WorldSub({ projectId }: { projectId: string }) {
   )
 }
 
+interface WorldFields {
+  title: string
+  tags: string
+  content: string
+  relation: string
+}
+
+const toWorldFields = (w: WorldbuildEntry): WorldFields => ({
+  title: w.title,
+  tags: w.tags,
+  content: w.content,
+  relation: w.relation
+})
+
 function WorldEditor({
   projectId,
   entry,
@@ -356,97 +372,165 @@ function WorldEditor({
   onBack: () => void
   onSaved: () => void
 }) {
-  const [title, setTitle] = useState(entry.title)
-  const [tags, setTags] = useState(entry.tags)
-  const [content, setContent] = useState(entry.content)
-  const [relation, setRelation] = useState(entry.relation)
+  const [mode, setMode] = useState<'view' | 'edit'>('view')
+  const [fields, setFields] = useState<WorldFields>(() => toWorldFields(entry))
+  const baseRef = useRef<WorldFields>(toWorldFields(entry))
   const [saving, setSaving] = useState(false)
-  const [deleting, setDeleting] = useState(false)
   const dirty =
-    title !== entry.title ||
-    tags !== entry.tags ||
-    content !== entry.content ||
-    relation !== entry.relation
+    fields.title !== baseRef.current.title ||
+    fields.tags !== baseRef.current.tags ||
+    fields.content !== baseRef.current.content ||
+    fields.relation !== baseRef.current.relation
+  const tags = splitTags(fields.tags)
+  const patch = (p: Partial<WorldFields>): void => setFields((f) => ({ ...f, ...p }))
 
   const save = async (): Promise<void> => {
-    if (saving || deleting) return
+    if (!fields.title.trim() || saving) return
     setSaving(true)
     try {
       await window.api.novel.worldbuildSave({
         id: entry.id,
         projectId,
         category: entry.category,
-        title,
-        tags,
-        content,
-        relation
+        title: fields.title,
+        tags: fields.tags,
+        content: fields.content,
+        relation: fields.relation
       })
       onSaved()
-      onBack()
+      baseRef.current = { ...fields }
+      setMode('view')
     } finally {
       setSaving(false)
     }
   }
 
-  const del = async (): Promise<void> => {
-    if (deleting || saving) return
-    if (!window.confirm(`删除「${entry.title}」？此操作不可恢复`)) return
-    setDeleting(true)
-    try {
-      await window.api.novel.worldbuildDelete(entry.id)
-      onSaved()
-      onBack()
-    } finally {
-      setDeleting(false)
-    }
+  const cancelEdit = (): void => {
+    if (dirty && !window.confirm('放弃未保存的修改？')) return
+    setFields({ ...baseRef.current })
+    setMode('view')
   }
 
+  const leave = (): void => {
+    if (mode === 'edit') {
+      cancelEdit()
+      return
+    }
+    onBack()
+  }
+
+  const del = async (): Promise<void> => {
+    if (saving) return
+    if (!window.confirm(`删除「${fields.title || entry.title}」？此操作不可恢复`)) return
+    await window.api.novel.worldbuildDelete(entry.id)
+    onSaved()
+    onBack()
+  }
+
+  const bar =
+    mode === 'view' ? (
+      <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950/95 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <span className="text-xs text-zinc-600">只读浏览</span>
+        <Button className="ml-auto px-5 py-1.5 text-xs" onClick={() => setMode('edit')}>
+          编辑
+        </Button>
+      </div>
+    ) : (
+      <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950/95 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
+        <Button
+          variant="ghost"
+          className="px-2 py-1.5 text-xs text-red-400/90"
+          disabled={saving}
+          onClick={() => void del()}
+        >
+          删除
+        </Button>
+        <span className="text-xs text-zinc-600">{dirty ? '有未保存修改' : '已保存'}</span>
+        <Button
+          variant="ghost"
+          className="ml-auto px-3.5 py-1.5 text-xs"
+          disabled={saving}
+          onClick={cancelEdit}
+        >
+          取消
+        </Button>
+        <Button
+          className="px-3.5 py-1.5 text-xs"
+          disabled={!dirty || saving || !fields.title.trim()}
+          onClick={() => void save()}
+        >
+          {saving ? <Spinner className="h-3.5 w-3.5" /> : '保存'}
+        </Button>
+      </div>
+    )
+
   return (
-    <DetailShell
-      title={entry.title}
-      onBack={onBack}
-      dirty={dirty}
-      bar={
-        <div className="flex items-center gap-2 border-t border-zinc-800 bg-zinc-950/95 px-3 py-2 pb-[max(0.5rem,env(safe-area-inset-bottom))]">
-          <Button
-            variant="ghost"
-            className="px-2 py-1.5 text-xs text-red-400/90"
-            disabled={deleting || saving}
-            onClick={() => void del()}
-          >
-            {deleting ? <Spinner className="h-3.5 w-3.5" /> : '删除'}
-          </Button>
-          <span className="text-xs text-zinc-600">{dirty ? '有未保存修改' : '已保存'}</span>
-          <Button
-            className="ml-auto px-3.5 py-1.5 text-xs"
-            disabled={!dirty || saving || deleting}
-            onClick={() => void save()}
-          >
-            {saving ? <Spinner className="h-3.5 w-3.5" /> : '保存'}
-          </Button>
-        </div>
-      }
-    >
-      <Label>
-        标题
-        <Input value={title} onChange={(e) => setTitle(e.target.value)} />
-      </Label>
-      <Label>
-        标签
-        <Input value={tags} onChange={(e) => setTags(e.target.value)} />
-      </Label>
-      <Label>
-        人物/剧情关联（与主要人物或剧情线的关系，可含 [[条目名]] 链接）
-        <Input
-          value={relation}
-          onChange={(e) => setRelation(e.target.value)}
-          placeholder="如：[[丹塔]] 是主角曾依附的势力"
-        />
-      </Label>
-      <Label>
-        内容
-        <Textarea rows={14} value={content} onChange={(e) => setContent(e.target.value)} />
-      </Label>
+    <DetailShell title={fields.title || entry.title} onBack={leave} dirty={false} bar={bar}>
+      {mode === 'view' ? (
+        <>
+          {(entry.category || tags.length > 0) && (
+            <div className="flex flex-wrap items-center gap-1.5">
+              {entry.category && (
+                <span className="rounded-full bg-amber-600/20 px-2.5 py-0.5 text-xs text-amber-300">
+                  {entry.category}
+                </span>
+              )}
+              {tags.map((t) => (
+                <span key={t} className="rounded-full bg-zinc-800 px-2.5 py-0.5 text-xs text-zinc-400">
+                  {t}
+                </span>
+              ))}
+            </div>
+          )}
+          {fields.content.trim() ? (
+            <section>
+              <Label>内容</Label>
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+                <Markdown text={fields.content} className="text-sm leading-6 text-zinc-200" />
+              </div>
+            </section>
+          ) : (
+            <div className="text-xs text-zinc-600">尚无内容，点右下角「编辑」补充</div>
+          )}
+          {fields.relation.trim() ? (
+            <section>
+              <Label>人物/剧情关联</Label>
+              <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
+                <Markdown text={fields.relation} className="text-sm leading-6 text-zinc-300" />
+              </div>
+            </section>
+          ) : (
+            <div className="text-xs text-zinc-600">暂无关联</div>
+          )}
+        </>
+      ) : (
+        <>
+          <Label>
+            标题
+            <Input value={fields.title} onChange={(e) => patch({ title: e.target.value })} />
+          </Label>
+          <Label>
+            标签
+            <Input value={fields.tags} onChange={(e) => patch({ tags: e.target.value })} />
+          </Label>
+          <Label>
+            人物/剧情关联（与主要人物或剧情线的关系，可含 [[条目名]] 链接）
+            <Input
+              value={fields.relation}
+              onChange={(e) => patch({ relation: e.target.value })}
+              placeholder="如：[[丹塔]] 是主角曾依附的势力"
+            />
+          </Label>
+          <Label>
+            内容
+            <Textarea
+              rows={14}
+              value={fields.content}
+              onChange={(e) => patch({ content: e.target.value })}
+            />
+          </Label>
+        </>
+      )}
     </DetailShell>
   )
 }
