@@ -37,7 +37,6 @@ interface ChapterDoneData {
 }
 
 interface InternalBatch extends BatchSnapshot {
-  stopFlag: boolean
   currentRid: string | null
   opts: {
     wordTarget?: number
@@ -54,8 +53,18 @@ const batches = new Map<string, InternalBatch>()
 function snapshotOf(projectId: string): BatchSnapshot | null {
   const b = batches.get(projectId)
   if (!b) return null
-  const { projectId: pid, running, paused, done, total, currentNo, log, resumeIds } = b
-  return { projectId: pid, running, paused, done, total, currentNo, log: [...log], resumeIds }
+  const { projectId: pid, running, paused, stopped, done, total, currentNo, log, resumeIds } = b
+  return {
+    projectId: pid,
+    running,
+    paused,
+    stopped,
+    done,
+    total,
+    currentNo,
+    log: [...log],
+    resumeIds
+  }
 }
 
 /** 全部项目批量快照（runtime:snapshot 用） */
@@ -82,6 +91,28 @@ function waitStream(
   return { rid, done }
 }
 
+/** 登记在途 rid；若停止已发生在登记前（竞态窗口），立即补杀，保证停止后没有存活的流 */
+function trackRid(b: InternalBatch, rid: string): void {
+  b.currentRid = rid
+  if (b.stopped) abortLlmRequest(rid)
+}
+
+/** 等待单次流完成并登记 rid（返修/摘要/对齐/卷摘要等阶段），使停止能 abort 在途请求 */
+async function waitTracked(
+  b: InternalBatch,
+  sink: EventSink,
+  params: Parameters<typeof startStream>[1],
+  opts: Parameters<typeof waitStream>[2]
+): Promise<DonePayload> {
+  const { rid, done } = waitStream(sink, params, opts)
+  trackRid(b, rid)
+  try {
+    return await done
+  } finally {
+    b.currentRid = null
+  }
+}
+
 /** 单章生成（与 pipeline 'chapter' 分流一致：候选/长章/普通） */
 function runChapterStep(
   sink: EventSink,
@@ -98,22 +129,30 @@ function runChapterStep(
       else resolve(payload as DonePayload)
     }
     if (candidates && candidates >= 2) {
-      b.currentRid = startChapterCandidatesStream(
-        sink,
-        outline.projectId,
-        outlineId,
-        wordTarget ?? 2700,
-        candidates,
-        settle
+      trackRid(
+        b,
+        startChapterCandidatesStream(
+          sink,
+          outline.projectId,
+          outlineId,
+          wordTarget ?? 2700,
+          candidates,
+          settle
+        )
       )
       return
     }
     if (wordTarget && wordTarget >= LONG_CHAPTER_THRESHOLD) {
-      b.currentRid = startLongChapterStream(sink, outline.projectId, outlineId, wordTarget, settle)
+      trackRid(b, startLongChapterStream(sink, outline.projectId, outlineId, wordTarget, settle))
       return
     }
     buildChapterRequest(outline.projectId, outlineId, wordTarget)
       .then((built) => {
+        // 上下文构建窗口内已点停止：不再启动流（否则整章会照常生成并落库）
+        if (b.stopped) {
+          reject(new Error('已停止'))
+          return
+        }
         const { rid, done } = waitStream(sink, built.params, {
           action: 'chapter',
           afterDone: (r) => {
@@ -134,7 +173,7 @@ function runChapterStep(
             }
           }
         })
-        b.currentRid = rid
+        trackRid(b, rid)
         done.then(resolve, reject)
       })
       .catch(reject)
@@ -151,7 +190,10 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
   }
 
   for (let i = 0; i < ids.length; i++) {
-    if (b.stopFlag) break
+    if (b.stopped) {
+      log('已停止')
+      break
+    }
     const brief = store.getOutline(ids[i])
     if (!brief) continue
     b.currentNo = brief.chapterNo
@@ -163,6 +205,12 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
       log(
         `第${brief.chapterNo}章 初稿 ${d?.wordCount ?? 0} 字${d?.longMode ? `（长章 ${d.segments} 段）` : ''}`
       )
+
+      // 停止发生在写完瞬间（本章已落库）：不再进入返修/摘要/状态流转
+      if (b.stopped) {
+        log('已停止')
+        return
+      }
 
       // 硬闸判定 + 自动返修（一次）
       let passed = d?.lint?.pass !== false
@@ -176,7 +224,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
         try {
           const outline = store.getOutline(ids[i])
           if (!outline) throw new Error('章节不存在')
-          await waitStream(sink, buildPolishRequest(outline.projectId, ids[i], focus), {
+          await waitTracked(b, sink, buildPolishRequest(outline.projectId, ids[i], focus), {
             action: 'polish',
             afterDone: (r) => {
               const chapter = store.saveChapter({
@@ -187,7 +235,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
               })
               return { wordCount: chapter.wordCount, saved: true }
             }
-          }).done
+          })
           const re = lintChapterReport(ids[i], store.getChapterByOutline(ids[i])?.content ?? '')
           passed = re.pass
           log(
@@ -196,18 +244,32 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
               : `第${brief.chapterNo}章 返修仍未过 → 需人工`
           )
         } catch (err) {
+          if (b.stopped) {
+            log(`第${brief.chapterNo}章 已停止`)
+            return
+          }
           log(`第${brief.chapterNo}章 返修失败：${(err as Error).message}`)
         }
       }
 
+      // 返修阶段被停止（或停止与完成竞态）：本章不再进入摘要
+      if (b.stopped) {
+        log(`第${brief.chapterNo}章 已停止`)
+        return
+      }
+
       try {
         if (!store.getChapterByOutline(ids[i])) throw new Error('该章节还没有正文')
-        await waitStream(sink, buildSummaryRequest(brief.projectId, ids[i]), {
+        await waitTracked(b, sink, buildSummaryRequest(brief.projectId, ids[i]), {
           action: 'summary',
           afterDone: (r) => applySummaryResult(brief.projectId, ids[i], r.text)
-        }).done
+        })
         log(`第${brief.chapterNo}章 ${passed ? '✓ 完成' : '⚠ 已写入（需人工）'}`)
       } catch (err) {
+        if (b.stopped) {
+          log(`第${brief.chapterNo}章 已停止`)
+          return
+        }
         log(`第${brief.chapterNo}章 摘要失败：${(err as Error).message}`)
       }
       // 大纲状态自动流转：写完即标，不等手动定稿；章节行状态同步升级（徽章/导出以章节行为准）
@@ -242,7 +304,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
         return
       }
 
-      if (b.opts.pauseEach && i < ids.length - 1 && !b.stopFlag) {
+      if (b.opts.pauseEach && i < ids.length - 1 && !b.stopped) {
         b.resumeIds = ids.slice(i + 1)
         b.paused = true
         b.running = false
@@ -251,7 +313,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
       }
     } catch (err) {
       b.currentRid = null
-      if (b.stopFlag) {
+      if (b.stopped) {
         log(`第${brief.chapterNo}章 已停止`)
       } else {
         log(`第${brief.chapterNo}章 失败：${(err as Error).message}`)
@@ -263,13 +325,13 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
   }
 
   // 全部跑完（非中止/熔断）→ 附带自动对齐后续大纲
-  if (!b.stopFlag && results.length === ids.length) {
+  if (!b.stopped && results.length === ids.length) {
     log('自动对齐后续大纲…')
     try {
-      const payload = await waitStream(sink, buildAlignRequest(b.projectId), {
+      const payload = await waitTracked(b, sink, buildAlignRequest(b.projectId), {
         action: 'outlineAlign',
         afterDone: (r) => parseAlignResult(b.projectId, r.text)
-      }).done
+      })
       const d = payload.data as {
         parsed?: boolean
         revisions?: {
@@ -285,6 +347,11 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
       }
       if (d?.error) throw new Error(d.error)
       if (!d?.parsed || !d.revisions) throw new Error('对齐结果解析失败')
+      // 停止发生在解析完成后：本轮修订不落库
+      if (b.stopped) {
+        log('已停止')
+        return
+      }
       for (const r of d.revisions) {
         store.saveOutline({
           id: r.outlineId,
@@ -303,22 +370,22 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
           : '自动对齐：后续大纲与已写剧情一致，无需修订'
       )
     } catch (err) {
-      log(`自动对齐失败：${(err as Error).message}`)
+      log(b.stopped ? '已停止' : `自动对齐失败：${(err as Error).message}`)
     }
   }
 
   // 全卷重写语义：重新生成该卷卷摘要（旧摘要已在启动时清除）
-  if (b.opts.regenVolumeSummary && b.opts.volume && !b.stopFlag && !b.paused) {
+  if (b.opts.regenVolumeSummary && b.opts.volume && !b.stopped && !b.paused) {
     const volume = b.opts.volume
     log(`重新生成第 ${volume} 卷摘要…`)
     try {
-      await waitStream(sink, buildVolumeSummaryRequest(b.projectId, volume), {
+      await waitTracked(b, sink, buildVolumeSummaryRequest(b.projectId, volume), {
         action: 'volumeSummary',
         afterDone: (r) => applyVolumeSummaryResult(b.projectId, volume, r.text)
-      }).done
+      })
       log(`第 ${volume} 卷摘要已更新`)
     } catch (err) {
-      log(`卷摘要生成失败：${(err as Error).message}`)
+      log(b.stopped ? '已停止' : `卷摘要生成失败：${(err as Error).message}`)
     }
   }
   b.running = false
@@ -363,7 +430,7 @@ export const writeHandlers = {
       currentNo: 0,
       log: [],
       resumeIds: null,
-      stopFlag: false,
+      stopped: false,
       currentRid: null,
       opts
     }
@@ -376,7 +443,9 @@ export const writeHandlers = {
   'write:batchStop': (ctx, [p]) => {
     const b = batches.get(p.projectId)
     if (!b) return null
-    b.stopFlag = true
+    // 非运行态（已完成/已暂停/已停止）：直接回快照让陈旧 UI 立即对账，不误标「已停止」
+    if (!b.running) return snapshotOf(p.projectId)
+    b.stopped = true
     b.resumeIds = null
     b.running = false
     b.paused = false

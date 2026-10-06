@@ -48,6 +48,7 @@ function AutoWritePanel({
   const [from, setFrom] = useState('')
   const [to, setTo] = useState('')
   const [startErr, setStartErr] = useState<string | null>(null)
+  const [stopErr, setStopErr] = useState<string | null>(null)
   const state = useWriteRunStore((s) =>
     s.batch && s.batch.projectId === projectId ? s.batch : null
   )
@@ -63,12 +64,13 @@ function AutoWritePanel({
 
   const stop = (): void => {
     // 返回快照直接落 store：不依赖 SSE 推送，界面立即与主进程对齐（响应丢失场景的自救路径）
+    setStopErr(null)
     void window.api.write
       .batchStop({ projectId })
       .then((snap) => {
         if (snap) useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
       })
-      .catch(() => {})
+      .catch((err: Error) => setStopErr(`停止失败：${err.message}`))
   }
 
   const start = (): void => {
@@ -78,6 +80,7 @@ function AutoWritePanel({
     if (iFrom < 0 || iTo < 0 || iFrom > iTo) return
     const ids = briefs.slice(iFrom, iTo + 1).map((b) => b.id)
     setStartErr(null)
+    setStopErr(null)
     // 编排在主进程：熄屏/切走后电脑端继续逐章写作。用返回快照立即切运行态，
     // 不依赖 write:batch 事件回推（手机端 SSE 断连时事件会丢，表单会卡住不动）
     void window.api.write
@@ -126,11 +129,23 @@ function AutoWritePanel({
           <div className="flex items-center gap-2 text-[11px] text-zinc-400">
             进度：{state.done}/{state.total}
             {state.running && state.currentNo > 0 ? ` · 第${state.currentNo}章进行中` : ''}
-            {/* 不 disable：store 里的 running 可能是「响应丢失」造成的假灰，点一下即与主进程对账（无害） */}
-            <Button variant="danger" className="ml-auto px-2 py-1 text-[11px]" onClick={stop}>
-              停止
-            </Button>
+            {!state.running
+              ? state.paused
+                ? ' · 已暂停'
+                : state.stopped
+                  ? ' · 已停止'
+                  : ' · 已完成'
+              : ''}
+            {/* running 才渲染停止：store 假灰时快照会让按钮消失；停止失败则保留按钮并提示错误 */}
+            {state.running && (
+              <Button variant="danger" className="ml-auto px-2 py-1 text-[11px]" onClick={stop}>
+                停止
+              </Button>
+            )}
           </div>
+          {stopErr && (
+            <div className="mt-1.5 text-[11px] leading-4 text-red-400">{stopErr}</div>
+          )}
           <div className="mt-1 h-1.5 overflow-hidden rounded-full bg-zinc-800">
             <div
               className="h-full rounded-full bg-amber-600 transition-all"

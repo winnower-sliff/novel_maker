@@ -58,6 +58,8 @@ export interface WriteBatchState {
   projectId: string
   running: boolean
   paused: boolean
+  /** 用户主动停止（区别于自然完成）：快照透传，UI 据此显示「已停止」 */
+  stopped: boolean
   done: number
   total: number
   currentNo: number

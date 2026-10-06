@@ -194,6 +194,8 @@ export interface BatchSnapshot {
   projectId: string
   running: boolean
   paused: boolean
+  /** 用户主动停止（区别于自然完成）：停止后不再执行后续阶段，UI 据此区分「已完成」 */
+  stopped: boolean
   done: number
   total: number
   currentNo: number

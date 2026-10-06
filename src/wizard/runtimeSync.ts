@@ -63,7 +63,11 @@ function applySnapshot(snap: RuntimeSnapshot): void {
       // 上次快照还在跑、这次才发现结束 → 大概率是后台期间完成的，补发系统通知
       fire(
         '自动写作',
-        b.paused ? `已暂停（${b.done}/${b.total}），可继续` : `已完成 ${b.done}/${b.total} 章`,
+        b.paused
+          ? `已暂停（${b.done}/${b.total}），可继续`
+          : b.stopped
+            ? `已停止（${b.done}/${b.total}）`
+            : `已完成 ${b.done}/${b.total} 章`,
         'success',
         true
       )

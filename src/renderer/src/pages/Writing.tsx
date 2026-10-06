@@ -103,6 +103,7 @@ function BatchProgressCard({
           自动写作进度：{batch.done}/{batch.total}
           {batch.running && batch.currentNo > 0 ? ` · 第${batch.currentNo}章进行中` : ''}
           {batch.paused ? ' · 已暂停待审' : ''}
+          {batch.stopped ? ' · 已停止' : ''}
         </span>
         <div className="ml-auto flex gap-2">
           {batch.paused && (
@@ -585,7 +586,13 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   }
 
   const stopBatch = (): void => {
-    void window.api.write.batchStop({ projectId }).catch(() => {})
+    // 用返回快照直接落 store：write:batch 事件丢失时界面也能立即收敛（与 startBatch 同策略）
+    void window.api.write
+      .batchStop({ projectId })
+      .then((snap) => {
+        if (snap) useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
+      })
+      .catch((err: unknown) => setNotice(`停止失败：${(err as Error).message}`))
   }
 
   const resumeBatch = (): void => {
