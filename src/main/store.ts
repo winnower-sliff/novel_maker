@@ -31,6 +31,7 @@ function mapProject(r: Row): Project {
     title: r.title as string,
     genre: (r.genre as string) ?? '',
     styleGuide: (r.style_guide as string) ?? '',
+    styleSample: (r.style_sample as string) ?? '',
     targetWords: (r.target_words as number) ?? 0,
     status: (r.status as string) ?? 'active',
     wizardPlan: (r.wizard_plan as string) ?? '',
@@ -111,9 +112,18 @@ export function createProject(input: ProjectInput): Project {
   const ts = now()
   getDb()
     .prepare(
-      'INSERT INTO projects (id, title, genre, style_guide, target_words, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO projects (id, title, genre, style_guide, style_sample, target_words, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     )
-    .run(id, input.title, input.genre ?? '', input.styleGuide ?? '', input.targetWords ?? 0, ts, ts)
+    .run(
+      id,
+      input.title,
+      input.genre ?? '',
+      input.styleGuide ?? '',
+      input.styleSample ?? '',
+      input.targetWords ?? 0,
+      ts,
+      ts
+    )
   return mapProject(getDb().prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row)
 }
 
@@ -121,11 +131,12 @@ export function updateProject(id: string, input: Partial<ProjectInput>): void {
   const db = getDb()
   const cur = mapProject(db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Row)
   db.prepare(
-    'UPDATE projects SET title = ?, genre = ?, style_guide = ?, target_words = ?, wizard_plan = ?, agent_instructions = ?, updated_at = ? WHERE id = ?'
+    'UPDATE projects SET title = ?, genre = ?, style_guide = ?, style_sample = ?, target_words = ?, wizard_plan = ?, agent_instructions = ?, updated_at = ? WHERE id = ?'
   ).run(
     input.title ?? cur.title,
     input.genre ?? cur.genre,
     input.styleGuide ?? cur.styleGuide,
+    input.styleSample ?? cur.styleSample,
     input.targetWords ?? cur.targetWords,
     input.wizardPlan ?? cur.wizardPlan,
     input.agentInstructions ?? cur.agentInstructions,

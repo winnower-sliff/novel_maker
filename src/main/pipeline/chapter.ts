@@ -20,9 +20,10 @@ export async function buildChapterRequest(
       model: '',
       system,
       messages: [{ role: 'user', content: ctx.user }],
-      maxTokens: 16384,
+      maxTokens: 32768,
       temperature: 0.8,
-      purpose: 'chapter'
+      purpose: 'chapter',
+      thinking: true
     },
     ctx
   }

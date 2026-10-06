@@ -351,6 +351,7 @@ export async function buildChapterContext(
   const next = outlines[idx + 1]
 
   const styleText = project.styleGuide
+  const sampleText = project.styleSample
   const summaries = renderRecentSummaries(projectId, outlineId)
   const volumeSummaries = renderVolumeSummaries(projectId, current.volume)
   const foreshadows = renderForeshadows(projectId)
@@ -391,6 +392,7 @@ export async function buildChapterContext(
 
   const estimate = (extra: number): number =>
     estimateTokens(styleText) +
+    estimateTokens(sampleText) +
     estimateTokens(wb.text) +
     estimateTokens(ch.text) +
     estimateTokens(summaries.text) +
@@ -412,6 +414,7 @@ export async function buildChapterContext(
   const sections: Array<[string, string]> = (
     [
       ['【作品风格】', styleText],
+      ['【风格范本（本书文类的优秀范文，模仿其行文肌理与人物烟火气，禁止抄袭情节）】', sampleText],
       ['【故事起点（开篇基准）】', origin.text],
       ['【前卷摘要（远期前情）】', volumeSummaries.text],
       ['【世界观设定】', wb.text],
@@ -442,6 +445,7 @@ export async function buildChapterContext(
 
   const parts = [
     part('风格指南', project.styleGuide ? '已配置' : '无', styleText),
+    part('风格范本', project.styleSample ? '已配置' : '无', sampleText),
     part('故事起点', origin.detail, origin.text),
     part('卷摘要', volumeSummaries.detail, volumeSummaries.text),
     part('世界观', wb.detail, wb.text),

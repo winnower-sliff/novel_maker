@@ -93,9 +93,10 @@ function buildSegmentRequest(
     model: '',
     system,
     messages: [{ role: 'user', content: user }],
-    maxTokens: Math.min(16384, Math.max(2048, plan[index].words * 3)),
+    maxTokens: Math.min(32768, Math.max(8192, plan[index].words * 6)),
     temperature: 0.8,
-    purpose: 'chapter'
+    purpose: 'chapter',
+    thinking: true
   }
 }
 

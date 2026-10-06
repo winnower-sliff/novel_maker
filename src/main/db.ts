@@ -212,6 +212,9 @@ function migrate(d: DatabaseSync): void {
   if (!projCols.some((c) => c.name === 'agent_instructions')) {
     d.exec("ALTER TABLE projects ADD COLUMN agent_instructions TEXT DEFAULT ''")
   }
+  if (!projCols.some((c) => c.name === 'style_sample')) {
+    d.exec("ALTER TABLE projects ADD COLUMN style_sample TEXT DEFAULT ''")
+  }
 }
 
 /** 伏笔章号文本 → 大纲 uid 存量回填：只填空列，解析失败保持空（展示层回退旧文本） */

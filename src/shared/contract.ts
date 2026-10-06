@@ -111,6 +111,7 @@ export const ChatParamsSchema = z.object({
   temperature: z.number().optional(),
   purpose: z.enum(PURPOSES).optional(),
   cacheSystem: z.boolean().optional(),
+  thinking: z.boolean().optional(),
   tools: z.custom<ToolDef[]>((v) => Array.isArray(v)).optional()
 })
 
@@ -118,6 +119,7 @@ export const ProjectInputSchema = z.object({
   title: z.string(),
   genre: z.string().optional(),
   styleGuide: z.string().optional(),
+  styleSample: z.string().optional(),
   targetWords: z.number().optional(),
   wizardPlan: z.string().optional(),
   agentInstructions: z.string().optional()

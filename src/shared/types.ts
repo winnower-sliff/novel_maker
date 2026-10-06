@@ -235,6 +235,7 @@ export interface Project {
   title: string
   genre: string
   styleGuide: string
+  styleSample: string
   targetWords: number
   status: string
   wizardPlan: string

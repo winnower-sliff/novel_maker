@@ -41,7 +41,8 @@ export async function chatStream(
     max_tokens: params.maxTokens ?? 4096,
     messages: params.messages,
     stream: true,
-    thinking: { type: 'disabled' }
+    // 默认关闭思考（GLM 默认开思考会吃光 max_tokens，坑 14）；写章类请求显式 thinking:true 恢复
+    thinking: params.thinking ? { type: 'enabled' } : { type: 'disabled' }
   }
   if (params.tools?.length) {
     body.tools = params.tools
