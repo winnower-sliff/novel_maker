@@ -39,6 +39,9 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
   const editing = outlines.find((o) => o.id === editId) ?? null
   const [feditId, setFeditId] = useState<string | null>(null)
   const [openScenes, setOpenScenes] = useState<Set<string>>(new Set())
+  // 生成区收起为入口；卷分组折叠（会话内记忆）
+  const [genOpen, setGenOpen] = useState(false)
+  const [collapsedVols, setCollapsedVols] = useState<Record<number, boolean>>({})
   const toggleScenes = (id: string): void => {
     setOpenScenes((prev) => {
       const next = new Set(prev)
@@ -91,6 +94,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
 
   const sorted = [...outlines].sort((a, b) => a.volume - b.volume || a.chapterNo - b.chapterNo)
   const volumes = [...new Set(sorted.map((o) => o.volume))]
+  const showGenForm = genOpen || sorted.length === 0
 
   // 生成区卷选择条：库内卷号 ∪ 记忆卷号；「下一卷」= 最大卷号 + 1
   const chipVols = (() => {
@@ -203,7 +207,36 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain p-3">
-      <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+      {/* 生成区：收起为入口，空库/点开时展开表单（hidden 保持挂载，参数不丢） */}
+      {!showGenForm && (
+        <button
+          type="button"
+          onClick={() => setGenOpen(true)}
+          className="mb-4 flex w-full cursor-pointer items-center gap-2 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/30 px-3 py-2.5 text-sm text-amber-300/90 active:bg-zinc-900"
+        >
+          <span>＋</span>
+          <span>生成 / 重写大纲</span>
+          <span className="text-xs text-zinc-500">第 {volume} 卷</span>
+          {busy && <span className="ml-auto text-xs text-amber-400">生成中…</span>}
+        </button>
+      )}
+      <div
+        className={`space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 ${
+          showGenForm ? '' : 'hidden'
+        }`}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-medium text-zinc-500">大纲生成</span>
+          {sorted.length > 0 && (
+            <button
+              type="button"
+              className="ml-auto shrink-0 cursor-pointer text-xs text-zinc-500"
+              onClick={() => setGenOpen(false)}
+            >
+              收起
+            </button>
+          )}
+        </div>
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="mr-0.5 text-xs text-zinc-500">选择卷</span>
           {chipVols.map((v) => {
@@ -409,17 +442,6 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           <Label>章数</Label>
           <NumberField input={Input} value={count} min={1} onChange={setCount} disabled={busy} className="w-full" />
         </div>
-        {(localBusy || outlineActive) && (
-          <OutlineProgress
-            progress={outlineRun.progress}
-            text={localBusy ? delta : outlineRun.tail}
-          />
-        )}
-        {outlineActive && !localBusy && (
-          <div className="text-xs text-amber-400">后台大纲生成中，完成后会自动导入（可离开此页）</div>
-        )}
-        {error && <div className="text-xs text-red-400">{error}</div>}
-        {result && !busy && <div className="text-xs text-emerald-400">{result}</div>}
         <div className="flex items-center gap-2">
           <button
             type="button"
@@ -450,20 +472,45 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
         </div>
       </div>
 
+      {/* 生成/后台进度与错误、结果常显（表单收起时也可见） */}
+      {(localBusy || outlineActive) && (
+        <div className="mt-4">
+          <OutlineProgress
+            progress={outlineRun.progress}
+            text={localBusy ? delta : outlineRun.tail}
+          />
+        </div>
+      )}
+      {outlineActive && !localBusy && (
+        <div className="mt-4 text-xs text-amber-400">后台大纲生成中，完成后会自动导入（可离开此页）</div>
+      )}
+      {error && <div className="mt-4 text-xs text-red-400">{error}</div>}
+      {result && !busy && <div className="mt-4 text-xs text-emerald-400">{result}</div>}
+
       <div className="mt-4">
         {sorted.length === 0 ? (
           <Empty text="暂无大纲章节" />
         ) : (
           volumes.map((vol) => {
             const volList = sorted.filter((o) => o.volume === vol)
+            const fold = collapsedVols[vol] ?? false
             return (
               <div key={vol} className="mb-4">
                 <div className="mb-1.5 flex items-center gap-2 px-1 text-xs font-medium text-zinc-500">
-                  <span>第 {vol} 卷</span>
-                  <span className="text-zinc-600">
-                    {volList.length} 章
-                    {volWritten(vol) > 0 && ` · 已写 ${volWritten(vol)}`}
-                  </span>
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setCollapsedVols((prev) => ({ ...prev, [vol]: !(prev[vol] ?? false) }))
+                    }
+                    className="flex cursor-pointer items-center gap-1.5"
+                  >
+                    <span className={`transition-transform ${fold ? '' : 'rotate-90'}`}>▸</span>
+                    <span>第 {vol} 卷</span>
+                    <span className="text-zinc-600">
+                      {volList.length} 章
+                      {volWritten(vol) > 0 && ` · 已写 ${volWritten(vol)}`}
+                    </span>
+                  </button>
                   <button
                     type="button"
                     className="ml-auto cursor-pointer rounded-full border border-zinc-700 px-2 py-0.5 text-[11px] text-zinc-400 active:bg-zinc-900"
@@ -474,17 +521,19 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                           volume: vol,
                           beforeOutlineId: volList[0]?.id
                         })
-                        .then(() =>
+                        .then(() => {
+                          // 折叠状态下插入的新章不可见，插入成功即展开本卷
+                          setCollapsedVols((prev) => ({ ...prev, [vol]: false }))
                           void qc.invalidateQueries({
                             queryKey: ['novel', 'outlines', projectId]
                           })
-                        )
+                        })
                     }}
                   >
                     + 插入章
                   </button>
                 </div>
-                <div className="space-y-1.5">
+                <div className={`space-y-1.5 ${fold ? 'hidden' : ''}`}>
                   {volList.map((o, idx) => {
                     const scenesOpen = openScenes.has(o.id)
                     return (

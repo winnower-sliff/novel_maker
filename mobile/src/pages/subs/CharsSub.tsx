@@ -32,7 +32,11 @@ export default function CharsSub({ projectId }: { projectId: string }) {
   })
   const [editId, setEditId] = useState<string | null>(null)
   const [draftOpen, setDraftOpen] = useState(false)
+  // 生成区收起为入口；面板保持挂载（hidden）以免中断生成/丢预览卡；空库时直接展开
+  const [genOpen, setGenOpen] = useState(false)
+  const [genBusy, setGenBusy] = useState(false)
   const editing = draftOpen ? DRAFT : (list.find((c) => c.id === editId) ?? null)
+  const showGenPanel = genOpen || list.length === 0
   const invalidate = (): void => {
     void qc.invalidateQueries({ queryKey: ['novel', 'characters', projectId] })
   }
@@ -54,7 +58,37 @@ export default function CharsSub({ projectId }: { projectId: string }) {
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain p-3">
-      <CharacterGenPanel ui={mobileWizardUi} projectId={projectId} onChanged={invalidate} />
+      {!showGenPanel && (
+        <button
+          type="button"
+          onClick={() => setGenOpen(true)}
+          className="mb-4 flex w-full cursor-pointer items-center gap-2 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/30 px-3 py-2.5 text-sm text-amber-300/90 active:bg-zinc-900"
+        >
+          <span>＋</span>
+          <span>AI 生成人物班底</span>
+          {genBusy && <span className="text-xs text-amber-400">生成中…</span>}
+          <span className="ml-auto text-[10px] text-zinc-600">已有 {list.length} 人</span>
+        </button>
+      )}
+      <div className={showGenPanel ? '' : 'hidden'}>
+        {list.length > 0 && (
+          <div className="mb-1.5 flex justify-end">
+            <button
+              type="button"
+              className="cursor-pointer text-xs text-zinc-500"
+              onClick={() => setGenOpen(false)}
+            >
+              收起
+            </button>
+          </div>
+        )}
+        <CharacterGenPanel
+          ui={mobileWizardUi}
+          projectId={projectId}
+          onChanged={invalidate}
+          onBusyChange={setGenBusy}
+        />
+      </div>
 
       <div className="mt-4">
         <div className="mb-1.5 flex items-center justify-between px-1">

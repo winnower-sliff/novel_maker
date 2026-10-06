@@ -12,6 +12,8 @@ interface CharacterGenPanelProps {
   projectId: string
   /** 库内人物变化后通知调用方刷新列表/门禁 */
   onChanged?: () => void
+  /** 生成/补充进行中状态上报（供收起态入口显示进度，可选） */
+  onBusyChange?: (busy: boolean) => void
 }
 
 type ItemStatus = 'pending' | 'running' | 'done' | 'error'
@@ -30,7 +32,12 @@ function buildItems(chars: PremiseDraftCharacter[], existing: Character[]): GenI
     .map((c) => ({ ...c, card: '', tags: [], status: 'pending' as ItemStatus }))
 }
 
-export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPanelProps) {
+export function CharacterGenPanel({
+  ui,
+  projectId,
+  onChanged,
+  onBusyChange
+}: CharacterGenPanelProps) {
   const { Badge, Button, Input } = ui
   const [items, setItems] = useState<GenItem[]>([])
   const [running, setRunning] = useState(false)
@@ -49,6 +56,10 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
   const addAbortRef = useRef<(() => void) | null>(null)
   // 库内人物名（含不在方案清单里的），供补充名单去重
   const existingNamesRef = useRef<string[]>([])
+  // busy 上报（收起态入口显示生成中）；回调经 ref 镜像，避免调用方内联函数引发依赖抖动
+  const busyCb = useRef(onBusyChange)
+  busyCb.current = onBusyChange
+  const busy = running || adding || runIndex >= 0
 
   useEffect(() => {
     let alive = true
@@ -76,9 +87,16 @@ export function CharacterGenPanel({ ui, projectId, onChanged }: CharacterGenPane
     () => () => {
       abortRef.current?.()
       addAbortRef.current?.()
+      // 卸载即上报空闲：生成中进编辑页会 abort 生成，父组件入口不能停留在「生成中…」
+      busyCb.current?.(false)
     },
     []
   )
+
+  // 上报 busy 供调用方（如手机端收起态入口）展示进度
+  useEffect(() => {
+    busyCb.current?.(busy)
+  }, [busy])
 
   const patchItem = (name: string, patch: Partial<GenItem>): void => {
     setItems((prev) => prev.map((it) => (it.name === name ? { ...it, ...patch } : it)))
