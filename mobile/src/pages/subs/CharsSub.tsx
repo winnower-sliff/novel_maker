@@ -154,6 +154,7 @@ function CharacterEditor({
   const [fields, setFields] = useState<CardFields>(() => toFields(character))
   const baseRef = useRef<CardFields>(toFields(character))
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const dirty =
     fields.name !== baseRef.current.name ||
     fields.role !== baseRef.current.role ||
@@ -216,11 +217,16 @@ function CharacterEditor({
   }
 
   const remove = async (): Promise<void> => {
-    if (!character.id || saving) return
+    if (!character.id || saving || deleting) return
     if (!window.confirm(`删除人物「${fields.name || character.name}」？`)) return
-    await window.api.novel.characterDelete(character.id)
-    onSaved()
-    onBack()
+    setDeleting(true)
+    try {
+      await window.api.novel.characterDelete(character.id)
+      onSaved()
+      onBack()
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const relationBlock = (
@@ -263,10 +269,10 @@ function CharacterEditor({
           <Button
             variant="ghost"
             className="px-2 py-1.5 text-xs text-red-400/90"
-            disabled={saving}
+            disabled={deleting || saving}
             onClick={() => void remove()}
           >
-            删除
+            {deleting ? <Spinner className="h-3.5 w-3.5" /> : '删除'}
           </Button>
         )}
         <span className="text-xs text-zinc-600">{dirty ? '有未保存修改' : '已保存'}</span>
@@ -344,7 +350,7 @@ function CharacterEditor({
             <Input value={fields.role} onChange={(e) => patch({ role: e.target.value })} />
           </Label>
           <Label>
-            标签（空格分隔）
+            标签（逗号或、分隔）
             <Input value={fields.tags} onChange={(e) => patch({ tags: e.target.value })} />
           </Label>
           <Label>

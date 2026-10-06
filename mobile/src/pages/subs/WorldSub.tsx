@@ -376,6 +376,7 @@ function WorldEditor({
   const [fields, setFields] = useState<WorldFields>(() => toWorldFields(entry))
   const baseRef = useRef<WorldFields>(toWorldFields(entry))
   const [saving, setSaving] = useState(false)
+  const [deleting, setDeleting] = useState(false)
   const dirty =
     fields.title !== baseRef.current.title ||
     fields.tags !== baseRef.current.tags ||
@@ -420,11 +421,16 @@ function WorldEditor({
   }
 
   const del = async (): Promise<void> => {
-    if (saving) return
+    if (saving || deleting) return
     if (!window.confirm(`删除「${fields.title || entry.title}」？此操作不可恢复`)) return
-    await window.api.novel.worldbuildDelete(entry.id)
-    onSaved()
-    onBack()
+    setDeleting(true)
+    try {
+      await window.api.novel.worldbuildDelete(entry.id)
+      onSaved()
+      onBack()
+    } finally {
+      setDeleting(false)
+    }
   }
 
   const bar =
@@ -440,10 +446,10 @@ function WorldEditor({
         <Button
           variant="ghost"
           className="px-2 py-1.5 text-xs text-red-400/90"
-          disabled={saving}
+          disabled={deleting || saving}
           onClick={() => void del()}
         >
-          删除
+          {deleting ? <Spinner className="h-3.5 w-3.5" /> : '删除'}
         </Button>
         <span className="text-xs text-zinc-600">{dirty ? '有未保存修改' : '已保存'}</span>
         <Button
@@ -510,7 +516,7 @@ function WorldEditor({
             <Input value={fields.title} onChange={(e) => patch({ title: e.target.value })} />
           </Label>
           <Label>
-            标签
+            标签（逗号或、分隔）
             <Input value={fields.tags} onChange={(e) => patch({ tags: e.target.value })} />
           </Label>
           <Label>
