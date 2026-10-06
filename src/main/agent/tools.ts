@@ -14,7 +14,8 @@ import { appendUsage } from '../usage'
 import {
   getInstructionsView,
   writeGlobalInstructions,
-  writeProjectInstructions
+  writeProjectInstructions,
+  writingRulesFor
 } from './instructions'
 import { runSubAgent } from './subagent'
 import {
@@ -1303,6 +1304,28 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
+      name: 'get_writing_rules',
+      description:
+        '读取全局写作规则（agents.md）中与当前任务相关的分节，返回规则全文。动笔前必须调用：写正文/大纲/人物卡/世界观/伏笔/润色等创作任务按任务类型传 tags，把返回的细则作为本次写作的硬性要求执行。tags 可选值：chapter（章节与结构）、prose（行文与去AI味）、dialogue（对话）、hooks（钩子与节奏）、character（人物塑造）、plot（情节推进）、continuity（视角与对账）、outline（大纲写法）、worldbuild（命名与设定/链接规则）、fore（伏笔维护）、polish（修改与润色）、agent（批量任务与审校）；核心节总会返回。常用组合：写正文传 chapter,prose,dialogue,hooks,plot,continuity,character；改稿传 polish,prose,dialogue,hooks,continuity；大纲传 outline,plot,fore',
+      input_schema: schema(
+        {
+          tags: s('要加载的分节标签数组（如 ["chapter","prose","dialogue"]），也接受逗号分隔字符串')
+        },
+        []
+      )
+    },
+    danger: false,
+    handler: (input) => {
+      const tags = (optStrArr(input, 'tags') ?? [])
+        .map((t) => t.trim().toLowerCase())
+        .filter(Boolean)
+      const rules = writingRulesFor(tags)
+      if (!rules) return { tags, rules: '', note: '全局写作规则为空（agents.md 未配置）' }
+      return { tags, rules }
+    }
+  },
+  {
+    def: {
       name: 'compact_context',
       description:
         '压缩对话历史：把此前全部对话替换为你写的 summary（单段进展摘要）。长任务（批量改写、全书检查、跨卷校对）收到「上下文过大」系统提示、或感觉早前细节已处理完时应主动调用，再轻装继续。调用前把后续仍需要的关键信息写进 summary：任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定。summary 写得越完整，压缩后信息损失越小。压缩完成后不要输出确认性文字，直接继续调用工具执行下一步',
@@ -1338,6 +1361,7 @@ export const READ_TOOLS = new Set([
   'grep_project',
   'get_book_digest',
   'get_agent_instructions',
+  'get_writing_rules',
   'list_foreshadows'
 ])
 

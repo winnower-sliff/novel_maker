@@ -5,6 +5,7 @@ import type {
   WorldbuildGenParams,
   WorldbuildPreviewEntry
 } from '../../shared/types'
+import { appendWritingRules } from '../agent/instructions'
 import * as store from '../store'
 import { extractJsonObject, skillBody } from './util'
 
@@ -199,7 +200,7 @@ export function buildWorldbuildRequest(
     .join('\n')
   return {
     model: '',
-    system,
+    system: appendWritingRules(system, ['worldbuild']),
     messages: [{ role: 'user', content: user }],
     maxTokens: 65536,
     temperature: 0.7,

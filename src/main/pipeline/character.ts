@@ -1,5 +1,6 @@
 import { splitHeadingHashtags, splitTags } from '../../shared/tags'
 import type { ChatParams } from '../../shared/types'
+import { appendWritingRules } from '../agent/instructions'
 import * as store from '../store'
 import { clampInt, extractJsonArray, skillBody } from './util'
 
@@ -40,7 +41,7 @@ export function buildStateSyncRequest(projectId: string, outlineId: string): Cha
       return `### ${c.name}\n【当前状态文档】\n${c.state.trim() || '（空——请按分区结构新建：物品/能力/身心状态/关系/最近事件）'}\n【第${outline.chapterNo}章的变化】\n${changes}`
     })
     .join('\n\n')
-  const system = skillBody('state-syncer')
+  const system = appendWritingRules(skillBody('state-syncer'), ['character', 'continuity'])
   const user = `请合并以下人物的状态变化，输出每人更新后的完整状态文档：\n\n${blocks}`
   return {
     model: '',
@@ -171,7 +172,7 @@ export function buildCharacterRequest(
   ].join('\n')
   return {
     model: '',
-    system,
+    system: appendWritingRules(system, ['character']),
     messages: [{ role: 'user', content: user }],
     maxTokens: allowUpdate ? 8192 : 4096,
     temperature: 0.8,
@@ -221,7 +222,7 @@ export function buildCharacterRosterRequest(
   ].join('\n')
   return {
     model: '',
-    system,
+    system: appendWritingRules(system, ['character']),
     messages: [{ role: 'user', content: user }],
     maxTokens: 2048,
     temperature: 0.9,

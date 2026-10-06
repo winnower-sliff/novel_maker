@@ -1,6 +1,6 @@
 {
   "name": "novel-maker",
-  "version": "1.17.0",
+  "version": "1.19.0",
   "description": "GLM 驱动的长篇小说自动创作工具",
   "type": "module",
   "main": "out/main/index.js",

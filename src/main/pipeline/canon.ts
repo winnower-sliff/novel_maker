@@ -3,6 +3,7 @@
 // 已有条目修订建议（预览确认）与新人物完整卡（自动落库）。
 import { splitTags } from '../../shared/tags'
 import type { CanonWorldUpdate, ChatParams, WorldbuildPreviewEntry } from '../../shared/types'
+import { appendWritingRules } from '../agent/instructions'
 import * as store from '../store'
 import { parseCharacterCards, renderCharacterCards } from './character'
 import { normalizeWorldbuildParsed, parseWorldbuildEntries } from './worldbuild'
@@ -86,7 +87,7 @@ export function buildCanonSyncRequest(projectId: string, volume: number): ChatPa
   ].join('\n')
   return {
     model: '',
-    system,
+    system: appendWritingRules(system, ['character', 'worldbuild']),
     messages: [{ role: 'user', content: user }],
     maxTokens: 16384,
     temperature: 0.5,

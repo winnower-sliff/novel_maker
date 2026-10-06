@@ -21,6 +21,7 @@ export const TOOL_LABELS: Record<string, string> = {
   save_foreshadow: '伏笔·保存',
   delete_foreshadow: '伏笔·删除',
   get_agent_instructions: '指令·读取',
+  get_writing_rules: '写作规则',
   set_agent_instructions: '指令·修改',
   spawn_subagent: '子智能体·委派',
   get_entity: '内容·读取',
@@ -155,6 +156,12 @@ export function toolSummary(call: AgentToolCall): string {
     }
     case 'get_agent_instructions':
       return '读取智能体行为指令'
+    case 'get_writing_rules': {
+      const tags = Array.isArray((i as { tags?: unknown }).tags)
+        ? ((i as { tags: unknown[] }).tags as unknown[]).join('、')
+        : String((i as { tags?: unknown }).tags ?? '')
+      return `读取写作规则分节${tags ? `：${tags}` : ''}`
+    }
     default:
       return toolLabel(call.name)
   }

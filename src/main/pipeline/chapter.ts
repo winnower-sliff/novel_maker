@@ -1,4 +1,5 @@
 import type { BuiltContext, ChatParams, ReviewResult, ReviewScore } from '../../shared/types'
+import { appendWritingRules, CHAPTER_RULE_TAGS } from '../agent/instructions'
 import { buildChapterContext } from '../context'
 import * as store from '../store'
 import { buildForeLedger } from './fore'
@@ -10,7 +11,10 @@ export async function buildChapterRequest(
   wordTarget?: number
 ): Promise<{ params: ChatParams; ctx: BuiltContext }> {
   const ctx = await buildChapterContext(projectId, outlineId, wordTarget)
-  const system = [skillBody('chapter-writer'), ctx.system].filter(Boolean).join('\n\n')
+  const system = appendWritingRules(
+    [skillBody('chapter-writer'), ctx.system].filter(Boolean).join('\n\n'),
+    CHAPTER_RULE_TAGS
+  )
   return {
     params: {
       model: '',
@@ -34,14 +38,17 @@ export function buildSummaryRequest(projectId: string, outlineId: string): ChatP
     .map((c) => c.name)
     .join('、')
   const ledger = buildForeLedger(projectId, true)
-  const system = [
-    skillBody('summarizer'),
-    chars && `本书人物名单：${chars}`,
-    ledger.text &&
-      `【既有未回收伏笔台账（编号稳定）】\n${ledger.text}\n登记伏笔时必须逐条对照此表：台账已有语义相同的条目禁止重复登记进 foreshadows_planted——只是再现/强化则写入 foreshadows_reinforced 引用编号；确已兑现回收则写入 foreshadows_resolved 引用编号。`
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+  const system = appendWritingRules(
+    [
+      skillBody('summarizer'),
+      chars && `本书人物名单：${chars}`,
+      ledger.text &&
+        `【既有未回收伏笔台账（编号稳定）】\n${ledger.text}\n登记伏笔时必须逐条对照此表：台账已有语义相同的条目禁止重复登记进 foreshadows_planted——只是再现/强化则写入 foreshadows_reinforced 引用编号；确已兑现回收则写入 foreshadows_resolved 引用编号。`
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    ['continuity']
+  )
   return {
     model: '',
     system,
@@ -63,13 +70,16 @@ export function buildPolishRequest(
   const outline = store.getOutline(outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
   if (!outline || !chapter?.content.trim()) throw new Error('该章节还没有正文，无法润色')
-  const system = [
-    skillBody('style-polisher'),
-    project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
-    focus && `【本次定向修复重点（优先处理，其余保持原意）】\n${focus}`
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+  const system = appendWritingRules(
+    [
+      skillBody('style-polisher'),
+      project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
+      focus && `【本次定向修复重点（优先处理，其余保持原意）】\n${focus}`
+    ]
+      .filter(Boolean)
+      .join('\n\n'),
+    ['polish', 'prose', 'dialogue', 'hooks', 'continuity']
+  )
   return {
     model: '',
     system,
@@ -90,7 +100,10 @@ export async function buildCheckRequest(projectId: string, outlineId: string): P
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
   if (!outline || !chapter?.content.trim()) throw new Error('该章节还没有正文，无法检查')
   const ctx = await buildChapterContext(projectId, outlineId)
-  const system = [skillBody('continuity-checker'), ctx.system].filter(Boolean).join('\n\n')
+  const system = appendWritingRules(
+    [skillBody('continuity-checker'), ctx.system].filter(Boolean).join('\n\n'),
+    ['continuity', 'character']
+  )
   return {
     model: '',
     system,
@@ -131,7 +144,10 @@ export async function buildReviewRequest(
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
   if (!outline || !chapter?.content.trim()) throw new Error('该章节还没有正文，无法评审')
   const ctx = await buildChapterContext(projectId, outlineId)
-  const system = [skillBody('chapter-reviewer'), ctx.system].filter(Boolean).join('\n\n')
+  const system = appendWritingRules(
+    [skillBody('chapter-reviewer'), ctx.system].filter(Boolean).join('\n\n'),
+    [...CHAPTER_RULE_TAGS, 'polish']
+  )
   return {
     model: '',
     system,
@@ -217,12 +233,12 @@ export function buildExpandRequest(
   const outline = store.getOutline(outlineId)
   const chapter = outline ? store.getChapterByOutline(outlineId) : null
   if (!outline || !chapter?.content.trim()) throw new Error('该章节还没有正文，无法扩写')
-  const system = [
-    skillBody('chapter-expander'),
-    project?.styleGuide && `【作品风格】\n${project.styleGuide}`
-  ]
-    .filter(Boolean)
-    .join('\n\n')
+  const system = appendWritingRules(
+    [skillBody('chapter-expander'), project?.styleGuide && `【作品风格】\n${project.styleGuide}`]
+      .filter(Boolean)
+      .join('\n\n'),
+    ['chapter', 'prose', 'dialogue', 'plot', 'hooks']
+  )
   const user = `第${outline.chapterNo}章《${outline.title}》正文（当前 ${chapter.wordCount} 字）：\n\n${chapter.content}\n\n请诊断式扩写至约 ${targetWords} 字。`
   return {
     model: '',
@@ -268,7 +284,7 @@ export function buildVolumeSummaryRequest(projectId: string, volume: number): Ch
     })
     .filter((cs) => cs.name)
     .join('；')
-  const system = skillBody('volume-summarizer')
+  const system = appendWritingRules(skillBody('volume-summarizer'), ['continuity'])
   const user = [
     `请生成第 ${volume} 卷的卷摘要。`,
     `【各章摘要】\n${chapterLines}`,

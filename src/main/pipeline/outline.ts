@@ -7,6 +7,7 @@ import type {
   OutlineItem,
   PremiseDraftResult
 } from '../../shared/types'
+import { appendWritingRules } from '../agent/instructions'
 import { enqueueEmbedding } from '../embedding'
 import * as store from '../store'
 import { buildForeLedger, FORE_PRIORITIES, FORE_REF_RE, normalizeForeText } from './fore'
@@ -104,10 +105,11 @@ export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): 
   ]
     .filter(Boolean)
     .join('\n\n')
+  const systemWithRules = appendWritingRules(system, ['outline', 'plot', 'fore'])
   const user = outlineUserPrompt(p, batch ?? null)
   return {
     model: '',
-    system,
+    system: systemWithRules,
     messages: [{ role: 'user', content: user }],
     maxTokens: batch
       ? Math.max(16384, batch.count * 2000)
@@ -153,7 +155,7 @@ export function buildVolumeIdeaRequest(
     .join('\n\n')
   return {
     model: '',
-    system,
+    system: appendWritingRules(system, ['outline', 'plot', 'fore']),
     messages: [{ role: 'user', content: `本卷要求：${req}\n\n请输出第 ${volume} 卷的卷创意。` }],
     maxTokens: 4096,
     temperature: 0.8,
@@ -188,6 +190,7 @@ export function buildRulesRefineRequest(
   ]
     .filter(Boolean)
     .join('\n')
+  const systemWithRules = appendWritingRules(system, ['outline', 'plot'])
   const user = [
     `【第 ${volume} 卷上下文（用于让规则贴合实际，不得改变规则原意）】`,
     project?.styleGuide && `风格：${project.styleGuide.slice(0, 200)}`,
@@ -203,7 +206,7 @@ export function buildRulesRefineRequest(
     .join('\n\n')
   return {
     model: '',
-    system,
+    system: systemWithRules,
     messages: [{ role: 'user', content: user }],
     maxTokens: 2048,
     temperature: 0.4,
@@ -255,7 +258,7 @@ export function buildPremiseDraftRequest(projectId: string): ChatParams {
     .join('\n')
   return {
     model: '',
-    system,
+    system: appendWritingRules(system, ['outline', 'plot', 'worldbuild', 'character']),
     messages: [{ role: 'user', content: user }],
     maxTokens: 4096,
     temperature: 0.8,
@@ -610,7 +613,7 @@ export function buildAlignRequest(projectId: string): ChatParams {
   const user = `【已写章节实际剧情（最近 ${Math.min(30, written.length)} 章）】\n${written.slice(-30).join('\n')}\n\n【后续未写章节大纲（共 ${pending.length} 章）】\n${pending.join('\n')}\n\n请检查后续大纲与已写剧情的连贯性，输出需修订章节的 JSON 数组。`
   return {
     model: '',
-    system,
+    system: appendWritingRules(system, ['outline', 'plot', 'fore']),
     messages: [{ role: 'user', content: user }],
     maxTokens: 8192,
     temperature: 0.4,

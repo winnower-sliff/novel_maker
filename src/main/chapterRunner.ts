@@ -1,4 +1,5 @@
 import type { BuiltContext, ChatParams } from '../shared/types'
+import { appendWritingRules, CHAPTER_RULE_TAGS } from './agent/instructions'
 import { buildChapterContext } from './context'
 import type { EventSink } from './eventSink'
 import { type LintReport, lintChapterReport } from './lint'
@@ -45,7 +46,10 @@ export function parseSegmentPlan(text: string, wordTarget: number): SegmentPlan[
 }
 
 function buildPlanRequest(ctx: BuiltContext, wordTarget: number): ChatParams {
-  const system = [skillBody('segment-planner'), ctx.system].filter(Boolean).join('\n\n')
+  const system = appendWritingRules(
+    [skillBody('segment-planner'), ctx.system].filter(Boolean).join('\n\n'),
+    ['chapter', 'plot']
+  )
   const user = `请为本章制定分段写作计划，目标 ${wordTarget} 字。\n\n${ctx.user}\n\n输出 JSON 数组：[{"point":"…","words":600}]`
   return {
     model: '',
@@ -64,7 +68,10 @@ function buildSegmentRequest(
   index: number,
   total: number
 ): ChatParams {
-  const system = [skillBody('chapter-writer'), ctx.system].filter(Boolean).join('\n\n')
+  const system = appendWritingRules(
+    [skillBody('chapter-writer'), ctx.system].filter(Boolean).join('\n\n'),
+    CHAPTER_RULE_TAGS
+  )
   const planLines = plan.map((s, i) => `第 ${i + 1} 段（${s.words} 字）：${s.point}`).join('\n')
   const user = [
     `本章写作指令：${ctx.user}`,

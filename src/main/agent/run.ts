@@ -14,7 +14,7 @@ import { chatStream, pickRatelimitHeaders } from '../llm'
 import { resolveRequestAuth } from '../settings'
 import * as store from '../store'
 import { appendUsage } from '../usage'
-import { readGlobalInstructions, readProjectInstructions } from './instructions'
+import { coreWritingRules, readProjectInstructions } from './instructions'
 import {
   AGENT_MAX_TOKENS,
   clip,
@@ -139,14 +139,20 @@ function waitConfirm(runState: RunState, info: PendingConfirmInfo): Promise<bool
 function buildSystemPrompt(projectId: string): string {
   const project = store.listProjects().find((p) => p.id === projectId)
   if (!project) throw new Error('项目不存在，无法启动智能体')
-  const globalInstr = readGlobalInstructions().trim()
+  const globalInstr = coreWritingRules().trim()
   const projectInstr = readProjectInstructions(projectId).trim()
   return [
     '你是小说项目的智能体编辑助理，通过工具直接读写当前项目的资料库（人物、世界观、大纲、章节正文、伏笔）。',
     '',
     `当前项目：《${project.title}》${project.genre ? `（类型：${project.genre}）` : ''}`,
     project.styleGuide ? `风格指南：\n${project.styleGuide}` : '（未配置风格指南）',
-    ...(globalInstr ? ['', `用户全局指令（所有项目生效）：`, globalInstr] : []),
+    ...(globalInstr
+      ? [
+          '',
+          '用户全局指令（核心节，所有项目生效；分节细则按任务经 get_writing_rules 工具拉取）：',
+          globalInstr
+        ]
+      : []),
     ...(projectInstr ? ['', '本项目用户指令（优先级高于全局指令）：', projectInstr] : []),
     '',
     '工作规则：',
@@ -168,7 +174,8 @@ function buildSystemPrompt(projectId: string): string {
     '16. 卷创意与本卷/通用节奏规则存在大纲生成页的向导参数里：读取用 get_outline_plan，保存用 save_outline_plan（未传字段保留原值，空串清空）；为某卷起草新卷创意时写成 3-5 个自然段的软分段形态，每段以「开篇章（卷首）：」等相对位置短语开头（禁写死章号），段间渐进过渡，总长 400-600 字',
     '17. 世界观类型管理：优先复用现有类型；条目换类型用 set_worldbuild_category（目标类型不存在会自动创建）；确需新类型用 worldbuild_type 的 op=create（可同时带 before/after/first/last 之一插到语义相邻处）；删类型用 op=delete（类型下还有条目时先逐条 set_worldbuild_category 迁走再删）',
     '18. 长任务（批量改写、全书检查、跨卷校对）中收到「上下文过大」系统提示、或确认早前细节已处理完时，主动用 compact_context 把历史压成摘要再继续；摘要必须包含任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定，宁可写长不可漏关键 id',
-    '19. 任务未完成时禁止停下征询意见或等待指示：直接继续调用工具执行下一步。只有两种情况可以停下：任务真正全部完成（此时输出最终总结），或遇到必须由用户决策的分叉（此时明确列出选项与你的建议）。压缩上下文后不要回复确认性文字，直接继续干活'
+    '19. 任务未完成时禁止停下征询意见或等待指示：直接继续调用工具执行下一步。只有两种情况可以停下：任务真正全部完成（此时输出最终总结），或遇到必须由用户决策的分叉（此时明确列出选项与你的建议）。压缩上下文后不要回复确认性文字，直接继续干活',
+    '20. 开始创作任务（写正文/大纲/卷创意/人物卡/世界观/伏笔规划/润色扩写）前，先调 get_writing_rules 拉取该任务相关的写作分节并遵守。常用 tags：写正文 ["chapter","prose","dialogue","hooks","plot","continuity","character"]；改稿润色 ["polish","prose","dialogue","hooks","continuity"]；大纲/卷创意/对齐 ["outline","plot","fore"]；人物卡 ["character"]；世界观条目 ["worldbuild"]；伏笔登记/回收 ["fore"]；批量写作/审校 ["agent","chapter","prose","continuity"]'
   ].join('\n')
 }
 
