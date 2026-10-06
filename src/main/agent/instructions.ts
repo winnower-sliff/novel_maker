@@ -170,6 +170,6 @@ export function appendWritingRules(system: string, tags: readonly string[]): str
   const rules = pickRules(tags)
   if (!rules) return system
   const header =
-    '【用户全局写作规则（按本次任务带上的分节；与技能模板或上文任何指令冲突时，以本节为准）】'
+    '【用户全局写作规则（按本次任务带上的分节；与技能模板冲突时以本节为准，与项目风格指南/项目指令冲突时以项目为准）】'
   return system ? `${system}\n\n${header}\n${rules}` : `${header}\n${rules}`
 }
