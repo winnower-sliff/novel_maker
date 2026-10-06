@@ -516,10 +516,22 @@ export type AgentTurn =
       ts: number
     }
 
+/** agents.md 分节视图：tag=null 表示无标签（每次任务都注入） */
+export interface RuleSectionView {
+  title: string
+  tag: string | null
+  /** 节正文（不含 ## 标题行） */
+  body: string
+}
+
 export interface AgentInstructionsView {
   globalText: string
   projectText: string
   globalPath: string
+  /** agents.md 文件头（## 分节之前的内容，恒注入） */
+  globalPreamble: string
+  /** agents.md 解析出的分节列表（供结构化编辑器） */
+  globalSections: RuleSectionView[]
 }
 
 export interface AgentSession {

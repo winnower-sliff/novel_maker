@@ -71,6 +71,8 @@ export const PIPELINE_ACTIONS = [
   'outline',
   'volumeIdea',
   'rulesRefine',
+  'instructionRefine',
+  'instructionSuggest',
   'outlineAlign',
   'chapter',
   'summary',
@@ -295,6 +297,17 @@ export const PIPELINE_PARAM_SCHEMAS = {
     volume: z.number(),
     rules: z.string(),
     globalRules: z.string().optional()
+  }),
+  instructionRefine: z.object({
+    projectId: z.string(),
+    scope: z.enum(['global', 'project']),
+    text: z.string(),
+    title: z.string().optional(),
+    tag: z.string().nullable().optional()
+  }),
+  instructionSuggest: z.object({
+    projectId: z.string(),
+    scope: z.enum(['global', 'project'])
   }),
   outlineAlign: z.object({ projectId: z.string() }),
   chapter: z.object({

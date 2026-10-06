@@ -1,5 +1,4 @@
 import type {
-  AgentInstructionsView,
   AgentToolCall,
   AgentTurn,
   LlmErrorHint,
@@ -8,6 +7,7 @@ import type {
 } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
+import { AgentInstructionsPanel } from '../../../wizard/AgentInstructionsPanel'
 import type { SubProc } from '../../../wizard/agentRunStore'
 import {
   renameSessionTitle,
@@ -270,12 +270,6 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [renameText, setRenameText] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
   const [instrOpen, setInstrOpen] = useState(false)
-  const [instrTab, setInstrTab] = useState<'global' | 'project'>('global')
-  const [instr, setInstr] = useState<AgentInstructionsView | null>(null)
-  const [instrDraft, setInstrDraft] = useState({ global: '', project: '' })
-  const [instrSaving, setInstrSaving] = useState(false)
-  const [instrSaved, setInstrSaved] = useState(false)
-  const [instrErr, setInstrErr] = useState('')
   const [showJump, setShowJump] = useState(false)
   const scrollRef = useRef<HTMLDivElement>(null)
   const atBottomRef = useRef(true)
@@ -412,36 +406,6 @@ export default function Agent({ projectId }: { projectId: string }) {
 
   const stop = (): void => {
     stopRun()
-  }
-
-  const openInstructions = (): void => {
-    setInstrOpen(true)
-    setInstrSaved(false)
-    void window.api.agent.instructionsGet(projectId).then((v) => {
-      setInstr(v)
-      setInstrDraft({ global: v.globalText, project: v.projectText })
-    })
-  }
-
-  const saveInstructions = (): void => {
-    if (!instr || instrSaving) return
-    setInstrSaving(true)
-    setInstrSaved(false)
-    setInstrErr('')
-    const tab = instrTab
-    const text = instrDraft[tab]
-    void window.api.agent
-      .instructionsSave(tab, text, projectId)
-      .then(() => {
-        setInstrSaving(false)
-        setInstrSaved(true)
-        setInstr((v) => (v ? { ...v, [tab === 'global' ? 'globalText' : 'projectText']: text } : v))
-        void queryClient.invalidateQueries({ queryKey: qk.projects })
-      })
-      .catch((e: unknown) => {
-        setInstrSaving(false)
-        setInstrErr((e as Error)?.message ?? '保存失败')
-      })
   }
 
   const activateTab = (key: string, sid: string | null): void => {
@@ -745,7 +709,7 @@ export default function Agent({ projectId }: { projectId: string }) {
           <Badge tone="amber">可直接读写当前项目的各板块</Badge>
         </div>
         <div className="sm:pt-5">
-          <Button variant="ghost" onClick={openInstructions}>
+          <Button variant="ghost" onClick={() => setInstrOpen(true)}>
             指令
           </Button>
         </div>
@@ -920,52 +884,7 @@ export default function Agent({ projectId }: { projectId: string }) {
         title="智能体指令"
         widthClass="max-w-2xl"
       >
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-1.5">
-            {(
-              [
-                ['global', '全局（agents.md）'],
-                ['project', '本项目']
-              ] as Array<['global' | 'project', string]>
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setInstrTab(key)}
-                className={`cursor-pointer rounded-md border px-2.5 py-1 text-xs transition-colors ${
-                  instrTab === key
-                    ? 'border-amber-600/60 bg-amber-600/10 text-amber-400'
-                    : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-            <span className="ml-auto text-[11px] text-zinc-600">
-              {instrTab === 'global'
-                ? `存于 ${instr?.globalPath ?? '…'}，所有项目生效`
-                : '仅当前项目的智能体生效，优先级高于全局'}
-            </span>
-          </div>
-          <Textarea
-            rows={14}
-            value={instrDraft[instrTab]}
-            onChange={(e) => setInstrDraft((d) => ({ ...d, [instrTab]: e.target.value }))}
-            placeholder={
-              instrTab === 'global'
-                ? '跨项目的写作偏好、称谓、章节结构习惯…（Markdown）'
-                : '本项目专属的工作要求，例如「伏笔必须三章内回收」…（Markdown）'
-            }
-            className="font-mono text-xs"
-          />
-          <div className="flex items-center gap-2">
-            <Button onClick={saveInstructions} disabled={instrSaving}>
-              {instrSaving ? '保存中…' : '保存'}
-            </Button>
-            {instrSaved && <span className="text-xs text-emerald-400">已保存，下次任务生效</span>}
-            {instrErr && <span className="text-xs text-red-400">{instrErr}</span>}
-          </div>
-        </div>
+        <AgentInstructionsPanel projectId={projectId} />
       </OverlayCard>
     </div>
   )

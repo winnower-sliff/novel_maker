@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app } from 'electron'
-import type { AgentInstructionsView } from '../../shared/types'
+import type { AgentInstructionsView, RuleSectionView } from '../../shared/types'
 import * as store from '../store'
 
 export function globalAgentsPath(): string {
@@ -56,10 +56,14 @@ export function ensureGlobalInstructions(): void {
 
 export function getInstructionsView(projectId: string): AgentInstructionsView {
   ensureGlobalInstructions()
+  const raw = readGlobalInstructions()
+  const { preamble, sections } = parseSectionsView(raw)
   return {
-    globalText: readGlobalInstructions(),
+    globalText: raw,
     projectText: readProjectInstructions(projectId),
-    globalPath: globalAgentsPath()
+    globalPath: globalAgentsPath(),
+    globalPreamble: preamble,
+    globalSections: sections
   }
 }
 
@@ -79,7 +83,7 @@ const HEADING_RE = /^##(?!#)[ \t]*(.+?)[ \t]*$/
 // 只认字母数字/连字符/下划线标签：中文括注（如「[核心]」）不当标签，该节退化为无标签=恒注入（宁多注入勿静默丢失）
 const TAG_RE = /\[([a-zA-Z0-9_-]+)\][ \t]*$/
 
-function parseRuleSections(raw: string): { preamble: string; sections: RuleSection[] } {
+export function parseRuleSections(raw: string): { preamble: string; sections: RuleSection[] } {
   const sections: RuleSection[] = []
   const preamble: string[] = []
   let cur: RuleSection | null = null
@@ -99,6 +103,22 @@ function parseRuleSections(raw: string): { preamble: string; sections: RuleSecti
   }
   if (cur) sections.push(cur)
   return { preamble: preamble.join('\n').trim(), sections }
+}
+
+/** 供结构化编辑器：分节视图（body 剥离 ## 标题行） */
+export function parseSectionsView(raw: string): {
+  preamble: string
+  sections: RuleSectionView[]
+} {
+  const { preamble, sections } = parseRuleSections(raw)
+  return {
+    preamble,
+    sections: sections.map((s) => ({
+      title: s.title,
+      tag: s.tag,
+      body: s.text.replace(/^##[^\n]*\n?/, '').trim()
+    }))
+  }
 }
 
 /** 解析结果按 mtime+size 缓存：写盘后立即失效，兼顾「即改即生效」与逐段写作的重复解析 */

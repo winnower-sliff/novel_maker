@@ -1,4 +1,5 @@
 import { PIPELINE_PARAM_SCHEMAS } from '../../shared/contract'
+import { parseSectionsView } from '../agent/instructions'
 import { enqueueEmbedding } from '../embedding'
 import { lintChapterReport, stripHtmlComments } from '../lint'
 import {
@@ -13,6 +14,8 @@ import {
   buildCharacterRosterRequest,
   buildCheckRequest,
   buildExpandRequest,
+  buildInstructionRefineRequest,
+  buildInstructionSuggestRequest,
   buildOutlineRequest,
   buildPolishRequest,
   buildPremiseDraftRequest,
@@ -186,6 +189,42 @@ export const pipelineHandlers = {
             action,
             meta: { projectId: params.projectId },
             afterDone: (r) => ({ rules: r.text.trim() })
+          }
+        )
+      }
+      case 'instructionRefine': {
+        const params = PIPELINE_PARAM_SCHEMAS.instructionRefine.parse(rawParams)
+        return startStream(
+          ctx.sink,
+          buildInstructionRefineRequest(
+            params.projectId,
+            params.scope,
+            params.text,
+            params.title,
+            params.tag
+          ),
+          {
+            action,
+            meta: { projectId: params.projectId },
+            afterDone: (r) => ({ text: r.text.trim() })
+          }
+        )
+      }
+      case 'instructionSuggest': {
+        const params = PIPELINE_PARAM_SCHEMAS.instructionSuggest.parse(rawParams)
+        return startStream(
+          ctx.sink,
+          buildInstructionSuggestRequest(params.projectId, params.scope),
+          {
+            action,
+            meta: { projectId: params.projectId },
+            afterDone: (r) => {
+              const text = r.text.trim()
+              if (params.scope === 'project') return { text }
+              // global：解析成分节结构返回，渲染端直接替换编辑器节卡
+              const { preamble, sections } = parseSectionsView(text)
+              return { text, preamble, sections }
+            }
           }
         )
       }

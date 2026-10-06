@@ -1,5 +1,5 @@
-import type { AgentInstructionsView, AgentToolCall, AgentTurn } from '@shared/types'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import type { AgentToolCall, AgentTurn } from '@shared/types'
+import { useQuery } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { Markdown } from '@mobile/components/Markdown'
@@ -17,6 +17,7 @@ import {
   useAgentRunStore
 } from '@wizard/agentRunStore'
 import { useAgentTabsStore } from '@wizard/agentTabsStore'
+import { AgentInstructionsPanel } from '@wizard/AgentInstructionsPanel'
 import { OverlayCard } from '@wizard/OverlayCard'
 
 type AssistantTurn = Extract<AgentTurn, { role: 'assistant' }>
@@ -174,19 +175,12 @@ function MobileToolGroup({
 }
 
 export default function AgentChat({ projectId }: { projectId: string }) {
-  const qc = useQueryClient()
   const { data: sessions = [] } = useQuery({
     queryKey: ['agentSessions', projectId],
     queryFn: () => window.api.agent.sessions(projectId)
   })
   const [pickerOpen, setPickerOpen] = useState(false)
   const [instrOpen, setInstrOpen] = useState(false)
-  const [instrTab, setInstrTab] = useState<'global' | 'project'>('global')
-  const [instr, setInstr] = useState<AgentInstructionsView | null>(null)
-  const [instrDraft, setInstrDraft] = useState({ global: '', project: '' })
-  const [instrSaving, setInstrSaving] = useState(false)
-  const [instrSaved, setInstrSaved] = useState(false)
-  const [instrErr, setInstrErr] = useState('')
   const [showJump, setShowJump] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   // 会话选择器打开时，返回键先关闭它
@@ -332,36 +326,6 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     stopRun()
   }
 
-  const openInstructions = (): void => {
-    setInstrOpen(true)
-    setInstrSaved(false)
-    void window.api.agent.instructionsGet(projectId).then((v) => {
-      setInstr(v)
-      setInstrDraft({ global: v.globalText, project: v.projectText })
-    })
-  }
-
-  const saveInstructions = (): void => {
-    if (!instr || instrSaving) return
-    setInstrSaving(true)
-    setInstrSaved(false)
-    setInstrErr('')
-    const tab = instrTab
-    const text = instrDraft[tab]
-    void window.api.agent
-      .instructionsSave(tab, text, projectId)
-      .then(() => {
-        setInstrSaving(false)
-        setInstrSaved(true)
-        setInstr((v) => (v ? { ...v, [tab === 'global' ? 'globalText' : 'projectText']: text } : v))
-        void qc.invalidateQueries({ queryKey: ['novel', 'projects'] })
-      })
-      .catch((e: unknown) => {
-        setInstrSaving(false)
-        setInstrErr((e as Error)?.message ?? '保存失败')
-      })
-  }
-
   const compactPoint = findCompactPoint(turns)
   // 运行中不折叠压缩前的历史，只插分隔条；run 结束/静态加载才折叠
   const liveHistory = !!compactPoint && running
@@ -449,7 +413,11 @@ export default function AgentChat({ projectId }: { projectId: string }) {
         >
           列表
         </Button>
-        <Button variant="ghost" className="shrink-0 px-2 py-1 text-xs" onClick={openInstructions}>
+        <Button
+          variant="ghost"
+          className="shrink-0 px-2 py-1 text-xs"
+          onClick={() => setInstrOpen(true)}
+        >
           指令
         </Button>
       </div>
@@ -578,51 +546,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
         title="智能体指令"
         fullscreenOnMobile
       >
-        <div className="flex flex-col gap-3">
-          <div className="flex items-center gap-1.5">
-            {(
-              [
-                ['global', '全局（agents.md）'],
-                ['project', '本项目']
-              ] as Array<['global' | 'project', string]>
-            ).map(([key, label]) => (
-              <button
-                key={key}
-                type="button"
-                onClick={() => setInstrTab(key)}
-                className={`cursor-pointer rounded-md border px-2.5 py-1 text-xs transition-colors ${
-                  instrTab === key
-                    ? 'border-amber-600/60 bg-amber-600/10 text-amber-400'
-                    : 'border-zinc-800 text-zinc-400'
-                }`}
-              >
-                {label}
-              </button>
-            ))}
-          </div>
-          <p className="text-[11px] leading-4 text-zinc-600">
-            {instrTab === 'global'
-              ? '存于电脑端 userData/agents.md，所有项目生效'
-              : '仅当前项目的智能体生效，优先级高于全局'}
-          </p>
-          <Textarea
-            rows={12}
-            value={instrDraft[instrTab]}
-            onChange={(e) => setInstrDraft((d) => ({ ...d, [instrTab]: e.target.value }))}
-            placeholder={
-              instrTab === 'global'
-                ? '跨项目的写作偏好、称谓、章节结构习惯…（Markdown）'
-                : '本项目专属的工作要求…（Markdown）'
-            }
-          />
-          <div className="flex items-center gap-2">
-            <Button onClick={saveInstructions} disabled={instrSaving} className="px-4 py-2 text-xs">
-              {instrSaving ? '保存中…' : '保存'}
-            </Button>
-            {instrSaved && <span className="text-xs text-emerald-400">已保存，下次任务生效</span>}
-            {instrErr && <span className="text-xs text-red-400">{instrErr}</span>}
-          </div>
-        </div>
+        <AgentInstructionsPanel projectId={projectId} />
       </OverlayCard>
     </div>
   )
