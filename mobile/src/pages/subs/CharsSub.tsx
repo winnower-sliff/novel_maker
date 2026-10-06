@@ -2,6 +2,7 @@ import { Button, Empty, Input, Label, Spinner, Textarea } from '@mobile/componen
 import { Markdown } from '@mobile/components/Markdown'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { withSnapshot } from '@mobile/lib/querySnapshot'
+import { qk } from '@renderer/lib/queries'
 import { DetailShell, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useRef, useState } from 'react'
@@ -43,8 +44,8 @@ const toFields = (c: Character): CardFields => ({
 export default function CharsSub({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
   const { data: list = [], isLoading } = useQuery({
-    queryKey: ['novel', 'characters', projectId],
-    queryFn: withSnapshot(['novel', 'characters', projectId], () =>
+    queryKey: qk.characters(projectId),
+    queryFn: withSnapshot(qk.characters(projectId), () =>
       window.api.novel.characters(projectId)
     )
   })
@@ -56,7 +57,7 @@ export default function CharsSub({ projectId }: { projectId: string }) {
   const editing = draftOpen ? DRAFT : (list.find((c) => c.id === editId) ?? null)
   const showGenPanel = genOpen || list.length === 0
   const invalidate = (): void => {
-    void qc.invalidateQueries({ queryKey: ['novel', 'characters', projectId] })
+    void qc.invalidateQueries({ queryKey: qk.characters(projectId) })
   }
   const close = (): void => {
     setEditId(null)
@@ -161,8 +162,8 @@ function CharacterEditor({
     fields.state !== baseRef.current.state
   const regen = useCharacterRegen(projectId)
   const { data: appearances } = useQuery({
-    queryKey: ['novel', 'characterAppearances', projectId],
-    queryFn: withSnapshot(['novel', 'characterAppearances', projectId], () =>
+    queryKey: qk.characterAppearances(projectId),
+    queryFn: withSnapshot(qk.characterAppearances(projectId), () =>
       window.api.novel.characterAppearances(projectId)
     ),
     enabled: !isNew

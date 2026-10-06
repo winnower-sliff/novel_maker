@@ -1,4 +1,6 @@
-import type { ChapterBrief } from '@shared/types'
+import type { Chapter, ChapterBrief } from '@shared/types'
+import { qk } from '@renderer/lib/queries'
+import { queryClient } from '@renderer/lib/queryClient'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 
 /**
@@ -25,6 +27,8 @@ export interface CachedChapter {
   title: string
   content: string
   wordCount: number
+  /** 章节状态快照（来自 brief.chapterStatus，供写作模式保存时透传） */
+  status: string
   cachedAt: number
 }
 
@@ -174,6 +178,8 @@ function clearBookProgress(projectId: string): void {
 export async function clearBook(projectId: string): Promise<void> {
   clearBookProgress(projectId)
   await clearProjectSnapshots(projectId)
+  // 同步清内存缓存：避免 2 分钟 staleTime 窗口内仍读到已删的旧稿
+  void queryClient.removeQueries({ queryKey: qk.novel })
   const db = await openDb()
   if (!db) return
   // IDBIndex 无 delete：先取该书全部主键，再逐键删正文
@@ -250,6 +256,8 @@ async function clearProjectSnapshots(projectId: string): Promise<void> {
 
 export async function clearAllBooks(): Promise<void> {
   useSettingsStore.getState().clearReadPos()
+  // 同步清内存缓存（同 clearBook）
+  void queryClient.removeQueries({ queryKey: qk.novel })
   const db = await openDb()
   if (!db) return
   await new Promise<void>((resolve) => {
@@ -269,6 +277,36 @@ export async function clearAllBooks(): Promise<void> {
 }
 
 // —— 整本预取器：进入阅读页触发，增量（跳过已缓存）、3 路并发、失败静默续传 ——
+
+/** 网络正文 → IndexedDB 缓存条目的唯一映射（预取器与章节 query 共用） */
+export function toCachedChapter(
+  projectId: string,
+  brief: ChapterBrief,
+  ch: Pick<Chapter, 'content' | 'wordCount'>
+): CachedChapter {
+  return {
+    id: brief.id,
+    projectId,
+    volume: brief.volume,
+    chapterNo: brief.chapterNo,
+    title: brief.title,
+    content: ch.content,
+    wordCount: ch.wordCount,
+    status: brief.chapterStatus,
+    cachedAt: Date.now()
+  }
+}
+
+/** 拉取单章正文并写入 IndexedDB（在线路径；未写章抛错由调用方处理） */
+export async function fetchChapterIntoCache(
+  projectId: string,
+  brief: ChapterBrief
+): Promise<Chapter> {
+  const fresh = await window.api.novel.chapter(brief.id)
+  if (!fresh) throw new Error('chapter not written')
+  void putChapters([toCachedChapter(projectId, brief, fresh)])
+  return fresh
+}
 
 export interface PrefetchState {
   done: number
@@ -300,6 +338,14 @@ export async function prefetchBook(projectId: string, briefs: ChapterBrief[]): P
   if (todo.length === 0) return
   const cached = await cachedIds(projectId)
   const queue = todo.filter((b) => !cached.has(b.id))
+  // 增量续传：上次已缓存的章回灌内存（TanStack），进书阅读同 key 直接命中秒开；
+  // 只灌内存没有的 key，绝不覆盖更新的网络数据
+  for (const b of todo) {
+    if (!cached.has(b.id)) continue
+    if (queryClient.getQueryData(qk.chapter(b.id)) !== undefined) continue
+    const c = await getCachedChapter(b.id)
+    if (c) queryClient.setQueryData(qk.chapter(b.id), c)
+  }
   if (queue.length === 0) return
 
   prefetching.set(projectId, { done: 0, total: queue.length })
@@ -310,20 +356,9 @@ export async function prefetchBook(projectId: string, briefs: ChapterBrief[]): P
       const b = queue[cursor]
       cursor += 1
       try {
-        const ch = await window.api.novel.chapter(b.id)
-        if (!ch) throw new Error('chapter not written')
-        await putChapters([
-          {
-            id: b.id,
-            projectId,
-            volume: b.volume,
-            chapterNo: b.chapterNo,
-            title: b.title,
-            content: ch.content,
-            wordCount: ch.wordCount,
-            cachedAt: Date.now()
-          }
-        ])
+        const ch = await fetchChapterIntoCache(projectId, b)
+        // 同步灌内存缓存：进书阅读时同 key 直接命中（2 分钟 staleTime 窗口内免请求）
+        queryClient.setQueryData(qk.chapter(b.id), ch)
       } catch {
         // 静默：单章失败不中断预取，下次进入续传
       }

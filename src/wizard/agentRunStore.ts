@@ -345,7 +345,7 @@ function fetchEvents(sid: string): void {
         if (st.projectId) {
           useAgentTabsStore.getState().dropSessionTabs(st.projectId, sid)
         }
-        void queryClient.invalidateQueries({ queryKey: ['agentSessions'] })
+        void queryClient.invalidateQueries({ queryKey: qk.agentSessionsAll })
         if (st.activeId === sid) switchSession(null)
         return
       }
@@ -639,6 +639,8 @@ export function applyAgentDone(id: string, payload: AgentDonePayload): boolean {
     b.liveDelta = ''
   })
   fetchEvents(sid)
+  // agent 工具可能已改写章节/设定：失效整个 novel 域（手机端无桌面 App 的全量失效兜底）
+  void queryClient.invalidateQueries({ queryKey: qk.novel })
   if (isBg) pushToast('success', '后台智能体任务已完成')
   return true
 }
@@ -660,6 +662,8 @@ export function applyAgentError(id: string, message: string, hint?: LlmErrorHint
     b.liveDelta = ''
   })
   fetchEvents(sid)
+  // 出错前工具可能已落库部分改动：与 done 同样失效 novel 域
+  void queryClient.invalidateQueries({ queryKey: qk.novel })
   if (isBg) {
     const { errorHint } = useAgentRunStore.getState()
     pushToast(
@@ -781,7 +785,7 @@ export function ensureAgentRuntime(): void {
       const buf = s.sessions[sid]
       if (!buf) {
         // 未打开的会话（他端/后台启动）：只刷列表（徽章/时间），不开缓冲
-        void queryClient.invalidateQueries({ queryKey: ['agentSessions'] })
+        void queryClient.invalidateQueries({ queryKey: qk.agentSessionsAll })
         return
       }
       if (buf.loaded && ev.seq <= buf.lastSeq) return
@@ -826,11 +830,13 @@ export function ensureAgentRuntime(): void {
         if (pendingStarts.get(sid) === ev.text) pendingStarts.delete(sid)
         if (pendingStarts.get(null) === ev.text) pendingStarts.delete(null)
         refreshView()
-        void queryClient.invalidateQueries({ queryKey: ['agentSessions'] })
+        void queryClient.invalidateQueries({ queryKey: qk.agentSessionsAll })
       }
       if (gap) fetchEvents(sid)
       if (ev.kind === 'done' || ev.kind === 'run_error') {
-        void queryClient.invalidateQueries({ queryKey: ['agentSessions'] })
+        void queryClient.invalidateQueries({ queryKey: qk.agentSessionsAll })
+        // 权威收尾事件：agent 工具可能已改写章节/设定，失效 novel 域让列表/正文立即刷新
+        void queryClient.invalidateQueries({ queryKey: qk.novel })
         if (s.activeId !== sid) {
           pushToast(
             ev.kind === 'done' ? 'success' : 'error',

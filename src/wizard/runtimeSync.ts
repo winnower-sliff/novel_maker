@@ -71,7 +71,8 @@ function applySnapshot(snap: RuntimeSnapshot): void {
         'success',
         true
       )
-      void queryClient.invalidateQueries({ queryKey: qk.chapterBriefs(b.projectId) })
+      // 批量逐章写完成：正文/状态全变，失效整个 novel 域（含 chapter 正文缓存）
+      void queryClient.invalidateQueries({ queryKey: qk.novel })
     }
     lastBatchRunning.set(b.projectId, b.running)
   }
@@ -146,10 +147,10 @@ function applySnapshot(snap: RuntimeSnapshot): void {
         if (r.status === 'done') fire('章节生成完成', '正文已就绪', 'success', missed)
         else fire('章节生成失败', friendlyLlmMessage(r.error ?? '未知错误'), 'error', missed)
       } else if (m?.action === 'outline' && m.projectId) {
-        // 大纲分批生成在后台完成/失败：补通知 + 失效大纲缓存（列表页自动刷新）
+        // 大纲分批生成在后台完成/失败：补通知 + 失效 novel 域（大纲+目录列表联动刷新）
         if (r.status === 'done') fire('大纲生成完成', '新大纲已导入', 'success', missed)
         else fire('大纲生成失败', friendlyLlmMessage(r.error ?? '未知错误'), 'error', missed)
-        void queryClient.invalidateQueries({ queryKey: qk.outlines(m.projectId) })
+        void queryClient.invalidateQueries({ queryKey: qk.novel })
       } else if (m?.action === 'canonSync' && m.projectId && r.status === 'done') {
         // 设定同步在后台完成：结果 ingest（挂预览/纯人物 toast，防重与文案由 canonStore 统一处理）；失败按共识静默
         const d = (r.donePayload as DonePayload | undefined)?.data as CanonSyncResult | undefined

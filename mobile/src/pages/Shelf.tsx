@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { Button, Empty } from '@mobile/components/ui'
 import { fmtRelative, fmtWords } from '@mobile/lib/format'
-import { putBriefs } from '@mobile/lib/readerCache'
+import { makeBriefsQuery } from '@mobile/lib/bookQueries'
+import { qk } from '@renderer/lib/queries'
 import { withSnapshot } from '@mobile/lib/querySnapshot'
 import type { Project } from '@shared/types'
 
@@ -12,16 +13,9 @@ function hueFromId(id: string): number {
 }
 
 function Cover({ project, onOpen }: { project: Project; onOpen: (id: string) => void }) {
-  const { data: briefs } = useQuery({
-    queryKey: ['novel', 'chapterBriefs', project.id],
-    queryFn: withSnapshot(['novel', 'chapterBriefs', project.id], async () => {
-      // 同 queryKey 以首个挂载的 observer 的 queryFn 为准（书架总是先进），阅读侧目录快照落库必须写在这里
-      const fresh = await window.api.novel.chapterBriefs(project.id)
-      void putBriefs({ projectId: project.id, title: project.title, briefs: fresh, cachedAt: Date.now() })
-      return fresh
-    }),
-    staleTime: 60_000
-  })
+  const { data: briefs } = useQuery(
+    makeBriefsQuery(project.id, project.title)
+  )
   const words = (briefs ?? []).reduce((s, b) => s + b.wordCount, 0)
   const hue = hueFromId(project.id)
 
@@ -73,8 +67,8 @@ export default function Shelf({
 }) {
   // 与 App.tsx 同 key 共用内存缓存；成功双写快照，失败回退快照（断网书架仍可用）
   const { data: projects = [], isLoading } = useQuery({
-    queryKey: ['novel', 'projects'],
-    queryFn: withSnapshot(['novel', 'projects'], () => window.api.novel.projects())
+    queryKey: qk.projects,
+    queryFn: withSnapshot(qk.projects, () => window.api.novel.projects())
   })
 
   if (isLoading) return <Empty text="加载中…" />

@@ -5,6 +5,7 @@ import { fetchMobileVersion } from '@mobile/lib/bridge'
 import { apkUpdater } from '@mobile/lib/apkUpdater'
 import { useConnStore } from '@mobile/lib/conn'
 import { fmtTokens } from '@mobile/lib/format'
+import { qk } from '@renderer/lib/queries'
 import {
   clearAllBooks,
   clearBook,
@@ -105,7 +106,7 @@ function OfflineCacheCard() {
     setBusy(true)
     try {
       const briefs = await qc.fetchQuery({
-        queryKey: ['novel', 'chapterBriefs', pid],
+        queryKey: qk.chapterBriefs(pid),
         queryFn: () => window.api.novel.chapterBriefs(pid)
       })
       await prefetchBook(pid, briefs)
@@ -217,7 +218,7 @@ export default function Settings() {
   }, [updater])
 
   const { data: usage } = useQuery({
-    queryKey: ['usage', 'stats'],
+    queryKey: qk.usageStats,
     queryFn: () => window.api.usage.stats(),
     refetchInterval: 60_000
   })

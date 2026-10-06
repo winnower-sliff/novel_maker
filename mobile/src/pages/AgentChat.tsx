@@ -6,6 +6,7 @@ import { Markdown } from '@mobile/components/Markdown'
 import { Badge, Button, Empty, Textarea } from '@mobile/components/ui'
 import { fmtRelative } from '@mobile/lib/format'
 import { findCompactPoint, toolLabel, toolSummary } from '@mobile/lib/agentTurns'
+import { qk } from '@renderer/lib/queries'
 import {
   resolveConfirm,
   retryLoadActive,
@@ -176,7 +177,7 @@ function MobileToolGroup({
 
 export default function AgentChat({ projectId }: { projectId: string }) {
   const { data: sessions = [] } = useQuery({
-    queryKey: ['agentSessions', projectId],
+    queryKey: qk.agentSessions(projectId),
     queryFn: () => window.api.agent.sessions(projectId)
   })
   const [pickerOpen, setPickerOpen] = useState(false)

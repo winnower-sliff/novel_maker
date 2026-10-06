@@ -5,7 +5,7 @@ import { getAllSnapshots, getSnapshot, saveSnapshot } from './readerCache'
  * 写作页 query 快照：列表类数据持久化到 IndexedDB，冷启动 hydrate 出首帧（不从空开始）。
  * - 每次进页仍从服务器刷新：hydrate 后立即标 invalid，挂载必 refetch
  * - refetch 失败回退快照（断网显示旧数据，不白屏）
- * - 单章正文不缓存（有脏状态，旧稿易误导）
+ * - 单章正文走 bookQueries.makeChapterQuery（内存缓存 + IDB 回退），不走 qsnap
  * - 所有失败路径静默降级，绝不能影响在线主链路
  */
 

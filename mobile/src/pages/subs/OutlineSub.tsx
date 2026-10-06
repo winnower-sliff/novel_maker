@@ -15,6 +15,7 @@ import { ExpandableTextarea, NumberField, OutlineProgress } from '@wizard/widget
 import { loadProjectPlan, type WizardPlanFull, saveProjectPlan } from '@wizard/wizardPlan'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { withSnapshot } from '@mobile/lib/querySnapshot'
+import { qk } from '@renderer/lib/queries'
 import type { Foreshadow, OutlineItem } from '@shared/types'
 import { buildOutlineNoIndex, formatChapterRef, isDanglingRef } from '@shared/foreRef'
 
@@ -24,14 +25,14 @@ const FORESHADOW_STATUS = ['planted', 'resolved', 'abandoned']
 export default function OutlineSub({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
   const { data: outlines = [] } = useQuery({
-    queryKey: ['novel', 'outlines', projectId],
-    queryFn: withSnapshot(['novel', 'outlines', projectId], () =>
+    queryKey: qk.outlines(projectId),
+    queryFn: withSnapshot(qk.outlines(projectId), () =>
       window.api.novel.outlines(projectId)
     )
   })
   const { data: briefs = [] } = useQuery({
-    queryKey: ['novel', 'chapterBriefs', projectId],
-    queryFn: withSnapshot(['novel', 'chapterBriefs', projectId], () =>
+    queryKey: qk.chapterBriefs(projectId),
+    queryFn: withSnapshot(qk.chapterBriefs(projectId), () =>
       window.api.novel.chapterBriefs(projectId)
     )
   })
@@ -177,8 +178,8 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
           }`
         )
       }
-      void qc.invalidateQueries({ queryKey: ['novel', 'outlines', projectId] })
-      void qc.invalidateQueries({ queryKey: ['novel', 'chapterBriefs', projectId] })
+      void qc.invalidateQueries({ queryKey: qk.outlines(projectId) })
+      void qc.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
     } finally {
@@ -194,8 +195,8 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
         item={editing}
         onBack={() => setEditId(null)}
         onSaved={() => {
-          void qc.invalidateQueries({ queryKey: ['novel', 'outlines', projectId] })
-          void qc.invalidateQueries({ queryKey: ['novel', 'chapterBriefs', projectId] })
+          void qc.invalidateQueries({ queryKey: qk.outlines(projectId) })
+          void qc.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
         }}
       />
     )
@@ -525,7 +526,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                           // 折叠状态下插入的新章不可见，插入成功即展开本卷
                           setCollapsedVols((prev) => ({ ...prev, [vol]: false }))
                           void qc.invalidateQueries({
-                            queryKey: ['novel', 'outlines', projectId]
+                            queryKey: qk.outlines(projectId)
                           })
                         })
                     }}
@@ -561,7 +562,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                                 .outlineMove({ id: o.id, beforeOutlineId: volList[idx - 1].id })
                                 .then(() =>
                                   void qc.invalidateQueries({
-                                    queryKey: ['novel', 'outlines', projectId]
+                                    queryKey: qk.outlines(projectId)
                                   })
                                 )
                             }}
@@ -583,7 +584,7 @@ export default function OutlineSub({ projectId }: { projectId: string }) {
                                 .outlineMove({ id: o.id, afterOutlineId: volList[idx + 1].id })
                                 .then(() =>
                                   void qc.invalidateQueries({
-                                    queryKey: ['novel', 'outlines', projectId]
+                                    queryKey: qk.outlines(projectId)
                                   })
                                 )
                             }}
@@ -743,14 +744,14 @@ function ForeshadowList({
   onEdit: (id: string) => void
 }) {
   const { data: list = [] } = useQuery({
-    queryKey: ['novel', 'foreshadows', projectId],
-    queryFn: withSnapshot(['novel', 'foreshadows', projectId], () =>
+    queryKey: qk.foreshadows(projectId),
+    queryFn: withSnapshot(qk.foreshadows(projectId), () =>
       window.api.novel.foreshadows(projectId)
     )
   })
   const { data: outlines = [] } = useQuery({
-    queryKey: ['novel', 'outlines', projectId],
-    queryFn: withSnapshot(['novel', 'outlines', projectId], () =>
+    queryKey: qk.outlines(projectId),
+    queryFn: withSnapshot(qk.outlines(projectId), () =>
       window.api.novel.outlines(projectId)
     )
   })
@@ -818,8 +819,8 @@ function ForeshadowEdit({
 }) {
   const qc = useQueryClient()
   const { data: list = [] } = useQuery({
-    queryKey: ['novel', 'foreshadows', projectId],
-    queryFn: withSnapshot(['novel', 'foreshadows', projectId], () =>
+    queryKey: qk.foreshadows(projectId),
+    queryFn: withSnapshot(qk.foreshadows(projectId), () =>
       window.api.novel.foreshadows(projectId)
     )
   })
@@ -831,7 +832,7 @@ function ForeshadowEdit({
       projectId={projectId}
       item={item}
       onBack={onBack}
-      onSaved={() => void qc.invalidateQueries({ queryKey: ['novel', 'foreshadows', projectId] })}
+      onSaved={() => void qc.invalidateQueries({ queryKey: qk.foreshadows(projectId) })}
     />
   )
 }
@@ -852,8 +853,8 @@ function ForeshadowEditor({
   const [plannedId, setPlannedId] = useState(item.plannedResolveOutlineId)
   const [saving, setSaving] = useState(false)
   const { data: outlines = [] } = useQuery({
-    queryKey: ['novel', 'outlines', projectId],
-    queryFn: withSnapshot(['novel', 'outlines', projectId], () =>
+    queryKey: qk.outlines(projectId),
+    queryFn: withSnapshot(qk.outlines(projectId), () =>
       window.api.novel.outlines(projectId)
     )
   })

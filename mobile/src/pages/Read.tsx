@@ -5,13 +5,7 @@ import { useTocStore } from '@mobile/lib/tocStore'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { useReaderStore } from '@mobile/lib/readerStore'
 import { useReaderChromeStore } from '@mobile/lib/readerChromeStore'
-import {
-  getCachedBriefs,
-  getCachedChapter,
-  putBriefs,
-  putChapters,
-  type CachedChapter
-} from '@mobile/lib/readerCache'
+import { makeBriefsQuery, makeChapterQuery } from '@mobile/lib/bookQueries'
 import { pushToast } from '@wizard/toastStore'
 import { useQueries, useQuery } from '@tanstack/react-query'
 import {
@@ -25,7 +19,7 @@ import {
   type ReactNode
 } from 'react'
 import { groupChapterSegments, SEGMENT_SIZE } from '@shared/chapterSegments'
-import type { Chapter, ChapterBrief } from '@shared/types'
+import type { ChapterBrief } from '@shared/types'
 
 /** 剥掉章节正文的 md 标题行与 [[链接]] 语法，得到纯文本段落 */
 export function parseParagraphs(content: string): string[] {
@@ -76,55 +70,26 @@ function ReaderFlow({
   const resumeTimerRef = useRef<number | null>(null)
   const trimRef = useRef<{ cutH: number } | null>(null)
   const jumpRef = useRef<number | null>(null)
-  // 走了离线缓存的章 id 集合：任一命中即顶栏标「离线」，全部新鲜才清除（避免并发覆盖闪烁）
-  const offlineIdsRef = useRef(new Set<string>())
 
   const flowBriefs = useMemo(
     () => written.slice(flow.start, flow.end + 1),
     [written, flow.start, flow.end]
   )
 
-  const fetchChapter = useCallback(
-    async (b: ChapterBrief): Promise<Chapter | CachedChapter> => {
-      const syncOffline = (): void => {
-        setOffline('chapter', offlineIdsRef.current.size > 0)
-      }
-      try {
-        const fresh = await window.api.novel.chapter(b.id)
-        if (!fresh) throw new Error('chapter not written')
-        offlineIdsRef.current.delete(b.id)
-        syncOffline()
-        void putChapters([
-          {
-            id: b.id,
-            projectId,
-            volume: b.volume,
-            chapterNo: b.chapterNo,
-            title: b.title,
-            content: fresh.content,
-            wordCount: fresh.wordCount,
-            cachedAt: Date.now()
-          }
-        ])
-        return fresh
-      } catch (err) {
-        const cached = await getCachedChapter(b.id)
-        if (cached) {
-          offlineIdsRef.current.add(b.id)
-          syncOffline()
-          return cached
-        }
-        throw err
-      }
-    },
-    [projectId, setOffline]
-  )
+  // 走了离线缓存的章 id 集合：任一命中即顶栏标「离线」，全部新鲜才清除（避免并发覆盖闪烁）
+  const offlineIdsRef = useRef(new Set<string>())
+  const syncOffline = useCallback((): void => {
+    setOffline('chapter', offlineIdsRef.current.size > 0)
+  }, [setOffline])
 
   const chapterQueries = useQueries({
-    queries: flowBriefs.map((b) => ({
-      queryKey: ['novel', 'chapter', b.id],
-      queryFn: () => fetchChapter(b)
-    }))
+    queries: flowBriefs.map((b) =>
+      makeChapterQuery(projectId, b, (id, offline) => {
+        if (offline) offlineIdsRef.current.add(id)
+        else offlineIdsRef.current.delete(id)
+        syncOffline()
+      })
+    )
   })
 
   // 砍头补偿 / 跳章定位：flow 变化后的绘制前修正，避免视口跳动
@@ -406,24 +371,10 @@ function ReaderFlow({
 /** 阅读页：卷分组目录（只列已写章）+ 拼接流正文阅读 + 进度记忆（重进续读）。
  *  整本预取在进书时由 Book 层触发（不依赖本页挂载）；断网时目录/正文自动回退缓存（顶栏标「离线」）。 */
 export default function Read({ projectId, title }: { projectId: string; title?: string }) {
-  const { data: briefs = [], isLoading } = useQuery({
-    queryKey: ['novel', 'chapterBriefs', projectId],
-    queryFn: async (): Promise<ChapterBrief[]> => {
-      try {
-        const fresh = await window.api.novel.chapterBriefs(projectId)
-        setOffline('briefs', false)
-        void putBriefs({ projectId, title: title ?? '', briefs: fresh, cachedAt: Date.now() })
-        return fresh
-      } catch (err) {
-        const cached = await getCachedBriefs(projectId)
-        if (cached) {
-          setOffline('briefs', true)
-          return cached.briefs
-        }
-        throw err
-      }
-    }
-  })
+  const setOffline = useReaderStore((s) => s.setOffline)
+  const { data: briefs = [], isLoading } = useQuery(
+    makeBriefsQuery(projectId, title ?? '', (offline) => setOffline('briefs', offline))
+  )
   const written = useMemo(
     () =>
       briefs.filter((b) => b.hasDraft).sort((a, b) => a.volume - b.volume || a.chapterNo - b.chapterNo),
@@ -431,7 +382,6 @@ export default function Read({ projectId, title }: { projectId: string; title?: 
   )
   const [openId, setOpenId] = useState<string | null>(null)
   const [hlId, setHlId] = useState<string | null>(null)
-  const setOffline = useReaderStore((s) => s.setOffline)
   const openSegs = useTocStore((s) => s.openSegs)
   const toggleSeg = useTocStore((s) => s.toggleSeg)
   const idx = openId ? written.findIndex((b) => b.id === openId) : -1

@@ -13,6 +13,7 @@ import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { useConnStore } from '@mobile/lib/conn'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { hydrateSnapshots, withSnapshot } from '@mobile/lib/querySnapshot'
+import { qk } from '@renderer/lib/queries'
 import { pushToast } from '@wizard/toastStore'
 import { CanonPreviewPanel } from '@wizard/CanonPreviewPanel'
 import { ensureRuntimeSync } from '@wizard/runtimeSync'
@@ -36,7 +37,7 @@ export default function App() {
 
   // 「基本设定」创建/改元数据后失效书架与书内门禁查询；创建成功即进入该书
   const invalidateProjects = useCallback((): void => {
-    void queryClient.invalidateQueries({ queryKey: ['novel', 'projects'] })
+    void queryClient.invalidateQueries({ queryKey: qk.projects })
   }, [queryClient])
   const handleCreated = useCallback(
     (id: string) => {
@@ -48,8 +49,8 @@ export default function App() {
   )
   // 项目列表：成功双写快照；失败回退快照（断网仍可从书架进书阅读）
   const { data: projects } = useQuery({
-    queryKey: ['novel', 'projects'],
-    queryFn: withSnapshot(['novel', 'projects'], () => window.api.novel.projects()),
+    queryKey: qk.projects,
+    queryFn: withSnapshot(qk.projects, () => window.api.novel.projects()),
     enabled: !!conn
   })
   const book = projects?.find((p) => p.id === bookId) ?? null

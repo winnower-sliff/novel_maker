@@ -240,8 +240,9 @@ export async function applyRunDone(id: string, payload: DonePayload): Promise<vo
             }`,
       ctxPreview: d.contextParts ?? null
     })
+    // 新正文已落库：失效整个 novel 域（含 chapter 正文缓存，防 2 分钟 staleTime 窗口读到旧稿）
     void queryClient.invalidateQueries({
-      queryKey: qk.chapterBriefs(run.projectId)
+      queryKey: qk.novel
     })
   } else if (payload.action === 'polish' || payload.action === 'expand') {
     S.setState((s) => ({
@@ -271,12 +272,13 @@ export function applyRunError(id: string, message: string, hint?: LlmErrorHint):
 export function ensureWriteRunBridge(): void {
   ensureBridge('writeRun', () => {
     // 批量进度事件（主进程编排）：快照直接落 store；一轮跑完时失效章节列表
-    window.api.write.onBatch((projectId, snap) => {
+    window.api.write.onBatch((_projectId, snap) => {
       const prev = S.getState().batch
       const wasRunning = prev?.running ?? false
       S.setState({ batch: snap, resumeIds: snap.resumeIds })
       if (wasRunning && !snap.running) {
-        void queryClient.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
+        // 批量逐章写完：正文/状态全变，失效整个 novel 域
+        void queryClient.invalidateQueries({ queryKey: qk.novel })
       }
     })
 

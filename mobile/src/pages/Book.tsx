@@ -9,9 +9,11 @@ import PremiseSub from '@mobile/pages/subs/PremiseSub'
 import WorldSub from '@mobile/pages/subs/WorldSub'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useMemo, useState } from 'react'
-import type { ChapterBrief, Project } from '@shared/types'
+import type { Project } from '@shared/types'
 import { useAnyAgentRunning } from '@wizard/agentRunStore'
-import { prefetchBook, putBriefs, getCachedBriefs } from '@mobile/lib/readerCache'
+import { prefetchBook } from '@mobile/lib/readerCache'
+import { makeBriefsQuery } from '@mobile/lib/bookQueries'
+import { qk } from '@renderer/lib/queries'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { useReaderChromeStore } from '@mobile/lib/readerChromeStore'
 import type { ReactNode } from 'react'
@@ -106,8 +108,8 @@ export default function Book({
     if (refreshing) return
     setRefreshing(true)
     void Promise.all([
-      qc.invalidateQueries({ queryKey: ['novel'] }),
-      qc.invalidateQueries({ queryKey: ['agentSessions', projectId] })
+      qc.invalidateQueries({ queryKey: qk.novel }),
+      qc.invalidateQueries({ queryKey: qk.agentSessions(projectId ?? undefined) })
     ])
       .catch(() => {})
       .finally(() => setRefreshing(false))
@@ -116,39 +118,28 @@ export default function Book({
   // —— 弱引导数据（只用于标「下一步」，不阻塞进书与位置恢复；创建模式不查）——
   const enabled = !!projectId
   const { data: projects = [] } = useQuery({
-    queryKey: ['novel', 'projects'],
+    queryKey: qk.projects,
     queryFn: () => window.api.novel.projects(),
     enabled
   })
   const { data: wb = [] } = useQuery({
-    queryKey: ['novel', 'worldbuild', projectId ?? ''],
+    queryKey: qk.worldbuild(projectId ?? ''),
     queryFn: () => window.api.novel.worldbuild(projectId!),
     enabled
   })
   const { data: chars = [] } = useQuery({
-    queryKey: ['novel', 'characters', projectId ?? ''],
+    queryKey: qk.characters(projectId ?? ''),
     queryFn: () => window.api.novel.characters(projectId!),
     enabled
   })
   const { data: outlines = [] } = useQuery({
-    queryKey: ['novel', 'outlines', projectId ?? ''],
+    queryKey: qk.outlines(projectId ?? ''),
     queryFn: () => window.api.novel.outlines(projectId!),
     enabled
   })
   // 目录（顺带缓存快照）：进书即整本预取正文，无论落在哪个 tab，不依赖「阅读」页挂载
   const { data: briefs = [] } = useQuery({
-    queryKey: ['novel', 'chapterBriefs', projectId ?? ''],
-    queryFn: async (): Promise<ChapterBrief[]> => {
-      try {
-        const fresh = await window.api.novel.chapterBriefs(projectId!)
-        void putBriefs({ projectId: projectId!, title, briefs: fresh, cachedAt: Date.now() })
-        return fresh
-      } catch (err) {
-        const cached = await getCachedBriefs(projectId!)
-        if (cached) return cached.briefs
-        throw err
-      }
-    },
+    ...makeBriefsQuery(projectId ?? '', title),
     enabled
   })
   const written = useMemo(
@@ -289,7 +280,7 @@ export default function Book({
             {sub === 'world' && <WorldSub projectId={projectId} />}
             {sub === 'chars' && <CharsSub projectId={projectId} />}
             {sub === 'outline' && <OutlineSub projectId={projectId} />}
-            {sub === 'sub' && <Write projectId={projectId} />}
+            {sub === 'sub' && <Write projectId={projectId} title={title} />}
           </>
         )}
       </main>

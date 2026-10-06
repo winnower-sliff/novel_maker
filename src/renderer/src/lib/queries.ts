@@ -12,6 +12,8 @@ export const qk = {
   worldbuild: (projectId: string) => ['novel', 'worldbuild', projectId] as const,
   worldbuildTypes: (projectId: string) => ['novel', 'worldbuildTypes', projectId] as const,
   characters: (projectId: string) => ['novel', 'characters', projectId] as const,
+  characterAppearances: (projectId: string) =>
+    ['novel', 'characterAppearances', projectId] as const,
   outlines: (projectId: string) => ['novel', 'outlines', projectId] as const,
   foreshadows: (projectId: string) => ['novel', 'foreshadows', projectId] as const,
   chapterBriefs: (projectId: string) => ['novel', 'chapterBriefs', projectId] as const,
@@ -24,6 +26,8 @@ export const qk = {
   usageStats: ['usage', 'stats'] as const,
   skills: ['skills'] as const,
   agentSessions: (projectId?: string) => ['agentSessions', projectId ?? 'all'] as const,
+  /** agentSessions 域前缀：invalidate 时命中全部会话查询（含各 projectId 子键） */
+  agentSessionsAll: ['agentSessions'] as const,
   graph: (projectId: string) => ['novel', 'graph', projectId] as const
 }
 

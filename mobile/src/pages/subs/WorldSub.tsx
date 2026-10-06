@@ -7,6 +7,7 @@ import { startGen, useWbGenTasks, useWbLiveEntries } from '@wizard/wbGenStore'
 import { NumberField } from '@wizard/widgets'
 import { loadProjectPlan, saveProjectPlan } from '@wizard/wizardPlan'
 import { withSnapshot } from '@mobile/lib/querySnapshot'
+import { qk } from '@renderer/lib/queries'
 import type { WorldbuildEntry } from '@shared/types'
 
 /** 剥掉 markdown/[[链接]] 语法后的内容摘要（列表行预览用） */
@@ -25,8 +26,8 @@ export default function WorldSub({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
   const { Badge: B } = mobileWizardUi
   const { data: list = [], isLoading } = useQuery({
-    queryKey: ['novel', 'worldbuild', projectId],
-    queryFn: withSnapshot(['novel', 'worldbuild', projectId], () =>
+    queryKey: qk.worldbuild(projectId),
+    queryFn: withSnapshot(qk.worldbuild(projectId), () =>
       window.api.novel.worldbuild(projectId)
     )
   })
@@ -148,7 +149,7 @@ export default function WorldSub({ projectId }: { projectId: string }) {
         projectId={projectId}
         entry={editing}
         onBack={() => setEditId(null)}
-        onSaved={() => void qc.invalidateQueries({ queryKey: ['novel', 'worldbuild', projectId] })}
+        onSaved={() => void qc.invalidateQueries({ queryKey: qk.worldbuild(projectId) })}
       />
     )
 

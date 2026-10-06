@@ -5,7 +5,8 @@ import { useBackHandler } from '@mobile/lib/backHandler'
 import { Badge, Button, Empty, Spinner } from '@mobile/components/ui'
 import { fmtWords } from '@mobile/lib/format'
 import { useWriteListStore } from '@mobile/lib/writeListStore'
-import { withSnapshot } from '@mobile/lib/querySnapshot'
+import { makeBriefsQuery, makeChapterQuery } from '@mobile/lib/bookQueries'
+import { qk } from '@renderer/lib/queries'
 import { ChainBanner } from '../../../src/wizard/ChainBanner'
 import { suggestBatchRange, useWriteRunStore } from '../../../src/wizard/writeRunStore'
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
@@ -166,7 +167,13 @@ function AutoWritePanel({
   )
 }
 
-export default function Write({ projectId }: { projectId: string }) {
+export default function Write({
+  projectId,
+  title
+}: {
+  projectId: string
+  title?: string
+}) {
   const qc = useQueryClient()
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const autoOpen = useWriteRunStore((s) => s.batchOpen)
@@ -176,13 +183,7 @@ export default function Write({ projectId }: { projectId: string }) {
   // hooks 一律在 early return 之前：点进章节走 ChapterEditor 分支时不能少声明，否则 React 崩溃黑屏
   const openSegs = useWriteListStore((s) => s.openSegs)
   const toggleSeg = useWriteListStore((s) => s.toggleSeg)
-  const { data: briefs = [], isLoading } = useQuery({
-    queryKey: ['novel', 'chapterBriefs', projectId],
-    queryFn: withSnapshot(['novel', 'chapterBriefs', projectId], () =>
-      window.api.novel.chapterBriefs(projectId)
-    ),
-    enabled: !!projectId
-  })
+  const { data: briefs = [], isLoading } = useQuery(makeBriefsQuery(projectId, title ?? ''))
 
   useEffect(() => {
     setSelectedId(null)
@@ -215,7 +216,7 @@ export default function Write({ projectId }: { projectId: string }) {
         briefs={briefs}
         onBack={() => {
           setSelectedId(null)
-          void qc.invalidateQueries({ queryKey: ['novel', 'chapterBriefs', projectId] })
+          void qc.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
         }}
       />
     )
@@ -245,7 +246,7 @@ export default function Write({ projectId }: { projectId: string }) {
               projectId={projectId}
               briefs={briefs}
               onFinish={() =>
-                void qc.invalidateQueries({ queryKey: ['novel', 'chapterBriefs', projectId] })
+                void qc.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
               }
             />
           )}
@@ -358,10 +359,7 @@ function ChapterEditor({
   const [chainPrompt, setChainPrompt] = useState(false)
   const taRef = useRef<HTMLTextAreaElement | null>(null)
 
-  const { data: chapter, isLoading } = useQuery({
-    queryKey: ['novel', 'chapter', brief.id],
-    queryFn: () => window.api.novel.chapter(brief.id)
-  })
+  const { data: chapter, isLoading } = useQuery(makeChapterQuery(projectId, brief))
 
   useEffect(() => {
     if (chapter) {
@@ -391,8 +389,8 @@ function ChapterEditor({
       setDirty(false)
       setSavedAt(Date.now())
       setChainPrompt(true)
-      void qc.invalidateQueries({ queryKey: ['novel', 'chapter', brief.id] })
-      void qc.invalidateQueries({ queryKey: ['novel', 'chapterBriefs', projectId] })
+      void qc.invalidateQueries({ queryKey: qk.chapter(brief.id) })
+      void qc.invalidateQueries({ queryKey: qk.chapterBriefs(projectId) })
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err))
     } finally {

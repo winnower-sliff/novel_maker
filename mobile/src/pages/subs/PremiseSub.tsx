@@ -1,6 +1,7 @@
 import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { getSnapshot } from '@mobile/lib/readerCache'
 import { snapshotKey } from '@mobile/lib/querySnapshot'
+import { qk } from '@renderer/lib/queries'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { PremisePanel, type PremiseSeed } from '@wizard/PremisePanel'
@@ -30,10 +31,10 @@ export default function PremiseSub({
     void (async () => {
       try {
         const [projects, wb, cs, ol] = await Promise.all([
-          getSnapshot(snapshotKey(['novel', 'projects'])),
-          getSnapshot(snapshotKey(['novel', 'worldbuild', projectId])),
-          getSnapshot(snapshotKey(['novel', 'characters', projectId])),
-          getSnapshot(snapshotKey(['novel', 'outlines', projectId]))
+          getSnapshot(snapshotKey(qk.projects)),
+          getSnapshot(snapshotKey(qk.worldbuild(projectId))),
+          getSnapshot(snapshotKey(qk.characters(projectId))),
+          getSnapshot(snapshotKey(qk.outlines(projectId)))
         ])
         if (!alive) return
         const project = (projects?.data as Project[] | undefined)?.find(
@@ -67,10 +68,10 @@ export default function PremiseSub({
         projectId={projectId}
         seed={seed}
         onCreated={(id) => {
-          void qc.invalidateQueries({ queryKey: ['novel', 'projects'] })
+          void qc.invalidateQueries({ queryKey: qk.projects })
           onCreated(id)
         }}
-        onUpdated={() => void qc.invalidateQueries({ queryKey: ['novel', 'projects'] })}
+        onUpdated={() => void qc.invalidateQueries({ queryKey: qk.projects })}
       />
     </div>
   )
