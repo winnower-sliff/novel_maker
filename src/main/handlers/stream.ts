@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto'
 import { makeSessionTitle } from '../../shared/agentTranscript'
 import { classifyLlmError } from '../../shared/llmError'
 import { createOutlineScanMachine, feedOutlineScan } from '../../shared/outlineScan'
+import type { ProviderId } from '../../shared/providers'
 import type {
   AgentTranscriptInput,
   ChatMessage,
@@ -176,7 +177,7 @@ export async function genSessionTitle(
         maxTokens: 200,
         purpose: 'agent'
       },
-      { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+      { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
       () => {}
     )
     appendUsage({
@@ -364,6 +365,8 @@ export function startStream(
     meta?: RunMeta
     /** 传入目标章数即启用结构化进度：send() 对已确认文本增量解析章数（仅 outline 用） */
     progressTotal?: number
+    /** 临时指定本次生成的 provider（写作页「引擎」切换用），优先级高于 modelRouting */
+    provider?: ProviderId
   }
 ): string {
   const requestId = randomUUID()
@@ -382,7 +385,7 @@ export function startStream(
 
   void (async () => {
     try {
-      const auth = await resolveRequestAuth(rawParams.purpose)
+      const auth = await resolveRequestAuth(rawParams.purpose, opts?.provider ?? rawParams.provider)
       if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
       const params: ChatParams = { ...rawParams }
       if (!params.model) params.model = auth.model
@@ -442,7 +445,7 @@ export function startStream(
           try {
             roundResult = await chatStream(
               params,
-              { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+              { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
               onDelta,
               controller.signal
             )
@@ -561,7 +564,8 @@ export function startLongChapterStream(
   projectId: string,
   outlineId: string,
   wordTarget: number,
-  onSettled?: SettleCb
+  onSettled?: SettleCb,
+  provider?: ProviderId
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
@@ -577,7 +581,8 @@ export function startLongChapterStream(
         projectId,
         outlineId,
         wordTarget,
-        signal: controller.signal
+        signal: controller.signal,
+        provider
       })
       const clean = stripHtmlComments(result.text)
       const chapter = store.saveChapter({
@@ -631,7 +636,8 @@ export function startChapterCandidatesStream(
   outlineId: string,
   wordTarget: number,
   candidates: number,
-  onSettled?: SettleCb
+  onSettled?: SettleCb,
+  provider?: ProviderId
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
@@ -648,7 +654,8 @@ export function startChapterCandidatesStream(
         outlineId,
         wordTarget,
         candidates,
-        signal: controller.signal
+        signal: controller.signal,
+        provider
       })
       if (result.candidates.length === 0) throw new Error('候选生成失败')
       const winner = result.candidates[result.winnerIndex]
@@ -715,7 +722,7 @@ export async function runWorldbuildRetrieval(
     const params: ChatParams = { ...req, model: req.model || auth.model }
     const result = await chatStream(
       params,
-      { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+      { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
       () => {}
     )
     appendUsage({

@@ -410,6 +410,7 @@ export async function runAgent(opts: {
     model: opts.model || auth.model,
     apiKey: auth.apiKey,
     baseUrl: auth.baseUrl,
+    protocol: auth.protocol,
     promptCache: auth.promptCache
   }
   let subagentCount = 0
@@ -448,7 +449,7 @@ export async function runAgent(opts: {
             purpose: 'agent',
             cacheSystem: auth.promptCache
           },
-          { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+          { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
           (text) => {
             pendingTurnText += text
             send('agent:delta', text)

@@ -1,10 +1,12 @@
 import { joinChapterContent, splitChapterHeading } from '@shared/chapterContent'
 import { groupChapterSegments } from '@shared/chapterSegments'
+import type { ProviderId } from '@shared/providers'
 import type { ContextPart, ReviewResult } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { type SyntheticEvent, useCallback, useEffect, useRef, useState } from 'react'
 import { ChainBanner } from '../../../wizard/ChainBanner'
 import { DiffView } from '../components/DiffView'
+import { EngineSelect } from '../components/EngineSelect'
 import { Badge, Button, Card, Label, Select, Textarea } from '../components/ui'
 import { desktopWizardUi } from '../lib/desktopWizardUi'
 import { fmtDuration, fmtTokens } from '../lib/format'
@@ -161,6 +163,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
   const batchOpen = useWriteRunStore((s) => s.batchOpen)
   const [wordTarget, setWordTarget] = useState('2700')
   const [candidateCount, setCandidateCount] = useState('0')
+  const [engine, setEngine] = useState<ProviderId | ''>('')
   const [batchFrom, setBatchFrom] = useState('')
   const [batchTo, setBatchTo] = useState('')
   const [pauseEach, setPauseEach] = useState(false)
@@ -322,7 +325,7 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
     setBusy(action)
     beginChapterRun(projectId, selectedId, action)
     void window.api.pipeline
-      .run(action, { outlineId: selectedId, ...params })
+      .run(action, { outlineId: selectedId, ...params, ...(engine ? { provider: engine } : {}) })
       .then((id) => {
         useWriteRunStore.setState((s) => (s.run ? { run: { ...s.run, requestId: id } } : s))
       })
@@ -577,7 +580,8 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
         ids,
         wordTarget: parseInt(wordTarget, 10) || undefined,
         candidates: parseInt(candidateCount, 10) >= 2 ? parseInt(candidateCount, 10) : undefined,
-        pauseEach
+        pauseEach,
+        ...(engine ? { provider: engine } : {})
       })
       .then((snap) => {
         useWriteRunStore.setState({ batch: snap, resumeIds: snap.resumeIds })
@@ -744,6 +748,11 @@ export default function Writing({ projectId, onNavigate, focusOutlineId, onFocus
                   <option value="2">候选×2</option>
                   <option value="3">候选×3</option>
                 </Select>
+                <EngineSelect
+                  value={engine}
+                  onChange={(p) => setEngine(p ?? '')}
+                  className="w-28 py-1 text-xs"
+                />
                 <Button onClick={generateDraft} disabled={busyAny}>
                   {busy === 'chapter' ? '生成中…' : selected.hasDraft ? '重新生成' : 'AI 初稿'}
                 </Button>

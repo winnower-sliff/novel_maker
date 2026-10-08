@@ -1,4 +1,5 @@
 import { PIPELINE_PARAM_SCHEMAS } from '../../shared/contract'
+import { isProviderId, type ProviderId } from '../../shared/providers'
 import { parseSectionsView } from '../agent/instructions'
 import { enqueueEmbedding } from '../embedding'
 import { lintChapterReport, stripHtmlComments } from '../lint'
@@ -45,7 +46,7 @@ import {
   runWorldbuildRetrieval,
   startChapterCandidatesStream,
   startLongChapterStream,
-  startStream
+  startStream as startStreamBase
 } from './stream'
 
 type ParsedCharacterCards = ReturnType<typeof parseCharacterCards>
@@ -92,6 +93,11 @@ function saveParsedCharacters(
 
 export const pipelineHandlers = {
   'pipeline:run': async (ctx, [action, rawParams]) => {
+    // 写作页「引擎」临时切换：rawParams 顶层的 provider 覆盖本次生成目标（各 action schema 会剔除该字段，故先取出）
+    const rawProvider = (rawParams as { provider?: unknown } | null)?.provider
+    const provider: ProviderId | undefined = isProviderId(rawProvider) ? rawProvider : undefined
+    const startStream: typeof startStreamBase = (sink, params, opts) =>
+      startStreamBase(sink, params, { ...opts, provider })
     switch (action) {
       case 'premiseDraft': {
         const params = PIPELINE_PARAM_SCHEMAS.premiseDraft.parse(rawParams)
@@ -247,11 +253,20 @@ export const pipelineHandlers = {
             outline.projectId,
             outlineId,
             wordTarget ?? 2700,
-            candidates
+            candidates,
+            undefined,
+            provider
           )
         }
         if (wordTarget && wordTarget >= LONG_CHAPTER_THRESHOLD) {
-          return startLongChapterStream(ctx.sink, outline.projectId, outlineId, wordTarget)
+          return startLongChapterStream(
+            ctx.sink,
+            outline.projectId,
+            outlineId,
+            wordTarget,
+            undefined,
+            provider
+          )
         }
         const built = await buildChapterRequest(outline.projectId, outlineId, wordTarget)
         return startStream(ctx.sink, built.params, {

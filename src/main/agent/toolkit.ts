@@ -1,3 +1,4 @@
+import type { Protocol } from '../../shared/providers'
 import type { OutlineItem, ToolDef, UsageInfo } from '../../shared/types'
 import type { EventSink } from '../eventSink'
 import * as store from '../store'
@@ -29,6 +30,7 @@ export interface ToolExecContext {
   model: string
   apiKey: string
   baseUrl: string
+  protocol: Protocol
   promptCache: boolean
 }
 

@@ -1,3 +1,4 @@
+import type { ProviderId } from '@shared/providers'
 import {
   type ChangeEvent,
   memo,
@@ -8,6 +9,7 @@ import {
   useState
 } from 'react'
 import { chatStream } from '../lib/ipc'
+import { EngineSelect } from './EngineSelect'
 import { Button, Input, Textarea } from './ui'
 
 type AiMode = 'idle' | 'input' | 'generating' | 'preview'
@@ -51,6 +53,7 @@ export function AiTextarea({
   const [instruction, setInstruction] = useState('')
   const [result, setResult] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [engine, setEngine] = useState<ProviderId | ''>('')
   const selRef = useRef<{ start: number; end: number } | null>(null)
   const abortRef = useRef<(() => void) | null>(null)
   const abortedRef = useRef(false)
@@ -162,7 +165,8 @@ export function AiTextarea({
         messages: [{ role: 'user', content: buildPrompt(context, picked, ins.trim()) }],
         maxTokens: 2048,
         temperature: 0.7,
-        purpose: 'polish'
+        purpose: 'polish',
+        ...(engine ? { provider: engine } : {})
       },
       onDelta
     )
@@ -227,7 +231,14 @@ export function AiTextarea({
 
       {mode === 'input' && (
         <div className="mt-1.5 space-y-1.5 rounded-md border border-zinc-800 bg-zinc-900/60 p-2">
-          <div className="text-[11px] text-zinc-500">对选中的 {selectedLen} 字执行指令</div>
+          <div className="flex items-center justify-between gap-2">
+            <div className="text-[11px] text-zinc-500">对选中的 {selectedLen} 字执行指令</div>
+            <EngineSelect
+              value={engine}
+              onChange={(p) => setEngine(p ?? '')}
+              className="w-28 py-0.5 text-[11px]"
+            />
+          </div>
           <div className="flex gap-1.5">
             <Input
               value={instruction}

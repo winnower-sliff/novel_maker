@@ -1,3 +1,4 @@
+import type { ProviderId } from '../shared/providers'
 import type { BuiltContext, ChatParams } from '../shared/types'
 import { appendWritingRules, CHAPTER_RULE_TAGS } from './agent/instructions'
 import { buildChapterContext } from './context'
@@ -121,6 +122,7 @@ export async function runLongChapter(opts: {
   outlineId: string
   wordTarget: number
   signal: AbortSignal
+  provider?: ProviderId
 }): Promise<LongChapterResult> {
   const { sink, requestId, signal } = opts
   const send = (text: string): void => {
@@ -129,14 +131,14 @@ export async function runLongChapter(opts: {
 
   const ctx = await buildChapterContext(opts.projectId, opts.outlineId, opts.wordTarget)
 
-  const planAuth = await resolveRequestAuth('outline')
+  const planAuth = await resolveRequestAuth('outline', opts.provider)
   const planRes = await chatStream(
     {
       ...buildPlanRequest(ctx, opts.wordTarget),
       model: planAuth.model,
       cacheSystem: planAuth.promptCache && true
     },
-    { apiKey: planAuth.apiKey, baseUrl: planAuth.baseUrl },
+    { apiKey: planAuth.apiKey, baseUrl: planAuth.baseUrl, protocol: planAuth.protocol },
     () => {},
     signal
   )
@@ -153,7 +155,7 @@ export async function runLongChapter(opts: {
   })
   const plan = parseSegmentPlan(planRes.text, opts.wordTarget)
 
-  const auth = await resolveRequestAuth('chapter')
+  const auth = await resolveRequestAuth('chapter', opts.provider)
   let written = ''
   let requests = 1
   for (let i = 0; i < plan.length; i++) {
@@ -185,7 +187,7 @@ export async function runLongChapter(opts: {
         model: auth.model,
         cacheSystem: auth.promptCache && true
       },
-      { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+      { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
       onDelta,
       signal
     )
@@ -232,13 +234,14 @@ export async function runChapterCandidates(opts: {
   wordTarget: number
   candidates: number
   signal: AbortSignal
+  provider?: ProviderId
 }): Promise<{ candidates: CandidateResult[]; winnerIndex: number }> {
   const { sink, requestId, signal } = opts
   const notice = (text: string): void => {
     if (!sink.isClosed()) sink.send('llm:notice', requestId, text)
   }
   const built = await buildChapterRequest(opts.projectId, opts.outlineId, opts.wordTarget)
-  const auth = await resolveRequestAuth('chapter')
+  const auth = await resolveRequestAuth('chapter', opts.provider)
   const n = Math.min(3, Math.max(2, opts.candidates))
   const out: CandidateResult[] = []
   for (let i = 0; i < n; i++) {
@@ -252,7 +255,7 @@ export async function runChapterCandidates(opts: {
         temperature,
         cacheSystem: auth.promptCache && !!built.params.system
       },
-      { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+      { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
       () => {},
       signal
     )

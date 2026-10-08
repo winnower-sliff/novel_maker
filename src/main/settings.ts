@@ -232,15 +232,15 @@ export async function getApiKeyFor(id: ProviderId): Promise<string> {
   return decodeKey(readStored().apiKeys[id])
 }
 
-export async function getLlmAuth(): Promise<LlmAuth> {
-  const stored = readStored()
-  const preset = providerPreset(stored.provider)
-  const profile = profileFor(stored, stored.provider)
-  const key = decodeKey(stored.apiKeys[stored.provider])
-  const protocol = effectiveProtocol(stored.provider, profile.protocol)
+/** 组装某 provider 的即时鉴权（读其 profile / key / 协议），供默认与 override 路径共用 */
+function authForProvider(stored: StoredSettings, id: ProviderId): LlmAuth {
+  const preset = providerPreset(id)
+  const profile = profileFor(stored, id)
+  const key = decodeKey(stored.apiKeys[id])
+  const protocol = effectiveProtocol(id, profile.protocol)
   return {
-    provider: stored.provider,
-    apiKey: stored.provider === 'ollama' ? key || 'ollama' : key,
+    provider: id,
+    apiKey: id === 'ollama' ? key || 'ollama' : key,
     baseUrl: profile.baseUrl.trim() || preset.baseUrl,
     needsKey: preset.needsKey,
     supportsCache: preset.supportsCache,
@@ -248,6 +248,11 @@ export async function getLlmAuth(): Promise<LlmAuth> {
     contextWindow: profile.contextWindow ?? preset.contextWindow,
     protocol
   }
+}
+
+export async function getLlmAuth(): Promise<LlmAuth> {
+  const stored = readStored()
+  return authForProvider(stored, stored.provider)
 }
 
 /** 旧版路由值是纯模型名字符串，新版是 {provider?, model}；统一归一化 */
@@ -270,12 +275,32 @@ export interface RequestAuth extends LlmAuth {
 
 /**
  * 按用途解析鉴权与模型（跨 provider 路由）：
+ * - overrideProvider 非空时优先：临时改用该 provider 的 profile/defaultModel，忽略 modelRouting（写作页「引擎」临时切换用）
  * - 当前 provider 的 modelRouting[purpose] 可指定 {provider, model}，让记账类任务走本地 ollama 等免费通道
- * - 路由指向的 provider 未配置 Key（且需要 Key）时回退当前 provider 默认模型，并给出 fallbackReason
+ * - 路由/override 指向的 provider 未配置 Key（且需要 Key）时回退当前 provider 默认模型，并给出 fallbackReason
  */
-export async function resolveRequestAuth(purpose?: Purpose): Promise<RequestAuth> {
+export async function resolveRequestAuth(
+  purpose?: Purpose,
+  overrideProvider?: ProviderId
+): Promise<RequestAuth> {
   const stored = readStored()
-  const base = await getLlmAuth()
+  if (overrideProvider) {
+    const preset = providerPreset(overrideProvider)
+    const key = decodeKey(stored.apiKeys[overrideProvider])
+    if (!key && preset.needsKey) {
+      return {
+        ...authForProvider(stored, stored.provider),
+        model: profileFor(stored, stored.provider).defaultModel.trim(),
+        fallbackReason: `指定引擎 ${preset.label} 未配置 API Key，已回退当前 provider`
+      }
+    }
+    return {
+      ...authForProvider(stored, overrideProvider),
+      model: profileFor(stored, overrideProvider).defaultModel.trim(),
+      fallbackReason: ''
+    }
+  }
+  const base = authForProvider(stored, stored.provider)
   const profile = profileFor(stored, stored.provider)
   let model = profile.defaultModel.trim()
   let fallbackReason = ''
@@ -283,22 +308,12 @@ export async function resolveRequestAuth(purpose?: Purpose): Promise<RequestAuth
   if (route) {
     if (route.provider && route.provider !== stored.provider) {
       const targetPreset = providerPreset(route.provider)
-      const targetProfile = profileFor(stored, route.provider)
       const targetKey = decodeKey(stored.apiKeys[route.provider])
       if (!targetKey && targetPreset.needsKey) {
         fallbackReason = `任务 ${purpose} 路由到 ${route.provider} 但未配置 API Key，已回退当前 provider`
       } else {
-        const targetProtocol = effectiveProtocol(route.provider, targetProfile.protocol)
         return {
-          provider: route.provider,
-          apiKey: route.provider === 'ollama' ? targetKey || 'ollama' : targetKey,
-          baseUrl: targetProfile.baseUrl.trim() || targetPreset.baseUrl,
-          needsKey: targetPreset.needsKey,
-          supportsCache: targetPreset.supportsCache,
-          promptCache:
-            targetPreset.supportsCache && targetProfile.promptCache && targetProtocol !== 'openai',
-          contextWindow: targetProfile.contextWindow ?? targetPreset.contextWindow,
-          protocol: targetProtocol,
+          ...authForProvider(stored, route.provider),
           model: route.model,
           fallbackReason: ''
         }

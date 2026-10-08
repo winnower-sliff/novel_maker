@@ -114,7 +114,9 @@ export const ChatParamsSchema = z.object({
   purpose: z.enum(PURPOSES).optional(),
   cacheSystem: z.boolean().optional(),
   thinking: z.boolean().optional(),
-  tools: z.custom<ToolDef[]>((v) => Array.isArray(v)).optional()
+  tools: z.custom<ToolDef[]>((v) => Array.isArray(v)).optional(),
+  /** 临时指定本次请求的 provider（覆盖 modelRouting 与当前默认），仅本次生效、不落库 */
+  provider: ProviderIdSchema.optional()
 })
 
 export const ProjectInputSchema = z.object({
@@ -427,7 +429,9 @@ export const invokeContract = {
         wordTarget: z.number().optional(),
         candidates: z.number().optional(),
         pauseEach: z.boolean().optional(),
-        regenVolumeSummary: z.boolean().optional()
+        regenVolumeSummary: z.boolean().optional(),
+        /** 临时指定批量生成使用的 provider（写作页「引擎」切换用），不落库 */
+        provider: ProviderIdSchema.optional()
       })
     ]),
     ret: ret<BatchSnapshot>()

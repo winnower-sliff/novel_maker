@@ -1,6 +1,7 @@
 // 批量自动写作编排（主进程）：手机熄屏/页面切走后电脑端继续逐章写作，
 // 进度经 write:batch 事件广播 + write:batchStatus 拉取（断连补拉）。
 import type { DonePayload } from '../../shared/contract'
+import type { ProviderId } from '../../shared/providers'
 import type { BatchSnapshot } from '../../shared/types'
 import { enqueueEmbedding } from '../embedding'
 import type { EventSink } from '../eventSink'
@@ -45,6 +46,8 @@ interface InternalBatch extends BatchSnapshot {
     /** 全卷重写语义：完成后自动重新生成该卷卷摘要（启动时先清旧摘要） */
     regenVolumeSummary?: boolean
     volume?: number
+    /** 写作页「引擎」临时指定的生成 provider（不落库） */
+    provider?: ProviderId
   }
 }
 
@@ -121,7 +124,7 @@ function runChapterStep(
 ): Promise<DonePayload> {
   const outline = store.getOutline(outlineId)
   if (!outline) return Promise.reject(new Error('章节不存在'))
-  const { wordTarget, candidates } = b.opts
+  const { wordTarget, candidates, provider } = b.opts
   return new Promise<DonePayload>((resolve, reject) => {
     const settle: SettleCb = (err, payload) => {
       b.currentRid = null
@@ -137,13 +140,17 @@ function runChapterStep(
           outlineId,
           wordTarget ?? 2700,
           candidates,
-          settle
+          settle,
+          provider
         )
       )
       return
     }
     if (wordTarget && wordTarget >= LONG_CHAPTER_THRESHOLD) {
-      trackRid(b, startLongChapterStream(sink, outline.projectId, outlineId, wordTarget, settle))
+      trackRid(
+        b,
+        startLongChapterStream(sink, outline.projectId, outlineId, wordTarget, settle, provider)
+      )
       return
     }
     buildChapterRequest(outline.projectId, outlineId, wordTarget)
@@ -155,6 +162,7 @@ function runChapterStep(
         }
         const { rid, done } = waitStream(sink, built.params, {
           action: 'chapter',
+          provider,
           afterDone: (r) => {
             const clean = stripHtmlComments(r.text)
             const chapter = store.saveChapter({
@@ -226,6 +234,7 @@ async function runBatchLoop(sink: EventSink, b: InternalBatch, ids: string[]): P
           if (!outline) throw new Error('章节不存在')
           await waitTracked(b, sink, buildPolishRequest(outline.projectId, ids[i], focus), {
             action: 'polish',
+            provider: b.opts.provider,
             afterDone: (r) => {
               const chapter = store.saveChapter({
                 outlineId: ids[i],
@@ -415,7 +424,8 @@ export const writeHandlers = {
         candidates: p.candidates,
         pauseEach: p.pauseEach ?? false,
         regenVolumeSummary: p.regenVolumeSummary,
-        volume: volumes.size === 1 ? [...volumes][0] : undefined
+        volume: volumes.size === 1 ? [...volumes][0] : undefined,
+        provider: p.provider
       }
       if (opts.regenVolumeSummary && opts.volume) {
         store.clearVolumeSummary(p.projectId, opts.volume)

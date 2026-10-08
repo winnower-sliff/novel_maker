@@ -1234,7 +1234,7 @@ const TOOLS: AgentTool[] = [
           model: auth.model,
           cacheSystem: auth.promptCache
         },
-        { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+        { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
         () => {},
         ctx.signal
       )

@@ -58,7 +58,7 @@ export async function runSubAgent(ctx: ToolExecContext & { task: string; role: s
         purpose: 'agent',
         cacheSystem: ctx.promptCache
       },
-      { apiKey: ctx.apiKey, baseUrl: ctx.baseUrl },
+      { apiKey: ctx.apiKey, baseUrl: ctx.baseUrl, protocol: ctx.protocol },
       (text) => send({ type: 'delta', parentId, text }),
       signal
     )
