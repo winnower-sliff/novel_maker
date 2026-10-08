@@ -1,4 +1,4 @@
-import { PROVIDER_IDS, type ProviderId, providerPreset } from '@shared/providers'
+import { effectiveProtocol, PROVIDER_IDS, type ProviderId, providerPreset } from '@shared/providers'
 import {
   type EmbeddingStatus,
   type ModelProbeResult,
@@ -48,6 +48,7 @@ export default function Settings() {
   const preset = providerPreset(provider)
   const active = drafts?.[provider] ?? EMPTY_PROFILE
   const keyConfigured = view?.configuredProviders.includes(provider) ?? false
+  const protocol = effectiveProtocol(provider, active.protocol)
 
   const patchDraft = (patch: Partial<ProviderProfile>): void => {
     setDrafts((prev) => {
@@ -65,7 +66,10 @@ export default function Settings() {
   }
 
   const resetPreset = (): void => {
-    patchDraft({ baseUrl: preset.baseUrl, defaultModel: preset.defaultModel })
+    patchDraft({
+      baseUrl: preset.baseUrl,
+      defaultModel: preset.defaultModel
+    })
     setProbeResult(null)
     setProbeError('')
   }
@@ -95,6 +99,7 @@ export default function Settings() {
       defaultModel: active.defaultModel,
       customModels: active.customModels,
       modelRouting: active.modelRouting,
+      protocol: provider === 'custom' ? protocol : undefined,
       quota5hPrompts: Math.max(0, parseInt(quota5h, 10) || 0),
       promptCache: active.promptCache
     }
@@ -119,7 +124,8 @@ export default function Settings() {
       .probe({
         provider,
         apiKey: apiKey.trim() !== '' ? apiKey.trim() : undefined,
-        baseUrl: active.baseUrl.trim() !== '' ? active.baseUrl.trim() : undefined
+        baseUrl: active.baseUrl.trim() !== '' ? active.baseUrl.trim() : undefined,
+        protocol
       })
       .then(setProbeResult)
       .catch((err: unknown) => setProbeError((err as Error).message))
@@ -127,11 +133,13 @@ export default function Settings() {
   }
 
   const probeHint =
-    provider === 'ollama'
-      ? '探测 /v1/models，失败回退 /api/tags（本地 Ollama 无需 Key）'
-      : provider === 'deepseek'
-        ? '探测 https://api.deepseek.com/models（OpenAI 兼容模型列表）；失败回退内置列表'
-        : '探测 /v1/models 端点；若服务端未实现则回退到内置模型列表'
+    protocol === 'openai'
+      ? '探测 /v1/models（OpenAI 兼容模型列表）；失败回退内置列表'
+      : provider === 'ollama'
+        ? '探测 /v1/models，失败回退 /api/tags（本地 Ollama 无需 Key）'
+        : provider === 'deepseek'
+          ? '探测 https://api.deepseek.com/models（OpenAI 兼容模型列表）；失败回退内置列表'
+          : '探测 /v1/models 端点；若服务端未实现则回退到内置模型列表'
 
   return (
     <div className="h-full overflow-y-auto">
@@ -176,28 +184,47 @@ export default function Settings() {
             <Input
               type="password"
               value={apiKey}
-              disabled={provider === 'ollama'}
+              disabled={!preset.needsKey}
               onChange={(e) => setApiKey(e.target.value)}
               placeholder={
-                provider === 'ollama'
-                  ? preset.keyHint
-                  : keyConfigured
-                    ? '留空则不修改'
-                    : preset.keyHint
+                !preset.needsKey ? preset.keyHint : keyConfigured ? '留空则不修改' : preset.keyHint
               }
             />
             <div className="mt-1.5 text-xs text-zinc-600">
               密钥使用系统凭据库加密存储，仅保存在本机，且各 Provider 分别保存。
             </div>
           </div>
+          {provider === 'custom' && (
+            <div className="max-w-xs">
+              <Label>API 协议</Label>
+              <Select
+                value={protocol}
+                onChange={(e) => patchDraft({ protocol: e.target.value as 'anthropic' | 'openai' })}
+              >
+                <option value="anthropic">Anthropic 兼容（/v1/messages）</option>
+                <option value="openai">OpenAI 兼容（/v1/chat/completions）</option>
+              </Select>
+              <div className="mt-1.5 text-xs text-zinc-600">
+                按网关实际支持的协议选择；OpenAI 兼容可接 LM Studio / llama.cpp / vLLM / one-api
+                等。
+              </div>
+            </div>
+          )}
           <div>
             <div className="flex items-end gap-2">
               <div className="flex-1">
-                <Label>API Base URL（Anthropic 兼容）</Label>
+                <Label>
+                  API Base URL（{protocol === 'openai' ? 'OpenAI 兼容' : 'Anthropic 兼容'}）
+                </Label>
                 <Input
                   value={active.baseUrl}
                   onChange={(e) => patchDraft({ baseUrl: e.target.value })}
-                  placeholder={preset.baseUrl || 'https://example.com/anthropic'}
+                  placeholder={
+                    preset.baseUrl ||
+                    (protocol === 'openai'
+                      ? 'http://localhost:1234/v1'
+                      : 'https://example.com/anthropic')
+                  }
                 />
               </div>
               <Button variant="ghost" onClick={resetPreset}>
@@ -326,8 +353,8 @@ export default function Settings() {
             <input
               id="prompt-cache"
               type="checkbox"
-              checked={preset.supportsCache && active.promptCache}
-              disabled={!preset.supportsCache}
+              checked={preset.supportsCache && protocol !== 'openai' && active.promptCache}
+              disabled={!preset.supportsCache || protocol === 'openai'}
               onChange={(e) => patchDraft({ promptCache: e.target.checked })}
               className="h-4 w-4 cursor-pointer accent-amber-600 disabled:cursor-not-allowed"
             />
@@ -336,9 +363,11 @@ export default function Settings() {
             </label>
           </div>
           <div className="text-xs text-zinc-600">
-            {preset.supportsCache
-              ? '开启后 system 块带 cache_control，重复注入设定/文风指令时命中缓存计价（用量明细中「缓存读」非零即生效）。'
-              : `${preset.label} 不支持 cache_control，缓存自动关闭。`}
+            {preset.supportsCache && protocol === 'openai'
+              ? 'OpenAI 兼容协议不支持 cache_control，缓存自动关闭。'
+              : preset.supportsCache
+                ? '开启后 system 块带 cache_control，重复注入设定/文风指令时命中缓存计价（用量明细中「缓存读」非零即生效）。'
+                : `${preset.label} 不支持 cache_control，缓存自动关闭。`}
           </div>
         </Card>
 

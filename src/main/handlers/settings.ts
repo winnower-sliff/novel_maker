@@ -1,4 +1,4 @@
-import { providerPreset } from '../../shared/providers'
+import { effectiveProtocol, providerPreset } from '../../shared/providers'
 import { probeModels } from '../llm'
 import { getServerStatus } from '../serverState'
 import { getApiKeyFor, loadSettingsView, saveSettings } from '../settings'
@@ -17,6 +17,7 @@ export const settingsHandlers = {
     const apiKey = opts?.apiKey?.trim() || (await getApiKeyFor(provider))
     const baseUrl = opts?.baseUrl?.trim() || providerView.baseUrl
     if (!apiKey && providerPreset(provider).needsKey) throw new Error('未配置 API Key')
-    return probeModels({ provider, apiKey, baseUrl })
+    const protocol = opts?.protocol ?? effectiveProtocol(provider, providerView.protocol)
+    return probeModels({ provider, apiKey, baseUrl, protocol })
   }
 } satisfies PartialHandlerTable

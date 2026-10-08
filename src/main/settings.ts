@@ -2,7 +2,14 @@ import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { app, safeStorage } from 'electron'
-import { isProviderId, PROVIDER_IDS, type ProviderId, providerPreset } from '../shared/providers'
+import {
+  effectiveProtocol,
+  isProviderId,
+  PROVIDER_IDS,
+  type Protocol,
+  type ProviderId,
+  providerPreset
+} from '../shared/providers'
 import type {
   ModelRouting,
   ProviderProfile,
@@ -47,6 +54,8 @@ export interface LlmAuth {
   needsKey: boolean
   supportsCache: boolean
   promptCache: boolean
+  /** 生效端点协议：custom 看 profile 覆盖，其余用预设 */
+  protocol: Protocol
 }
 
 function settingsFile(): string {
@@ -226,13 +235,15 @@ export async function getLlmAuth(): Promise<LlmAuth> {
   const preset = providerPreset(stored.provider)
   const profile = profileFor(stored, stored.provider)
   const key = decodeKey(stored.apiKeys[stored.provider])
+  const protocol = effectiveProtocol(stored.provider, profile.protocol)
   return {
     provider: stored.provider,
     apiKey: stored.provider === 'ollama' ? key || 'ollama' : key,
     baseUrl: profile.baseUrl.trim() || preset.baseUrl,
     needsKey: preset.needsKey,
     supportsCache: preset.supportsCache,
-    promptCache: preset.supportsCache && profile.promptCache
+    promptCache: preset.supportsCache && profile.promptCache && protocol !== 'openai',
+    protocol
   }
 }
 
@@ -274,13 +285,16 @@ export async function resolveRequestAuth(purpose?: Purpose): Promise<RequestAuth
       if (!targetKey && targetPreset.needsKey) {
         fallbackReason = `任务 ${purpose} 路由到 ${route.provider} 但未配置 API Key，已回退当前 provider`
       } else {
+        const targetProtocol = effectiveProtocol(route.provider, targetProfile.protocol)
         return {
           provider: route.provider,
           apiKey: route.provider === 'ollama' ? targetKey || 'ollama' : targetKey,
           baseUrl: targetProfile.baseUrl.trim() || targetPreset.baseUrl,
           needsKey: targetPreset.needsKey,
           supportsCache: targetPreset.supportsCache,
-          promptCache: targetPreset.supportsCache && targetProfile.promptCache,
+          promptCache:
+            targetPreset.supportsCache && targetProfile.promptCache && targetProtocol !== 'openai',
+          protocol: targetProtocol,
           model: route.model,
           fallbackReason: ''
         }
@@ -331,7 +345,9 @@ export async function saveSettings(patch: SettingsPatch): Promise<SettingsView> 
         defaultModel: patch.defaultModel?.trim() || prev.defaultModel,
         customModels: patch.customModels ?? prev.customModels,
         modelRouting: patch.modelRouting ?? prev.modelRouting,
-        promptCache: patch.promptCache !== undefined ? patch.promptCache : prev.promptCache
+        promptCache: patch.promptCache !== undefined ? patch.promptCache : prev.promptCache,
+        // 仅 custom 存协议覆盖；非 custom 一律清除，固定走预设
+        protocol: provider === 'custom' ? (patch.protocol ?? prev.protocol) : undefined
       }
     },
     apiKeys: { ...stored.apiKeys },

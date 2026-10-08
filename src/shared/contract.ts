@@ -181,6 +181,8 @@ export const SettingsPatchSchema = z.object({
   defaultModel: z.string().optional(),
   customModels: z.string().optional(),
   modelRouting: z.custom<ModelRouting>((v) => typeof v === 'object' && v !== null).optional(),
+  /** 仅 custom 生效：端点协议；缺省保留原值 */
+  protocol: z.enum(['anthropic', 'openai']).optional(),
   quota5hPrompts: z.number().optional(),
   promptCache: z.boolean().optional(),
   currentProjectId: z.string().optional()
@@ -195,7 +197,8 @@ export const ServerConfigPatchSchema = z.object({
 export const ModelProbeOptionsSchema = z.object({
   provider: ProviderIdSchema.optional(),
   apiKey: z.string().optional(),
-  baseUrl: z.string().optional()
+  baseUrl: z.string().optional(),
+  protocol: z.enum(['anthropic', 'openai']).optional()
 })
 
 export const WorldbuildGenParamsSchema = z.object({

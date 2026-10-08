@@ -1,5 +1,6 @@
-import { type ProviderId, providerPreset } from '../shared/providers'
+import { type Protocol, type ProviderId, providerPreset } from '../shared/providers'
 import type { ChatParams, ChatResult, ModelProbeResult, UsageInfo } from '../shared/types'
+import { chatStreamOpenai, openaiHeaders, openaiModelsUrl } from './llmOpenai'
 
 const ANTHROPIC_VERSION = '2023-06-01'
 
@@ -12,7 +13,7 @@ export class LlmError extends Error {
   }
 }
 
-function normalizeBase(baseUrl: string): string {
+export function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '')
 }
 
@@ -30,10 +31,13 @@ function emptyUsage(): UsageInfo {
 
 export async function chatStream(
   params: ChatParams,
-  auth: { apiKey: string; baseUrl: string },
+  auth: { apiKey: string; baseUrl: string; protocol?: Protocol },
   onDelta: (text: string) => void,
   signal?: AbortSignal
 ): Promise<ChatResult> {
+  if (auth.protocol === 'openai') {
+    return chatStreamOpenai(params, auth, onDelta, signal)
+  }
   const started = Date.now()
   const url = `${normalizeBase(auth.baseUrl)}/v1/messages`
   const body: Record<string, unknown> = {
@@ -202,12 +206,19 @@ export async function probeModels(auth: {
   provider: ProviderId
   apiKey: string
   baseUrl: string
+  protocol?: Protocol
 }): Promise<ModelProbeResult> {
   const base = normalizeBase(auth.baseUrl)
   const builtin = (): ModelProbeResult => ({
     source: 'builtin',
     models: [...providerPreset(auth.provider).builtinModels]
   })
+
+  if (auth.protocol === 'openai') {
+    const ids = await listModelIds(openaiModelsUrl(base), openaiHeaders(auth.apiKey))
+    if (ids) return { source: 'endpoint', models: ids }
+    return builtin()
+  }
 
   if (auth.provider === 'ollama') {
     const viaOpenai = await listModelIds(`${base}/v1/models`, {})
