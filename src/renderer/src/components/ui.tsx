@@ -2,6 +2,7 @@ import type {
   ButtonHTMLAttributes,
   InputHTMLAttributes,
   ReactNode,
+  Ref,
   SelectHTMLAttributes,
   TextareaHTMLAttributes
 } from 'react'
@@ -37,10 +38,12 @@ export function Input({ className = '', ...props }: InputHTMLAttributes<HTMLInpu
 
 export function Textarea({
   className = '',
+  ref,
   ...props
-}: TextareaHTMLAttributes<HTMLTextAreaElement>) {
+}: TextareaHTMLAttributes<HTMLTextAreaElement> & { ref?: Ref<HTMLTextAreaElement> }) {
   return (
     <textarea
+      ref={ref}
       className={`w-full resize-none rounded-md border border-zinc-700 bg-zinc-900 px-3 py-2 text-sm leading-relaxed text-zinc-200 placeholder-zinc-500 outline-none focus:border-amber-600 ${className}`}
       {...props}
     />

@@ -8,6 +8,8 @@ import { fmtRelative } from '@mobile/lib/format'
 import { findCompactPoint, toolLabel, toolSummary } from '@mobile/lib/agentTurns'
 import { qk } from '@renderer/lib/queries'
 import {
+  cancelQueued,
+  queueRun,
   resolveConfirm,
   retryLoadActive,
   startRun,
@@ -205,6 +207,19 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const activeKey = tabsState?.activeKey ?? ''
   const tabs = tabsState?.tabs ?? []
   const input = useAgentTabsStore((s) => (activeKey ? s.drafts[activeKey] ?? '' : ''))
+  const queuedNext = useAgentRunStore((s) => s.queuedNext)
+
+  // 输入框自动增高（内容超过上限后内部滚动）
+  const taRef = useRef<HTMLTextAreaElement | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: input/activeKey 是故意的重触发信号（内容变化/切 tab 恢复草稿时重算高度）
+  useEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    // 挂载首帧 CSS/布局未就绪时 scrollHeight 可能为 0，误设 0px 后空输入不再触发重算——跳过保持自然高度
+    const h = el.scrollHeight
+    el.style.height = h > 0 ? `${Math.min(h, 128)}px` : ''
+  }, [input, activeKey])
 
   // 项目变化：不中断旧任务，加载新项目最近会话（同项目重复挂载为幂等 no-op）
   useEffect(() => {
@@ -316,11 +331,23 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   }
 
   const send = (): void => {
-    if (!input.trim() || running) return
-    startRun(input)
+    const text = input.trim()
+    if (!text) return
+    if (running) {
+      // 运行中：入队（已有排队时按钮已禁用，此处防御）
+      if (queuedNext) return
+      queueRun(text)
+    } else {
+      startRun(input)
+    }
     if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, '')
     atBottomRef.current = true
     setShowJump(false)
+  }
+
+  const cancelQueue = (): void => {
+    const text = cancelQueued()
+    if (text !== null && activeKey) useAgentTabsStore.getState().setDraft(activeKey, text)
   }
 
   const stop = (): void => {
@@ -514,26 +541,42 @@ export default function AgentChat({ projectId }: { projectId: string }) {
         )}
       </div>
 
+      {queuedNext && (
+        <div className="flex items-center gap-2 border-t border-amber-900/40 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300">
+          <span className="shrink-0">已排队</span>
+          <span className="min-w-0 flex-1 truncate text-amber-200/80">{queuedNext.text}</span>
+          <button
+            type="button"
+            onClick={cancelQueue}
+            className="shrink-0 rounded px-1.5 py-0.5 text-amber-400 active:bg-amber-900/40"
+          >
+            取消
+          </button>
+        </div>
+      )}
       <div className="flex items-end gap-2 border-t border-zinc-800 bg-zinc-950/95 p-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
         <Textarea
+          ref={taRef}
           value={input}
           onChange={(e) => {
             if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, e.target.value)
           }}
           rows={1}
           className="max-h-32 min-h-11 flex-1 py-2.5"
-          placeholder={running ? '智能体工作中…' : '输入指令…'}
-          disabled={running}
+          placeholder={running ? '可继续输入，排队完成后自动发送…' : '输入指令…'}
         />
-        {running ? (
+        {running && (
           <Button variant="danger" className="shrink-0 px-3.5" onClick={stop}>
             停止
           </Button>
-        ) : (
-          <Button className="shrink-0 px-3.5" disabled={!input.trim()} onClick={send}>
-            发送
-          </Button>
         )}
+        <Button
+          className="shrink-0 px-3.5"
+          disabled={!input.trim() || (!!queuedNext && running)}
+          onClick={send}
+        >
+          {running ? '排队' : '发送'}
+        </Button>
       </div>
       {running && (
         <div className="flex items-center justify-center gap-1.5 border-t border-zinc-900 py-1">

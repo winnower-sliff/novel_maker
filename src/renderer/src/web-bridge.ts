@@ -59,6 +59,9 @@ function ensureSource(): void {
   source.onopen = () => {
     reconnectDelay = 1000
     emitState('open')
+    // 断流期间的事件可能整段丢失（含尾部终态——没有后续事件到来就不会触发 gap 补拉），
+    // 通知业务层对所有在途会话做一次无条件对账
+    window.dispatchEvent(new CustomEvent('nm-sse-open'))
   }
   source.onmessage = (ev: MessageEvent<string>) => {
     try {

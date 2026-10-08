@@ -10,6 +10,8 @@ import { useEffect, useRef, useState } from 'react'
 import { AgentInstructionsPanel } from '../../../wizard/AgentInstructionsPanel'
 import type { SubProc } from '../../../wizard/agentRunStore'
 import {
+  cancelQueued,
+  queueRun,
   renameSessionTitle,
   resolveConfirm,
   retryLoadActive,
@@ -285,6 +287,7 @@ export default function Agent({ projectId }: { projectId: string }) {
   const sessionId = useAgentRunStore((s) => s.sessionId)
   const loadFailed = useAgentRunStore((s) => s.loadFailed)
   const runningIds = useAgentRunStore((s) => s.runningIds)
+  const queuedNext = useAgentRunStore((s) => s.queuedNext)
   const confirmTarget = useAgentConfirmTarget()
 
   // tab 会话模型：每项目一组 tab（含至多一个草稿 tab），草稿/滚动随 tab 保留
@@ -292,6 +295,20 @@ export default function Agent({ projectId }: { projectId: string }) {
   const activeKey = tabsState?.activeKey ?? ''
   const tabs = tabsState?.tabs ?? []
   const input = useAgentTabsStore((s) => (activeKey ? (s.drafts[activeKey] ?? '') : ''))
+
+  // 触屏设备（平板等）回车兜底为换行，发送只走按钮
+  const [coarsePointer] = useState(() => window.matchMedia?.('(pointer: coarse)').matches ?? false)
+  // 输入框自动增高（内容超过上限后内部滚动）
+  const taRef = useRef<HTMLTextAreaElement | null>(null)
+  // biome-ignore lint/correctness/useExhaustiveDependencies: input/activeKey 是故意的重触发信号（内容变化/切 tab 恢复草稿时重算高度）
+  useEffect(() => {
+    const el = taRef.current
+    if (!el) return
+    el.style.height = 'auto'
+    // 挂载首帧 CSS/布局未就绪时 scrollHeight 可能为 0，误设 0px 后空输入不再触发重算——跳过保持自然高度
+    const h = el.scrollHeight
+    el.style.height = h > 0 ? `${Math.min(h, 192)}px` : ''
+  }, [input, activeKey])
 
   const refreshSessions = (pid: string): void => {
     void queryClient.invalidateQueries({ queryKey: qk.agentSessions(pid) })
@@ -397,11 +414,23 @@ export default function Agent({ projectId }: { projectId: string }) {
   })()
 
   const send = (): void => {
-    if (!input.trim() || running || !model) return
-    startRun(input, model)
+    const text = input.trim()
+    if (!text || !model) return
+    if (running) {
+      // 运行中：入队（已有排队时按钮已禁用，此处防御）
+      if (queuedNext) return
+      queueRun(text, model)
+    } else {
+      startRun(input, model)
+    }
     if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, '')
     atBottomRef.current = true
     setShowJump(false)
+  }
+
+  const cancelQueue = (): void => {
+    const text = cancelQueued()
+    if (text !== null && activeKey) useAgentTabsStore.getState().setDraft(activeKey, text)
   }
 
   const stop = (): void => {
@@ -839,6 +868,9 @@ export default function Agent({ projectId }: { projectId: string }) {
                   {!!doneInfo.autoContinues && doneInfo.autoContinues > 0 && (
                     <Badge tone="amber">自动续跑 ×{doneInfo.autoContinues}</Badge>
                   )}
+                  {!!doneInfo.autoCompacts && doneInfo.autoCompacts > 0 && (
+                    <Badge tone="amber">自动压缩 ×{doneInfo.autoCompacts}</Badge>
+                  )}
                   {doneInfo.subagents > 0 && (
                     <Badge tone="amber">子任务 {doneInfo.subagents} 次</Badge>
                   )}
@@ -850,30 +882,53 @@ export default function Agent({ projectId }: { projectId: string }) {
       </Card>
 
       <div className="pb-[env(safe-area-inset-bottom)]">
+        {queuedNext && (
+          <div className="mb-2 flex items-center gap-2 rounded-md border border-amber-700/40 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300">
+            <span className="shrink-0">已排队，完成后自动发送</span>
+            <span className="min-w-0 flex-1 truncate text-amber-200/80">{queuedNext.text}</span>
+            <button
+              type="button"
+              onClick={cancelQueue}
+              className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-amber-400 transition-colors hover:bg-amber-900/40"
+            >
+              取消
+            </button>
+          </div>
+        )}
         <Textarea
+          ref={taRef}
           rows={3}
           value={input}
           onChange={(e) => {
             if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, e.target.value)
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send()
+            if (e.key !== 'Enter') return
+            if (e.ctrlKey || e.metaKey) {
+              e.preventDefault()
+              send()
+              return
+            }
+            // 触屏兜底：回车保持换行；Shift+Enter 换行；输入法组词态回车上屏
+            if (e.shiftKey || coarsePointer || e.nativeEvent.isComposing) return
+            e.preventDefault()
+            send()
           }}
-          placeholder="描述任务，Ctrl+Enter 发送，例如：帮我把主角的人物卡扩写到 500 字"
-          disabled={running}
+          placeholder="描述任务，Enter 发送，例如：帮我把主角的人物卡扩写到 500 字"
         />
         <div className="mt-2 flex items-center justify-between">
-          <span className="hidden text-xs text-zinc-600 sm:inline">Ctrl+Enter 发送</span>
+          <span className="hidden text-xs text-zinc-600 sm:inline">
+            Enter 发送，Shift+Enter 换行
+          </span>
           <div className="flex gap-2">
-            {running ? (
+            {running && (
               <Button variant="danger" onClick={stop}>
                 停止
               </Button>
-            ) : (
-              <Button onClick={send} disabled={!input.trim() || !model}>
-                发送
-              </Button>
             )}
+            <Button onClick={send} disabled={!input.trim() || !model || (!!queuedNext && running)}>
+              {running ? '排队' : '发送'}
+            </Button>
           </div>
         </div>
       </div>

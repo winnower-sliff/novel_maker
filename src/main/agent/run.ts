@@ -1,4 +1,5 @@
 import type { AgentToolResultEvent, EventChannels, EventContract } from '../../shared/contract'
+import { classifyLlmError } from '../../shared/llmError'
 import type {
   AgentDonePayload,
   AgentToolResultStatus,
@@ -35,6 +36,11 @@ const CONFIRM_TIMEOUT_MS = 10 * 60 * 1000
 /** 输入 token 超过该阈值时在工具结果里软提示建议压缩（不强制，每轮至多一次） */
 const COMPACT_NUDGE_TOKENS = 100_000
 
+/** 自动压缩兜底预算：输入超限（context_too_long）时程序化压缩的次数与保留字符预算（二级递减） */
+const MAX_AUTO_COMPACTS = 2
+const AUTO_COMPACT_BUDGET = 30_000
+const AUTO_COMPACT_BUDGET_HARD = 8_000
+
 /** 自动续跑预算：检测到疑似中途停摆时自动注入「继续」的次数上限，防失控烧钱 */
 const MAX_AUTO_CONTINUES = 2
 
@@ -64,6 +70,131 @@ function looksLikePaused(text: string, toolUseCount: number, compacted: boolean)
   if (compacted) return true
   if (/[?？]\s*$/.test(t)) return true
   return STOP_PHRASES.some((re) => re.test(t))
+}
+
+/** 单条消息粗估字符量（自动压缩预算用，无需精确 token） */
+function msgSize(m: ChatMessage): number {
+  if (typeof m.content === 'string') return m.content.length
+  let n = 0
+  for (const b of m.content) {
+    if (b.type === 'text') n += b.text.length
+    else if (b.type === 'tool_use') n += JSON.stringify(b.input ?? {}).length + 40
+    else if (b.type === 'tool_result')
+      n +=
+        (typeof b.content === 'string'
+          ? b.content.length
+          : JSON.stringify(b.content ?? '').length) + 20
+  }
+  return n
+}
+
+function isToolResultMsg(m: ChatMessage): boolean {
+  return (
+    m.role === 'user' &&
+    Array.isArray(m.content) &&
+    m.content.length > 0 &&
+    m.content.every((b) => b.type === 'tool_result')
+  )
+}
+
+interface MsgGroup {
+  msgs: ChatMessage[]
+  size: number
+  toolNames: string[]
+}
+
+/** 按轮切原子组：assistant 与其紧随的 tool_result user 绑定（配对约束不可拆散），普通 user 独立成组 */
+function groupMessages(messages: ChatMessage[]): MsgGroup[] {
+  const groups: MsgGroup[] = []
+  for (let i = 0; i < messages.length; ) {
+    const m = messages[i]
+    if (m.role === 'assistant') {
+      const next = messages[i + 1]
+      const msgs = next && isToolResultMsg(next) ? [m, next] : [m]
+      i += msgs.length
+      const toolNames: string[] = []
+      if (Array.isArray(m.content))
+        for (const b of m.content) if (b.type === 'tool_use') toolNames.push(b.name)
+      groups.push({ msgs, size: msgs.reduce((n, x) => n + msgSize(x), 0), toolNames })
+    } else {
+      groups.push({ msgs: [m], size: msgSize(m), toolNames: [] })
+      i++
+    }
+  }
+  return groups
+}
+
+function userText(m: ChatMessage): string {
+  if (typeof m.content === 'string') return m.content
+  return m.content
+    .filter((b) => b.type === 'text')
+    .map((b) => b.text)
+    .join('')
+}
+
+function firstUserText(messages: ChatMessage[]): string {
+  const first = messages[0]
+  if (first?.role !== 'user') return ''
+  return userText(first)
+}
+
+/**
+ * 程序化自动压缩（输入超限兜底）：从尾往前按字符预算保留最近的工作（原子组切割），
+ * 早期历史替换为线索摘要（原始任务 + 被丢弃段的工作统计），至少保留最后一组。
+ * 落库为合成 compact_context 调用（input.summary 非空），重开会话回灌时按摘要裁剪。
+ */
+function buildAutoCompact(
+  messages: ChatMessage[],
+  budget: number
+): { summary: string; kept: ChatMessage[] } {
+  const groups = groupMessages(messages)
+  const kept: MsgGroup[] = []
+  let used = 0
+  for (let i = groups.length - 1; i >= 0; i--) {
+    const g = groups[i]
+    if (kept.length > 0 && used + g.size > budget) break
+    kept.unshift(g)
+    used += g.size
+  }
+  const lines: string[] = []
+  const taskText = firstUserText(messages).slice(0, 800).trim()
+  if (taskText.startsWith('【上下文压缩】')) {
+    lines.push(`前次压缩摘要（继承，可能截取）：\n${taskText}`)
+  } else if (taskText) {
+    lines.push(`原始任务（截取）：${taskText}`)
+  }
+  // 前次压缩摘要组若落在保留区头部：内容已继承进新摘要，剔除避免双份
+  let absorbed = 0
+  if (
+    kept.length > 1 &&
+    kept[0].msgs[0]?.role === 'user' &&
+    userText(kept[0].msgs[0]).startsWith('【上下文压缩】')
+  ) {
+    kept.shift()
+    absorbed++
+  }
+  // 保留区头部若是普通 user 指令：并入摘要行，避免摘要后紧跟连续 user 消息（兼容层风险）
+  if (kept.length > 1) {
+    const head = kept[0].msgs[0]
+    if (head?.role === 'user' && !isToolResultMsg(head)) {
+      const t = userText(head).slice(0, 400).trim()
+      if (t) lines.push(`用户中途指令（保留）：${t}`)
+      kept.shift()
+      absorbed++
+    }
+  }
+  const dropped = groups.slice(0, groups.length - kept.length - absorbed)
+  if (dropped.length > 0) {
+    const toolCount = new Map<string, number>()
+    for (const g of dropped)
+      for (const n of g.toolNames) toolCount.set(n, (toolCount.get(n) ?? 0) + 1)
+    const stat = [...toolCount.entries()].map(([n, c]) => `${n}×${c}`).join('、')
+    lines.push(
+      `已省略早期 ${dropped.length} 组对话${stat ? `（工具调用：${stat}）` : ''}：详细内容已不可恢复，需要早期结论或数据时用工具重新查询项目资料，不要凭空回忆`
+    )
+  }
+  lines.push('以下从最近的工作继续，直接调用工具完成任务')
+  return { summary: lines.join('\n'), kept: kept.flatMap((g) => g.msgs) }
 }
 
 interface RunState {
@@ -253,6 +384,7 @@ export async function runAgent(opts: {
   let compactSummary = ''
   let toolUseCount = 0
   let autoContinues = 0
+  let autoCompacts = 0
 
   const messages = [...opts.messages]
   const tools = getAgentToolDefs()
@@ -270,23 +402,62 @@ export async function runAgent(opts: {
   try {
     for (let turn = 0; turn < MAX_TURNS; turn++) {
       turnCount = turn + 1
-      const result = await chatStream(
-        {
-          model: opts.model || auth.model,
-          system,
-          messages,
-          tools,
-          maxTokens: AGENT_MAX_TOKENS,
-          purpose: 'agent',
-          cacheSystem: auth.promptCache
-        },
-        { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
-        (text) => {
-          pendingTurnText += text
-          send('agent:delta', text)
-        },
-        signal
-      )
+      let result: Awaited<ReturnType<typeof chatStream>>
+      try {
+        result = await chatStream(
+          {
+            model: opts.model || auth.model,
+            system,
+            messages,
+            tools,
+            maxTokens: AGENT_MAX_TOKENS,
+            purpose: 'agent',
+            cacheSystem: auth.promptCache
+          },
+          { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
+          (text) => {
+            pendingTurnText += text
+            send('agent:delta', text)
+          },
+          signal
+        )
+      } catch (err) {
+        // 自动压缩兜底：输入超上下文限制时程序化压缩后重试（不耗 MAX_TURNS），预算用尽才真报错
+        const errMsg = (err as Error)?.message ?? String(err)
+        if (
+          signal.aborted ||
+          autoCompacts >= MAX_AUTO_COMPACTS ||
+          classifyLlmError(errMsg).category !== 'context_too_long'
+        )
+          throw err
+        autoCompacts++
+        pendingTurnText = ''
+        const budget = autoCompacts === 1 ? AUTO_COMPACT_BUDGET : AUTO_COMPACT_BUDGET_HARD
+        const { summary, kept } = buildAutoCompact(messages, budget)
+        const cid = `auto_compact_${Date.now()}`
+        persist({
+          kind: 'tool_call',
+          call: { id: cid, name: 'compact_context', input: { summary }, state: 'running' }
+        })
+        send('agent:toolCall', {
+          id: cid,
+          name: 'compact_context',
+          input: { summary },
+          state: 'running'
+        })
+        const note = `已自动压缩（第 ${autoCompacts} 次）：输入超出模型上下文长度限制，早期历史已替换为线索摘要，保留了最近的工作。不要输出确认性文字，直接继续调用工具完成任务`
+        emitToolResult({ id: cid, ok: true, result: note })
+        messages.length = 0
+        messages.push({
+          role: 'user',
+          content: `【上下文压缩】以下摘要替代了此前全部对话历史：\n${summary}`
+        })
+        messages.push(...kept)
+        compacted = true
+        compactSummary = summary
+        turn--
+        continue
+      }
       requests++
       // transcript 按轮合并落库（空文本也落：纯工具轮的结构需要 assistant 占位）
       persist({ kind: 'assistant', text: result.text })
@@ -502,6 +673,7 @@ export async function runAgent(opts: {
     durationMs: Date.now() - started,
     toolResults: runState.toolResults,
     autoContinues,
+    autoCompacts,
     ...(compacted ? { compact: { summary: compactSummary } } : {})
   }
 }

@@ -595,6 +595,8 @@ export interface AgentDonePayload {
   toolResults?: AgentToolResultEvent[]
   /** 自动续跑次数：检测到任务中途停摆（压缩后停顿/征询语）时主进程自动注入「继续」的次数 */
   autoContinues?: number
+  /** 上下文超限触发的程序化自动压缩次数 */
+  autoCompacts?: number
   /** 本 run 内发生过上下文压缩时携带最后一次压缩摘要（渲染端据此在压缩点渲染折叠条） */
   compact?: { summary: string }
 }

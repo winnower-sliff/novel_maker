@@ -31,6 +31,12 @@ export interface SubProc {
   running: boolean
 }
 
+/** 运行中排队的下一条指令（text + 发起排队时的模型选择） */
+export interface QueuedNext {
+  text: string
+  model?: string
+}
+
 /** 单会话缓冲：服务端事件的本地投影材料 + 运行态 */
 interface SessionBuf {
   id: string
@@ -54,6 +60,8 @@ interface SessionBuf {
   loadFail: string
   lastTouch: number
   wasRunning: boolean
+  /** 运行中排队待发的下一条指令（单条；成功收尾后自动续发） */
+  queuedNext: QueuedNext | null
 }
 
 interface AgentRunState {
@@ -74,6 +82,8 @@ interface AgentRunState {
   runningIds: string[]
   /** active 会话事件拉取失败（区别于 run 错误，可重试） */
   loadFailed: boolean
+  /** active 会话（或草稿）的排队待发指令 */
+  queuedNext: QueuedNext | null
 }
 
 export const useAgentRunStore = create<AgentRunState>(() => ({
@@ -90,7 +100,8 @@ export const useAgentRunStore = create<AgentRunState>(() => ({
   doneInfo: null,
   subProcs: {},
   runningIds: [],
-  loadFailed: false
+  loadFailed: false,
+  queuedNext: null
 }))
 
 // —— 模块级可变结构 ——
@@ -103,6 +114,8 @@ const pendingStarts = new Map<string | null, string>()
 /** 草稿视图的兜底错误（activeId=null 时无处挂 error） */
 let draftError = ''
 let draftErrorHint: LlmErrorHint | null = null
+/** 草稿起步 invoke 在途时的排队指令（会话 id 未知，run 建立后转入该会话缓冲） */
+let draftQueued: QueuedNext | null = null
 /** 当前项目在快照里仍 running 但本地无缓冲的会话（驱动活跃轮询） */
 const foreignRunning = new Set<string>()
 /** 会话缓冲上限：超出时淘汰非活跃非运行的 LRU */
@@ -138,7 +151,8 @@ function ensureBuf(sid: string): SessionBuf {
     interrupted: false,
     loadFail: '',
     lastTouch: Date.now(),
-    wasRunning: false
+    wasRunning: false,
+    queuedNext: null
   }
   useAgentRunStore.setState({ sessions: { ...s.sessions, [sid]: buf } })
   evictStaleBufs()
@@ -150,7 +164,7 @@ function evictStaleBufs(): void {
   const ids = Object.keys(s.sessions)
   if (ids.length <= MAX_BUFS) return
   const evictable = ids
-    .filter((id) => id !== s.activeId && !s.sessions[id].running)
+    .filter((id) => id !== s.activeId && !s.sessions[id].running && !s.sessions[id].queuedNext)
     .sort((a, b) => s.sessions[a].lastTouch - s.sessions[b].lastTouch)
   for (const id of evictable.slice(0, ids.length - MAX_BUFS)) {
     const next = { ...useAgentRunStore.getState().sessions }
@@ -215,7 +229,8 @@ function mirrorOf(sid: string, buf: SessionBuf): Partial<AgentRunState> {
     errorHint: buf.errorHint,
     doneInfo: buf.doneInfo,
     subProcs: buf.subProcs,
-    loadFailed: !!buf.loadFail
+    loadFailed: !!buf.loadFail,
+    queuedNext: buf.queuedNext
   }
 }
 
@@ -233,6 +248,7 @@ function applyBuf(sid: string, fn: (b: SessionBuf) => void): void {
   const s = useAgentRunStore.getState()
   const buf = s.sessions[sid]
   if (!buf) return
+  const prevRunning = buf.wasRunning
   fn(buf)
   buf.lastTouch = Date.now()
   buf.turns = projectTurns(buf)
@@ -255,6 +271,15 @@ function applyBuf(sid: string, fn: (b: SessionBuf) => void): void {
     }
   }
   buf.wasRunning = buf.running
+  // 排队续发：本会话运行真正收尾且成功（无 error/中断）时，自动发出排队的下一条指令
+  const finished = prevRunning && !buf.running && !pendingStarts.get(sid)
+  if (finished && !buf.error && !buf.interrupted && buf.queuedNext) {
+    const queued = buf.queuedNext
+    applyBuf(sid, (b) => {
+      b.queuedNext = null
+    })
+    launchRun(sid, queued.text, queued.model, false)
+  }
 }
 
 /** 草稿/镜像统一刷新（activeId 为空时把 pendingStarts/draftError 投影到平面字段） */
@@ -279,7 +304,8 @@ function refreshView(): void {
     doneInfo: null,
     subProcs: {},
     runningIds: runningIdsOf(useAgentRunStore.getState().sessions),
-    loadFailed: false
+    loadFailed: false,
+    queuedNext: draftQueued
   })
 }
 
@@ -293,6 +319,7 @@ function fetchEvents(sid: string): void {
   if (!buf) return
   fetchInFlight.add(sid)
   const afterSeq = buf.loaded ? buf.lastSeq : 0
+  const ridAtStart = buf.requestId
   window.api.agent
     .sessionEvents({ sessionId: sid, afterSeq })
     .then((res) => {
@@ -307,10 +334,12 @@ function fetchEvents(sid: string): void {
         b.loaded = true
         b.interrupted = false
         b.loadFail = ''
-        // 广播丢失时的兜底：末事件为终态而本地仍标 running/interrupted → 收尾
+        // 广播丢失时的兜底：末事件为终态而本地仍标 running → 收尾。
+        // requestId 已变（排队续发等新 run 已接管）则绝不误杀新 run
         const last = res.events[res.events.length - 1]
         if (
-          (b.running || b.interrupted) &&
+          b.running &&
+          b.requestId === ridAtStart &&
           last &&
           (last.kind === 'done' || last.kind === 'run_error')
         ) {
@@ -361,25 +390,52 @@ export function startRun(input: string, model?: string): void {
   const s = useAgentRunStore.getState()
   const text = input.trim()
   if (!text || !s.projectId) return
-  const target = s.activeId
+  launchRun(s.activeId, text, model, true)
+}
+
+/**
+ * 发起一次 run。target=目标会话（null=草稿起步）；bumpToken=false 用于排队自动续发
+ * （复用当前代际，避免后台续发作废用户正在进行的 UI 发起）。
+ */
+function launchRun(
+  target: string | null,
+  text: string,
+  model: string | undefined,
+  bumpToken: boolean
+): void {
+  const s = useAgentRunStore.getState()
+  const pid = s.projectId
+  if (!pid) return
   if (target && s.sessions[target]?.running) return
-  const token = ++genToken
+  const token = bumpToken ? ++genToken : genToken
   pendingStarts.set(target, text)
   refreshView()
-  setAgentUi({ running: true, confirming: false, ended: null })
+  // pendingStarts 只影响 refreshView 的 running 镜像，显式同步徽章数据
+  useAgentRunStore.setState({ runningIds: runningIdsOf(useAgentRunStore.getState().sessions) })
+  // 排队续发可能发生在后台会话：仅当目标就是当前视图（或草稿）时才驱动全局 UI 态
+  if (!target || s.activeId === target) {
+    setAgentUi({ running: true, confirming: false, ended: null })
+  }
   void window.api.agent
     .run(
-      target
-        ? { projectId: s.projectId, sessionId: target, text, model }
-        : { projectId: s.projectId, text, model }
+      target ? { projectId: pid, sessionId: target, text, model } : { projectId: pid, text, model }
     )
     .then((id) => {
-      if (token !== genToken) return
+      if (useAgentRunStore.getState().projectId !== pid) return
+      if (bumpToken && token !== genToken) return
       if (typeof id === 'string') return // 旧路径（messages 直跑）不会出现在新客户端，防御
       pendingStarts.delete(target)
       pendingStarts.delete(id.sessionId)
       ridIndex.set(id.requestId, id.sessionId)
       ensureBuf(id.sessionId)
+      // 草稿起步：把 invoke 在途期间排队的指令转入新会话缓冲
+      if (!target && draftQueued) {
+        const queued = draftQueued
+        draftQueued = null
+        applyBuf(id.sessionId, (b) => {
+          b.queuedNext = queued
+        })
+      }
       applyBuf(id.sessionId, (b) => {
         b.running = true
         b.requestId = id.requestId
@@ -396,9 +452,25 @@ export function startRun(input: string, model?: string): void {
       }
     })
     .catch(async (err: unknown) => {
-      if (token !== genToken) return
+      if (bumpToken && token !== genToken) return
+      if (useAgentRunStore.getState().projectId !== pid) return
       pendingStarts.delete(target)
-      await reconcileFailedStart(s.projectId ?? '', target, text, (err as Error).message)
+      // 草稿起步失败：排队的指令没有会话可转入，清掉避免幽灵排队条（失败场景指令丢弃，与发送时已清空的输入框一致）
+      if (!target && draftQueued) {
+        draftQueued = null
+        refreshView()
+      }
+      await reconcileFailedStart(pid, target, text, (err as Error).message)
+      // F1：排队续发失败且未被对账接管（真失败）→ 指令放回队列，保留用户重试机会
+      if (!bumpToken && target) {
+        const st = useAgentRunStore.getState()
+        const b = st.sessions[target]
+        if (b && !b.running && !b.queuedNext) {
+          applyBuf(target, (x) => {
+            x.queuedNext = { text, model }
+          })
+        }
+      }
     })
 }
 
@@ -479,6 +551,49 @@ async function reconcileFailedStart(
     return
   }
   fail(message)
+}
+
+/**
+ * 运行中排队下一条指令（每会话单条；成功收尾后自动续发，失败/中断保留）。
+ * 非运行态调用视为误用，直接忽略（UI 侧应走 startRun）。
+ */
+export function queueRun(text: string, model?: string): void {
+  const s = useAgentRunStore.getState()
+  const sid = s.activeId
+  const queued = text.trim()
+  if (!queued) return
+  if (!sid) {
+    // 草稿起步 invoke 在途：会话 id 未知，挂到草稿队列，run 建立后转入
+    if (pendingStarts.has(null)) {
+      draftQueued = { text: queued, model }
+      refreshView()
+    }
+    return
+  }
+  const buf = s.sessions[sid]
+  if (!buf || (!buf.running && !pendingStarts.has(sid))) return
+  applyBuf(sid, (b) => {
+    b.queuedNext = { text: queued, model }
+  })
+}
+
+/** 取消排队：返回被取消的文本（UI 回填输入框） */
+export function cancelQueued(): string | null {
+  const s = useAgentRunStore.getState()
+  const sid = s.activeId
+  if (!sid) {
+    const t = draftQueued
+    draftQueued = null
+    refreshView()
+    return t?.text ?? null
+  }
+  const buf = s.sessions[sid]
+  if (!buf?.queuedNext) return null
+  const t = buf.queuedNext.text
+  applyBuf(sid, (b) => {
+    b.queuedNext = null
+  })
+  return t
 }
 
 export function stopRun(): void {
@@ -590,6 +705,7 @@ export function syncProject(projectId: string): void {
   foreignRunning.clear()
   draftError = ''
   draftErrorHint = null
+  draftQueued = null
   useAgentRunStore.setState({
     projectId: projectId || null,
     activeId: null,
@@ -604,7 +720,8 @@ export function syncProject(projectId: string): void {
     doneInfo: null,
     subProcs: {},
     runningIds: [],
-    loadFailed: false
+    loadFailed: false,
+    queuedNext: null
   })
   setAgentUi({ running: false, confirming: false })
   if (!projectId) return
@@ -775,10 +892,20 @@ export function syncAgentFromSnapshot(snap: RuntimeSnapshot): void {
 
 // —— 事件桥 ——
 
+/** SSE 重连成功/页面回前台后的全量对账：所有已打开会话无条件补拉（幂等，fetchInFlight 防重入） */
+function reconcileAllSessions(): void {
+  for (const sid of Object.keys(useAgentRunStore.getState().sessions)) {
+    fetchEvents(sid)
+  }
+}
+
 /** 挂全局事件桥（幂等，两端 App 连接就绪后调用一次；与组件存活无关） */
 export function ensureAgentRuntime(): void {
   ensureBridge('agentRun', () => {
     registerAgentSubEvents()
+
+    // web-bridge SSE 断线重连成功：断流期间尾部事件丢失无 gap 触发，必须无条件对账
+    window.addEventListener('nm-sse-open', reconcileAllSessions)
 
     window.api.agent.onTranscript((_rid, sid, ev) => {
       const s = useAgentRunStore.getState()
@@ -864,9 +991,13 @@ export function ensureAgentRuntime(): void {
       applyAgentError(id, message, hint)
     })
 
-    // 页面从后台回前台：rAF 在后台被冻结，缓冲的 delta 立即刷入
+    // 页面从后台回前台：rAF 在后台被冻结，缓冲的 delta 立即刷入；
+    // 同时后台期间的事件可能整段丢失，无条件对账所有已打开会话
     document.addEventListener('visibilitychange', () => {
-      if (document.visibilityState === 'visible' && pendingDelta) flushDelta()
+      if (document.visibilityState === 'visible') {
+        if (pendingDelta) flushDelta()
+        reconcileAllSessions()
+      }
     })
   })
 }
