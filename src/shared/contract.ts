@@ -15,6 +15,7 @@ import type {
   ChapterSummary,
   Character,
   CharacterAppearance,
+  CharacterSection,
   ChatMessage,
   ChatResult,
   ContentBlock,
@@ -129,12 +130,22 @@ export const ProjectInputSchema = z.object({
   agentInstructions: z.string().optional()
 })
 
+export const CharacterSectionInputSchema = z.object({
+  id: z.string().optional(),
+  title: z.string(),
+  content: z.string()
+})
+
 export const CharacterInputSchema = z.object({
   projectId: z.string(),
   name: z.string(),
   role: z.string().optional(),
   tags: z.string().optional(),
+  /** 旧式整卡输入：传了则切分为分节替换落库（sections 未传时生效）；显式空串清空全部分节 */
   card: z.string().optional(),
+  /** 全量分节数组：传了则按数组顺序替换该人物全部分节（优先于 card） */
+  sections: z.array(CharacterSectionInputSchema).optional(),
+  relation: z.string().optional(),
   state: z.string().optional()
 })
 
@@ -500,6 +511,25 @@ export const invokeContract = {
     ret: ret<Character>()
   },
   'novel:characterDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
+  'novel:characterSections': {
+    args: z.tuple([z.string()]),
+    ret: ret<CharacterSection[]>()
+  },
+  'novel:characterSectionSave': {
+    args: z.tuple([
+      z.object({
+        characterId: z.string(),
+        id: z.string().optional(),
+        title: z.string(),
+        content: z.string()
+      })
+    ]),
+    ret: ret<CharacterSection>()
+  },
+  'novel:characterSectionDelete': {
+    args: z.tuple([z.string(), z.array(z.string())]),
+    ret: ret<number>()
+  },
   'novel:characterAppearances': {
     args: z.tuple([z.string()]),
     ret: ret<Record<string, CharacterAppearance>>()
@@ -725,6 +755,9 @@ export interface Api {
     characters: InvokeFn<'novel:characters'>
     characterSave: InvokeFn<'novel:characterSave'>
     characterDelete: InvokeFn<'novel:characterDelete'>
+    characterSections: InvokeFn<'novel:characterSections'>
+    characterSectionSave: InvokeFn<'novel:characterSectionSave'>
+    characterSectionDelete: InvokeFn<'novel:characterSectionDelete'>
     characterAppearances: InvokeFn<'novel:characterAppearances'>
     worldbuild: InvokeFn<'novel:worldbuild'>
     worldbuildSave: InvokeFn<'novel:worldbuildSave'>

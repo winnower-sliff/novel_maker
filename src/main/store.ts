@@ -6,6 +6,7 @@ import type {
   ChapterSummary,
   Character,
   CharacterInput,
+  CharacterSection,
   Foreshadow,
   ForeshadowInput,
   OutlineInput,
@@ -17,6 +18,7 @@ import type {
   WorldbuildEntry,
   WorldbuildInput
 } from '../shared/types'
+import { mergeCharacterCard, splitCharacterCard } from './characterCard'
 import { getDb } from './db'
 
 type Row = Record<string, unknown>
@@ -49,10 +51,55 @@ function mapCharacter(r: Row): Character {
     role: (r.role as string) ?? '',
     tags: (r.tags as string) ?? '',
     card: (r.card as string) ?? '',
+    relation: (r.relation as string) ?? '',
     state: (r.state as string) ?? '',
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number
   }
+}
+
+type SectionRow = {
+  id: string
+  character_id: string
+  title: string
+  content: string
+  sort_key: number
+  created_at: number
+  updated_at: number
+}
+
+function mapSection(r: SectionRow): CharacterSection {
+  return {
+    id: r.id,
+    characterId: r.character_id,
+    title: r.title ?? '',
+    content: r.content ?? '',
+    sortKey: r.sort_key ?? 0,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
+
+/** 为人物批量拼合并视图 card（分节是事实源，card 列恒空） */
+function attachCards(db: ReturnType<typeof getDb>, chars: Character[]): Character[] {
+  if (chars.length === 0) return chars
+  const ids = chars.map((c) => c.id)
+  const ph = ids.map(() => '?').join(',')
+  const rows = db
+    .prepare(
+      `SELECT * FROM character_sections WHERE character_id IN (${ph}) ORDER BY character_id, sort_key, created_at`
+    )
+    .all(...ids) as unknown as SectionRow[]
+  const grouped = new Map<string, CharacterSection[]>()
+  for (const r of rows) {
+    const arr = grouped.get(r.character_id)
+    if (arr) arr.push(mapSection(r))
+    else grouped.set(r.character_id, [mapSection(r)])
+  }
+  return chars.map((c) => {
+    const sections = grouped.get(c.id) ?? []
+    return { ...c, card: mergeCharacterCard(c.name, c.tags, sections, c.relation) }
+  })
 }
 
 function mapWorldbuild(r: Row): WorldbuildEntry {
@@ -150,47 +197,159 @@ export function deleteProject(id: string): void {
 }
 
 export function listCharacters(projectId: string): Character[] {
-  return getDb()
-    .prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY created_at')
-    .all(projectId)
-    .map((r) => mapCharacter(r as Row))
+  const db = getDb()
+  const chars = (
+    db
+      .prepare('SELECT * FROM characters WHERE project_id = ? ORDER BY created_at')
+      .all(projectId) as Row[]
+  ).map(mapCharacter)
+  return attachCards(db, chars)
+}
+
+export function getCharacter(id: string): Character | null {
+  const row = getDb().prepare('SELECT * FROM characters WHERE id = ?').get(id) as Row | undefined
+  if (!row) return null
+  return attachCards(getDb(), [mapCharacter(row)])[0]
+}
+
+function replaceCharacterSectionsInner(
+  db: ReturnType<typeof getDb>,
+  characterId: string,
+  sections: Array<{ title: string; content: string }>
+): void {
+  db.prepare('DELETE FROM character_sections WHERE character_id = ?').run(characterId)
+  const ins = db.prepare(
+    'INSERT INTO character_sections (id, character_id, title, content, sort_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  )
+  const ts = now()
+  sections.forEach((s, i) => {
+    ins.run(randomUUID(), characterId, s.title, s.content, i, ts, ts)
+  })
 }
 
 export function saveCharacter(input: CharacterInput & { id?: string }): Character {
   const db = getDb()
   const ts = now()
-  if (input.id) {
-    const cur = mapCharacter(
-      db.prepare('SELECT * FROM characters WHERE id = ?').get(input.id) as Row
-    )
-    db.prepare(
-      'UPDATE characters SET name = ?, role = ?, tags = ?, card = ?, state = ?, updated_at = ? WHERE id = ?'
-    ).run(
-      input.name,
-      input.role ?? cur.role,
-      input.tags ?? cur.tags,
-      input.card ?? cur.card,
-      input.state ?? cur.state,
-      ts,
-      input.id
-    )
-    return mapCharacter(db.prepare('SELECT * FROM characters WHERE id = ?').get(input.id) as Row)
+  let targetId: string
+  db.exec('BEGIN')
+  try {
+    if (input.id) {
+      const row = db.prepare('SELECT * FROM characters WHERE id = ?').get(input.id) as
+        | Row
+        | undefined
+      if (!row) throw new Error(`人物不存在：${input.id}`)
+      const cur = mapCharacter(row)
+      db.prepare(
+        'UPDATE characters SET name = ?, role = ?, tags = ?, relation = ?, state = ?, updated_at = ? WHERE id = ?'
+      ).run(
+        input.name,
+        input.role ?? cur.role,
+        input.tags ?? cur.tags,
+        input.relation ?? cur.relation,
+        input.state ?? cur.state,
+        ts,
+        input.id
+      )
+      targetId = input.id
+    } else {
+      targetId = randomUUID()
+      db.prepare(
+        'INSERT INTO characters (id, project_id, name, role, tags, relation, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(
+        targetId,
+        input.projectId,
+        input.name,
+        input.role ?? '',
+        input.tags ?? '',
+        input.relation ?? '',
+        input.state ?? '',
+        ts,
+        ts
+      )
+    }
+    // 分节写入：sections 全量替换优先；否则旧式 card 切分替换（两者都未传则不动）
+    const sections =
+      input.sections !== undefined
+        ? input.sections.map((s) => ({ title: s.title, content: s.content }))
+        : input.card !== undefined
+          ? splitCharacterCard(input.card).sections
+          : undefined
+    if (sections !== undefined) replaceCharacterSectionsInner(db, targetId, sections)
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
   }
-  const id = randomUUID()
-  db.prepare(
-    'INSERT INTO characters (id, project_id, name, role, tags, card, state, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(
-    id,
-    input.projectId,
-    input.name,
-    input.role ?? '',
-    input.tags ?? '',
-    input.card ?? '',
-    input.state ?? '',
-    ts,
-    ts
+  const saved = mapCharacter(
+    db.prepare('SELECT * FROM characters WHERE id = ?').get(targetId) as Row
   )
-  return mapCharacter(db.prepare('SELECT * FROM characters WHERE id = ?').get(id) as Row)
+  return attachCards(db, [saved])[0]
+}
+
+export function getCharacterSections(characterId: string): CharacterSection[] {
+  return (
+    getDb()
+      .prepare(
+        'SELECT * FROM character_sections WHERE character_id = ? ORDER BY sort_key, created_at'
+      )
+      .all(characterId) as unknown as SectionRow[]
+  ).map(mapSection)
+}
+
+export function getCharacterSection(id: string): CharacterSection | undefined {
+  const row = getDb().prepare('SELECT * FROM character_sections WHERE id = ?').get(id) as unknown as
+    | SectionRow
+    | undefined
+  return row ? mapSection(row) : undefined
+}
+
+export function saveCharacterSection(input: {
+  characterId: string
+  id?: string
+  title: string
+  content: string
+}): CharacterSection {
+  const db = getDb()
+  const ts = now()
+  if (input.id) {
+    const cur = getCharacterSections(input.characterId).find((s) => s.id === input.id)
+    if (!cur) throw new Error('分节不存在或不属于该人物')
+    db.prepare(
+      'UPDATE character_sections SET title = ?, content = ?, updated_at = ? WHERE id = ?'
+    ).run(input.title, input.content, ts, input.id)
+  } else {
+    const max = db
+      .prepare('SELECT MAX(sort_key) AS m FROM character_sections WHERE character_id = ?')
+      .get(input.characterId) as { m: number | null }
+    db.prepare(
+      'INSERT INTO character_sections (id, character_id, title, content, sort_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(randomUUID(), input.characterId, input.title, input.content, (max.m ?? -1) + 1, ts, ts)
+  }
+  db.prepare('UPDATE characters SET updated_at = ? WHERE id = ?').run(ts, input.characterId)
+  const row = input.id
+    ? db.prepare('SELECT * FROM character_sections WHERE id = ?').get(input.id)
+    : (db
+        .prepare(
+          'SELECT * FROM character_sections WHERE character_id = ? ORDER BY sort_key DESC, created_at DESC LIMIT 1'
+        )
+        .get(input.characterId) as unknown as SectionRow)
+  return mapSection(row as SectionRow)
+}
+
+export function deleteCharacterSections(characterId: string, ids: string[]): number {
+  const db = getDb()
+  const del = db.prepare('DELETE FROM character_sections WHERE character_id = ? AND id = ?')
+  db.exec('BEGIN')
+  try {
+    let n = 0
+    for (const id of ids) n += Number(del.run(characterId, id).changes)
+    db.prepare('UPDATE characters SET updated_at = ? WHERE id = ?').run(now(), characterId)
+    db.exec('COMMIT')
+    return n
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
 }
 
 export function deleteCharacter(id: string): void {
@@ -219,17 +378,29 @@ function propagateWikiRenames(
   const pairs: Array<[string, string]> = [
     ['worldbuild', 'content'],
     ['worldbuild', 'relation'],
-    ['characters', 'card'],
+    ['characters', 'relation'],
+    ['character_sections', 'content'],
     ['outlines', 'synopsis'],
     ['chapters', 'content']
   ]
-  for (const [table, col] of pairs) {
+  const replace = (table: string, col: string, where: string): number => {
+    // 表/列/WHERE 均来自硬编码 pairs，标题文本全部走占位符
     const r = db
       .prepare(
-        `UPDATE ${table} SET ${col} = REPLACE(REPLACE(${col}, '[[${o}|', '[[${n}|'), '[[${o}]]', '[[${n}]]') WHERE project_id = ? AND ${col} LIKE ?`
+        `UPDATE ${table} SET ${col} = REPLACE(REPLACE(${col}, ?, ?), ?, ?) WHERE ${where} AND ${col} LIKE ?`
       )
-      .run(projectId, like)
-    changed += Number(r.changes)
+      .run(`[[${o}|`, `[[${n}|`, `[[${o}]]`, `[[${n}]]`, projectId, like)
+    return Number(r.changes)
+  }
+  for (const [table, col] of pairs) {
+    // character_sections 无 project_id 列，经 characters 间接限定
+    changed += replace(
+      table,
+      col,
+      table === 'character_sections'
+        ? 'character_id IN (SELECT id FROM characters WHERE project_id = ?)'
+        : 'project_id = ?'
+    )
   }
   return changed
 }

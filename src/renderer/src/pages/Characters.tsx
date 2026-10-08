@@ -1,5 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { parseCardSections } from '../../../shared/characterSections'
 import { CharacterGenPanel } from '../../../wizard/CharacterGenPanel'
 import { parseWikiLinks, useCharacterRegen } from '../../../wizard/characterTools'
 import { AiTextarea } from '../components/AiTextarea'
@@ -7,13 +8,21 @@ import { Badge, Button, Card, Input, Label } from '../components/ui'
 import { desktopWizardUi } from '../lib/desktopWizardUi'
 import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
+import { pushToast } from '../lib/toastStore'
+
+interface SectionDraft {
+  id?: string
+  title: string
+  content: string
+}
 
 interface EditState {
   id: string
   name: string
   role: string
   tags: string
-  card: string
+  relation: string
+  sections: SectionDraft[]
   state: string
 }
 
@@ -58,7 +67,20 @@ export default function Characters({
 
   const pick = (c: (typeof list)[number]): void => {
     regen.reset()
-    setEdit({ id: c.id, name: c.name, role: c.role, tags: c.tags, card: c.card, state: c.state })
+    void window.api.novel
+      .characterSections(c.id)
+      .then((secs) => {
+        setEdit({
+          id: c.id,
+          name: c.name,
+          role: c.role,
+          tags: c.tags,
+          relation: c.relation,
+          sections: secs.map((s) => ({ id: s.id, title: s.title, content: s.content })),
+          state: c.state
+        })
+      })
+      .catch((err: unknown) => pushToast('error', err instanceof Error ? err.message : String(err)))
   }
 
   const save = (): void => {
@@ -70,22 +92,56 @@ export default function Characters({
         name: edit.name.trim(),
         role: edit.role,
         tags: edit.tags,
-        card: edit.card,
+        relation: edit.relation,
+        sections: edit.sections
+          .filter((s) => s.title.trim() || s.content.trim())
+          .map((s) => ({ id: s.id, title: s.title.trim(), content: s.content })),
         state: edit.state
       })
       .then((saved) => {
         setEdit((prev) => (prev && !prev.id ? { ...prev, id: saved.id } : prev))
         load()
       })
+      .catch((err: unknown) => pushToast('error', err instanceof Error ? err.message : String(err)))
   }
 
   const newBlank = (): void => {
     regen.reset()
-    setEdit({ id: '', name: '', role: '', tags: '', card: '', state: '' })
+    setEdit({
+      id: '',
+      name: '',
+      role: '',
+      tags: '',
+      relation: '',
+      sections: [{ title: '基本信息', content: '' }],
+      state: ''
+    })
+  }
+
+  const setSection = (i: number, patch: Partial<SectionDraft>): void => {
+    setEdit((prev) =>
+      prev
+        ? { ...prev, sections: prev.sections.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
+        : prev
+    )
+  }
+
+  const addSection = (): void => {
+    setEdit((prev) =>
+      prev ? { ...prev, sections: [...prev.sections, { title: '', content: '' }] } : prev
+    )
+  }
+
+  const removeSection = (i: number): void => {
+    setEdit((prev) =>
+      prev ? { ...prev, sections: prev.sections.filter((_, j) => j !== i) } : prev
+    )
   }
 
   const app = edit?.id ? appearances?.[edit.id] : undefined
-  const links = edit ? parseWikiLinks(edit.card) : []
+  const links = edit
+    ? parseWikiLinks([...edit.sections.map((s) => s.content), edit.relation].join('\n'))
+    : []
 
   return (
     <div className="flex h-full flex-col gap-3 p-3 md:flex-row md:p-4">
@@ -184,9 +240,17 @@ export default function Characters({
                 />
               </div>
             </div>
+            <div className="mt-3">
+              <Label>关联（[[世界观条目|关系短语]]，多个用、分隔）</Label>
+              <Input
+                value={edit.relation}
+                onChange={(e) => setEdit({ ...edit, relation: e.target.value })}
+                placeholder="[[丹塔|曾依附丹塔]]、[[云岚宗|宿敌]]"
+              />
+            </div>
             <div className="mt-3 flex-1">
               <div className="flex items-center justify-between">
-                <Label>人物卡（markdown，M4 写作时自动注入相关人物；选中文字可用 AI 改写）</Label>
+                <Label>人物卡分节（M4 写作时自动注入相关人物；正文选中可用 AI 改写）</Label>
                 <Button
                   variant="ghost"
                   className="px-2 py-1 text-xs"
@@ -216,7 +280,13 @@ export default function Characters({
                       onClick={() => {
                         const p = regen.preview
                         if (!p) return
-                        setEdit({ ...edit, card: p.main, tags: p.tags.join(',') })
+                        const parsed = parseCardSections(p.main)
+                        setEdit({
+                          ...edit,
+                          sections: parsed.sections,
+                          relation: parsed.relation || edit.relation,
+                          tags: p.tags.join(',')
+                        })
                         regen.reset()
                       }}
                     >
@@ -225,13 +295,41 @@ export default function Characters({
                   </div>
                 </div>
               )}
-              <AiTextarea
-                className="h-full min-h-72"
-                value={edit.card}
-                onChange={(v) => setEdit({ ...edit, card: v })}
-                placeholder={'- 基本信息：…\n- 性格核心：…\n- 欲望与恐惧：…\n- 口癖与语言习惯：…'}
-                context={`这是人物「${edit.name || '未命名'}」（定位：${edit.role || '未填'}）的人物卡全文：\n${edit.card}`}
-              />
+              <div className="divide-y divide-zinc-800 rounded-md border border-zinc-800">
+                {edit.sections.map((s, i) => (
+                  <div key={s.id ?? `new-${i}`} className="p-3">
+                    <div className="mb-1.5 flex items-center gap-2">
+                      <Input
+                        className="h-7 w-44 text-xs"
+                        value={s.title}
+                        onChange={(e) => setSection(i, { title: e.target.value })}
+                        placeholder="字段名，如 基本信息"
+                      />
+                      <span className="flex-1" />
+                      <Button
+                        variant="ghost"
+                        className="px-1.5 py-0.5 text-xs text-red-400"
+                        onClick={() => removeSection(i)}
+                      >
+                        删除
+                      </Button>
+                    </div>
+                    <AiTextarea
+                      className="min-h-24"
+                      value={s.content}
+                      onChange={(v) => setSection(i, { content: v })}
+                      placeholder="该字段的正文（markdown）"
+                      context={`这是人物「${edit.name || '未命名'}」（定位：${edit.role || '未填'}）人物卡「${s.title || '未命名分节'}」分节的内容：\n${s.content}`}
+                    />
+                  </div>
+                ))}
+                {edit.sections.length === 0 && (
+                  <div className="p-3 text-center text-xs text-zinc-600">暂无分节</div>
+                )}
+              </div>
+              <Button variant="ghost" className="mt-2 px-2 py-1 text-xs" onClick={addSection}>
+                + 添加分节
+              </Button>
             </div>
             <div className="mt-3">
               <Label>

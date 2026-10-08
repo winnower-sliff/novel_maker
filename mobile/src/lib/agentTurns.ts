@@ -37,6 +37,8 @@ export const TOOL_LABELS: Record<string, string> = {
   search_project: '语义·搜索',
   get_book_digest: '全书·概览',
   update_character_state: '人物·状态更新',
+  get_character_section: '人物·分节读取',
+  save_character_section: '人物·分节保存',
   refresh_volume_summary: '卷摘要·重建',
   reorder_worldbuild_type: '世界观·类型排序'
 }
@@ -121,6 +123,14 @@ export function toolSummary(call: AgentToolCall): string {
       return '读取全书概览'
     case 'update_character_state':
       return `更新人物状态：${str(i, 'name') || `id 前 8 位 ${str(i, 'id').slice(0, 8)}`}`
+    case 'get_character_section': {
+      const t = str(i, 'title')
+      return `读取人物分节${t ? `：${t}` : ''}（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
+    }
+    case 'save_character_section': {
+      const t = str(i, 'title')
+      return `${str(i, 'id') ? '修改' : '新增'}人物分节：${t || '(未命名)'}`
+    }
     case 'refresh_volume_summary':
       return `重建第 ${str(i, 'volume') || '?'} 卷卷摘要`
     case 'reorder_worldbuild_type':

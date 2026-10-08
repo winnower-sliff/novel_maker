@@ -256,8 +256,22 @@ export interface Character {
   name: string
   role: string
   tags: string
+  /** 合并视图：由 character_sections 拼装（存储事实源是分节表，card 列恒空） */
   card: string
+  /** 人物关联：`[[世界观条目|关系短语]]` 语法，展示/图谱用 */
+  relation: string
   state: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** 人物卡分节：title 为字段名（如「基本信息」），content 为该字段 markdown 正文 */
+export interface CharacterSection {
+  id: string
+  characterId: string
+  title: string
+  content: string
+  sortKey: number
   createdAt: number
   updatedAt: number
 }

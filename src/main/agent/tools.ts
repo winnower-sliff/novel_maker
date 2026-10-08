@@ -153,7 +153,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'get_entity',
       description:
-        '按 id 读取单条内容全文（修改前取原文用）。kind=character 返回人物卡（含动态状态 state）；kind=worldbuild 返回世界观词条全文（含 category/tags/keys）；kind=chapter 传大纲条目 id，返回该章正文全文（超长会截断）',
+        '按 id 读取单条内容（修改前取原文用）。kind=character 返回人物元信息与分节目录（sections 只含 id/标题/字数，不含正文——读正文用 get_character_section，只读个别字段时无需整卡拉取）；kind=worldbuild 返回世界观词条全文（含 category/tags/keys）；kind=chapter 传大纲条目 id，返回该章正文全文（超长会截断）',
       input_schema: schema(
         {
           kind: s('内容类型：character / worldbuild / chapter'),
@@ -169,14 +169,21 @@ const TOOLS: AgentTool[] = [
       if (kind === 'character') {
         const c = store.listCharacters(projectId).find((x) => x.id === id)
         if (!c) throw new Error('未找到该人物')
+        const sections = store.getCharacterSections(c.id)
         return {
           kind,
           id: c.id,
           name: c.name,
           role: c.role,
           tags: c.tags,
-          card: c.card,
-          state: c.state
+          relation: c.relation,
+          state: c.state,
+          sections: sections.map((s) => ({
+            id: s.id,
+            title: s.title || '（未命名）',
+            chars: s.content.length
+          })),
+          note: '分节正文未随本结果返回；需要读某节内容时用 get_character_section 传分节 id'
         }
       }
       if (kind === 'worldbuild') {
@@ -213,16 +220,43 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
+      name: 'get_character_section',
+      description:
+        '读人物卡单个分节的正文。先 get_entity(kind=character) 拿分节目录（sections[].id），再传分节 id 读全文',
+      input_schema: schema(
+        {
+          id: s('分节 id（get_entity(kind=character) 返回的 sections[].id）')
+        },
+        ['id']
+      )
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const sec = store.getCharacterSection(reqStr(input, 'id'))
+      if (!sec) throw new Error('未找到该分节')
+      const owner = store.getCharacter(sec.characterId)
+      if (!owner || owner.projectId !== projectId) throw new Error('该分节不属于当前项目')
+      return {
+        id: sec.id,
+        characterId: sec.characterId,
+        characterName: owner.name,
+        title: sec.title,
+        content: sec.content
+      }
+    }
+  },
+  {
+    def: {
       name: 'save_character',
       description:
-        '新建或修改人物卡。传 id 表示修改既有人物；不传 id 表示新建。tags 为标签（逗号分隔，2-4 个；新建时建议提供，修改时省略则保留原标签；优先复用已有标签，没有合适的就新建可被多个人物共享的主题标签）。card 文末建议带「关联：」行（[[世界观条目|关系短语]]，1-3 个）；链接只允许指向世界观条目，严禁 [[ ]] 链人物名。修改时应先 list_characters 取原文再改',
+        '新建或修改人物元信息。传 id 表示修改既有人物；不传 id 表示新建（新建后用 save_character_section 逐节写卡）。tags 为标签（逗号分隔，2-4 个；修改时省略则保留原标签；优先复用已有标签，没有合适的就新建可被多个人物共享的主题标签）。relation 为关联字符串，如「[[丹塔|曾依附丹塔换取庇护]]」；链接只允许指向世界观条目，严禁 [[ ]] 链人物名，省略则保留原值。注意：本工具不写卡面内容——新建人物后先 get_entity(kind=character) 拿分节目录，再用 save_character_section 逐节写；改已有字段内容也用 save_character_section',
       input_schema: schema(
         {
           id: optS('要修改的人物 id（新建时省略）'),
           name: s('姓名'),
           role: optS('定位，如 主角/反派/配角'),
           tags: optS('标签'),
-          card: optS('人物卡正文（markdown）')
+          relation: optS('关联（[[世界观条目|关系短语]]，多个用、分隔）')
         },
         ['name']
       )
@@ -235,20 +269,63 @@ const TOOLS: AgentTool[] = [
         name: reqStr(input, 'name'),
         role: optStr(input, 'role'),
         tags: optStr(input, 'tags'),
-        card: optStr(input, 'card')
+        relation: optStr(input, 'relation')
       })
-      return { ok: true, id: saved.id, name: saved.name, created: !optStr(input, 'id') }
+      return {
+        ok: true,
+        id: saved.id,
+        name: saved.name,
+        created: !optStr(input, 'id'),
+        sections: store.getCharacterSections(saved.id).map((s) => ({ id: s.id, title: s.title })),
+        note: '写/改卡面内容用 save_character_section'
+      }
+    }
+  },
+  {
+    def: {
+      name: 'save_character_section',
+      description:
+        '写人物卡的一个分节（字段）。不传 id 为新增分节（追加到卡尾）；传 id 为覆盖该分节（title 可用于改名）。title 是字段名（如 基本信息/性格核心/关系网），content 是该字段 markdown 正文。新建人物时先 save_character 建档，再逐节写卡',
+      input_schema: schema(
+        {
+          characterId: s('人物 id'),
+          id: optS('要覆盖的分节 id（新增时省略）'),
+          title: s('字段名，如 基本信息 / 性格核心 / 弧光预设'),
+          content: s('该字段 markdown 正文')
+        },
+        ['characterId', 'title', 'content']
+      )
+    },
+    danger: false,
+    handler: (input, projectId) => {
+      const characterId = reqStr(input, 'characterId')
+      const hit = store.listCharacters(projectId).find((x) => x.id === characterId)
+      if (!hit) throw new Error('未找到该人物')
+      const saved = store.saveCharacterSection({
+        characterId,
+        id: optStr(input, 'id'),
+        title: reqStr(input, 'title'),
+        content: reqStr(input, 'content')
+      })
+      return {
+        ok: true,
+        id: saved.id,
+        title: saved.title,
+        updated: !!optStr(input, 'id'),
+        sections: store.getCharacterSections(characterId).map((s) => ({ id: s.id, title: s.title }))
+      }
     }
   },
   {
     def: {
       name: 'delete_entity',
       description:
-        '删除内容（不可恢复，需用户确认）。kind=character 删人物卡；kind=worldbuild 删世界观词条；kind=outline 删大纲条目；kind=foreshadow 删伏笔',
+        '删除内容（不可恢复，需用户确认）。kind=character 时传 section_ids 数组则只删除指定分节（保留人物），不传则删除整张人物卡；kind=worldbuild 删世界观词条；kind=outline 删大纲条目；kind=foreshadow 删伏笔',
       input_schema: schema(
         {
           kind: s('内容类型：character / worldbuild / outline / foreshadow'),
-          id: s('要删除的条目 id')
+          id: s('要删除的条目 id（kind=character 且带 section_ids 时，id 为人物 id）'),
+          sectionIds: optArr('kind=character 时可选：只删这些分节 id（不传删整卡）')
         },
         ['kind', 'id']
       )
@@ -260,6 +337,11 @@ const TOOLS: AgentTool[] = [
       if (kind === 'character') {
         const c = store.listCharacters(projectId).find((x) => x.id === id)
         if (!c) throw new Error('未找到该人物')
+        const sectionIds = optStrArr(input, 'sectionIds')
+        if (sectionIds) {
+          const n = store.deleteCharacterSections(c.id, sectionIds.map(String))
+          return { ok: true, kind, deletedSections: n, kept: c.name }
+        }
         store.deleteCharacter(c.id)
         return { ok: true, kind, deleted: c.name }
       }
@@ -1351,6 +1433,7 @@ export const READ_TOOLS = new Set([
   'get_project',
   'list_characters',
   'get_entity',
+  'get_character_section',
   'list_worldbuild',
   'list_outlines',
   'get_outline_plan',

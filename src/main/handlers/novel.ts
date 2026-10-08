@@ -24,6 +24,23 @@ export const novelHandlers = {
     deleteEmbeddingsByRef('character', id)
     store.deleteCharacter(id)
   },
+  'novel:characterSections': (_ctx, [characterId]) => store.getCharacterSections(characterId),
+  'novel:characterSectionSave': (_ctx, [input]) => {
+    const saved = store.saveCharacterSection(input)
+    const c = store.getCharacter(input.characterId)
+    if (c) {
+      enqueueEmbedding(c.projectId, 'character', c.id, `${c.name} ${c.role} ${c.tags} ${c.card}`)
+    }
+    return saved
+  },
+  'novel:characterSectionDelete': (_ctx, [characterId, ids]) => {
+    const n = store.deleteCharacterSections(characterId, ids)
+    const c = store.getCharacter(characterId)
+    if (c) {
+      enqueueEmbedding(c.projectId, 'character', c.id, `${c.name} ${c.role} ${c.tags} ${c.card}`)
+    }
+    return n
+  },
   'novel:characterAppearances': (_ctx, [projectId]) => {
     const characters = store.listCharacters(projectId)
     const out: Record<string, { chapters: number[]; count: number }> = {}

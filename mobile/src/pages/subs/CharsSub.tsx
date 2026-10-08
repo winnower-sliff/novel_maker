@@ -5,10 +5,11 @@ import { withSnapshot } from '@mobile/lib/querySnapshot'
 import { qk } from '@renderer/lib/queries'
 import { DetailShell, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { parseWikiLinks, useCharacterRegen } from '@wizard/characterTools'
 import { CharacterGenPanel } from '@wizard/CharacterGenPanel'
 import { splitTags } from '@shared/tags'
+import { parseCardSections } from '@shared/characterSections'
 import type { Character } from '@shared/types'
 
 /** 新建空白人物草稿（保存时才落库） */
@@ -19,15 +20,23 @@ const DRAFT: Character = {
   role: '',
   tags: '',
   card: '',
+  relation: '',
   state: '',
   createdAt: 0,
   updatedAt: 0
+}
+
+interface SectionDraft {
+  id?: string
+  title: string
+  content: string
 }
 
 interface CardFields {
   name: string
   role: string
   tags: string
+  relation: string
   card: string
   state: string
 }
@@ -36,6 +45,7 @@ const toFields = (c: Character): CardFields => ({
   name: c.name,
   role: c.role,
   tags: c.tags,
+  relation: c.relation,
   card: c.card,
   state: c.state
 })
@@ -152,15 +162,44 @@ function CharacterEditor({
   const isNew = !character.id
   const [mode, setMode] = useState<'view' | 'edit'>(isNew ? 'edit' : 'view')
   const [fields, setFields] = useState<CardFields>(() => toFields(character))
+  // 分节是存储事实源：view 模式只渲染合并视图 card，进入 edit 才拉分节编辑
+  const [sections, setSections] = useState<SectionDraft[]>(() =>
+    isNew ? [{ title: '基本信息', content: '' }] : []
+  )
+  const secsBaseRef = useRef<SectionDraft[] | null>(isNew ? [{ title: '基本信息', content: '' }] : null)
+  const [secsLoaded, setSecsLoaded] = useState(isNew)
   const baseRef = useRef<CardFields>(toFields(character))
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    if (mode !== 'edit' || isNew || secsLoaded) return
+    let alive = true
+    void window.api.novel
+      .characterSections(character.id)
+      .then((secs) => {
+        if (!alive) return
+        const drafts = secs.map((s) => ({ id: s.id, title: s.title, content: s.content }))
+        setSections(drafts)
+        secsBaseRef.current = drafts
+        setSecsLoaded(true)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [mode, isNew, secsLoaded, character.id])
+
+  const secsDirty =
+    secsBaseRef.current !== null &&
+    JSON.stringify(sections) !== JSON.stringify(secsBaseRef.current)
   const dirty =
     fields.name !== baseRef.current.name ||
     fields.role !== baseRef.current.role ||
     fields.tags !== baseRef.current.tags ||
-    fields.card !== baseRef.current.card ||
-    fields.state !== baseRef.current.state
+    fields.relation !== baseRef.current.relation ||
+    fields.state !== baseRef.current.state ||
+    secsDirty
   const regen = useCharacterRegen(projectId)
   const { data: appearances } = useQuery({
     queryKey: qk.characterAppearances(projectId),
@@ -178,17 +217,25 @@ function CharacterEditor({
     if (!fields.name.trim() || saving) return
     setSaving(true)
     try {
-      await window.api.novel.characterSave({
+      const cleanSections = sections
+        .filter((s) => s.title.trim() || s.content.trim())
+        .map((s) => ({ id: s.id, title: s.title.trim(), content: s.content }))
+      const saved = await window.api.novel.characterSave({
         id: character.id || undefined,
         projectId,
         name: fields.name,
         role: fields.role,
         tags: fields.tags,
-        card: fields.card,
+        relation: fields.relation,
+        sections: cleanSections,
         state: fields.state
       })
       onSaved()
-      baseRef.current = { ...fields }
+      const next = toFields(saved)
+      setFields(next)
+      baseRef.current = next
+      setSections(cleanSections)
+      secsBaseRef.current = cleanSections
       // 新建草稿没有 id，回去也没有可浏览的查看态，直接回列表
       if (isNew) onBack()
       else setMode('view')
@@ -204,6 +251,7 @@ function CharacterEditor({
       return
     }
     setFields({ ...baseRef.current })
+    setSections(secsBaseRef.current ?? [])
     regen.reset()
     setMode('view')
   }
@@ -354,8 +402,16 @@ function CharacterEditor({
             <Input value={fields.tags} onChange={(e) => patch({ tags: e.target.value })} />
           </Label>
           <Label>
+            关联（[[世界观条目|关系短语]]，多个用、分隔）
+            <Input
+              value={fields.relation}
+              onChange={(e) => patch({ relation: e.target.value })}
+              placeholder="[[丹塔|曾依附丹塔]]"
+            />
+          </Label>
+          <Label>
             <span className="flex items-center justify-between">
-              人物卡
+              人物卡分节
               <Button
                 variant="ghost"
                 className="px-2 py-1 text-xs"
@@ -388,7 +444,9 @@ function CharacterEditor({
                     onClick={() => {
                       const p = regen.preview
                       if (!p) return
-                      patch({ card: p.main, tags: p.tags.join(',') })
+                      const parsed = parseCardSections(p.main)
+                      setSections(parsed.sections.map((s) => ({ ...s })))
+                      patch({ relation: parsed.relation || fields.relation, tags: p.tags.join(',') })
                       regen.reset()
                     }}
                   >
@@ -397,11 +455,53 @@ function CharacterEditor({
                 </div>
               </div>
             )}
-            <Textarea
-              rows={10}
-              value={fields.card}
-              onChange={(e) => patch({ card: e.target.value })}
-            />
+            {mode === 'edit' && !isNew && !secsLoaded ? (
+              <div className="rounded-md border border-zinc-800 p-3 text-xs text-zinc-600">
+                分节加载中…
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {sections.map((s, i) => (
+                  <div key={s.id ?? `new-${i}`} className="rounded-md border border-zinc-800 p-2">
+                    <div className="mb-1 flex items-center gap-2">
+                      <Input
+                        className="h-7 flex-1 text-xs"
+                        value={s.title}
+                        placeholder="字段名，如 基本信息"
+                        onChange={(e) =>
+                          setSections((arr) =>
+                            arr.map((x, j) => (j === i ? { ...x, title: e.target.value } : x))
+                          )
+                        }
+                      />
+                      <Button
+                        variant="ghost"
+                        className="px-1.5 py-0.5 text-xs text-red-400/90"
+                        onClick={() => setSections((arr) => arr.filter((_, j) => j !== i))}
+                      >
+                        删
+                      </Button>
+                    </div>
+                    <Textarea
+                      rows={Math.min(12, Math.max(3, Math.ceil(s.content.length / 30)))}
+                      value={s.content}
+                      onChange={(e) =>
+                        setSections((arr) =>
+                          arr.map((x, j) => (j === i ? { ...x, content: e.target.value } : x))
+                        )
+                      }
+                    />
+                  </div>
+                ))}
+                <Button
+                  variant="ghost"
+                  className="w-full px-2 py-1 text-xs"
+                  onClick={() => setSections((arr) => [...arr, { title: '', content: '' }])}
+                >
+                  + 添加分节
+                </Button>
+              </div>
+            )}
           </Label>
           <Label>
             当前状态（动态）
