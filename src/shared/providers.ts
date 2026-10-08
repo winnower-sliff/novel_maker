@@ -16,6 +16,8 @@ export interface ProviderPreset {
   supportsCache: boolean
   keyHint: string
   hint: string
+  /** 该 provider 常规模型的上下文窗口（tokens），供智能体主动压缩预估；未知/混杂则省略，主进程回退保守默认值 */
+  contextWindow?: number
 }
 
 /** 有效协议：custom 看 profile 覆盖（缺省 anthropic），其余用预设值 */
@@ -38,7 +40,8 @@ export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
     needsKey: true,
     supportsCache: true,
     keyHint: '填入 GLM Coding Plan 的 API Key',
-    hint: '密钥使用系统凭据库加密存储，仅保存在本机。获取：open.bigmodel.cn → API Keys'
+    hint: '密钥使用系统凭据库加密存储，仅保存在本机。获取：open.bigmodel.cn → API Keys',
+    contextWindow: 200_000
   },
   deepseek: {
     id: 'deepseek',
@@ -50,7 +53,8 @@ export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
     needsKey: true,
     supportsCache: false,
     keyHint: '填入 DeepSeek API Key',
-    hint: '走官方 Anthropic 兼容端点（api.deepseek.com/anthropic），按量计费。获取：platform.deepseek.com → API Keys'
+    hint: '走官方 Anthropic 兼容端点（api.deepseek.com/anthropic），按量计费。获取：platform.deepseek.com → API Keys',
+    contextWindow: 128_000
   },
   ollama: {
     id: 'ollama',
@@ -62,7 +66,11 @@ export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
     needsKey: false,
     supportsCache: false,
     keyHint: '本地 Ollama 无需 API Key',
-    hint: '需 Ollama v0.12+（提供 Anthropic /v1/messages 兼容）。先 ollama pull 模型；本地推理免费，但速度与工具调用质量取决于模型和显存'
+    hint: '需 Ollama v0.12+（提供 Anthropic /v1/messages 兼容）。先 ollama pull 模型；本地推理免费，但速度与工具调用质量取决于模型和显存',
+    // 模型标称窗口，仅作上限估计：Ollama 运行时默认 num_ctx 常只有 4096/8192（需 Modelfile/环境变量调大），
+    // 未调大时实际可用窗口远小于此值——主动压缩阈值据此估算会偏松（不触发），超限报错文案也未必命中
+    // context_too_long 分类，最终退化为普通 run_error（与无压缩时的既有行为一致）
+    contextWindow: 32_768
   },
   lmstudio: {
     id: 'lmstudio',
@@ -74,7 +82,8 @@ export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
     needsKey: false,
     supportsCache: false,
     keyHint: '本地服务无需 API Key',
-    hint: '任意 OpenAI 兼容本地端点（LM Studio / llama.cpp / vLLM 等，/v1/chat/completions）。先在服务端加载模型再点「探测可用模型」；想用 Ollama 走此协议可把地址改为 http://localhost:11434/v1'
+    hint: '任意 OpenAI 兼容本地端点（LM Studio / llama.cpp / vLLM 等，/v1/chat/completions）。先在服务端加载模型再点「探测可用模型」；想用 Ollama 走此协议可把地址改为 http://localhost:11434/v1',
+    contextWindow: 32_768
   },
   custom: {
     id: 'custom',

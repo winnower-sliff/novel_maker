@@ -54,6 +54,8 @@ export interface LlmAuth {
   needsKey: boolean
   supportsCache: boolean
   promptCache: boolean
+  /** 生效的上下文窗口（tokens）：profile 覆盖 > provider 预设；均缺省为 undefined（调用方回退保守默认） */
+  contextWindow?: number
   /** 生效端点协议：custom 看 profile 覆盖，其余用预设 */
   protocol: Protocol
 }
@@ -243,6 +245,7 @@ export async function getLlmAuth(): Promise<LlmAuth> {
     needsKey: preset.needsKey,
     supportsCache: preset.supportsCache,
     promptCache: preset.supportsCache && profile.promptCache && protocol !== 'openai',
+    contextWindow: profile.contextWindow ?? preset.contextWindow,
     protocol
   }
 }
@@ -294,6 +297,7 @@ export async function resolveRequestAuth(purpose?: Purpose): Promise<RequestAuth
           supportsCache: targetPreset.supportsCache,
           promptCache:
             targetPreset.supportsCache && targetProfile.promptCache && targetProtocol !== 'openai',
+          contextWindow: targetProfile.contextWindow ?? targetPreset.contextWindow,
           protocol: targetProtocol,
           model: route.model,
           fallbackReason: ''
@@ -347,7 +351,13 @@ export async function saveSettings(patch: SettingsPatch): Promise<SettingsView> 
         modelRouting: patch.modelRouting ?? prev.modelRouting,
         promptCache: patch.promptCache !== undefined ? patch.promptCache : prev.promptCache,
         // 仅 custom 存协议覆盖；非 custom 一律清除，固定走预设
-        protocol: provider === 'custom' ? (patch.protocol ?? prev.protocol) : undefined
+        protocol: provider === 'custom' ? (patch.protocol ?? prev.protocol) : undefined,
+        contextWindow:
+          patch.contextWindow !== undefined
+            ? patch.contextWindow > 0
+              ? Math.floor(patch.contextWindow)
+              : undefined
+            : prev.contextWindow
       }
     },
     apiKeys: { ...stored.apiKeys },

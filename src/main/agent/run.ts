@@ -33,8 +33,14 @@ export function getAgentToolDefs(): ToolDef[] {
 /** 确认等待超时：渲染端刷新/断连后无人应答时自动拒绝，防 run 在主进程死等（对齐 runRecords TTL） */
 const CONFIRM_TIMEOUT_MS = 10 * 60 * 1000
 
-/** 输入 token 超过该阈值时在工具结果里软提示建议压缩（不强制，每轮至多一次） */
-const COMPACT_NUDGE_TOKENS = 100_000
+/** 上下文窗口未知（custom/异常 provider）时的保守回退值 */
+const DEFAULT_CONTEXT_WINDOW = 128_000
+
+/** 输入 token 占窗口比超过该比率时在工具结果里软提示建议模型自主压缩（不强制，每轮至多一次） */
+const COMPACT_NUDGE_RATIO = 0.6
+
+/** 输入+输出 token 占窗口比超过该比率时程序化主动压缩（不等 context_too_long 报错） */
+const PROACTIVE_COMPACT_RATIO = 0.8
 
 /** 自动压缩兜底预算：输入超限（context_too_long）时程序化压缩的次数与保留字符预算（二级递减） */
 const MAX_AUTO_COMPACTS = 2
@@ -304,7 +310,7 @@ function buildSystemPrompt(projectId: string): string {
     '15. 章节编号由系统按位置自动重排：引用其他章节用章节标题或大纲 id，不要在 synopsis/scenes/正文里写死「第N章」（插删章后会漂移）；需要插章用 save_outline 的插入语义（chapterNo=插到该章号之前、afterOutlineId=插到某章之后、缺省追加末尾），移动/改卷用 save_outline 修改 chapterNo 或传 afterOutlineId',
     '16. 卷创意与本卷/通用节奏规则存在大纲生成页的向导参数里：读取用 get_outline_plan，保存用 save_outline_plan（未传字段保留原值，空串清空）；为某卷起草新卷创意时写成 3-5 个自然段的软分段形态，每段以「开篇章（卷首）：」等相对位置短语开头（禁写死章号），段间渐进过渡，总长 400-600 字',
     '17. 世界观类型管理：优先复用现有类型；条目换类型用 set_worldbuild_category（目标类型不存在会自动创建）；确需新类型用 worldbuild_type 的 op=create（可同时带 before/after/first/last 之一插到语义相邻处）；删类型用 op=delete（类型下还有条目时先逐条 set_worldbuild_category 迁走再删）',
-    '18. 长任务（批量改写、全书检查、跨卷校对）中收到「上下文过大」系统提示、或确认早前细节已处理完时，主动用 compact_context 把历史压成摘要再继续；摘要必须包含任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定，宁可写长不可漏关键 id',
+    '18. 长任务（批量改写、全书检查、跨卷校对）中收到「上下文过大」系统提示、或确认早前细节已处理完时，主动用 compact_context 把历史压成摘要再继续；摘要必须包含任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定、连续性数字硬账（人数/金额/库存/伤势等当前值），宁可写长不可漏关键 id',
     '19. 任务未完成时禁止停下征询意见或等待指示：直接继续调用工具执行下一步。只有两种情况可以停下：任务真正全部完成（此时输出最终总结），或遇到必须由用户决策的分叉（此时明确列出选项与你的建议）。压缩上下文后不要回复确认性文字，直接继续干活',
     '20. 开始创作任务（写正文/大纲/卷创意/人物卡/世界观/伏笔规划/润色扩写）前，先调 get_writing_rules 拉取该任务相关的写作分节并遵守。常用 tags：写正文 ["chapter","prose","dialogue","hooks","plot","continuity","character"]；改稿润色 ["polish","prose","dialogue","hooks","continuity"]；大纲/卷创意/对齐 ["outline","plot","fore"]；人物卡 ["character"]；世界观条目 ["worldbuild"]；伏笔登记/回收 ["fore"]；批量写作/审校 ["agent","chapter","prose","continuity"]'
   ].join('\n')
@@ -342,6 +348,7 @@ export async function runAgent(opts: {
 
   const auth = await resolveRequestAuth('agent')
   if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
+  const contextWindow = auth.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   const system = buildSystemPrompt(projectId)
 
   const runState: RunState = { confirms: new Map(), alwaysAllowed: new Set(), toolResults: [] }
@@ -358,6 +365,33 @@ export async function runAgent(opts: {
       ...(ev.denied ? { denied: true } : {})
     })
     send('agent:toolResult', ev)
+  }
+
+  /**
+   * 程序化压缩执行体（主动 80% 预防与被动超限兜底共用）：
+   * 落库 compact 卡（保证重开会话回灌也会裁剪）+ 整体替换 messages 为 摘要+kept
+   */
+  const doAutoCompact = (summary: string, kept: ChatMessage[], note: string): void => {
+    const cid = `auto_compact_${Date.now()}`
+    persist({
+      kind: 'tool_call',
+      call: { id: cid, name: 'compact_context', input: { summary }, state: 'running' }
+    })
+    send('agent:toolCall', {
+      id: cid,
+      name: 'compact_context',
+      input: { summary },
+      state: 'running'
+    })
+    emitToolResult({ id: cid, ok: true, result: note })
+    messages.length = 0
+    messages.push({
+      role: 'user',
+      content: `【上下文压缩】以下摘要替代了此前全部对话历史：\n${summary}`
+    })
+    messages.push(...kept)
+    compacted = true
+    compactSummary = summary
   }
 
   const usage: UsageInfo = {
@@ -431,30 +465,16 @@ export async function runAgent(opts: {
         )
           throw err
         autoCompacts++
+        // 超限报错若发生在流中途（罕见）：已流出文本先落库再清，避免静默丢失
+        if (pendingTurnText.trim()) persist({ kind: 'assistant', text: pendingTurnText })
         pendingTurnText = ''
         const budget = autoCompacts === 1 ? AUTO_COMPACT_BUDGET : AUTO_COMPACT_BUDGET_HARD
         const { summary, kept } = buildAutoCompact(messages, budget)
-        const cid = `auto_compact_${Date.now()}`
-        persist({
-          kind: 'tool_call',
-          call: { id: cid, name: 'compact_context', input: { summary }, state: 'running' }
-        })
-        send('agent:toolCall', {
-          id: cid,
-          name: 'compact_context',
-          input: { summary },
-          state: 'running'
-        })
-        const note = `已自动压缩（第 ${autoCompacts} 次）：输入超出模型上下文长度限制，早期历史已替换为线索摘要，保留了最近的工作。不要输出确认性文字，直接继续调用工具完成任务`
-        emitToolResult({ id: cid, ok: true, result: note })
-        messages.length = 0
-        messages.push({
-          role: 'user',
-          content: `【上下文压缩】以下摘要替代了此前全部对话历史：\n${summary}`
-        })
-        messages.push(...kept)
-        compacted = true
-        compactSummary = summary
+        doAutoCompact(
+          summary,
+          kept,
+          `已自动压缩（第 ${autoCompacts} 次）：输入超出模型上下文长度限制，早期历史已替换为线索摘要，保留了最近的工作。不要输出确认性文字，直接继续调用工具完成任务`
+        )
         turn--
         continue
       }
@@ -633,13 +653,17 @@ export async function runAgent(opts: {
         })
         emitToolResult({ id: tu.id, ok, result: out })
       }
-      if (result.usage.inputTokens > COMPACT_NUDGE_TOKENS && resultBlocks.length > 0) {
+      if (
+        result.usage.inputTokens >= COMPACT_NUDGE_RATIO * contextWindow &&
+        resultBlocks.length > 0
+      ) {
         const last = resultBlocks[resultBlocks.length - 1]
         if (last.type === 'tool_result')
-          last.content += `\n[系统提示：本次请求输入约 ${result.usage.inputTokens} tokens，上下文偏大。若早前细节已不再需要，建议调用 compact_context 压缩历史（先把任务目标、已完成修改含 id、待办事项写进摘要），压缩后直接继续调用工具，不要停下来等待确认]`
+          last.content += `\n[系统提示：本次请求输入约 ${result.usage.inputTokens} tokens（窗口约 ${contextWindow}），上下文偏大。若早前细节已不再需要，建议调用 compact_context 压缩历史（先把任务目标、已完成修改含 id、待办事项写进摘要），压缩后直接继续调用工具，不要停下来等待确认]`
       }
       messages.push({ role: 'user', content: resultBlocks })
 
+      let selfCompacted = false
       if (pendingCompact !== null) {
         // 压缩必须在本轮 tool_use/tool_result 全部落账后整体替换，保证配对约束不被破坏
         messages.length = 0
@@ -650,6 +674,26 @@ export async function runAgent(opts: {
         compacted = true
         compactSummary = pendingCompact
         pendingCompact = null
+        selfCompacted = true
+      }
+
+      // 主动压缩：本轮实测用量逼近窗口（80%）且模型没有自主压缩时程序化裁剪，防下一轮请求超限报错
+      const usedTokens = result.usage.inputTokens + result.usage.outputTokens
+      if (
+        !selfCompacted &&
+        !signal.aborted &&
+        result.toolUses.length > 0 &&
+        autoCompacts < MAX_AUTO_COMPACTS &&
+        usedTokens >= PROACTIVE_COMPACT_RATIO * contextWindow
+      ) {
+        autoCompacts++
+        const { summary, kept } = buildAutoCompact(messages, AUTO_COMPACT_BUDGET)
+        doAutoCompact(
+          summary,
+          kept,
+          `已主动压缩（第 ${autoCompacts} 次）：上下文用量约 ${usedTokens} tokens，已达窗口（约 ${contextWindow}）的 ${Math.round(PROACTIVE_COMPACT_RATIO * 100)}%，早期历史已替换为线索摘要，保留了最近的工作。不要输出确认性文字，直接继续调用工具完成任务`
+        )
+        turn--
       }
 
       if (turn === MAX_TURNS - 1) hitLimit = true

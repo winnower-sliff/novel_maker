@@ -68,7 +68,8 @@ export default function Settings() {
   const resetPreset = (): void => {
     patchDraft({
       baseUrl: preset.baseUrl,
-      defaultModel: preset.defaultModel
+      defaultModel: preset.defaultModel,
+      contextWindow: undefined
     })
     setProbeResult(null)
     setProbeError('')
@@ -99,6 +100,7 @@ export default function Settings() {
       defaultModel: active.defaultModel,
       customModels: active.customModels,
       modelRouting: active.modelRouting,
+      contextWindow: active.contextWindow ?? 0,
       protocol: provider === 'custom' ? protocol : undefined,
       quota5hPrompts: Math.max(0, parseInt(quota5h, 10) || 0),
       promptCache: active.promptCache
@@ -248,6 +250,23 @@ export default function Settings() {
                 onChange={(e) => patchDraft({ customModels: e.target.value })}
                 placeholder="model-id"
               />
+            </div>
+          </div>
+          <div>
+            <Label>上下文窗口（tokens，可选）</Label>
+            <Input
+              inputMode="numeric"
+              value={active.contextWindow ? String(active.contextWindow) : ''}
+              onChange={(e) => {
+                const n = parseInt(e.target.value, 10)
+                patchDraft({ contextWindow: Number.isFinite(n) && n > 0 ? n : undefined })
+              }}
+              placeholder={`留空用预设（${
+                preset.contextWindow ? preset.contextWindow.toLocaleString() : '128,000'
+              }）`}
+            />
+            <div className="mt-1.5 text-xs text-zinc-600">
+              智能体据此预估主动压缩时机（用量达 80% 触发）；custom 端点或混用小窗模型时按实际填写
             </div>
           </div>
           <div className="flex items-center gap-3">
