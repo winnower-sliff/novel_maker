@@ -1,4 +1,4 @@
-import type { Protocol } from '../../shared/providers'
+import { isProviderId, type Protocol, providerPreset } from '../../shared/providers'
 import type { OutlineItem, ToolDef, UsageInfo } from '../../shared/types'
 import type { EventSink } from '../eventSink'
 import * as store from '../store'
@@ -9,7 +9,17 @@ export const MAX_RESULT_CHARS = 30000
 export const BRIEF_CHARS = 200
 export const FULL_PAGE_DEFAULT = 20
 
+/** 未知 provider（custom/异常）的保守输出上限 */
 export const AGENT_MAX_TOKENS = 8192
+
+/** 按 provider 预设取单次输出上限（glm 16k / deepseek·ollama·lmstudio 8k）；未知回退保守值 */
+export function agentMaxTokens(provider: string | undefined | null): number {
+  if (provider && isProviderId(provider)) {
+    const preset = providerPreset(provider)
+    if (preset.maxOutputTokens) return preset.maxOutputTokens
+  }
+  return AGENT_MAX_TOKENS
+}
 
 export const MAX_SUB_TURNS = 10
 export const MAX_SUBAGENTS = 6

@@ -113,6 +113,18 @@ export function parseRuleSections(raw: string): { preamble: string; sections: Ru
   return { preamble: preamble.join('\n').trim(), sections }
 }
 
+/** 逆解析：结构化分节重组完整指令文本（分节级编辑写回用） */
+export function serializeRuleSections(preamble: string, sections: readonly RuleSection[]): string {
+  const parts: string[] = []
+  if (preamble.trim()) parts.push(preamble.trim())
+  for (const sec of sections) {
+    const body = sec.text.split('\n').slice(1).join('\n').trim()
+    const heading = `## ${sec.title}${sec.tag ? ` [${sec.tag}]` : ''}`
+    parts.push(body ? `${heading}\n${body}` : heading)
+  }
+  return parts.join('\n\n')
+}
+
 /** 供结构化编辑器：分节视图（body 剥离 ## 标题行） */
 export function parseSectionsView(raw: string): {
   preamble: string
@@ -211,29 +223,7 @@ export function writingRulesBlock(tags: readonly string[], projectId: string): s
   return parts.join('\n\n')
 }
 
-/** 取 tags 命中的分节块全文（全局+项目，含核心节），无内容返回空串；get_writing_rules 工具与 pipeline 共用 */
+/** 取 tags 命中的分节块全文（全局+项目，含核心节），无内容返回空串；get_writing_rules 工具专用 */
 export function writingRulesFor(tags: readonly string[], projectId: string): string {
   return writingRulesBlock(tags, projectId)
-}
-
-/** 写正文任务的规则分节（chapterRunner 逐段写作与 chapter 管线共用） */
-export const CHAPTER_RULE_TAGS = [
-  'chapter',
-  'prose',
-  'dialogue',
-  'hooks',
-  'plot',
-  'continuity',
-  'character'
-] as const
-
-/** 把 tags 命中的分节块追加到 system 末尾（全局在前、项目在后，项目标最高优先级）；两处都为空时原样返回 */
-export function appendWritingRules(
-  system: string,
-  tags: readonly string[],
-  projectId: string
-): string {
-  const block = writingRulesBlock(tags, projectId)
-  if (!block) return system
-  return system ? `${system}\n\n${block}` : block
 }

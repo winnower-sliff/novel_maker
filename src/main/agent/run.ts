@@ -21,7 +21,7 @@ import { appendUsage } from '../usage'
 import { coreWritingRules, projectCoreRules } from './instructions'
 import { drainInjections } from './queue'
 import {
-  AGENT_MAX_TOKENS,
+  agentMaxTokens,
   clip,
   MAX_RESULT_CHARS,
   MAX_SUBAGENTS,
@@ -332,12 +332,12 @@ function buildSystemPrompt(projectId: string): string {
     '6. 用户要求模糊时（如"优化一下大纲"），先读取现状再决定改法，必要时先说明你的计划',
     '7. 全局性任务（矛盾检查、一致性审校、批量统计或修改）必须覆盖全部相关条目：先看 total/hasMore/byCategory 规划分批，逐批读取直至 hasMore=false，再下结论并在结论中说明覆盖范围；结果被截断时改用 category/volume 过滤、offset/limit 分页或 detail=summary 重试，禁止基于不完整数据下最终结论',
     '8. 写入世界观词条或人物卡时遵循标签纪律：每条至少 2 个标签，优先复用现有标签，没有合适的就新建可被多条共享的上位主题标签（体系名/时代名/事件名/族群名等），禁止无标签条目或让标签留空；[[ ]] 链接有单向纪律：只允许人物卡单向链接世界观条目（用 save_character 的 relation 参数写 [[世界观条目|关系短语]]，展示为卡末尾「关联：」行），世界观条目之间可互链（优先写 [[目标|关系短语]]，关系短语写清「是什么关系」，简单提及才用裸 [[目标]]），但世界观条目严禁反向链人物名——提及人物直接写名字或纯文本描述，不加双方括号；关系化链接会被知识图谱解析成带语义的边',
-    '9. 写章节正文前的固定序列（顺序不可省略）：① list_outlines 找到上一章大纲 id，同时取出本章大纲（标题写在 outline.title 上；scenes 场景序列是「这章怎么演」的逐场依据，正文须逐场落实）；② get_chapter_tail 回读上一章结尾，找回语气、当前悬念与情绪落点，开头自然承接、禁止复述；③ 读取本章出场人物的 get_entity(kind=character)（关注动态状态 state）；④ list_foreshadows 核对未回收伏笔（关注 plannedResolve 计划回收点与 priority 优先级，本章该埋/该收的在梗概或 foreshadowOps 里）；⑤ list_summaries 取上一章摘要，按其 ledger 硬账对齐数字（人数/金额/库存/伤势程度等不得无故跳变）；⑥ 然后才动笔',
+    '9. 写/续写章节正文的固定闭环（顺序不可省略）：① 动笔前必调 get_chapter_context（传本章大纲 id；它已整合本章场景序列、上一章结尾与硬账、人物动态状态、伏笔台账与回收计划、卷摘要与相关世界观，无须再逐个翻查）；② 正文用 append_chapter 分段追加：每次不超过约 3000 字，写完一段就追加一次，长章绝不求一次写完；要修改已有段落用 edit_text，禁止为小改而整章重写；③ 全部写完后调 lint_chapter 自检，pass=false 就逐条按 advice 修复并重跑，通过才算完；④ 收尾必调 save_summary 落摘要与硬账（章节状态自动升「已写」）',
     '10. 找"与某主题相关的设定/人物/章节"时优先用 search_project 语义搜索，比翻页浏览高效；要找「哪些地方写了某个确切字符串」（如 [[链接名]] 的引用处、改名前的旧标题、专名出现位置）用 grep_project 精确定位；两者都空再回退 list_* 分页浏览',
     '11. 回答全书级问题（整体脉络/主题/长线走向）前先用 get_book_digest 拿全局概览，再按需深入具体卷章；不要靠翻页拼凑全局判断',
     '12. 完成写章任务后，若人物状态发生变化（伤势/物品/信息/立场），顺手用 update_character_state 更新其状态文档（旧条目可删，保持紧凑）',
     '13. 大范围调研/核对（全书矛盾检查、批量统计、跨卷一致性）若预计要翻阅大量条目，用 spawn_subagent 委派只读子智能体代劳，拿到报告后再执行写入决策；委派时 task 必须写全调查范围、判断标准与期望报告格式，一个子任务聚焦一件事，需要写入的修改由你亲自执行',
-    '14. 刷新某卷卷摘要一律用 refresh_volume_summary（走与自动写作相同的生成链，自动落库），不要自己拼一段文字当卷摘要写；重新规划章节时用 save_outline 的 scenes 参数逐场排「人物+动作/冲突」场景序列（synopsis 只写「这章讲什么」，怎么演落在 scenes）',
+    '14. 刷新某卷卷摘要一律用 refresh_volume_summary（LLM 生成后自动落库），不要自己拼一段文字当卷摘要写；重新规划章节时用 save_outline 的 scenes 参数逐场排「人物+动作/冲突」场景序列（synopsis 只写「这章讲什么」，怎么演落在 scenes）',
     '15. 章节编号由系统按位置自动重排：引用其他章节用章节标题或大纲 id，不要在 synopsis/scenes/正文里写死「第N章」（插删章后会漂移）；需要插章用 save_outline 的插入语义（chapterNo=插到该章号之前、afterOutlineId=插到某章之后、缺省追加末尾），移动/改卷用 save_outline 修改 chapterNo 或传 afterOutlineId',
     '16. 卷创意与本卷/通用节奏规则存在大纲生成页的向导参数里：读取用 get_outline_plan，保存用 save_outline_plan（未传字段保留原值，空串清空）；为某卷起草新卷创意时写成 3-5 个自然段的软分段形态，每段以「开篇章（卷首）：」等相对位置短语开头（禁写死章号），段间渐进过渡，总长 400-600 字',
     '17. 世界观类型管理：优先复用现有类型；条目换类型用 set_worldbuild_category（目标类型不存在会自动创建）；确需新类型用 worldbuild_type 的 op=create（可同时带 before/after/first/last 之一插到语义相邻处）；删类型用 op=delete（类型下还有条目时先逐条 set_worldbuild_category 迁走再删）',
@@ -480,7 +480,7 @@ export async function runAgent(opts: {
             system,
             messages,
             tools,
-            maxTokens: AGENT_MAX_TOKENS,
+            maxTokens: agentMaxTokens(auth.provider),
             purpose: 'agent',
             cacheSystem: auth.promptCache
           },

@@ -6,7 +6,9 @@ import {
 } from '../../shared/foreRef'
 import { splitTags } from '../../shared/tags'
 import type { OutlineItem, ToolDef } from '../../shared/types'
-import { reembedEntity } from '../embedding'
+import { buildChapterContext } from '../context'
+import { enqueueEmbedding, reembedEntity } from '../embedding'
+import { lintChapterReport } from '../lint'
 import { chatStream, pickRatelimitHeaders } from '../llm'
 import { applyVolumeSummaryResult, buildVolumeSummaryRequest } from '../pipeline'
 import { resolveRequestAuth } from '../settings'
@@ -15,6 +17,10 @@ import * as store from '../store'
 import { appendUsage } from '../usage'
 import {
   getInstructionsView,
+  parseRuleSections,
+  readGlobalInstructions,
+  readProjectInstructions,
+  serializeRuleSections,
   writeGlobalInstructions,
   writeProjectInstructions,
   writingRulesFor
@@ -1584,9 +1590,211 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
+      name: 'get_chapter_context',
+      description:
+        '动笔前必调：拉取指定章节的完整写作上下文包（本章元数据与场景序列、下一章预告、人物动态状态、伏笔台账与回收计划、各卷卷摘要、上一章硬账、相关世界观条目）。写/续写任何一章前先调用它，再依据其内容动笔',
+      input_schema: schema(
+        {
+          outlineId: s('目标章节的大纲条目 id（list_chapter_briefs 里拿）'),
+          wordTarget: optN('本章目标字数（可选，影响上下文取舍预算）')
+        },
+        ['outlineId']
+      )
+    },
+    danger: false,
+    handler: async (input) => {
+      const outlineId = reqStr(input, 'outlineId')
+      const outline = store.getOutline(outlineId)
+      if (!outline) throw new Error(`大纲条目不存在：${outlineId}`)
+      const wordTarget = optNum(input, 'wordTarget')
+      const ctx = await buildChapterContext(outline.projectId, outlineId, wordTarget ?? undefined)
+      return {
+        outlineId,
+        title: outline.title,
+        context: ctx.user,
+        totalTokens: ctx.totalTokens
+      }
+    }
+  },
+  {
+    def: {
+      name: 'append_chapter',
+      description:
+        '向指定章节末尾追加正文（不覆盖已有内容）。长章务必分段写：每次追加不超过约 3000 字，写完一段就追加一次，全部完成后用 lint_chapter 自检。要修改已有段落用 edit_text',
+      input_schema: schema(
+        {
+          outlineId: s('目标章节的大纲条目 id'),
+          text: s('要追加的正文片段（纯文本；建议每次 ≤3000 字）')
+        },
+        ['outlineId', 'text']
+      )
+    },
+    danger: false,
+    handler: (input) => {
+      const outlineId = reqStr(input, 'outlineId')
+      const outline = store.getOutline(outlineId)
+      if (!outline) throw new Error(`大纲条目不存在：${outlineId}`)
+      const text = reqStr(input, 'text').trimStart()
+      if (!text) throw new Error('text 为空，没有可追加的内容')
+      if (text.length > 12000) throw new Error('单次追加过长（上限 12000 字），请拆成多段逐次追加')
+      const existing = store.getChapterByOutline(outlineId)
+      const prev = existing?.content ?? ''
+      const content = prev ? `${prev.trimEnd()}\n\n${text}` : text
+      if (content.length > MAX_CHAPTER_CHARS * 2)
+        throw new Error(`本章正文已超过上限（${content.length} 字），请收尾或用 edit_text 精简`)
+      store.saveChapter({ outlineId, projectId: outline.projectId, content })
+      return {
+        ok: true,
+        outlineId,
+        chapterChars: content.length,
+        appendedChars: text.length,
+        note: `已追加 ${text.length} 字，本章现 ${content.length} 字`
+      }
+    }
+  },
+  {
+    def: {
+      name: 'save_summary',
+      description:
+        '保存章节摘要与硬账台账（写完一章后的收尾步骤）：summary=50-150 字纯剧情概要，events=关键事件，characterStates=人物状态变化，ledger=必须记住的硬事实（伤害/获得/承诺/死伤等），foreshadowsPlanted=本章埋设的伏笔，foreshadowsResolved=本章回收的伏笔。保存后章节状态升为「已写」。硬账是后续章节连续性的地基，务必如实记录',
+      input_schema: schema(
+        {
+          outlineId: s('目标章节的大纲条目 id'),
+          summary: s('50-150 字纯剧情概要（讲什么，不含评价）'),
+          events: optArr('关键事件列表'),
+          timeline: optS('时间线/时间跨度推进说明'),
+          characterStates: optArr(
+            '人物状态变化，如 [{"name":"林晚","state":"左臂重伤，失去战力"}]'
+          ),
+          ledger: optArr('硬事实台账，如 [{"name":"玉佩","value":"已交给沈青保管"}]'),
+          foreshadowsPlanted: optArr(
+            '本章埋设的伏笔，如 [{"content":"玉佩内藏地图","quote":"「这玉佩…你从未真正看过它」"}]'
+          ),
+          foreshadowsResolved: optArr('本章回收的伏笔（表述需与埋设时一致）')
+        },
+        ['outlineId', 'summary']
+      )
+    },
+    danger: false,
+    handler: (input) => {
+      const outlineId = reqStr(input, 'outlineId')
+      const outline = store.getOutline(outlineId)
+      if (!outline) throw new Error(`大纲条目不存在：${outlineId}`)
+      const chapter = store.getChapterByOutline(outlineId)
+      if (!chapter?.content.trim()) throw new Error('该章还没有正文，请先写完正文再保存摘要')
+      const summary = reqStr(input, 'summary').trim()
+      const clean = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
+      const states = (Array.isArray(input.characterStates) ? input.characterStates : [])
+        .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+        .map((x) => ({ name: clean(x.name), state: clean(x.state) }))
+        .filter((x) => x.name && x.state)
+      const ledgerEntries = (Array.isArray(input.ledger) ? input.ledger : [])
+        .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+        .map((x) => ({ name: clean(x.name), value: clean(x.value) }))
+        .filter((x) => x.name && x.value)
+      const planted = (Array.isArray(input.foreshadowsPlanted) ? input.foreshadowsPlanted : [])
+        .filter((x): x is Record<string, unknown> => !!x && typeof x === 'object')
+        .map((x) => ({ content: clean(x.content), quote: clean(x.quote) || undefined }))
+        .filter((x) => x.content)
+      store.saveSummary(chapter.id, {
+        summary,
+        events: optStrArr(input, 'events') ?? [],
+        timeline: clean(input.timeline),
+        characterStates: states,
+        ledger: ledgerEntries,
+        foreshadowsPlanted: planted,
+        foreshadowsResolved: optStrArr(input, 'foreshadowsResolved') ?? []
+      })
+      store.raiseChapterStatus(outlineId, 'written')
+      try {
+        enqueueEmbedding(outline.projectId, 'summary', outlineId, summary.slice(0, 1200))
+      } catch {
+        // 嵌入入队失败不影响摘要落库
+      }
+      return {
+        ok: true,
+        outlineId,
+        note: `第 ${outline.chapterNo} 章摘要已保存，章节状态已升为「已写」`
+      }
+    }
+  },
+  {
+    def: {
+      name: 'lint_chapter',
+      description:
+        '章节交稿前自检：跑硬闸检查（与上一章接缝重复、穿帮词、元语言泄漏、重复段、字数达标），返回问题清单与 pass 结论。pass=false 时逐条按 advice 修复后重跑，直到通过再交付',
+      input_schema: schema({ outlineId: s('目标章节的大纲条目 id') }, ['outlineId'])
+    },
+    danger: false,
+    handler: (input) => {
+      const outlineId = reqStr(input, 'outlineId')
+      if (!store.getOutline(outlineId)) throw new Error(`大纲条目不存在：${outlineId}`)
+      return { outlineId, report: lintChapterReport(outlineId) }
+    }
+  },
+  {
+    def: {
+      name: 'update_instruction_section',
+      description:
+        '按分节修改智能体行为指令（推荐优先用它而不是整篇重写）：scope=global 改全局 agents.md、scope=project 改本项目指令。title 定位 `## 标题` 分节；body 传入新内容=替换该节、body 省略=只改该节 tag、body 传空串=删除该节；title 不存在且 body 非空=新建节。tag 决定注入时机：留空=每次任务恒注入，填 outline/chapter/worldbuild/character 等=仅对应任务注入（同 get_writing_rules 的 tags）',
+      input_schema: schema(
+        {
+          scope: s("'global' 或 'project'"),
+          title: s('分节标题（不含 ## 前缀）'),
+          body: optS('新分节内容；省略=只改 tag；空串=删除该节'),
+          tag: optS('该节的注入标签；空串=改为恒注入')
+        },
+        ['scope', 'title']
+      )
+    },
+    danger: false,
+    dangerCheck: (input) =>
+      `将修改智能体行为指令的分节「${
+        typeof input.title === 'string' ? input.title : ''
+      }」（${typeof input.scope === 'string' ? input.scope : ''}）`,
+    handler: (input, projectId) => {
+      const scope = reqStr(input, 'scope')
+      if (scope !== 'global' && scope !== 'project')
+        throw new Error("scope 必须是 'global' 或 'project'")
+      const title = reqStr(input, 'title').trim()
+      if (!title) throw new Error('title 不能为空')
+      const bodyOpt = optStr(input, 'body')
+      const tagRaw = optStr(input, 'tag')
+      const tag =
+        tagRaw === undefined ? undefined : tagRaw.trim() ? tagRaw.trim().toLowerCase() : null
+      const raw = scope === 'global' ? readGlobalInstructions() : readProjectInstructions(projectId)
+      const { preamble, sections } = parseRuleSections(raw)
+      const writeBack = (out: string): void => {
+        if (out.length > 20000) throw new Error('指令过长（上限 20000 字），请精简')
+        if (scope === 'global') writeGlobalInstructions(out)
+        else writeProjectInstructions(projectId, out)
+      }
+      const idx = sections.findIndex((sec) => sec.title.toLowerCase() === title.toLowerCase())
+      if (idx === -1) {
+        if (!bodyOpt?.trim())
+          throw new Error(`分节「${title}」不存在；body 为空无法新建（传 body 内容即可新建）`)
+        sections.push({ title, tag: tag ?? null, text: `## ${title}\n${bodyOpt.trim()}` })
+        writeBack(serializeRuleSections(preamble, sections))
+        return { ok: true, action: 'created', scope, title, tag: tag ?? null }
+      }
+      if (bodyOpt !== undefined && !bodyOpt.trim()) {
+        sections.splice(idx, 1)
+        writeBack(serializeRuleSections(preamble, sections))
+        return { ok: true, action: 'deleted', scope, title, tag: null }
+      }
+      if (!!bodyOpt?.trim()) {
+        sections[idx] = { ...sections[idx], text: `## ${sections[idx].title}\n${bodyOpt.trim()}` }
+      }
+      if (tag !== undefined) sections[idx] = { ...sections[idx], tag }
+      writeBack(serializeRuleSections(preamble, sections))
+      return { ok: true, action: 'updated', scope, title, tag: sections[idx].tag }
+    }
+  },
+  {
+    def: {
       name: 'get_agent_instructions',
       description:
-        '读取智能体行为指令：globalText=全局指令（userData/agents.md，所有项目生效）、projectText=本项目指令（用户在界面配置），两者均注入系统提示且项目级优先。用户让你「记住/调整你自己的工作方式」时，先读再改',
+        '读取智能体行为指令：globalText=全局指令（userData/agents.md，所有项目生效）、projectText=本项目指令，两者均注入系统提示且项目级优先；projectPreamble/projectSections=本项目指令的分节视图（preamble 恒注入，sections 按 tag 在对应任务注入）。用户让你「记住/调整你自己的工作方式」时，先读再改；改动尽量用 update_instruction_section 按节进行',
       input_schema: schema({}, [])
     },
     danger: false,

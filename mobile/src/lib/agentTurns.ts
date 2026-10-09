@@ -21,10 +21,15 @@ export const TOOL_LABELS: Record<string, string> = {
   list_foreshadows: '伏笔·列表',
   save_foreshadow: '伏笔·保存',
   delete_foreshadow: '伏笔·删除',
+  append_chapter: '正文·追加',
   get_agent_instructions: '指令·读取',
+  get_chapter_context: '写作上下文',
   get_writing_rules: '写作规则',
+  lint_chapter: '硬闸自检',
   load_skill: '技能·加载',
+  save_summary: '摘要·保存',
   set_agent_instructions: '指令·修改',
+  update_instruction_section: '指令·改节',
   spawn_subagent: '子智能体·委派',
   get_entity: '内容·读取',
   delete_entity: '内容·删除',
@@ -82,6 +87,16 @@ export function toolSummary(call: AgentToolCall): string {
       return `${str(i, 'scope') === 'global' ? '写入全局 agents.md' : '写入本项目指令'}（${str(i, 'text').length} 字）`
     case 'load_skill':
       return `加载技能全文：${str(i, 'name') || '(未知)'}`
+    case 'get_chapter_context':
+      return `拉取写作上下文：${str(i, 'outlineId') || '(未知)'}`
+    case 'append_chapter':
+      return `追加正文 ${str(i, 'text').length} 字`
+    case 'save_summary':
+      return `保存章节摘要：${str(i, 'outlineId') || '(未知)'}`
+    case 'lint_chapter':
+      return `硬闸自检：${str(i, 'outlineId') || '(未知)'}`
+    case 'update_instruction_section':
+      return `${str(i, 'scope') === 'global' ? '全局' : '本项目'}指令分节「${str(i, 'title') || '(未知)'}」`
     case 'spawn_subagent': {
       const t = str(i, 'task')
       return `${str(i, 'role') || '调研'}：${t.slice(0, 40)}${t.length > 40 ? '…' : ''}`

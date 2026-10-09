@@ -84,9 +84,15 @@ export function deleteSkill(filename: string): void {
   if (existsSync(path)) rmSync(path)
 }
 
+const REMOVED_BUILTIN_SKILLS = ['segment-planner.md']
+
 function seedIfEmpty(): void {
   const dir = globalSkillsDir()
   mkdirSync(dir, { recursive: true })
+  for (const filename of REMOVED_BUILTIN_SKILLS) {
+    const path = join(dir, filename)
+    if (existsSync(path)) rmSync(path)
+  }
   for (const [filename, content] of Object.entries(BUILTIN_SKILLS)) {
     const path = join(dir, filename)
     if (!existsSync(path)) {
