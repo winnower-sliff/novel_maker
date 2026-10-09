@@ -1,19 +1,6 @@
-import { friendlyLlmMessage } from '@shared/llmError'
 import type { OutlineItem, OutlineStatus } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { fireCanonSync } from '../../../wizard/canonStore'
-import { type AlignRevision, applyAlignRevisions } from '../../../wizard/outlineAlign'
-import {
-  deriveStartNo,
-  generateRulesRefine,
-  generateVolume,
-  generateVolumeIdea,
-  rememberVolumePlan,
-  useOutlineRunActive
-} from '../../../wizard/volumeGen'
-import { ExpandableTextarea, NumberField, OutlineProgress } from '../../../wizard/widgets'
-import { loadProjectPlan, saveProjectPlan, type WizardPlanFull } from '../../../wizard/wizardPlan'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { EmptyGuide } from '../components/EmptyGuide'
 import { Badge, Button, Card, Input, Label, Select, Textarea } from '../components/ui'
 import type { Navigate } from '../lib/nav'
@@ -70,45 +57,13 @@ export default function Outline({
   const queryClient = useQueryClient()
   const { data: items = [] } = useQuery(queries.outlines(projectId))
   const { data: volSummaryList = [] } = useQuery(queries.volumeSummaries(projectId))
-  const { data: briefs = [] } = useQuery(queries.chapterBriefs(projectId))
   const [edit, setEdit] = useState<EditState | null>(null)
-  const [genOpen, setGenOpen] = useState(false)
-  const [plan, setPlan] = useState<WizardPlanFull | null>(null)
-  const [idea, setIdea] = useState('')
-  const [volume, setVolume] = useState(1)
-  const [count, setCount] = useState(30)
-  const [generating, setGenerating] = useState(false)
-  // 后台在途 outline run（切页/刷新后生成继续，重挂时恢复禁用态防重复触发）
-  const outlineRun = useOutlineRunActive(projectId)
-  const outlineActive = outlineRun.active
-  const genBusy = generating || outlineActive
-  const [genOutput, setGenOutput] = useState('')
-  const [ideaBusy, setIdeaBusy] = useState(false)
-  const ideaAbortRef = useRef<(() => void) | null>(null)
-  const [rules, setRules] = useState('')
-  const [rulesBusy, setRulesBusy] = useState(false)
-  const rulesAbortRef = useRef<(() => void) | null>(null)
-  // 通用规则：全书各卷适用（存 wizard_plan.outlineRules，区别于 volumePlans[].rules 的本卷规则）
-  const [globalRules, setGlobalRules] = useState('')
-  const [gRulesBusy, setGRulesBusy] = useState(false)
-  const gRulesAbortRef = useRef<(() => void) | null>(null)
-  const [genNotice, setGenNotice] = useState('')
-  const genAbortRef = useRef<(() => void) | null>(null)
-  const [volNotice, setVolNotice] = useState('')
   const volSummaries = useMemo(() => {
     const map: Record<number, string> = {}
     for (const v of volSummaryList) map[v.volume] = v.summary
     return map
   }, [volSummaryList])
   const [openVolumeSummary, setOpenVolumeSummary] = useState<number | null>(null)
-  const volSummaryRequestId = useRef<string | null>(null)
-  const alignRequestId = useRef<string | null>(null)
-  // 预填签名去重（见下方预填 effect 注释）
-  const filledSig = useRef('')
-  const [alignBusy, setAlignBusy] = useState(false)
-  const [alignNotice, setAlignNotice] = useState('')
-  const [alignRevisions, setAlignRevisions] = useState<AlignRevision[] | null>(null)
-  const [alignSkip, setAlignSkip] = useState<Set<string>>(new Set())
   const [openScenes, setOpenScenes] = useState<Set<string>>(new Set())
   const toggleScenes = (id: string): void =>
     setOpenScenes((prev) => {
@@ -117,32 +72,6 @@ export default function Outline({
       else next.add(id)
       return next
     })
-
-  const startAlign = (): void => {
-    setAlignBusy(true)
-    setAlignNotice('AI 正在对照已写剧情检查后续大纲…')
-    setAlignRevisions(null)
-    setAlignSkip(new Set())
-    void window.api.pipeline
-      .run('outlineAlign', { projectId })
-      .then((id) => {
-        alignRequestId.current = id
-      })
-      .catch((err: unknown) => {
-        setAlignBusy(false)
-        setAlignNotice(`出错：${(err as Error).message}`)
-      })
-  }
-
-  const applyAlign = (): void => {
-    if (!alignRevisions) return
-    const list = alignRevisions.filter((r) => !alignSkip.has(r.outlineId))
-    void applyAlignRevisions(projectId, list).then((n) => {
-      setAlignRevisions(null)
-      setAlignNotice(n > 0 ? `已修订 ${n} 章大纲` : '未选择任何修订')
-      load()
-    })
-  }
 
   const load = useCallback((): void => {
     void queryClient.invalidateQueries({ queryKey: qk.outlines(projectId) })
@@ -154,99 +83,6 @@ export default function Outline({
     setEdit(null)
   }, [projectId])
 
-  useEffect(() => {
-    let alive = true
-    void loadProjectPlan(projectId)
-      .then((p) => {
-        if (!alive) return
-        setPlan(p)
-        setCount(p?.outlineCount ?? 30)
-        setIdea(p?.outlineIdea ?? '')
-        setGlobalRules(p?.outlineRules ?? '')
-        // 重挂回到最近操作的卷（生成启动时已写入），配合 volumePlans 预填恢复本次参数
-        if (p && Number.isInteger(p.volume) && p.volume >= 1) setVolume(p.volume)
-      })
-      .catch(() => {})
-    return () => {
-      alive = false
-    }
-  }, [projectId])
-
-  // 换卷时按 volumePlans 预填该卷上次生成参数；无记忆则清空（起始章号生成时全自动推导）
-  // 守卫用签名去重而非 generating：重挂时 snapshot 先到、plan 后到，generating=true 会
-  // 拦掉恢复预填，表单被锁死在顶层旧值（手机端 100 章实锤，两端同构）
-  useEffect(() => {
-    const memo = plan?.volumePlans?.[String(volume)]
-    const sig = `${volume}:${memo ? JSON.stringify(memo) : ''}`
-    if (filledSig.current === sig) return
-    filledSig.current = sig
-    if (memo) {
-      setIdea(memo.idea)
-      setCount(memo.count)
-      setRules(memo.rules ?? '')
-      return
-    }
-    setIdea('')
-    setRules('')
-  }, [volume, plan])
-
-  const volWritten = (vol: number): number =>
-    briefs.filter((b) => b.volume === vol && b.hasDraft).length
-  const targetWritten = briefs.some((b) => b.volume === volume && b.hasDraft)
-
-  useEffect(() => {
-    const offDone = window.api.llm.onDone((id, payload) => {
-      if (id === volSummaryRequestId.current) {
-        const d = payload.data as {
-          volume?: number
-          summaryChars?: number
-          parsed?: boolean
-          error?: string
-        }
-        if (d?.error) setVolNotice(`卷摘要失败：${d.error}`)
-        else if (!d?.parsed) setVolNotice('卷摘要解析失败，可重试')
-        else setVolNotice(`第 ${d.volume} 卷摘要已生成（${d.summaryChars} 字）`)
-        load()
-        return
-      }
-      if (id === alignRequestId.current) {
-        alignRequestId.current = null
-        setAlignBusy(false)
-        const d = payload.data as {
-          parsed?: boolean
-          revisions?: Array<{
-            outlineId: string
-            volume: number
-            chapterNo: number
-            title: string
-            synopsis: string
-            hook?: string
-            reason?: string
-          }>
-          error?: string
-        }
-        if (d?.error) setAlignNotice(`对齐失败：${d.error}`)
-        else if (!d?.parsed) setAlignNotice('对齐结果解析失败，可重试')
-        else if (!d.revisions || d.revisions.length === 0)
-          setAlignNotice('后续大纲与已写剧情一致，无需修订')
-        else setAlignRevisions(d.revisions)
-      }
-    })
-    const offError = window.api.llm.onError((id, message, hint) => {
-      const notice = `出错：${friendlyLlmMessage(message, hint)}`
-      if (id === volSummaryRequestId.current) setVolNotice(notice)
-      if (id === alignRequestId.current) {
-        alignRequestId.current = null
-        setAlignBusy(false)
-        setAlignNotice(notice)
-      }
-    })
-    return () => {
-      offDone()
-      offError()
-    }
-  }, [load])
-
   const volumes = useMemo(() => {
     const map = new Map<number, OutlineItem[]>()
     for (const it of items) {
@@ -256,17 +92,6 @@ export default function Outline({
     }
     return [...map.entries()].sort((a, b) => a[0] - b[0])
   }, [items])
-
-  // 生成区卷选择条：库内卷号 ∪ 记忆卷号；「下一卷」= 最大卷号 + 1
-  const chipVols = useMemo(() => {
-    const set = new Set<number>(volumes.map(([v]) => v))
-    for (const k of Object.keys(plan?.volumePlans ?? {})) {
-      const n = Number(k)
-      if (Number.isInteger(n) && n >= 1) set.add(n)
-    }
-    return [...set].sort((a, b) => a - b)
-  }, [volumes, plan])
-  const nextVol = chipVols.length > 0 ? chipVols[chipVols.length - 1] + 1 : 1
 
   const counts = useMemo(() => {
     const c: Record<string, number> = {}
@@ -306,16 +131,6 @@ export default function Outline({
       })
   }
 
-  const volumeSummary = (vol: number): void => {
-    setVolNotice(`第 ${vol} 卷摘要生成中…`)
-    void window.api.pipeline
-      .run('volumeSummary', { projectId, volume: vol })
-      .then((id) => {
-        volSummaryRequestId.current = id
-      })
-      .catch((err: unknown) => setVolNotice((err as Error).message))
-  }
-
   return (
     <div className="flex h-full flex-col gap-3 overflow-y-auto p-3 md:p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -328,17 +143,6 @@ export default function Outline({
           </span>
         </div>
         <div className="ml-auto flex gap-2">
-          <Button variant="ghost" onClick={() => setGenOpen((v) => !v)}>
-            AI 生成大纲
-          </Button>
-          <Button
-            variant="ghost"
-            onClick={startAlign}
-            disabled={alignBusy || items.length === 0}
-            title="AI 对照已写章节的实际剧情，检查并修订后续未写章节的大纲梗概"
-          >
-            {alignBusy ? '对齐中…' : '对齐已写进展'}
-          </Button>
           <Button
             onClick={() =>
               setEdit({
@@ -352,409 +156,6 @@ export default function Outline({
           </Button>
         </div>
       </div>
-
-      {alignNotice && (
-        <div className="rounded-md border border-zinc-800 bg-zinc-900 px-4 py-2 text-xs text-zinc-400">
-          {alignNotice}
-        </div>
-      )}
-
-      {alignRevisions && alignRevisions.length > 0 && (
-        <Card className="space-y-2 p-4">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className="text-sm font-medium text-zinc-200">
-              大纲对齐建议（{alignRevisions.length} 章）
-            </span>
-            <span className="text-xs text-zinc-500">
-              勾选要应用的修订，确认后覆盖更新对应章节梗概
-            </span>
-            <Button
-              className="ml-auto"
-              onClick={applyAlign}
-              disabled={alignSkip.size === alignRevisions.length}
-            >
-              应用所选（{alignRevisions.length - alignSkip.size}）
-            </Button>
-            <Button variant="ghost" onClick={() => setAlignRevisions(null)}>
-              放弃
-            </Button>
-          </div>
-          {alignRevisions.map((r) => {
-            const skip = alignSkip.has(r.outlineId)
-            return (
-              <div
-                key={r.outlineId}
-                className={`rounded-md border p-2.5 text-xs leading-5 ${
-                  skip
-                    ? 'border-zinc-800 bg-zinc-950/40 opacity-50'
-                    : 'border-amber-900/40 bg-zinc-950'
-                }`}
-              >
-                <label className="flex cursor-pointer items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={!skip}
-                    onChange={(e) =>
-                      setAlignSkip((prev) => {
-                        const next = new Set(prev)
-                        if (e.target.checked) next.delete(r.outlineId)
-                        else next.add(r.outlineId)
-                        return next
-                      })
-                    }
-                    className="h-3.5 w-3.5 cursor-pointer accent-amber-600"
-                  />
-                  <span className="font-medium text-zinc-200">
-                    第 {r.chapterNo} 章《{r.title}》
-                  </span>
-                  {r.reason && <span className="text-amber-400/80">{r.reason}</span>}
-                </label>
-                <div className="mt-1 whitespace-pre-wrap text-zinc-400">{r.synopsis}</div>
-                {r.scenes && r.scenes.length > 0 && (
-                  <div className="mt-1 text-xs text-zinc-500">
-                    场景：
-                    {r.scenes.join(' / ')}
-                  </div>
-                )}
-                {r.hook && <div className="mt-0.5 text-zinc-500">钩子：{r.hook}</div>}
-              </div>
-            )
-          })}
-        </Card>
-      )}
-
-      {genOpen && (
-        <Card className="space-y-3 p-4">
-          <div className="flex flex-wrap items-center gap-1.5">
-            <span className="mr-1 text-xs text-zinc-500">选择卷</span>
-            {chipVols.map((v) => {
-              const w = volWritten(v)
-              const active = v === volume
-              return (
-                <button
-                  key={v}
-                  type="button"
-                  disabled={genBusy}
-                  onClick={() => setVolume(v)}
-                  className={`rounded-full px-3 py-1 text-xs transition-colors disabled:cursor-default disabled:opacity-50 ${
-                    active
-                      ? 'bg-amber-600 font-medium text-white'
-                      : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-zinc-200'
-                  }`}
-                >
-                  第 {v} 卷
-                  {w > 0 && (
-                    <span className={active ? ' text-amber-100' : ' text-zinc-500'}>
-                      {' '}
-                      · 已写{w}
-                    </span>
-                  )}
-                </button>
-              )
-            })}
-            <button
-              type="button"
-              disabled={genBusy}
-              onClick={() => setVolume(nextVol)}
-              className={`rounded-full px-3 py-1 text-xs transition-colors disabled:cursor-default disabled:opacity-50 ${
-                volume === nextVol
-                  ? 'bg-amber-600 font-medium text-white'
-                  : 'border border-dashed border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-zinc-200'
-              }`}
-            >
-              ＋ 第 {nextVol} 卷
-            </button>
-          </div>
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <Label>
-                第 {volume} 卷 ·
-                核心创意（题材、主角、金手指、主线冲突；已有世界观/人物会自动作为上下文）
-              </Label>
-              <Button
-                variant="ghost"
-                className="shrink-0 px-2 py-1 text-xs"
-                disabled={genBusy || ideaBusy || !idea.trim()}
-                onClick={() => {
-                  setIdeaBusy(true)
-                  setGenNotice('')
-                  const { done, abort } = generateVolumeIdea({
-                    projectId,
-                    volume,
-                    idea: idea.trim(),
-                    rules: rules.trim() || undefined,
-                    globalRules: globalRules.trim() || undefined,
-                    onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
-                  })
-                  ideaAbortRef.current = abort
-                  done
-                    .then((text) => {
-                      setIdea(text)
-                      void rememberVolumePlan(projectId, volume, {
-                        idea: text,
-                        count: Math.max(1, Math.floor(count) || 30),
-                        rules: rules.trim() || undefined
-                      })
-                    })
-                    .catch((err: unknown) => {
-                      setGenNotice(`出错：${(err as Error).message}`)
-                    })
-                    .finally(() => {
-                      ideaAbortRef.current = null
-                      setIdeaBusy(false)
-                    })
-                }}
-              >
-                {ideaBusy ? '扩写中…' : 'AI 扩写成创意'}
-              </Button>
-            </div>
-            <ExpandableTextarea
-              ui={{ Textarea, Button }}
-              rows={5}
-              value={idea}
-              onChange={setIdea}
-              placeholder="例：末法时代最后一位炼丹师重生都市，靠一手丹术搅动风云…（也可写简短要求，点「AI 扩写成创意」补全）"
-              disabled={genBusy}
-              overlayTitle={`第 ${volume} 卷 · 核心创意`}
-            />
-          </div>
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <Label>
-                通用规则（全书各卷适用，每行一条；随本卷大纲生成注入，逐章严格执行）
-                {!globalRules.trim() && (
-                  <span className="ml-1 text-amber-500">· 未填写，不生效</span>
-                )}
-              </Label>
-              <Button
-                variant="ghost"
-                className="shrink-0 px-2 py-1 text-xs"
-                disabled={gRulesBusy || genBusy || !globalRules.trim()}
-                onClick={() => {
-                  setGRulesBusy(true)
-                  setGenNotice('')
-                  const { done, abort } = generateRulesRefine({
-                    projectId,
-                    volume,
-                    rules: globalRules.trim(),
-                    onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
-                  })
-                  gRulesAbortRef.current = abort
-                  done
-                    .then((text) => {
-                      setGlobalRules(text)
-                      void saveProjectPlan(projectId, { outlineRules: text })
-                    })
-                    .catch((err: unknown) => {
-                      setGenNotice(`出错：${(err as Error).message}`)
-                    })
-                    .finally(() => {
-                      gRulesAbortRef.current = null
-                      setGRulesBusy(false)
-                    })
-                }}
-              >
-                {gRulesBusy ? '优化中…' : 'AI 优化规则'}
-              </Button>
-            </div>
-            <ExpandableTextarea
-              ui={{ Textarea, Button }}
-              rows={4}
-              value={globalRules}
-              onChange={setGlobalRules}
-              onCommit={(v) => {
-                void saveProjectPlan(projectId, { outlineRules: v })
-              }}
-              placeholder={'例：\n每 10 章安排一个单元故事收尾\n主角每次突破都须付出明确代价'}
-              disabled={genBusy}
-              overlayTitle="通用规则（全书各卷适用）"
-            />
-          </div>
-          <div>
-            <div className="flex items-center justify-between gap-2">
-              <Label>
-                第 {volume} 卷 · 节奏与硬性要求（每行一条，原样透传给大纲生成、逐章严格执行，不经 AI
-                改写）
-                {!rules.trim() && <span className="ml-1 text-amber-500">· 未填写，不生效</span>}
-              </Label>
-              <Button
-                variant="ghost"
-                className="shrink-0 px-2 py-1 text-xs"
-                disabled={rulesBusy || genBusy || !rules.trim()}
-                onClick={() => {
-                  setRulesBusy(true)
-                  setGenNotice('')
-                  const { done, abort } = generateRulesRefine({
-                    projectId,
-                    volume,
-                    rules: rules.trim(),
-                    globalRules: globalRules.trim() || undefined,
-                    onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-1200))
-                  })
-                  rulesAbortRef.current = abort
-                  done
-                    .then((text) => {
-                      setRules(text)
-                      void rememberVolumePlan(projectId, volume, {
-                        idea,
-                        count: Math.max(1, Math.floor(count) || 30),
-                        rules: text
-                      })
-                    })
-                    .catch((err: unknown) => {
-                      setGenNotice(`出错：${(err as Error).message}`)
-                    })
-                    .finally(() => {
-                      rulesAbortRef.current = null
-                      setRulesBusy(false)
-                    })
-                }}
-              >
-                {rulesBusy ? '优化中…' : 'AI 优化规则'}
-              </Button>
-            </div>
-            <ExpandableTextarea
-              ui={{ Textarea, Button }}
-              rows={4}
-              value={rules}
-              onChange={setRules}
-              onCommit={(v) => {
-                // 与通用规则对称：弹层完成即记忆，切卷重进不丢
-                void rememberVolumePlan(projectId, volume, {
-                  idea,
-                  count: Math.max(1, Math.floor(count) || 30),
-                  rules: v
-                })
-              }}
-              placeholder={
-                '例：\n每 3~6 章插入一段独立的色情小故事\n每 10 章安排一个单元小故事收尾'
-              }
-              disabled={genBusy}
-              overlayTitle={`第 ${volume} 卷 · 节奏与硬性要求`}
-            />
-          </div>
-          <div className="max-w-48">
-            <Label>生成章数</Label>
-            <NumberField
-              input={Input}
-              value={count}
-              min={1}
-              onChange={setCount}
-              disabled={genBusy}
-            />
-          </div>
-          {targetWritten && (
-            <p className="text-xs text-amber-400/90">
-              第 {volume} 卷已有 {volWritten(volume)} 章正文——生成将按「全卷重写」执行：重生成大纲后
-              自动覆盖重写该卷全部章节正文（原稿不保留）。
-            </p>
-          )}
-          <div className="flex items-center gap-3">
-            <Button
-              variant={targetWritten ? 'danger' : 'primary'}
-              disabled={genBusy || ideaBusy || rulesBusy || gRulesBusy || !idea.trim()}
-              onClick={() => {
-                if (!rules.trim() && !globalRules.trim()) {
-                  const go = window.confirm(
-                    '通用规则与本卷规则都是空的，本次生成将不附加任何节奏/硬性要求。\n仍要继续吗？'
-                  )
-                  if (!go) return
-                }
-                if (
-                  targetWritten &&
-                  !window.confirm(
-                    `第 ${volume} 卷已有 ${volWritten(volume)} 章正文。\n重写 = 重新生成该卷大纲，并清除该卷全部旧正文与摘要（原稿不保留，不会自动重写）。\n确定继续？`
-                  )
-                )
-                  return
-                setGenerating(true)
-                setGenOutput('')
-                setGenNotice('')
-                // 通用规则原位编辑可能未经弹层 commit，生成启动时统一落库一次
-                void saveProjectPlan(projectId, { outlineRules: globalRules })
-                const { done, abort } = generateVolume({
-                  projectId,
-                  volume,
-                  idea: idea.trim(),
-                  rules: rules.trim() || undefined,
-                  globalRules: globalRules.trim() || undefined,
-                  startNo: deriveStartNo(volume, items),
-                  count: Math.max(1, Math.floor(count) || 30),
-                  hasWritten: targetWritten,
-                  onDelta: (t) => setGenOutput((prev) => (prev + t).slice(-2000))
-                })
-                genAbortRef.current = abort
-                done
-                  .then((r) => {
-                    if (!r.parsed || r.created + r.updated === 0)
-                      setGenNotice('AI 输出无法解析为章节列表，请调整创意后重试')
-                    else if (r.cleared > 0)
-                      setGenNotice(
-                        `大纲已重生成（新建 ${r.created} · 更新 ${r.updated}），已清除该卷 ${r.cleared} 章旧正文与摘要${r.foreRemoved ? `，并删除埋于本卷的旧伏笔 ${r.foreRemoved} 条` : ''}；需要重写正文时到写作页主动触发`
-                      )
-                    else {
-                      const parts = [`已导入 ${r.created} 章`]
-                      if (r.updated) parts.push(`更新 ${r.updated} 章`)
-                      if (r.skipped) parts.push(`跳过已存在 ${r.skipped} 章`)
-                      setGenNotice(parts.join('，'))
-                    }
-                    load()
-                  })
-                  .catch((err: unknown) => {
-                    setGenNotice(`出错：${(err as Error).message}`)
-                  })
-                  .finally(() => {
-                    genAbortRef.current = null
-                    setGenerating(false)
-                  })
-              }}
-            >
-              {generating
-                ? '生成中…'
-                : outlineActive
-                  ? '后台生成中…'
-                  : targetWritten
-                    ? `重写第 ${volume} 卷（大纲+正文）`
-                    : `生成第 ${volume} 卷大纲`}
-            </Button>
-            {(generating || ideaBusy || rulesBusy || gRulesBusy) && (
-              <Button
-                variant="danger"
-                onClick={() => {
-                  genAbortRef.current?.()
-                  ideaAbortRef.current?.()
-                  rulesAbortRef.current?.()
-                  gRulesAbortRef.current?.()
-                }}
-              >
-                中断
-              </Button>
-            )}
-            <Button
-              variant="ghost"
-              onClick={() => {
-                if (projectId) fireCanonSync(projectId, volume)
-              }}
-            >
-              同步设定与人物
-            </Button>
-            {outlineActive && !generating && (
-              <span className="text-xs text-amber-600">
-                后台大纲生成中，完成后自动导入（可离开此页）
-              </span>
-            )}
-            {genNotice && <span className="text-xs text-zinc-400">{genNotice}</span>}
-          </div>
-          {generating && (
-            <pre className="max-h-32 overflow-hidden rounded bg-zinc-950 p-2 font-mono text-[10px] leading-4 text-zinc-600">
-              {genOutput || '等待模型输出…'}
-            </pre>
-          )}
-          {outlineActive && (
-            <OutlineProgress progress={outlineRun.progress} text={outlineRun.tail} />
-          )}
-        </Card>
-      )}
 
       {edit && (
         <Card className="grid grid-cols-2 gap-3 p-3 sm:grid-cols-12 md:p-4">
@@ -880,11 +281,8 @@ export default function Outline({
         <EmptyGuide
           onNavigate={onNavigate}
           title="还没有大纲"
-          desc="AI 依据核心创意一次性生成整卷章节大纲（含定位/悬念/反转/钩子/伏笔操作元数据），也可手动录入。"
+          desc="手动录入章节大纲（含定位/悬念/反转/钩子/伏笔操作元数据）；也可到智能体页让 AI 规划后由其保存。"
         >
-          <Button variant="ghost" onClick={() => setGenOpen((v) => !v)}>
-            AI 生成大纲
-          </Button>
           <Button
             variant="ghost"
             onClick={() =>
@@ -937,23 +335,11 @@ export default function Outline({
                   {openVolumeSummary === vol ? '收起卷摘要' : '查看卷摘要'}
                 </Button>
               )}
-              <Button
-                variant="ghost"
-                className="px-2 py-0.5 text-xs"
-                onClick={() => volumeSummary(vol)}
-              >
-                {volSummaries[vol] ? '重新生成卷摘要' : '生成卷摘要'}
-              </Button>
             </div>
           </div>
           {openVolumeSummary === vol && volSummaries[vol] && (
             <div className="border-b border-zinc-800 bg-zinc-950/60 px-4 py-3 text-xs leading-6 whitespace-pre-wrap text-zinc-400">
               {volSummaries[vol]}
-            </div>
-          )}
-          {volNotice && (
-            <div className="border-b border-zinc-800 px-4 py-1.5 text-xs text-zinc-500">
-              {volNotice}
             </div>
           )}
           <div className="divide-y divide-zinc-800/60">

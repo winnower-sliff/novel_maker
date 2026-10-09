@@ -23,7 +23,6 @@ export default function PremisePage({
             onCreated(id)
           }}
           onUpdated={() => void qc.invalidateQueries({ queryKey: qk.projects })}
-          onDraftedChange={() => {}}
         />
       </div>
     </div>

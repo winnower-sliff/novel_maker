@@ -9,14 +9,11 @@ import Connect from '@mobile/pages/Connect'
 import Settings from '@mobile/pages/Settings'
 import Shelf from '@mobile/pages/Shelf'
 import { MobileToaster } from '@mobile/components/MobileToaster'
-import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { useConnStore } from '@mobile/lib/conn'
 import { useSettingsStore } from '@mobile/lib/settingsStore'
 import { hydrateSnapshots, withSnapshot } from '@mobile/lib/querySnapshot'
 import { qk } from '@renderer/lib/queries'
 import { pushToast } from '@wizard/toastStore'
-import { CanonPreviewPanel } from '@wizard/CanonPreviewPanel'
-import { ensureRuntimeSync } from '@wizard/runtimeSync'
 import { ensureAgentRuntime } from '@wizard/agentRunStore'
 
 type Page = 'shelf' | 'settings'
@@ -95,7 +92,6 @@ export default function App() {
     if (!conn) return
     installNotifyProvider()
     installKeyboardViewport()
-    ensureRuntimeSync()
     ensureAgentRuntime()
   }, [conn])
 
@@ -147,7 +143,6 @@ export default function App() {
           </nav>
         </>
       )}
-      <CanonPreviewPanel ui={mobileWizardUi} />
       <MobileToaster />
     </div>
   )

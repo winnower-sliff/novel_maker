@@ -9,11 +9,9 @@ import type {
   ChatParams,
   ChatResult,
   LlmErrorHint,
-  PipelineAction,
   RunMeta,
   RunRecordPayload,
-  RuntimeRunRecord,
-  WorldbuildGenParams
+  RuntimeRunRecord
 } from '../../shared/types'
 import {
   cancelAgentConfirms,
@@ -30,19 +28,9 @@ import {
   rebuildMessages,
   updateTitle
 } from '../agentTranscript'
-import { LONG_CHAPTER_THRESHOLD, runChapterCandidates, runLongChapter } from '../chapterRunner'
-import { enqueueEmbedding } from '../embedding'
 import type { EventSink } from '../eventSink'
-import { lintChapterReport, stripHtmlComments } from '../lint'
 import { chatStream, LlmError, pickRatelimitHeaders } from '../llm'
-import {
-  buildWorldbuildIndex,
-  buildWorldbuildRetrieveRequest,
-  resolveWorldbuildRetrieval,
-  type WorldbuildRetrieval
-} from '../pipeline'
 import { resolveRequestAuth } from '../settings'
-import * as store from '../store'
 import { appendUsage } from '../usage'
 
 const activeRequests = new Map<string, AbortController>()
@@ -119,8 +107,6 @@ export function listRuns(): RuntimeRunRecord[] {
     return { id, ...rec }
   })
 }
-
-export { LONG_CHAPTER_THRESHOLD }
 
 export function abortLlmRequest(requestId: string): void {
   activeRequests.get(requestId)?.abort()
@@ -400,7 +386,6 @@ export function startStream(
   sink: EventSink,
   rawParams: ChatParams,
   opts?: {
-    action?: PipelineAction
     afterDone?: (result: ChatResult) => unknown
     continueOnMaxTokens?: number
     /** 多段生成：每段结束后由 nextPrompt 决定下一段指令（返回 null 结束）。分批生成等编排场景用 */
@@ -419,7 +404,7 @@ export function startStream(
   const requestId = randomUUID()
   const controller = new AbortController()
   activeRequests.set(requestId, controller)
-  recordRunning(requestId, 'llm', { ...opts?.meta, action: opts?.action ?? opts?.meta?.action })
+  recordRunning(requestId, 'llm', opts?.meta)
 
   // 大纲进度扫描器：跨 chunk 状态机，只吃 send() 的已确认文本
   const progressTotal =
@@ -580,7 +565,6 @@ export function startStream(
         stopReason: final.stopReason,
         durationMs: totalMs,
         headers: final.headers,
-        action: opts?.action,
         data: dataError ? { error: dataError } : data
       }
       recordDone(requestId, donePayload)
@@ -603,188 +587,4 @@ export function startStream(
   })()
 
   return requestId
-}
-
-/** 长章模式（AgentWrite 计划→逐段写）：多请求编排，对外仍是单 requestId 流 */
-export function startLongChapterStream(
-  sink: EventSink,
-  projectId: string,
-  outlineId: string,
-  wordTarget: number,
-  onSettled?: SettleCb,
-  provider?: ProviderId
-): string {
-  const requestId = randomUUID()
-  const controller = new AbortController()
-  activeRequests.set(requestId, controller)
-  recordRunning(requestId, 'llm', { projectId, outlineId, action: 'chapter' })
-
-  void (async () => {
-    try {
-      const started = Date.now()
-      const result = await runLongChapter({
-        sink,
-        requestId,
-        projectId,
-        outlineId,
-        wordTarget,
-        signal: controller.signal,
-        provider
-      })
-      const clean = stripHtmlComments(result.text)
-      const chapter = store.saveChapter({
-        outlineId,
-        projectId,
-        content: clean,
-        status: 'draft'
-      })
-      enqueueEmbedding(projectId, 'summary', outlineId, clean.slice(0, 1200))
-      const donePayload = {
-        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
-        model: '',
-        stopReason: 'end_turn',
-        durationMs: Date.now() - started,
-        headers: {},
-        action: 'chapter' as const,
-        data: {
-          chapterId: chapter.id,
-          wordCount: chapter.wordCount,
-          longMode: true,
-          segments: result.plan.length,
-          lint: lintChapterReport(outlineId, clean)
-        }
-      }
-      recordDone(requestId, donePayload)
-      onSettled?.(null, donePayload)
-      if (!sink.isClosed()) sink.send('llm:done', requestId, donePayload)
-    } catch (err) {
-      const message = controller.signal.aborted
-        ? '已停止'
-        : err instanceof LlmError
-          ? `[${err.status ?? '网络'}] ${err.message}`
-          : ((err as Error)?.message ?? String(err))
-      recordError(requestId, message)
-      onSettled?.(message)
-      if (!sink.isClosed()) {
-        sink.send('llm:error', requestId, message, buildErrorHint(err, message))
-      }
-    } finally {
-      activeRequests.delete(requestId)
-    }
-  })()
-
-  return requestId
-}
-
-/** 多候选选优：生成 N 个候选、程序打分、返回全部候选并落库最优 */
-export function startChapterCandidatesStream(
-  sink: EventSink,
-  projectId: string,
-  outlineId: string,
-  wordTarget: number,
-  candidates: number,
-  onSettled?: SettleCb,
-  provider?: ProviderId
-): string {
-  const requestId = randomUUID()
-  const controller = new AbortController()
-  activeRequests.set(requestId, controller)
-  recordRunning(requestId, 'llm', { projectId, outlineId, action: 'chapter' })
-
-  void (async () => {
-    try {
-      const started = Date.now()
-      const result = await runChapterCandidates({
-        sink,
-        requestId,
-        projectId,
-        outlineId,
-        wordTarget,
-        candidates,
-        signal: controller.signal,
-        provider
-      })
-      if (result.candidates.length === 0) throw new Error('候选生成失败')
-      const winner = result.candidates[result.winnerIndex]
-      const clean = stripHtmlComments(winner.text)
-      const chapter = store.saveChapter({
-        outlineId,
-        projectId,
-        content: clean,
-        status: 'draft'
-      })
-      enqueueEmbedding(projectId, 'summary', outlineId, clean.slice(0, 1200))
-      const donePayload = {
-        usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
-        model: '',
-        stopReason: 'end_turn',
-        durationMs: Date.now() - started,
-        headers: {},
-        action: 'chapter' as const,
-        data: {
-          chapterId: chapter.id,
-          wordCount: chapter.wordCount,
-          candidateMode: true,
-          winnerIndex: result.winnerIndex,
-          candidates: result.candidates.map((c) => ({
-            text: stripHtmlComments(c.text),
-            score: c.score,
-            wordCount: c.wordCount,
-            issues: c.lint.issues.length,
-            pass: c.lint.pass
-          })),
-          lint: winner.lint
-        }
-      }
-      recordDone(requestId, donePayload)
-      onSettled?.(null, donePayload)
-      if (!sink.isClosed()) sink.send('llm:done', requestId, donePayload)
-    } catch (err) {
-      const message = controller.signal.aborted
-        ? '已停止'
-        : err instanceof LlmError
-          ? `[${err.status ?? '网络'}] ${err.message}`
-          : ((err as Error)?.message ?? String(err))
-      recordError(requestId, message)
-      onSettled?.(message)
-      if (!sink.isClosed()) {
-        sink.send('llm:error', requestId, message, buildErrorHint(err, message))
-      }
-    } finally {
-      activeRequests.delete(requestId)
-    }
-  })()
-
-  return requestId
-}
-
-export async function runWorldbuildRetrieval(
-  p: WorldbuildGenParams
-): Promise<WorldbuildRetrieval | undefined> {
-  const req = buildWorldbuildRetrieveRequest(p)
-  if (!req) return undefined
-  try {
-    const auth = await resolveRequestAuth(req.purpose)
-    if (!auth.apiKey && auth.needsKey) return undefined
-    const params: ChatParams = { ...req, model: req.model || auth.model }
-    const result = await chatStream(
-      params,
-      { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
-      () => {}
-    )
-    appendUsage({
-      ts: Date.now(),
-      model: result.model,
-      purpose: 'outline',
-      inputTokens: result.usage.inputTokens,
-      outputTokens: result.usage.outputTokens,
-      cacheReadTokens: result.usage.cacheReadTokens,
-      cacheCreationTokens: result.usage.cacheCreationTokens,
-      durationMs: result.durationMs,
-      ratelimit: pickRatelimitHeaders(result.headers)
-    })
-    return resolveWorldbuildRetrieval(p, buildWorldbuildIndex(p.projectId), result.text)
-  } catch {
-    return undefined
-  }
 }

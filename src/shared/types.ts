@@ -3,24 +3,19 @@ import type { ProviderId } from './providers'
 
 // 输入类型与枚举已收敛到 contract.ts（zod 单一事实源），这里统一再导出兼容旧路径
 export type {
-  CharacterGenParams,
   CharacterInput,
   ChatParams,
   ForeshadowInput,
   ModelProbeOptions,
-  OutlineGenParams,
   OutlineInput,
   OutlineStatus,
-  PipelineAction,
-  PremiseDraftParams,
   ProjectInput,
   Purpose,
   ServerConfigPatch,
   SettingsPatch,
-  WorldbuildGenParams,
   WorldbuildInput
 } from './contract'
-export { OUTLINE_STATUSES, PIPELINE_ACTIONS, PURPOSES } from './contract'
+export { OUTLINE_STATUSES, PURPOSES } from './contract'
 
 export interface TextBlock {
   type: 'text'
@@ -121,8 +116,6 @@ export interface SettingsView {
   quota5hPrompts: number
   promptCache: boolean
   currentProjectId: string
-  /** 生效的技能绑定（默认绑定 + settings.json 覆盖），供设置界面展示与调试 */
-  skillBindings: Record<string, string[]>
 }
 
 export interface ServerConfig {
@@ -198,21 +191,6 @@ export interface RuntimeRunRecord extends RunRecordPayload {
 /** 中央同步器拉取的全量运行态快照 */
 export interface RuntimeSnapshot {
   runs: RuntimeRunRecord[]
-  batches: BatchSnapshot[]
-}
-
-/** 批量自动写作进度快照（主进程编排，write:batch 事件/write:batchStatus 拉取） */
-export interface BatchSnapshot {
-  projectId: string
-  running: boolean
-  paused: boolean
-  /** 用户主动停止（区别于自然完成）：停止后不再执行后续阶段，UI 据此区分「已完成」 */
-  stopped: boolean
-  done: number
-  total: number
-  currentNo: number
-  log: string[]
-  resumeIds: string[] | null
 }
 
 export interface ModelProbeResult {
@@ -426,66 +404,7 @@ export interface BuiltContext {
   totalTokens: number
 }
 
-export interface WorldbuildPreviewEntry {
-  category: string
-  title: string
-  tags: string[]
-  content: string
-  relation?: string
-  isNewType: boolean
-}
-
-/** canonSync：对已有世界观条目的修订建议（id 为原条目，确认后按 id 覆盖落库） */
-export interface CanonWorldUpdate {
-  id: string
-  title: string
-  category: string
-  tags: string[]
-  content: string
-  /** 人物/剧情关联修订：未传保留原条目 relation */
-  relation?: string
-}
-
-/** canonSync 管线 done payload.data：人物已自动落库，世界观进预览确认 */
-export interface CanonSyncResult {
-  savedCharacters: {
-    characterId?: string
-    name: string
-    revised: Array<{ id: string; name: string }>
-  }
-  worldNew: WorldbuildPreviewEntry[]
-  worldUpdates: CanonWorldUpdate[]
-}
-
 export type ExportFormat = 'txt' | 'md' | 'docx'
-
-export interface PremiseDraftCharacter {
-  name: string
-  brief: string
-}
-
-export interface PremiseDraftResult {
-  worldbuildBrief: string
-  worldbuildCategories: string[]
-  worldbuildCount: number
-  characters: PremiseDraftCharacter[]
-  outlineIdea: string
-  outlineCount: number
-}
-
-export interface ReviewScore {
-  dim: string
-  score: number
-  quote: string
-  comment: string
-}
-
-export interface ReviewResult {
-  verdict: 'rewrite' | 'polish' | 'pass'
-  scores: ReviewScore[]
-  summary: string
-  parsed: boolean
-}
 
 export type GraphNodeKind = 'character' | 'worldbuild' | 'outline' | 'foreshadow'
 
@@ -516,6 +435,21 @@ export interface SearchHit {
   title: string
   snippet: string
   score: number
+}
+
+export interface LintIssue {
+  rule: string
+  level: 'major' | 'minor'
+  quote: string
+  advice: string
+}
+
+export interface LintReport {
+  issues: LintIssue[]
+  score: number
+  pass: boolean
+  wordCount: number
+  targetWords: number | null
 }
 
 export interface EmbeddingStatus {
@@ -567,6 +501,10 @@ export interface AgentInstructionsView {
   globalPreamble: string
   /** agents.md 解析出的分节列表（供结构化编辑器） */
   globalSections: RuleSectionView[]
+  /** 项目指令文件头（## 分节之前的内容，恒注入） */
+  projectPreamble: string
+  /** 项目指令解析出的分节列表（供结构化编辑器） */
+  projectSections: RuleSectionView[]
 }
 
 export interface AgentSession {

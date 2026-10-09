@@ -9,7 +9,6 @@ import type {
   AgentToolCall,
   AgentTranscriptEvent,
   AgentTranscriptResult,
-  BatchSnapshot,
   BuiltContext,
   Chapter,
   ChapterBrief,
@@ -56,41 +55,8 @@ import type {
 
 // ── 基础枚举（类型与运行时值都从这里出） ─────────────────────────────────────
 
-export const PURPOSES = [
-  'playground',
-  'outline',
-  'chapter',
-  'summary',
-  'polish',
-  'check',
-  'review',
-  'expand',
-  'agent'
-] as const
+export const PURPOSES = ['playground', 'summary', 'agent'] as const
 export type Purpose = (typeof PURPOSES)[number]
-
-export const PIPELINE_ACTIONS = [
-  'outline',
-  'volumeIdea',
-  'rulesRefine',
-  'instructionRefine',
-  'instructionSuggest',
-  'outlineAlign',
-  'chapter',
-  'summary',
-  'polish',
-  'check',
-  'review',
-  'expand',
-  'volumeSummary',
-  'stateSync',
-  'character',
-  'characterRoster',
-  'worldbuild',
-  'canonSync',
-  'premiseDraft'
-] as const
-export type PipelineAction = (typeof PIPELINE_ACTIONS)[number]
 
 export const OUTLINE_STATUSES = ['draft', 'approved', 'written', 'polished'] as const
 export type OutlineStatus = (typeof OUTLINE_STATUSES)[number]
@@ -207,9 +173,7 @@ export const SettingsPatchSchema = z.object({
   protocol: z.enum(['anthropic', 'openai']).optional(),
   quota5hPrompts: z.number().optional(),
   promptCache: z.boolean().optional(),
-  currentProjectId: z.string().optional(),
-  /** 管线动作→技能名覆盖（整体替换语义；缺键回退默认绑定，显式 [] 禁用） */
-  skillBindings: z.record(z.string(), z.array(z.string())).optional()
+  currentProjectId: z.string().optional()
 })
 
 export const ServerConfigPatchSchema = z.object({
@@ -225,51 +189,11 @@ export const ModelProbeOptionsSchema = z.object({
   protocol: z.enum(['anthropic', 'openai']).optional()
 })
 
-export const WorldbuildGenParamsSchema = z.object({
-  projectId: z.string(),
-  categories: z.array(z.string()),
-  title: z.string(),
-  brief: z.string(),
-  count: z.number().optional(),
-  tags: z.array(z.string()).optional(),
-  allowUpdate: z.boolean().optional()
-})
-
-export const CharacterGenParamsSchema = z.object({
-  projectId: z.string(),
-  brief: z.string(),
-  name: z.string().optional(),
-  allowUpdate: z.boolean().optional(),
-  // false = 仅解析预览不落库（人物班底挑选模式），缺省 true 保持自动落库
-  save: z.boolean().optional(),
-  // 本批已生成的预览卡（班底队列批内感知：后生成的人须与先生成的咬合）
-  peers: z.array(z.object({ name: z.string(), card: z.string() })).optional()
-})
-
-export const OutlineGenParamsSchema = z.object({
-  projectId: z.string(),
-  idea: z.string(),
-  volume: z.number(),
-  startNo: z.number(),
-  count: z.number(),
-  allowUpdate: z.boolean().optional(),
-  // 节奏与硬性要求（每行一条，原样透传给 prompt，逐章严格执行）
-  rules: z.string().optional(),
-  // 通用规则（全书各卷适用，与 rules 分块注入大纲链路 prompt，不透传正文生成）
-  globalRules: z.string().optional()
-})
-
 export const SaveChapterInputSchema = z.object({
   outlineId: z.string(),
   projectId: z.string(),
   content: z.string(),
   status: z.string().optional()
-})
-
-export const WorldbuildCommitChunkOptsSchema = z.object({
-  allowNewType: z.boolean(),
-  taskEntryIds: z.array(z.string()),
-  allowUpdate: z.boolean().optional()
 })
 
 export const WorldbuildTypePosSchema = z.object({
@@ -292,81 +216,12 @@ export const AgentRunParamsSchema = z.object({
   provider: ProviderIdSchema.optional()
 })
 
-export const WorldbuildPreviewEntrySchema = z.object({
-  category: z.string(),
-  title: z.string(),
-  tags: z.array(z.string()),
-  content: z.string(),
-  relation: z.string().optional(),
-  isNewType: z.boolean()
-})
-
 export const ExportOptionsSchema = z.object({
   projectId: z.string(),
   format: z.enum(['txt', 'md', 'docx']),
   scope: z.enum(['all', 'single']),
   outlineId: z.string().optional()
 })
-
-export const PremiseDraftParamsSchema = z.object({ projectId: z.string() })
-
-/** pipeline:run 的 params：按 action 在 handler 内用 PIPELINE_PARAM_SCHEMAS 校验 */
-export const PIPELINE_PARAM_SCHEMAS = {
-  premiseDraft: z.object({ projectId: z.string() }),
-  outline: OutlineGenParamsSchema,
-  volumeIdea: z.object({
-    projectId: z.string(),
-    volume: z.number(),
-    idea: z.string(),
-    rules: z.string().optional(),
-    globalRules: z.string().optional()
-  }),
-  rulesRefine: z.object({
-    projectId: z.string(),
-    volume: z.number(),
-    rules: z.string(),
-    globalRules: z.string().optional()
-  }),
-  instructionRefine: z.object({
-    projectId: z.string(),
-    scope: z.enum(['global', 'project']),
-    text: z.string(),
-    title: z.string().optional(),
-    tag: z.string().nullable().optional()
-  }),
-  instructionSuggest: z.object({
-    projectId: z.string(),
-    scope: z.enum(['global', 'project'])
-  }),
-  outlineAlign: z.object({ projectId: z.string() }),
-  chapter: z.object({
-    outlineId: z.string(),
-    wordTarget: z.number().optional(),
-    candidates: z.number().optional()
-  }),
-  summary: z.object({
-    outlineId: z.string(),
-    finalize: z.boolean().optional()
-  }),
-  polish: z.object({
-    outlineId: z.string(),
-    focus: z.string().optional(),
-    save: z.boolean().optional()
-  }),
-  check: z.object({ outlineId: z.string() }),
-  review: z.object({ outlineId: z.string() }),
-  expand: z.object({ outlineId: z.string(), targetWords: z.number() }),
-  volumeSummary: z.object({ projectId: z.string(), volume: z.number() }),
-  stateSync: z.object({ outlineId: z.string() }),
-  character: CharacterGenParamsSchema,
-  characterRoster: z.object({
-    projectId: z.string(),
-    count: z.number().optional(),
-    note: z.string().optional()
-  }),
-  worldbuild: WorldbuildGenParamsSchema,
-  canonSync: z.object({ projectId: z.string(), volume: z.number() })
-} satisfies Record<PipelineAction, z.ZodTypeAny>
 
 // ── 输入类型（types.ts 从这里再导出以兼容旧 import 路径） ───────────────────
 
@@ -379,15 +234,9 @@ export type ForeshadowInput = z.output<typeof ForeshadowInputSchema>
 export type SettingsPatch = z.output<typeof SettingsPatchSchema>
 export type ServerConfigPatch = z.output<typeof ServerConfigPatchSchema>
 export type ModelProbeOptions = z.output<typeof ModelProbeOptionsSchema>
-export type WorldbuildGenParams = z.output<typeof WorldbuildGenParamsSchema>
-export type CharacterGenParams = z.output<typeof CharacterGenParamsSchema>
-export type OutlineGenParams = z.output<typeof OutlineGenParamsSchema>
-export type PremiseDraftParams = z.output<typeof PremiseDraftParamsSchema>
 export type SaveChapterInput = z.output<typeof SaveChapterInputSchema>
-export type WorldbuildCommitChunkOpts = z.output<typeof WorldbuildCommitChunkOptsSchema>
 export type WorldbuildTypePos = z.output<typeof WorldbuildTypePosSchema>
 export type AgentRunParams = z.output<typeof AgentRunParamsSchema>
-export type WorldbuildPreviewEntryInput = z.output<typeof WorldbuildPreviewEntrySchema>
 export type ExportOptions = z.output<typeof ExportOptionsSchema>
 
 // ── 事件 payload 类型 ────────────────────────────────────────────────────────
@@ -396,15 +245,7 @@ export type DonePayload = Pick<
   ChatResult,
   'usage' | 'model' | 'stopReason' | 'durationMs' | 'headers'
 > & {
-  action?: PipelineAction
   data?: unknown
-}
-
-export interface WorldbuildRetrievalBrief {
-  types: string[]
-  tags: string[]
-  count: number
-  titles: string[]
 }
 
 export interface AgentToolCallEvent extends Omit<AgentToolCall, 'state'> {
@@ -441,31 +282,6 @@ export const invokeContract = {
   },
 
   'runtime:snapshot': { args: z.tuple([]), ret: ret<RuntimeSnapshot>() },
-
-  'write:batchStart': {
-    args: z.tuple([
-      z.object({
-        projectId: z.string(),
-        ids: z.array(z.string()).optional(),
-        resume: z.boolean().optional(),
-        wordTarget: z.number().optional(),
-        candidates: z.number().optional(),
-        pauseEach: z.boolean().optional(),
-        regenVolumeSummary: z.boolean().optional(),
-        /** 临时指定批量生成使用的 provider（写作页「引擎」切换用），不落库 */
-        provider: ProviderIdSchema.optional()
-      })
-    ]),
-    ret: ret<BatchSnapshot>()
-  },
-  'write:batchStop': {
-    args: z.tuple([z.object({ projectId: z.string() })]),
-    ret: ret<BatchSnapshot | null>()
-  },
-  'write:batchStatus': {
-    args: z.tuple([z.object({ projectId: z.string() })]),
-    ret: ret<BatchSnapshot | null>()
-  },
 
   'agent:run': {
     args: z.tuple([AgentRunParamsSchema]),
@@ -524,11 +340,6 @@ export const invokeContract = {
   'usage:list': { args: z.tuple([z.number().optional()]), ret: ret<UsageRecord[]>() },
   'usage:stats': { args: z.tuple([]), ret: ret<UsageStats>() },
 
-  'pipeline:run': {
-    args: z.tuple([z.enum(PIPELINE_ACTIONS), z.unknown()]),
-    ret: ret<string>()
-  },
-
   'novel:projects': { args: z.tuple([]), ret: ret<Project[]>() },
   'novel:projectCreate': { args: z.tuple([ProjectInputSchema]), ret: ret<Project>() },
   'novel:projectUpdate': {
@@ -577,27 +388,6 @@ export const invokeContract = {
   'novel:worldbuildDeleteBatch': {
     args: z.tuple([z.string(), z.array(z.string())]),
     ret: ret<number>()
-  },
-  'novel:worldbuildCommitChunk': {
-    args: z.tuple([z.string(), z.string(), z.array(z.string()), WorldbuildCommitChunkOptsSchema]),
-    ret: ret<{
-      entryIds: string[]
-      createdTypes: string[]
-      updatedIds: string[]
-      revisedIds: string[]
-    }>()
-  },
-  'novel:worldbuildRelink': {
-    args: z.tuple([z.string(), z.array(z.string())]),
-    ret: ret<number>()
-  },
-  'novel:worldbuildRetrieve': {
-    args: z.tuple([WorldbuildGenParamsSchema]),
-    ret: ret<WorldbuildRetrievalBrief | null>()
-  },
-  'novel:worldbuildSaveBatch': {
-    args: z.tuple([z.string(), z.array(WorldbuildPreviewEntrySchema)]),
-    ret: ret<{ entryIds: string[]; createdTypes: string[] }>()
   },
   'novel:worldbuildTypes': { args: z.tuple([z.string()]), ret: ret<string[]>() },
   'novel:worldbuildTypeCreate': { args: z.tuple([z.string(), z.string()]), ret: ret<string[]>() },
@@ -720,7 +510,6 @@ export interface EventContract {
   'agent:subEvent': [requestId: string, event: SubagentEvent]
   'agent:transcript': [requestId: string, sessionId: string, event: AgentTranscriptEvent]
   'agent:queue': [projectId: string, items: AgentQueueItem[]]
-  'write:batch': [projectId: string, snapshot: BatchSnapshot]
 }
 
 export const EVENT_CHANNELS = [
@@ -735,8 +524,7 @@ export const EVENT_CHANNELS = [
   'agent:error',
   'agent:subEvent',
   'agent:transcript',
-  'agent:queue',
-  'write:batch'
+  'agent:queue'
 ] as const satisfies readonly (keyof EventContract)[]
 
 export type EventChannels = keyof EventContract & string
@@ -777,12 +565,6 @@ export interface Api {
     list: InvokeFn<'usage:list'>
     stats: InvokeFn<'usage:stats'>
   }
-  write: {
-    batchStart: InvokeFn<'write:batchStart'>
-    batchStop: InvokeFn<'write:batchStop'>
-    batchStatus: InvokeFn<'write:batchStatus'>
-    onBatch: SubscribeFn<'write:batch'>
-  }
   novel: {
     projects: InvokeFn<'novel:projects'>
     projectCreate: InvokeFn<'novel:projectCreate'>
@@ -799,10 +581,6 @@ export interface Api {
     worldbuildSave: InvokeFn<'novel:worldbuildSave'>
     worldbuildDelete: InvokeFn<'novel:worldbuildDelete'>
     worldbuildDeleteBatch: InvokeFn<'novel:worldbuildDeleteBatch'>
-    worldbuildCommitChunk: InvokeFn<'novel:worldbuildCommitChunk'>
-    worldbuildRelink: InvokeFn<'novel:worldbuildRelink'>
-    worldbuildRetrieve: InvokeFn<'novel:worldbuildRetrieve'>
-    worldbuildSaveBatch: InvokeFn<'novel:worldbuildSaveBatch'>
     worldbuildTypes: InvokeFn<'novel:worldbuildTypes'>
     worldbuildTypeCreate: InvokeFn<'novel:worldbuildTypeCreate'>
     worldbuildTypeDelete: InvokeFn<'novel:worldbuildTypeDelete'>
@@ -834,9 +612,6 @@ export interface Api {
   }
   lint: {
     run: InvokeFn<'lint:run'>
-  }
-  pipeline: {
-    run: InvokeFn<'pipeline:run'>
   }
   agent: {
     run: InvokeFn<'agent:run'>

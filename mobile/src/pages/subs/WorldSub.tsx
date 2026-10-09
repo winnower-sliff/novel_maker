@@ -1,12 +1,8 @@
 import { Button, Empty, Input, Label, Spinner, Textarea } from '@mobile/components/ui'
 import { Markdown } from '@mobile/components/Markdown'
-import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { DetailShell, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
-import { startGen, useWbGenTasks, useWbLiveEntries } from '@wizard/wbGenStore'
-import { NumberField } from '@wizard/widgets'
-import { loadProjectPlan, saveProjectPlan } from '@wizard/wizardPlan'
 import { withSnapshot } from '@mobile/lib/querySnapshot'
 import { qk } from '@renderer/lib/queries'
 import { splitTags } from '@shared/tags'
@@ -26,7 +22,6 @@ function plainSummary(content: string): string {
 /** 世界观子页：搜索 + 分类 tab + 分组折叠浏览；AI 生成收起为入口，点开才展开表单 */
 export default function WorldSub({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
-  const { Badge: B } = mobileWizardUi
   const { data: list = [], isLoading } = useQuery({
     queryKey: qk.worldbuild(projectId),
     queryFn: withSnapshot(qk.worldbuild(projectId), () =>
@@ -43,31 +38,14 @@ export default function WorldSub({ projectId }: { projectId: string }) {
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
   const searching = deferredQ.trim() !== ''
 
-  // —— 生成区（预填「基本设定」方案里的方向/类型/条目数）——
-  const [genOpen, setGenOpen] = useState(false)
-  const [brief, setBrief] = useState('')
-  const [cats, setCats] = useState<string[]>([])
-  const [count, setCount] = useState(8)
   const [typeOptions, setTypeOptions] = useState<string[]>([])
-  const [started, setStarted] = useState(false)
-  const [result, setResult] = useState<string | null>(null)
-  const beforeRef = useRef<number | null>(null)
-  const wbTasks = useWbGenTasks(projectId)
-  const wbLive = useWbLiveEntries(projectId)
-  const running = wbTasks.length > 0
-  const task = wbTasks[0] ?? null
-  const showGenForm = genOpen || list.length === 0
 
   useEffect(() => {
     let alive = true
-    void Promise.all([loadProjectPlan(projectId), window.api.novel.worldbuildTypes(projectId)])
-      .then(([plan, types]) => {
+    void window.api.novel
+      .worldbuildTypes(projectId)
+      .then((types) => {
         if (!alive) return
-        if (plan) {
-          setBrief(plan.wbBrief)
-          setCats(plan.wbCats)
-          setCount(plan.wbCount)
-        }
         setTypeOptions(types)
       })
       .catch(() => {})
@@ -75,20 +53,6 @@ export default function WorldSub({ projectId }: { projectId: string }) {
       alive = false
     }
   }, [projectId])
-
-  // 生成结束后统计本次入库条数
-  useEffect(() => {
-    if (!started || running) return
-    void window.api.novel
-      .worldbuild(projectId)
-      .then((l) => {
-        const before = beforeRef.current
-        if (before === null) return
-        const n = l.length - before
-        setResult(n > 0 ? `本次生成入库 ${n} 条世界观条目` : '本次未解析出有效条目，可调整需求后重试')
-      })
-      .catch(() => {})
-  }, [started, running, projectId])
 
   // 分类顺序：受控类型表优先，列表中存在但类型表没有的排后
   const categories = useMemo(() => {
@@ -120,29 +84,7 @@ export default function WorldSub({ projectId }: { projectId: string }) {
     return scored.sort((a, b) => a.score - b.score).map((s) => s.w)
   }, [list, deferredQ])
 
-  const toggleCat = (c: string): void =>
-    setCats((prev) => (prev.includes(c) ? prev.filter((x) => x !== c) : [...prev, c]))
 
-  const start = (): void => {
-    if (!brief.trim() || running) return
-    setResult(null)
-    void window.api.novel
-      .worldbuild(projectId)
-      .then((l) => {
-        beforeRef.current = l.length
-      })
-      .catch(() => {})
-    // 参数记忆：写回 wizard_plan，下次进入预填
-    void saveProjectPlan(projectId, { wbBrief: brief.trim(), wbCats: cats, wbCount: count })
-    startGen({
-      projectId,
-      categories: cats,
-      title: '',
-      brief: brief.trim(),
-      count: count >= 1 ? Math.floor(count) : undefined
-    })
-    setStarted(true)
-  }
 
   if (editing)
     return (
@@ -214,91 +156,6 @@ export default function WorldSub({ projectId }: { projectId: string }) {
       </div>
 
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-3">
-        {/* 生成区：收起为入口，空态/点开时展开表单 */}
-        {showGenForm ? (
-          <div className="mb-4 space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
-            <div className="flex items-center gap-2">
-              <Label>世界观方向（AI 生成条目的需求描述）</Label>
-              {list.length > 0 && <B tone="green">已有 {list.length} 条</B>}
-              {list.length > 0 && (
-                <button
-                  type="button"
-                  className="ml-auto shrink-0 cursor-pointer text-xs text-zinc-500"
-                  onClick={() => setGenOpen(false)}
-                >
-                  收起
-                </button>
-              )}
-            </div>
-            <Textarea
-              value={brief}
-              onChange={(e) => setBrief(e.target.value)}
-              rows={3}
-              style={{ resize: 'vertical' }}
-              disabled={running}
-              placeholder="例：低魔武侠世界，内力源于血脉，朝廷与江湖门派相互制衡…"
-            />
-            <div className="flex flex-wrap items-center gap-1.5 text-xs">
-              <span className="shrink-0 text-zinc-500">类型</span>
-              {typeOptions.map((t) => (
-                <button
-                  type="button"
-                  key={t}
-                  disabled={running}
-                  onClick={() => toggleCat(t)}
-                  className={`cursor-pointer rounded-full px-2.5 py-0.5 transition-colors disabled:cursor-default ${
-                    cats.includes(t) ? 'bg-amber-600/20 text-amber-300' : 'bg-zinc-800 text-zinc-400'
-                  }`}
-                >
-                  {t}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-2 text-xs">
-              <span className="shrink-0 text-zinc-500">条目数</span>
-              <NumberField
-                input={Input}
-                value={count}
-                min={1}
-                max={12}
-                onChange={setCount}
-                disabled={running}
-                className="w-20"
-              />
-            </div>
-            <Button onClick={start} disabled={!brief.trim() || running}>
-              {running ? '生成中…' : started ? '再次生成' : '开始生成世界观'}
-            </Button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setGenOpen(true)}
-            className="mb-4 flex w-full cursor-pointer items-center gap-2 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/30 px-3 py-2.5 text-sm text-amber-300/90 active:bg-zinc-900"
-          >
-            <span>＋</span>
-            <span>AI 生成世界观</span>
-            <span className="ml-auto text-[10px] text-zinc-600">已有 {list.length} 条</span>
-          </button>
-        )}
-
-        {running && task && (
-          <div className="mb-4 rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-400">
-            <div className="text-amber-300">
-              生成中（{task.status === 'retrieving' ? '检索相关条目' : '生成'}）
-              {task.committedCount > 0 && ` · 已入库 ${task.committedCount} 条`}
-            </div>
-            {wbLive.length > 0 && (
-              <div className="mt-1 truncate text-zinc-500">
-                {wbLive
-                  .slice(-3)
-                  .map((s) => s.title)
-                  .join(' / ')}
-              </div>
-            )}
-          </div>
-        )}
-        {result && !running && <div className="mb-4 text-xs text-emerald-400">{result}</div>}
 
         {/* 条目列表 */}
         {isLoading ? (

@@ -1,6 +1,5 @@
 import type { AgentInstructionsView, RuleSectionView } from '@shared/types'
-import { useEffect, useRef, useState } from 'react'
-import { generateInstructionRefine, generateInstructionSuggest } from './agentGen'
+import { useEffect, useState } from 'react'
 
 const TAG_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: '无标签（每次注入）' },
@@ -111,21 +110,17 @@ function SectionCard({
   index,
   count,
   disabled,
-  refining,
   onPatch,
   onRemove,
-  onMove,
-  onRefine
+  onMove
 }: {
   section: EditSection
   index: number
   count: number
   disabled: boolean
-  refining: boolean
   onPatch: (patch: Partial<RuleSectionView>) => void
   onRemove: () => void
   onMove: (dir: -1 | 1) => void
-  onRefine: () => void
 }) {
   const [open, setOpen] = useState(true)
   return (
@@ -191,15 +186,12 @@ function SectionCard({
             placeholder={'规则内容，例如：\n- 每章结尾留一个钩子'}
             className={TEXTAREA_CLS}
           />
-          <div className="mt-1.5 flex items-center justify-end gap-2">
+          <div className="mt-1.5 flex items-center justify-end">
             <span className="text-[11px] text-zinc-600">
               {!section.tag || section.tag === 'core'
                 ? '每次任务注入'
                 : `随 [${section.tag}] 任务注入`}
             </span>
-            <button type="button" onClick={onRefine} disabled={disabled} className={BTN_CLS}>
-              {refining ? '优化中…' : 'AI 优化'}
-            </button>
           </div>
         </div>
       )}
@@ -261,9 +253,6 @@ export function AgentInstructionsPanel({ projectId }: { projectId: string }) {
   const [saving, setSaving] = useState(false)
   const [saved, setSaved] = useState(false)
   const [err, setErr] = useState('')
-  const [aiBusy, setAiBusy] = useState<string | null>(null)
-  const [aiTail, setAiTail] = useState('')
-  const abortRef = useRef<(() => void) | null>(null)
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey 仅作重试触发
   useEffect(() => {
@@ -292,18 +281,10 @@ export function AgentInstructionsPanel({ projectId }: { projectId: string }) {
     }
   }, [projectId, reloadKey])
 
-  // 卸载时中止在途 AI 请求（关弹层即停，避免白烧 token）
-  useEffect(() => {
-    return () => {
-      abortRef.current?.()
-      abortRef.current = null
-    }
-  }, [])
-
   const dirtyG = serializeSections(preamble, sections) !== baselineG
   const dirtyP = projectDraft !== baselineP
   const dirty = tab === 'global' ? dirtyG : dirtyP
-  const locked = !!aiBusy || saving
+  const locked = saving
 
   const patchSection = (i: number, patch: Partial<RuleSectionView>): void => {
     setSections((prev) => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)))
@@ -335,92 +316,6 @@ export function AgentInstructionsPanel({ projectId }: { projectId: string }) {
       return next
     })
     setSaved(false)
-  }
-
-  const runRefine = (scope: 'global' | 'project', secIndex: number | null): void => {
-    if (locked) return
-    setErr('')
-    setSaved(false)
-    if (scope === 'project') {
-      const original = projectDraft
-      setAiBusy('refine-project')
-      setProjectDraft('')
-      const { done, abort } = generateInstructionRefine({
-        projectId,
-        scope: 'project',
-        text: original,
-        onDelta: (t) => setProjectDraft((v) => v + t)
-      })
-      abortRef.current = abort
-      void done
-        .then((text) => setProjectDraft(text))
-        .catch((e: unknown) => {
-          setProjectDraft(original)
-          setErr(toMsg(e))
-        })
-        .finally(() => {
-          abortRef.current = null
-          setAiBusy(null)
-        })
-      return
-    }
-    if (secIndex === null) return
-    const idx = secIndex
-    const sec = sections[idx]
-    if (!sec) return
-    const original = sec.body
-    setAiBusy(`refine-${idx}`)
-    setSections((prev) => prev.map((s, j) => (j === idx ? { ...s, body: '' } : s)))
-    const { done, abort } = generateInstructionRefine({
-      projectId,
-      scope: 'global',
-      text: original,
-      title: sec.title,
-      tag: sec.tag,
-      onDelta: (t) =>
-        setSections((prev) => prev.map((s, j) => (j === idx ? { ...s, body: s.body + t } : s)))
-    })
-    abortRef.current = abort
-    void done
-      .then((text) =>
-        setSections((prev) => prev.map((s, j) => (j === idx ? { ...s, body: text } : s)))
-      )
-      .catch((e: unknown) => {
-        setSections((prev) => prev.map((s, j) => (j === idx ? { ...s, body: original } : s)))
-        setErr(toMsg(e))
-      })
-      .finally(() => {
-        abortRef.current = null
-        setAiBusy(null)
-      })
-  }
-
-  const runSuggest = (scope: 'global' | 'project'): void => {
-    if (locked) return
-    setErr('')
-    setSaved(false)
-    setAiBusy(`suggest-${scope}`)
-    setAiTail('')
-    const { done, abort } = generateInstructionSuggest({
-      projectId,
-      scope,
-      onDelta: (t) => setAiTail((v) => (v + t).slice(-500))
-    })
-    abortRef.current = abort
-    void done
-      .then((res) => {
-        if (scope === 'global') {
-          setSections(withIds(res.sections ?? []))
-        } else {
-          setProjectDraft(res.text)
-        }
-      })
-      .catch((e: unknown) => setErr(toMsg(e)))
-      .finally(() => {
-        abortRef.current = null
-        setAiBusy(null)
-        setAiTail('')
-      })
   }
 
   const save = (): void => {
@@ -502,20 +397,7 @@ export function AgentInstructionsPanel({ projectId }: { projectId: string }) {
             <button type="button" onClick={addSection} disabled={locked} className={BTN_CLS}>
               ＋ 添加节
             </button>
-            <button
-              type="button"
-              onClick={() => runSuggest('global')}
-              disabled={locked}
-              className={`ml-auto ${BTN_CLS}`}
-            >
-              {aiBusy === 'suggest-global' ? '起草中…' : 'AI 建议'}
-            </button>
           </div>
-          {aiBusy === 'suggest-global' && (
-            <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
-              {aiTail || '正在阅读项目设定起草规则…'}
-            </pre>
-          )}
           <PreambleCard
             value={preamble}
             onChange={(v) => {
@@ -531,16 +413,14 @@ export function AgentInstructionsPanel({ projectId }: { projectId: string }) {
               index={i}
               count={sections.length}
               disabled={locked}
-              refining={aiBusy === `refine-${i}`}
               onPatch={(p) => patchSection(i, p)}
               onRemove={() => removeSection(i)}
               onMove={(d) => moveSection(i, d)}
-              onRefine={() => runRefine('global', i)}
             />
           ))}
           {sections.length === 0 && (
             <p className="py-2 text-center text-xs text-zinc-600">
-              暂无分节——点「＋ 添加节」或「AI 建议」起草
+              暂无分节——点「＋ 添加节」自行起草
             </p>
           )}
         </div>
@@ -554,32 +434,9 @@ export function AgentInstructionsPanel({ projectId }: { projectId: string }) {
               setSaved(false)
             }}
             disabled={locked}
-            placeholder="本项目专属的工作要求，例如「伏笔必须三章内回收」「主角称呼固定为『阿澈』」…（Markdown）"
+            placeholder="本项目专属的工作要求，例如「伏笔必须三章内回收」「主角称呼固定为『阿澈』」…（Markdown，支持 ## 标题 [tag] 分节）"
             className={`${TEXTAREA_CLS} font-mono`}
           />
-          {aiBusy === 'suggest-project' && (
-            <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
-              {aiTail || '正在起草…'}
-            </pre>
-          )}
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => runRefine('project', null)}
-              disabled={locked}
-              className={BTN_CLS}
-            >
-              {aiBusy === 'refine-project' ? '优化中…' : 'AI 优化'}
-            </button>
-            <button
-              type="button"
-              onClick={() => runSuggest('project')}
-              disabled={locked}
-              className={BTN_CLS}
-            >
-              {aiBusy === 'suggest-project' ? '起草中…' : 'AI 建议'}
-            </button>
-          </div>
         </div>
       )}
       <div className="flex flex-wrap items-center gap-2">
@@ -592,7 +449,7 @@ export function AgentInstructionsPanel({ projectId }: { projectId: string }) {
           {saving ? '保存中…' : '保存'}
         </button>
         {saved && <span className="text-xs text-emerald-400">已保存，下次任务生效</span>}
-        {!saved && dirty && !aiBusy && <span className="text-xs text-zinc-500">有未保存修改</span>}
+        {!saved && dirty && <span className="text-xs text-zinc-500">有未保存修改</span>}
         {err && <span className="text-xs text-red-400">{err}</span>}
       </div>
     </div>

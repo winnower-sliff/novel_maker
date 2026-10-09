@@ -1,13 +1,2 @@
-/**
- * 各板块 prompt 构建 / 结果解析 / 落库的域模块。本文件仅做聚合导出，
- * 保持既有 `from './pipeline'` 导入路径不变。
- */
-
-export * from './canon'
-export * from './chapter'
-export * from './character'
-export * from './fore'
-export * from './instruction'
-export * from './outline'
-export * from './util'
-export * from './worldbuild'
+// 管线已拆除（AI 能力收敛到 agent 页），仅保留 refresh_volume_summary 工具所需的卷摘要构建
+export { applyVolumeSummaryResult, buildVolumeSummaryRequest } from './util'

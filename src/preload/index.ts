@@ -19,10 +19,4 @@ const api = buildApi(transport)
 
 contextBridge.exposeInMainWorld('api', api)
 
-export type {
-  AgentToolCallEvent,
-  AgentToolResultEvent,
-  Api,
-  DonePayload,
-  WorldbuildRetrievalBrief
-} from '../shared/contract'
+export type { AgentToolCallEvent, AgentToolResultEvent, Api, DonePayload } from '../shared/contract'

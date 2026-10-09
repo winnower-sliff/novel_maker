@@ -1,15 +1,12 @@
 import { Button, Empty, Input, Label, Spinner, Textarea } from '@mobile/components/ui'
 import { Markdown } from '@mobile/components/Markdown'
-import { mobileWizardUi } from '@mobile/lib/wizardUi'
 import { withSnapshot } from '@mobile/lib/querySnapshot'
 import { qk } from '@renderer/lib/queries'
 import { DetailShell, Row } from '@mobile/pages/subs/parts'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { parseWikiLinks, useCharacterRegen } from '@wizard/characterTools'
-import { CharacterGenPanel } from '@wizard/CharacterGenPanel'
+import { parseWikiLinks } from '@shared/wikiLinks'
 import { splitTags } from '@shared/tags'
-import { parseCardSections } from '@shared/characterSections'
 import type { Character } from '@shared/types'
 
 /** 新建空白人物草稿（保存时才落库） */
@@ -50,7 +47,7 @@ const toFields = (c: Character): CardFields => ({
   state: c.state
 })
 
-/** 人物设定子页：AI 班底生成（预览挑选落库）+ 已入库人物列表 + 单卡编辑 */
+/** 人物设定子页：已入库人物列表 + 单卡编辑 */
 export default function CharsSub({ projectId }: { projectId: string }) {
   const qc = useQueryClient()
   const { data: list = [], isLoading } = useQuery({
@@ -61,11 +58,7 @@ export default function CharsSub({ projectId }: { projectId: string }) {
   })
   const [editId, setEditId] = useState<string | null>(null)
   const [draftOpen, setDraftOpen] = useState(false)
-  // 生成区收起为入口；面板保持挂载（hidden）以免中断生成/丢预览卡；空库时直接展开
-  const [genOpen, setGenOpen] = useState(false)
-  const [genBusy, setGenBusy] = useState(false)
   const editing = draftOpen ? DRAFT : (list.find((c) => c.id === editId) ?? null)
-  const showGenPanel = genOpen || list.length === 0
   const invalidate = (): void => {
     void qc.invalidateQueries({ queryKey: qk.characters(projectId) })
   }
@@ -87,38 +80,6 @@ export default function CharsSub({ projectId }: { projectId: string }) {
 
   return (
     <div className="h-full overflow-y-auto overscroll-contain p-3">
-      {!showGenPanel && (
-        <button
-          type="button"
-          onClick={() => setGenOpen(true)}
-          className="mb-4 flex w-full cursor-pointer items-center gap-2 rounded-lg border border-dashed border-zinc-700 bg-zinc-900/30 px-3 py-2.5 text-sm text-amber-300/90 active:bg-zinc-900"
-        >
-          <span>＋</span>
-          <span>AI 生成人物班底</span>
-          {genBusy && <span className="text-xs text-amber-400">生成中…</span>}
-          <span className="ml-auto text-[10px] text-zinc-600">已有 {list.length} 人</span>
-        </button>
-      )}
-      <div className={showGenPanel ? '' : 'hidden'}>
-        {list.length > 0 && (
-          <div className="mb-1.5 flex justify-end">
-            <button
-              type="button"
-              className="cursor-pointer text-xs text-zinc-500"
-              onClick={() => setGenOpen(false)}
-            >
-              收起
-            </button>
-          </div>
-        )}
-        <CharacterGenPanel
-          ui={mobileWizardUi}
-          projectId={projectId}
-          onChanged={invalidate}
-          onBusyChange={setGenBusy}
-        />
-      </div>
-
       <div className="mt-4">
         <div className="mb-1.5 flex items-center justify-between px-1">
           <span className="text-xs font-medium text-zinc-500">已入库（{list.length}）</span>
@@ -129,7 +90,7 @@ export default function CharsSub({ projectId }: { projectId: string }) {
         {isLoading ? (
           <Empty text="加载中…" />
         ) : list.length === 0 && !draftOpen ? (
-          <Empty text="还没有入库人物——先生成或点「+ 新增人物」手写" />
+          <Empty text="还没有入库人物，点「+ 新增人物」手写；或到电脑端智能体页让 AI 生成班底" />
         ) : (
           <div className="space-y-1.5">
             {list.map((c: Character) => (
@@ -200,7 +161,6 @@ function CharacterEditor({
     fields.relation !== baseRef.current.relation ||
     fields.state !== baseRef.current.state ||
     secsDirty
-  const regen = useCharacterRegen(projectId)
   const { data: appearances } = useQuery({
     queryKey: qk.characterAppearances(projectId),
     queryFn: withSnapshot(qk.characterAppearances(projectId), () =>
@@ -254,7 +214,6 @@ function CharacterEditor({
     }
     setFields({ ...baseRef.current })
     setSections(secsBaseRef.current ?? [])
-    regen.reset()
     setMode('view')
   }
 
@@ -412,51 +371,7 @@ function CharacterEditor({
             />
           </Label>
           <Label>
-            <span className="flex items-center justify-between">
-              人物卡分节
-              <Button
-                variant="ghost"
-                className="px-2 py-1 text-xs"
-                disabled={regen.busy || !fields.name.trim()}
-                onClick={() => regen.run(fields.name.trim(), fields.role || fields.name.trim())}
-              >
-                {regen.busy ? '生成中…' : 'AI 重生成'}
-              </Button>
-            </span>
-            {regen.error && <span className="mb-1 block text-xs text-red-400">{regen.error}</span>}
-            {regen.busy && (
-              <pre className="max-h-28 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
-                {regen.delta.slice(-600) || '生成中…'}
-              </pre>
-            )}
-            {regen.preview && (
-              <div className="rounded-md border border-amber-700/50 bg-amber-950/20 p-2">
-                <div className="max-h-44 overflow-y-auto">
-                  <Markdown
-                    text={regen.preview.main}
-                    className="text-xs leading-relaxed text-zinc-300"
-                  />
-                </div>
-                <div className="mt-2 flex justify-end gap-2">
-                  <Button variant="ghost" className="px-2 py-1 text-xs" onClick={regen.reset}>
-                    放弃
-                  </Button>
-                  <Button
-                    className="px-2 py-1 text-xs"
-                    onClick={() => {
-                      const p = regen.preview
-                      if (!p) return
-                      const parsed = parseCardSections(p.main)
-                      setSections(parsed.sections.map((s) => ({ ...s })))
-                      patch({ relation: parsed.relation || fields.relation, tags: p.tags.join(',') })
-                      regen.reset()
-                    }}
-                  >
-                    替换人物卡
-                  </Button>
-                </div>
-              </div>
-            )}
+            <span>人物卡分节</span>
             {mode === 'edit' && !isNew && !secsLoaded ? (
               <div className="rounded-md border border-zinc-800 p-3 text-xs text-zinc-600">
                 分节加载中…

@@ -2,17 +2,13 @@ import { providerPreset } from '@shared/providers'
 import { useQuery } from '@tanstack/react-query'
 import { lazy, type ReactElement, Suspense, useCallback, useEffect, useState } from 'react'
 import { ensureAgentRuntime } from '../../wizard/agentRunStore'
-import { CanonPreviewPanel } from '../../wizard/CanonPreviewPanel'
-import { ensureRuntimeSync } from '../../wizard/runtimeSync'
 import AgentConfirmOverlay from './components/AgentConfirmOverlay'
 import { Toaster } from './components/Toaster'
 import { markAgentSeen, useAgentNavBadge } from './lib/agentUiStore'
-import { desktopWizardUi } from './lib/desktopWizardUi'
 import { fmtTokens } from './lib/format'
 import type { Navigate, Page } from './lib/nav'
 import { qk, queries } from './lib/queries'
 import { queryClient } from './lib/queryClient'
-import { useWbGenNavBadge } from './lib/wbGenStore'
 import Agent from './pages/Agent'
 import Characters from './pages/Characters'
 import Foreshadows from './pages/Foreshadows'
@@ -264,13 +260,6 @@ const GROUP_SYSTEM: NavItem[] = [
   }
 ]
 
-const WB_BADGE_DOT: Record<string, string> = {
-  running: 'bg-amber-500 animate-pulse',
-  done: 'bg-emerald-500',
-  error: 'bg-red-500',
-  mixed: 'bg-amber-400'
-}
-
 const AGENT_BADGE_DOT: Record<string, string> = {
   running: 'bg-amber-500 animate-pulse',
   confirming: 'bg-red-500 animate-pulse',
@@ -287,7 +276,6 @@ export default function App() {
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
   const [sseDown, setSseDown] = useState(false)
-  const wbBadge = useWbGenNavBadge()
   const agentBadge = useAgentNavBadge()
 
   // 浏览器环境监听 SSE 连接状态，断连时全局横幅提示
@@ -300,10 +288,8 @@ export default function App() {
     return () => window.removeEventListener('nm-sse-state', onState)
   }, [])
 
-  // 中央同步器：运行态「拉为兜底」，不依赖事件到达（幂等，App 级挂一次）
+  // 智能体事件桥模块级挂载：切页/卸载 Agent 页面不影响后台任务
   useEffect(() => {
-    ensureRuntimeSync()
-    // 智能体事件桥模块级挂载：切页/卸载 Agent 页面不影响后台任务
     ensureAgentRuntime()
   }, [])
 
@@ -320,15 +306,10 @@ export default function App() {
 
   // 事件驱动的跨页失效：LLM 流完成 → 小说数据域 + 额度；agent 完成 → 全量失效
   useEffect(() => {
-    const offDone = window.api.llm.onDone((_rid, p) => {
+    const offDone = window.api.llm.onDone((_rid, _p) => {
       void queryClient.invalidateQueries({ queryKey: qk.novel })
       void queryClient.invalidateQueries({ queryKey: qk.usageStats })
       void queryClient.invalidateQueries({ queryKey: qk.usageList(200) })
-      if (p.action === 'chapter' || p.action === 'summary') {
-        void queryClient.invalidateQueries({
-          queryKey: qk.chapterBriefs(cfg?.currentProjectId ?? '')
-        })
-      }
     })
     const offError = window.api.llm.onError(() => {
       void queryClient.invalidateQueries({ queryKey: qk.usageStats })
@@ -341,7 +322,7 @@ export default function App() {
       offError()
       offAgentDone()
     }
-  }, [cfg?.currentProjectId])
+  }, [])
 
   const switchProject = useCallback((id: string) => {
     void window.api.settings.save({ currentProjectId: id }).then(() => {
@@ -399,9 +380,6 @@ export default function App() {
       >
         {item.icon}
         {item.label}
-        {item.id === 'worldbuild' && wbBadge && (
-          <span className={`ml-auto h-2 w-2 shrink-0 rounded-full ${WB_BADGE_DOT[wbBadge.tone]}`} />
-        )}
         {item.id === 'agent' && page !== item.id && agentBadge && (
           <span
             className={`ml-auto h-2 w-2 shrink-0 rounded-full ${AGENT_BADGE_DOT[agentBadge.tone]}`}
@@ -412,7 +390,6 @@ export default function App() {
 
   return (
     <div className="flex h-full flex-col">
-      <CanonPreviewPanel ui={desktopWizardUi} />
       <Toaster />
       <AgentConfirmOverlay hidden={page === 'agent'} />
       {sseDown && (

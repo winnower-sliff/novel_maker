@@ -1,6 +1,5 @@
 import { buildChapterContext } from '../context'
 import { deleteEmbeddingsByRef, enqueueEmbedding, reembedEntity } from '../embedding'
-import { commitWorldbuildChunk, relinkWorldbuildEntries, saveWorldbuildBatch } from '../pipeline'
 import * as store from '../store'
 import type { PartialHandlerTable } from './context'
 
@@ -108,23 +107,6 @@ export const novelHandlers = {
     for (const id of ids) deleteEmbeddingsByRef('worldbuild', id)
     return store.deleteWorldbuildBatch(projectId, ids)
   },
-  'novel:worldbuildCommitChunk': (_ctx, [projectId, rawText, categories, opts]) =>
-    commitWorldbuildChunk(projectId, rawText, categories, opts),
-  'novel:worldbuildRelink': (_ctx, [projectId, entryIds]) =>
-    relinkWorldbuildEntries(projectId, entryIds),
-  'novel:worldbuildRetrieve': async (_ctx, [p]) => {
-    const { runWorldbuildRetrieval } = await import('./stream')
-    const retrieval = await runWorldbuildRetrieval(p)
-    if (!retrieval || retrieval.entries.length === 0) return null
-    return {
-      types: retrieval.types,
-      tags: retrieval.tags,
-      count: retrieval.entries.length,
-      titles: retrieval.entries.map((e) => e.title)
-    }
-  },
-  'novel:worldbuildSaveBatch': (_ctx, [projectId, entries]) =>
-    saveWorldbuildBatch(projectId, entries),
   'novel:worldbuildTypes': (_ctx, [projectId]) => store.listWorldbuildTypes(projectId),
   'novel:worldbuildTypeCreate': (_ctx, [projectId, name]) => {
     store.createWorldbuildType(projectId, name)

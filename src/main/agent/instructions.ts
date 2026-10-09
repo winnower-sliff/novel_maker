@@ -62,12 +62,16 @@ export function getInstructionsView(projectId: string): AgentInstructionsView {
   ensureGlobalInstructions()
   const raw = readGlobalInstructions()
   const { preamble, sections } = parseSectionsView(raw)
+  const projectRaw = readProjectInstructions(projectId)
+  const project = parseSectionsView(projectRaw)
   return {
     globalText: raw,
-    projectText: readProjectInstructions(projectId),
+    projectText: projectRaw,
     globalPath: globalAgentsPath(),
     globalPreamble: preamble,
-    globalSections: sections
+    globalSections: sections,
+    projectPreamble: project.preamble,
+    projectSections: project.sections
   }
 }
 

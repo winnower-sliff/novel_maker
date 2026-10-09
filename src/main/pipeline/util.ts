@@ -1,96 +1,72 @@
-import { type PipelineAction, resolveSkillNames } from '../../shared/skillBindings'
-import { getSkillBindings } from '../settings'
+import type { ChatParams } from '../../shared/types'
 import { getSkill, stripFrontmatter } from '../skills'
+import * as store from '../store'
 
-/** 按管线动作装配技能正文：多技能依序拼接；settings.json skillBindings 可覆盖，缺省用内置默认绑定 */
-export function skillBody(action: PipelineAction): string {
-  const names = resolveSkillNames(action, getSkillBindings())
-  return names
-    .map((name) => {
-      const f = getSkill(name.endsWith('.md') ? name : `${name}.md`)
-      return f ? stripFrontmatter(f.raw) : ''
-    })
-    .filter(Boolean)
-    .join('\n\n---\n\n')
-}
-
-function sliceBetween(text: string, open: string, close: string): string | null {
-  const start = text.indexOf(open)
-  const end = text.lastIndexOf(close)
-  if (start < 0 || end <= start) return null
-  return text.slice(start, end + 1)
-}
-
-export function extractJsonArray(text: string): unknown[] | null {
-  const start = text.indexOf('[')
-  if (start < 0) return null
-  const raw = sliceBetween(text, '[', ']')
-  let best: unknown[] = []
-  if (raw) {
-    try {
-      const parsed = JSON.parse(raw) as unknown
-      if (Array.isArray(parsed)) best = parsed
-    } catch {
-      // 输出超长被 max_tokens 截断时 JSON 不完整，下面抢救已完整的对象
-    }
-  }
-  // 分批拼接/截断场景：sliceBetween 可能漏掉后续未闭合数组，对全文做配平扫描兜底（取对象更多者）
-  const scanned = salvageArrayObjects(text.slice(start))
-  if (scanned.length > best.length) best = scanned
-  return best.length > 0 ? best : null
-}
-
-// 从可能被截断的 JSON 数组文本中配平扫描出所有完整的顶层对象（坏对象跳过）
-function salvageArrayObjects(raw: string): unknown[] {
-  const out: unknown[] = []
-  let depth = 0
-  let start = -1
-  let inStr = false
-  let esc = false
-  for (let i = 0; i < raw.length; i++) {
-    const ch = raw[i]
-    if (inStr) {
-      if (esc) esc = false
-      else if (ch === '\\') esc = true
-      else if (ch === '"') inStr = false
-      continue
-    }
-    if (ch === '"') {
-      inStr = true
-    } else if (ch === '{') {
-      if (depth === 0) start = i
-      depth++
-    } else if (ch === '}') {
-      depth--
-      if (depth === 0 && start >= 0) {
-        try {
-          out.push(JSON.parse(raw.slice(start, i + 1)) as unknown)
-        } catch {
-          // 单个对象坏则丢弃，不影响其余
-        }
-        start = -1
+/**
+ * refresh_volume_summary 工具专用（原管线函数收编，管线已拆）：
+ * 卷摘要请求构建 + 结果落库。
+ */
+export function buildVolumeSummaryRequest(projectId: string, volume: number): ChatParams {
+  const outlines = store
+    .listOutlines(projectId)
+    .filter((o) => o.volume === volume)
+    .sort((a, b) => a.chapterNo - b.chapterNo)
+  if (outlines.length === 0) throw new Error(`第 ${volume} 卷还没有大纲`)
+  const withSummary = outlines.filter((o) => {
+    const c = store.getChapterByOutline(o.id)
+    return c && store.getSummary(c.id)
+  })
+  if (withSummary.length === 0) throw new Error(`第 ${volume} 卷还没有已定稿的章节摘要`)
+  const chapterLines = outlines
+    .map((o) => {
+      const c = store.getChapterByOutline(o.id)
+      const s = c ? store.getSummary(c.id) : null
+      if (s) {
+        return `第${o.chapterNo}章《${o.title}》：${s.summary}${s.timeline ? `（时间线：${s.timeline}）` : ''}`
       }
-      if (depth < 0) break
-    }
+      return `第${o.chapterNo}章《${o.title}》（未写/未定稿）：${o.synopsis.slice(0, 80)}`
+    })
+    .join('\n')
+  const foreLines = store
+    .listForeshadows(projectId)
+    .filter((f) => f.status === 'open' && f.plantedChapter)
+    .map((f) => `- ${f.content}（埋于${f.plantedChapter}）`)
+    .join('\n')
+  const stateLines = withSummary
+    .flatMap((o) => {
+      const c = store.getChapterByOutline(o.id)
+      const s = c ? store.getSummary(c.id) : null
+      return s ? s.characterStates : []
+    })
+    .filter((cs) => cs.name)
+    .join('；')
+  const skill = getSkill('volume-summarizer.md')
+  const system = skill ? stripFrontmatter(skill.raw) : '你是小说项目助手，负责生成某一卷的卷摘要。'
+  const user = [
+    `请生成第 ${volume} 卷的卷摘要。`,
+    `【各章摘要】\n${chapterLines}`,
+    foreLines && `【当前未回收伏笔（参考）】\n${foreLines}`,
+    stateLines && `【末章人物状态（参考）】${stateLines}`
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+  return {
+    model: '',
+    system,
+    messages: [{ role: 'user', content: user }],
+    maxTokens: 2048,
+    temperature: 0.3,
+    purpose: 'summary'
   }
-  return out
 }
 
-export function extractJsonObject(text: string): Record<string, unknown> | null {
-  const raw = sliceBetween(text, '{', '}')
-  if (!raw) return null
-  try {
-    const parsed = JSON.parse(raw) as unknown
-    return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
-      ? (parsed as Record<string, unknown>)
-      : null
-  } catch {
-    return null
-  }
-}
-
-export function clampInt(v: unknown, min: number, max: number, fallback: number): number {
-  const n = typeof v === 'number' ? Math.floor(v) : parseInt(String(v ?? ''), 10)
-  if (!Number.isFinite(n)) return fallback
-  return Math.min(max, Math.max(min, n))
+export function applyVolumeSummaryResult(
+  projectId: string,
+  volume: number,
+  text: string
+): { volume: number; summaryChars: number; parsed: boolean } {
+  const summary = text.trim()
+  if (!summary) return { volume, summaryChars: 0, parsed: false }
+  store.saveVolumeSummary(projectId, volume, summary)
+  return { volume, summaryChars: summary.length, parsed: true }
 }

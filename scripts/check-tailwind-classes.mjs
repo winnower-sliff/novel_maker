@@ -20,7 +20,7 @@ const COMMON = [
   ['rounded-none', 'src/wizard（OverlayCard 手机全屏）'],
   ['sm\\:p-6', 'src/wizard（OverlayCard 桌面弹窗）'],
   ['bg-black\\/60', 'src/wizard（OverlayCard 遮罩）'],
-  ['rounded-md', 'renderer/ui + src/wizard（StreamBox 等）']
+  ['rounded-md', 'renderer/ui + src/wizard（OverlayCard 等）']
 ]
 const MOBILE_ONLY = [
   ['px-3\\.5', 'mobile/ui（Button）'],

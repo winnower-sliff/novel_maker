@@ -18,18 +18,9 @@ import { OverlayCard } from '../components/OverlayCard'
 import { PreviewPanel } from '../components/PreviewPanel'
 import { type GraphEdgeData, type GraphNodeData, RelationGraph } from '../components/RelationGraph'
 import { Button, Card, Input, Label, Select } from '../components/ui'
-import { WbGenOverlay } from '../components/WbGenOverlay'
 import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
 import { pushToast } from '../lib/toastStore'
-import {
-  markEntrySeen,
-  useNewEntryIds,
-  useRevisedEntryIds,
-  useWbLiveEntries,
-  useWbSavedSeq,
-  type WbLiveSection
-} from '../lib/wbGenStore'
 import { extractLinkNames } from '../lib/wikiLink'
 
 const GROUP_COLORS: Record<string, string> = {
@@ -77,8 +68,6 @@ type Preview = { type: 'entry'; entry: WorldbuildEntry } | { type: 'char'; char:
 interface EntryCardProps {
   entry: WorldbuildEntry
   highlighted: boolean
-  isNew?: boolean
-  isRevised?: boolean
   selection?: { selected: boolean; onToggle: () => void }
   onOpen: (entry: WorldbuildEntry) => void
   onTagClick: (tag: string) => void
@@ -89,8 +78,6 @@ interface EntryCardProps {
 const EntryCard = memo(function EntryCard({
   entry,
   highlighted,
-  isNew,
-  isRevised,
   selection,
   onOpen,
   onTagClick,
@@ -116,18 +103,6 @@ const EntryCard = memo(function EntryCard({
         selection?.selected ? 'border-amber-600 bg-amber-950/20' : ''
       } ${highlighted ? 'ring-2 ring-amber-500' : ''}`}
     >
-      {isNew && (
-        <span
-          className="absolute right-3 top-3 h-2 w-2 rounded-full bg-emerald-400"
-          title="新生成，打开后不再提示"
-        />
-      )}
-      {!isNew && isRevised && (
-        <span
-          className="absolute right-3 top-3 h-2 w-2 rounded-full bg-amber-500"
-          title="AI 生成时被修订，打开后不再提示"
-        />
-      )}
       <div className="flex flex-wrap items-center gap-1.5 pr-6">
         {selection && (
           <span
@@ -169,36 +144,6 @@ const EntryCard = memo(function EntryCard({
   )
 })
 
-function LiveCard({ section }: { section: WbLiveSection }) {
-  return (
-    <div className="relative cursor-default rounded-lg border border-dashed border-amber-800/50 bg-zinc-900/50 p-4">
-      <span
-        className={`absolute right-3 top-3 h-2 w-2 rounded-full ${
-          section.active ? 'animate-pulse bg-amber-400' : 'bg-amber-500/70'
-        }`}
-        title="生成中"
-      />
-      <div className="flex flex-wrap items-center gap-1.5 pr-6">
-        <span className="rounded bg-zinc-800 px-1.5 py-0.5 text-[10px] text-zinc-400">
-          {section.category ?? '生成中'}
-        </span>
-        <span className="truncate text-sm font-medium text-zinc-200">{section.title || '…'}</span>
-        {section.tags.map((t) => (
-          <span
-            key={t}
-            className="rounded-full border border-amber-800/60 px-1.5 py-0.5 text-[10px] text-amber-300/90"
-          >
-            # {t}
-          </span>
-        ))}
-      </div>
-      <pre className="mt-2 max-h-[7.5rem] overflow-hidden whitespace-pre-wrap font-mono text-[11px] leading-4 text-zinc-400">
-        {section.content || '…'}
-      </pre>
-    </div>
-  )
-}
-
 const TAG_PREVIEW_LIMIT = 20
 
 export default function Worldbuild({
@@ -231,18 +176,12 @@ export default function Worldbuild({
   const [secsLoading, setSecsLoading] = useState(false)
   // 分节拉取代际号：关窗/换条目后使在途请求失效，防旧请求污染新弹窗
   const secsReqRef = useRef(0)
-  const [genOpen, setGenOpen] = useState(false)
   const [highlightIds, _setHighlightIds] = useState<string[]>([])
   const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [actionOpen, setActionOpen] = useState(false)
   const actionMenuRef = useRef<HTMLDivElement>(null)
   const editInitialRef = useRef<EditState>(EMPTY)
-
-  const liveEntries = useWbLiveEntries(projectId)
-  const newEntryIdList = useNewEntryIds(projectId)
-  const revisedEntryIdList = useRevisedEntryIds(projectId)
-  const savedSeq = useWbSavedSeq()
 
   const load = (): void => {
     void queryClient.invalidateQueries({ queryKey: qk.worldbuild(projectId) })
@@ -267,11 +206,6 @@ export default function Worldbuild({
     setSelectedIds(new Set())
     setActionOpen(false)
   }, [projectId])
-
-  // biome-ignore lint/correctness/useExhaustiveDependencies: savedSeq 仅作触发信号，load 每渲染重建
-  useEffect(() => {
-    if (savedSeq > 0) load()
-  }, [savedSeq])
 
   useEffect(() => {
     if (!actionOpen) return
@@ -334,7 +268,6 @@ export default function Worldbuild({
   )
 
   const openPreview = useCallback((entry: WorldbuildEntry): void => {
-    markEntrySeen(entry.id)
     setPreview({ type: 'entry', entry })
     setGraphActiveId(entry.id)
     setCenterSignal((v) => v + 1)
@@ -664,17 +597,13 @@ export default function Worldbuild({
   const entryGrid = (
     <div className="grid min-h-0 flex-1 grid-cols-[repeat(auto-fill,minmax(240px,1fr))] content-start gap-3 overflow-y-auto pb-2">
       {filtered.length === 0 &&
-        liveEntries.length === 0 &&
         (filter === '全部' && tagFilter === null && entries.length === 0 ? (
           <div className="col-span-full">
             <EmptyGuide
               onNavigate={onNavigate}
               title="还没有世界观条目"
-              desc="力量体系、势力、地理等基础设定是大纲与写作的上文依据，建议最先建设。可先在基本设定起草方向，再回来批量生成条目。"
+              desc="力量体系、势力、地理等基础设定是大纲与写作的上文依据，建议最先建设。可手动新增条目，或到智能体页让 AI 批量生成。"
             >
-              <Button variant="ghost" onClick={() => setGenOpen(true)}>
-                AI 生成…
-              </Button>
               <Button variant="ghost" onClick={() => openNew()}>
                 新增条目
               </Button>
@@ -685,10 +614,6 @@ export default function Worldbuild({
             {tagFilter !== null ? `「#${tagFilter}」标签下暂无条目` : `「${filter}」类型下暂无条目`}
           </Card>
         ))}
-      {liveEntries.map((s, i) => (
-        // biome-ignore lint/suspicious/noArrayIndexKey: 追加式/一次性渲染列表，index 即身份，无重排语义
-        <LiveCard key={`live-${s.taskId}-${i}`} section={s} />
-      ))}
       {grouped
         ? grouped.map((g) => (
             <Fragment key={g.category}>
@@ -708,8 +633,6 @@ export default function Worldbuild({
                   key={e.id}
                   entry={e}
                   highlighted={highlightIds.includes(e.id)}
-                  isNew={newEntryIdList.includes(e.id)}
-                  isRevised={revisedEntryIdList.includes(e.id)}
                   selection={
                     selectMode
                       ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
@@ -728,8 +651,6 @@ export default function Worldbuild({
               key={e.id}
               entry={e}
               highlighted={highlightIds.includes(e.id)}
-              isNew={newEntryIdList.includes(e.id)}
-              isRevised={revisedEntryIdList.includes(e.id)}
               selection={
                 selectMode
                   ? { selected: selectedIds.has(e.id), onToggle: () => toggleSelect(e.id) }
@@ -932,16 +853,6 @@ export default function Worldbuild({
                       type="button"
                       onClick={() => {
                         setActionOpen(false)
-                        setGenOpen(true)
-                      }}
-                      className="block w-full cursor-pointer px-3 py-1.5 text-left text-sm text-zinc-200 transition-colors hover:bg-zinc-800"
-                    >
-                      AI 生成…
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setActionOpen(false)
                         setSelectMode(true)
                         setSelectedIds(new Set())
                       }}
@@ -1013,18 +924,6 @@ export default function Worldbuild({
             </button>
           )}
         </div>
-      )}
-
-      {genOpen && (
-        <WbGenOverlay
-          open={genOpen}
-          onClose={() => setGenOpen(false)}
-          projectId={projectId}
-          types={types}
-          initialTypes={filter !== '全部' ? [filter] : []}
-          initialTags={tagFilter ? [tagFilter] : []}
-          tagOptions={tagCounts}
-        />
       )}
 
       <OverlayCard

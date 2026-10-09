@@ -1,13 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import { parseCardSections } from '../../../shared/characterSections'
 import { splitTags } from '../../../shared/tags'
-import { CharacterGenPanel } from '../../../wizard/CharacterGenPanel'
-import { parseWikiLinks, useCharacterRegen } from '../../../wizard/characterTools'
+import { parseWikiLinks } from '../../../shared/wikiLinks'
 import { AiTextarea } from '../components/AiTextarea'
 import { Markdown } from '../components/Markdown'
 import { Badge, Button, Card, Input, Label } from '../components/ui'
-import { desktopWizardUi } from '../lib/desktopWizardUi'
 import type { Navigate } from '../lib/nav'
 import { qk, queries } from '../lib/queries'
 import { pushToast } from '../lib/toastStore'
@@ -83,8 +80,6 @@ export default function Characters({
     queryFn: () => window.api.novel.characterAppearances(projectId)
   })
   const [edit, setEdit] = useState<EditState | null>(null)
-  const [genOpen, setGenOpen] = useState(false)
-  const regen = useCharacterRegen(projectId)
   // 分节交互：默认渲染态；draft 非空表示某节处于编辑/新增态（单节切换）
   const [draft, setDraft] = useState<(SectionDraft & { isNew: boolean }) | null>(null)
   const [savingSec, setSavingSec] = useState(false)
@@ -108,7 +103,6 @@ export default function Characters({
     setDraft(null)
     setMetaDraft(null)
     setStateDraft(null)
-    regen.reset()
   }, [projectId])
 
   if (!projectId) {
@@ -135,7 +129,6 @@ export default function Characters({
   }
 
   const pick = (c: (typeof list)[number]): void => {
-    regen.reset()
     setDraft(null)
     setMetaDraft(null)
     setStateDraft(null)
@@ -156,7 +149,6 @@ export default function Characters({
   }
 
   const startEditSection = (s: SectionDraft): void => {
-    regen.reset()
     setDraft({ id: s.id, title: s.title, content: s.content, isNew: false })
   }
 
@@ -200,14 +192,12 @@ export default function Characters({
   }
 
   const addSection = (): void => {
-    regen.reset()
     setDraft({ title: '', content: '', isNew: true })
   }
 
   // 元信息逐字段保存：只提交被编辑的字段（+必填 name），不触碰分节与状态
   const startMetaEdit = (field: MetaField): void => {
     if (!edit) return
-    regen.reset()
     setMetaDraft({ field, value: edit[field] })
   }
 
@@ -255,7 +245,6 @@ export default function Characters({
   // 动态状态保存：单独提交 state，不触碰分节与元信息
   const startStateEdit = (): void => {
     if (!edit) return
-    regen.reset()
     setStateDraft(edit.state)
   }
 
@@ -281,7 +270,6 @@ export default function Characters({
   }
 
   const newBlank = (): void => {
-    regen.reset()
     setDraft(null)
     setEdit({
       id: '',
@@ -308,22 +296,15 @@ export default function Characters({
             <Button className="px-2 py-1 text-xs" onClick={newBlank}>
               + 新增
             </Button>
-            <Button variant="ghost" className="px-2 py-1 text-xs" onClick={() => setGenOpen(true)}>
-              AI 生成
-            </Button>
           </span>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
           {list.length === 0 && (
             <div className="space-y-2.5 p-4 text-center">
               <div className="text-xs text-zinc-600">暂无人物</div>
-              <Button
-                variant="ghost"
-                className="px-2 py-1 text-xs"
-                onClick={() => setGenOpen(true)}
-              >
-                用 AI 生成班底
-              </Button>
+              <div className="text-xs text-zinc-500">
+                点「＋ 新增」创建人物卡，或到智能体页让 AI 生成班底。
+              </div>
             </div>
           )}
           {list.map((c) => (
@@ -346,19 +327,7 @@ export default function Characters({
       </Card>
 
       <Card className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4">
-        <div className="mb-3 flex items-center justify-between">
-          <div className="text-sm font-medium text-zinc-200">AI 生成班底</div>
-          <Button variant="ghost" onClick={() => setGenOpen((v) => !v)}>
-            {genOpen ? '收起' : '展开'}
-          </Button>
-        </div>
-        {genOpen && (
-          <div className="mb-4 rounded-md border border-zinc-800 bg-zinc-900/50 p-3">
-            <CharacterGenPanel ui={desktopWizardUi} projectId={projectId} onChanged={load} />
-          </div>
-        )}
-
-        <div className="mb-3 border-t border-zinc-800 pt-3">
+        <div className="mb-3">
           <div className="text-sm font-medium text-zinc-200">
             {edit ? `编辑人物：${edit.name || '未命名'}` : '人物详情'}
           </div>
@@ -478,78 +447,7 @@ export default function Characters({
             <div className="mt-3 flex-1">
               <div className="flex items-center justify-between">
                 <Label>人物卡分节（M4 写作时自动注入相关人物；默认渲染，点编辑修改）</Label>
-                <Button
-                  variant="ghost"
-                  className="px-2 py-1 text-xs"
-                  disabled={regen.busy || !edit.name.trim()}
-                  onClick={() => regen.run(edit.name.trim(), edit.role || edit.name.trim())}
-                >
-                  {regen.busy ? '生成中…' : 'AI 重生成'}
-                </Button>
               </div>
-              {regen.error && <div className="mb-1.5 text-xs text-red-400">{regen.error}</div>}
-              {regen.busy && (
-                <pre className="mb-1.5 max-h-32 overflow-y-auto whitespace-pre-wrap rounded-md border border-zinc-800 bg-zinc-950 p-2 text-xs text-zinc-500">
-                  {regen.delta.slice(-800) || '生成中…'}
-                </pre>
-              )}
-              {regen.preview && (
-                <div className="mb-1.5 rounded-md border border-amber-700/50 bg-amber-950/20 p-2">
-                  <pre className="max-h-48 overflow-y-auto whitespace-pre-wrap text-xs leading-relaxed text-zinc-300">
-                    {regen.preview.main}
-                  </pre>
-                  <div className="mt-2 flex justify-end gap-2">
-                    <Button variant="ghost" className="px-2 py-1 text-xs" onClick={regen.reset}>
-                      放弃
-                    </Button>
-                    <Button
-                      className="px-2 py-1 text-xs"
-                      onClick={() => {
-                        const p = regen.preview
-                        if (!p || !edit.id) return
-                        const parsed = parseCardSections(p.main)
-                        // 整卡替换走 sections 全量提交（批量替换特例），成功后全部进渲染态
-                        void window.api.novel
-                          .characterSave({
-                            id: edit.id,
-                            projectId,
-                            name:
-                              edit.name.trim() ||
-                              p.main.match(/^##\s*([^\n#]+)/)?.[1]?.trim() ||
-                              edit.name,
-                            role: edit.role,
-                            tags: p.tags.join(','),
-                            relation: parsed.relation || edit.relation,
-                            sections: parsed.sections
-                          })
-                          .then(() => {
-                            regen.reset()
-                            setDraft(null)
-                            setMetaDraft(null)
-                            setStateDraft(null)
-                            setEdit((cur) =>
-                              cur
-                                ? {
-                                    ...cur,
-                                    tags: p.tags.join(','),
-                                    relation: parsed.relation || cur.relation
-                                  }
-                                : cur
-                            )
-                            reloadSections(edit.id)
-                            load()
-                            pushToast('success', '人物卡已替换')
-                          })
-                          .catch((err: unknown) =>
-                            pushToast('error', err instanceof Error ? err.message : String(err))
-                          )
-                      }}
-                    >
-                      替换人物卡
-                    </Button>
-                  </div>
-                </div>
-              )}
               <div className="divide-y divide-zinc-800 rounded-md border border-zinc-800">
                 {edit.sections.map((s) =>
                   draft && !draft.isNew && draft.id === s.id ? (
@@ -752,7 +650,6 @@ export default function Characters({
               <Button
                 variant="ghost"
                 onClick={() => {
-                  regen.reset()
                   setEdit(null)
                   setDraft(null)
                   setMetaDraft(null)
