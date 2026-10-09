@@ -162,7 +162,7 @@ export function buildWorldbuildRequest(
     ? `- 总主题：${p.title.trim()}（各条目标题由你围绕该主题拟定，禁止把全部内容挤进一个条目）`
     : '- 各条目标题由你根据生成需求拟定'
   const system = [
-    skillBody('worldbuilder'),
+    skillBody('worldbuild'),
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
     typeLine,
     tagLine,
@@ -200,7 +200,7 @@ export function buildWorldbuildRequest(
     .join('\n')
   return {
     model: '',
-    system: appendWritingRules(system, ['worldbuild']),
+    system: appendWritingRules(system, ['worldbuild'], p.projectId),
     messages: [{ role: 'user', content: user }],
     maxTokens: 65536,
     temperature: 0.7,

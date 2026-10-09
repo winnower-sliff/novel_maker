@@ -207,7 +207,9 @@ export const SettingsPatchSchema = z.object({
   protocol: z.enum(['anthropic', 'openai']).optional(),
   quota5hPrompts: z.number().optional(),
   promptCache: z.boolean().optional(),
-  currentProjectId: z.string().optional()
+  currentProjectId: z.string().optional(),
+  /** 管线动作→技能名覆盖（整体替换语义；缺键回退默认绑定，显式 [] 禁用） */
+  skillBindings: z.record(z.string(), z.array(z.string())).optional()
 })
 
 export const ServerConfigPatchSchema = z.object({

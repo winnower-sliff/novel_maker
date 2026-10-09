@@ -3,6 +3,7 @@ import type { ChatMessage, ContentBlock, SubagentEvent } from '../../shared/type
 import { chatStream, pickRatelimitHeaders } from '../llm'
 import * as store from '../store'
 import { appendUsage } from '../usage'
+import { coreWritingRules, projectCoreRules } from './instructions'
 import { serializeResult } from './run'
 import {
   clip,
@@ -16,10 +17,14 @@ import { SUB_TOOL_MAP, SUB_TOOLS } from './tools'
 function buildSubSystemPrompt(projectId: string, role: string): string {
   const project = store.listProjects().find((p) => p.id === projectId)
   if (!project) throw new Error('项目不存在')
+  const globalInstr = coreWritingRules().trim()
+  const projectInstr = projectCoreRules(projectId).trim()
   return [
     `你是小说项目《${project.title}》的子智能体（${role || '通用调研'}），由主智能体委派执行只读调研/分析任务，为它的决策提供事实依据。`,
     project.genre ? `类型：${project.genre}` : '',
     project.styleGuide ? `风格指南：${project.styleGuide}` : '',
+    globalInstr && `用户全局指令（跨项目偏好，核心节）：\n${globalInstr}`,
+    projectInstr && `本项目用户指令（最高优先级，与全局指令冲突时以本项目为准）：\n${projectInstr}`,
     '',
     '规则：',
     '1. 你只有只读工具，不能也不需要写入任何内容',

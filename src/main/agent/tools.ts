@@ -10,6 +10,7 @@ import { reembedEntity } from '../embedding'
 import { chatStream, pickRatelimitHeaders } from '../llm'
 import { applyVolumeSummaryResult, buildVolumeSummaryRequest } from '../pipeline'
 import { resolveRequestAuth } from '../settings'
+import { getSkill, listSkills, stripFrontmatter } from '../skills'
 import * as store from '../store'
 import { appendUsage } from '../usage'
 import {
@@ -1611,7 +1612,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'get_writing_rules',
       description:
-        '读取全局写作规则（agents.md）中与当前任务相关的分节，返回规则全文。动笔前必须调用：写正文/大纲/人物卡/世界观/伏笔/润色等创作任务按任务类型传 tags，把返回的细则作为本次写作的硬性要求执行。tags 可选值：chapter（章节与结构）、prose（行文与去AI味）、dialogue（对话）、hooks（钩子与节奏）、character（人物塑造）、plot（情节推进）、continuity（视角与对账）、outline（大纲写法）、worldbuild（命名与设定/链接规则）、fore（伏笔维护）、polish（修改与润色）、agent（批量任务与审校）；核心节总会返回。常用组合：写正文传 chapter,prose,dialogue,hooks,plot,continuity,character；改稿传 polish,prose,dialogue,hooks,continuity；大纲传 outline,plot,fore',
+        '读取写作规则中与当前任务相关的分节（来源：全局 agents.md + 本项目指令）。动笔前必须调用：写正文/大纲/人物卡/世界观/伏笔/润色等创作任务按任务类型传 tags，把返回的细则作为本次写作的硬性要求执行。优先级：本项目指令 > 全局规则 > 技能模板，冲突时以高优先级为准。tags 可选值：chapter（章节与结构）、prose（行文与去AI味）、dialogue（对话）、hooks（钩子与节奏）、character（人物塑造）、plot（情节推进）、continuity（视角与对账）、outline（大纲写法）、worldbuild（命名与设定/链接规则）、fore（伏笔维护）、polish（修改与润色）、agent（批量任务与审校）；核心节与项目恒注节总会返回。常用组合：写正文传 chapter,prose,dialogue,hooks,plot,continuity,character；改稿传 polish,prose,dialogue,hooks,continuity；大纲传 outline,plot,fore',
       input_schema: schema(
         {
           tags: s('要加载的分节标签数组（如 ["chapter","prose","dialogue"]），也接受逗号分隔字符串')
@@ -1620,13 +1621,40 @@ const TOOLS: AgentTool[] = [
       )
     },
     danger: false,
-    handler: (input) => {
+    handler: (input, projectId) => {
       const tags = (optStrArr(input, 'tags') ?? [])
         .map((t) => t.trim().toLowerCase())
         .filter(Boolean)
-      const rules = writingRulesFor(tags)
-      if (!rules) return { tags, rules: '', note: '全局写作规则为空（agents.md 未配置）' }
+      const rules = writingRulesFor(tags, projectId)
+      if (!rules)
+        return { tags, rules: '', note: '写作规则为空（全局 agents.md 与本项目指令均未配置）' }
       return { tags, rules }
+    }
+  },
+  {
+    def: {
+      name: 'load_skill',
+      description:
+        '加载技能（工艺模板）全文。系统提示的「可用技能索引」列出了全部可用技能（文件名 + 说明）；当某类任务需要详细写法步骤/模板（写钩子、场景序列、卷摘要、压缩要领等）时用它取回全文并遵循。技能是通用工艺，与用户指令冲突时以用户指令为准',
+      input_schema: schema(
+        {
+          name: s('技能文件名，如 outline-architect、chapter-writer（可省略 .md 后缀）')
+        },
+        ['name']
+      )
+    },
+    danger: false,
+    handler: (input) => {
+      const name = reqStr(input, 'name').trim()
+      if (/[\\/]/.test(name)) throw new Error('name 必须是技能文件名，不能包含路径分隔符')
+      const file = getSkill(name.endsWith('.md') ? name : `${name}.md`)
+      if (!file) {
+        const available = listSkills()
+          .map((s) => s.filename.replace(/\.md$/, ''))
+          .join('、')
+        throw new Error(`技能不存在：${name}。可用技能：${available}`)
+      }
+      return { name: file.name, body: stripFrontmatter(file.raw) }
     }
   },
   {
@@ -1668,6 +1696,7 @@ export const READ_TOOLS = new Set([
   'get_book_digest',
   'get_agent_instructions',
   'get_writing_rules',
+  'load_skill',
   'list_foreshadows'
 ])
 

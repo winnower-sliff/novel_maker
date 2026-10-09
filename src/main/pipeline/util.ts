@@ -1,10 +1,17 @@
-import { getSkill } from '../skills'
+import { type PipelineAction, resolveSkillNames } from '../../shared/skillBindings'
+import { getSkillBindings } from '../settings'
+import { getSkill, stripFrontmatter } from '../skills'
 
-export function skillBody(name: string): string {
-  const f = getSkill(`${name}.md`)
-  if (!f) return ''
-  const match = /^---\r?\n[\s\S]*?\r?\n---/.exec(f.raw)
-  return match ? f.raw.slice(match[0].length).trim() : f.raw
+/** 按管线动作装配技能正文：多技能依序拼接；settings.json skillBindings 可覆盖，缺省用内置默认绑定 */
+export function skillBody(action: PipelineAction): string {
+  const names = resolveSkillNames(action, getSkillBindings())
+  return names
+    .map((name) => {
+      const f = getSkill(name.endsWith('.md') ? name : `${name}.md`)
+      return f ? stripFrontmatter(f.raw) : ''
+    })
+    .filter(Boolean)
+    .join('\n\n---\n\n')
 }
 
 function sliceBetween(text: string, open: string, close: string): string | null {

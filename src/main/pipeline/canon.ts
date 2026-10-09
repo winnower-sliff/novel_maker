@@ -87,7 +87,7 @@ export function buildCanonSyncRequest(projectId: string, volume: number): ChatPa
   ].join('\n')
   return {
     model: '',
-    system: appendWritingRules(system, ['character', 'worldbuild']),
+    system: appendWritingRules(system, ['character', 'worldbuild'], projectId),
     messages: [{ role: 'user', content: user }],
     maxTokens: 16384,
     temperature: 0.5,

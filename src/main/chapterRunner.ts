@@ -46,10 +46,11 @@ export function parseSegmentPlan(text: string, wordTarget: number): SegmentPlan[
   return plan
 }
 
-function buildPlanRequest(ctx: BuiltContext, wordTarget: number): ChatParams {
+function buildPlanRequest(ctx: BuiltContext, wordTarget: number, projectId: string): ChatParams {
   const system = appendWritingRules(
-    [skillBody('segment-planner'), ctx.system].filter(Boolean).join('\n\n'),
-    ['chapter', 'plot']
+    [skillBody('segment-plan'), ctx.system].filter(Boolean).join('\n\n'),
+    ['chapter', 'plot'],
+    projectId
   )
   const user = `请为本章制定分段写作计划，目标 ${wordTarget} 字。\n\n${ctx.user}\n\n输出 JSON 数组：[{"point":"…","words":600}]`
   return {
@@ -67,11 +68,13 @@ function buildSegmentRequest(
   plan: SegmentPlan[],
   written: string,
   index: number,
-  total: number
+  total: number,
+  projectId: string
 ): ChatParams {
   const system = appendWritingRules(
-    [skillBody('chapter-writer'), ctx.system].filter(Boolean).join('\n\n'),
-    CHAPTER_RULE_TAGS
+    [skillBody('chapter'), ctx.system].filter(Boolean).join('\n\n'),
+    CHAPTER_RULE_TAGS,
+    projectId
   )
   const planLines = plan.map((s, i) => `第 ${i + 1} 段（${s.words} 字）：${s.point}`).join('\n')
   const user = [
@@ -134,7 +137,7 @@ export async function runLongChapter(opts: {
   const planAuth = await resolveRequestAuth('outline', opts.provider)
   const planRes = await chatStream(
     {
-      ...buildPlanRequest(ctx, opts.wordTarget),
+      ...buildPlanRequest(ctx, opts.wordTarget, opts.projectId),
       model: planAuth.model,
       cacheSystem: planAuth.promptCache && true
     },
@@ -183,7 +186,7 @@ export async function runLongChapter(opts: {
     }
     const res = await chatStream(
       {
-        ...buildSegmentRequest(ctx, plan, written, i, plan.length),
+        ...buildSegmentRequest(ctx, plan, written, i, plan.length, opts.projectId),
         model: auth.model,
         cacheSystem: auth.promptCache && true
       },

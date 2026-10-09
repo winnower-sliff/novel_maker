@@ -10,7 +10,11 @@ export function globalAgentsPath(): string {
 
 const GLOBAL_TEMPLATE = `# 智能体全局指令
 
-本文件是跨项目的写作偏好，会注入生成链路与智能体系统提示（位于项目指令之前）。
+本文件是跨项目的个人写作偏好（「我习惯怎么写」），会注入生成链路与智能体系统提示（位于项目指令之前）。
+
+职责边界：技能模板负责「这类动作的通用工艺」，本文件只写技能里没有的个人偏好，不要重复技能已有的通用纪律（如「章末留钩子」这类工艺要求技能里已经写了）；只适用于某个项目的约束写到该项目的指令里。
+
+优先级：项目指令 > 本文件 > 技能模板。冲突时以优先级高者为准。
 
 分节约定：## 标题末尾方括号是注入标签——[core] 和不带标签的节每次任务都完整注入；其他标签只在对应任务时注入（界面「生成」按动作自动带上，智能体做对应任务前先调 get_writing_rules 工具读取相关节）。新建节不带标签即视为每次注入。
 
@@ -19,7 +23,7 @@ const GLOBAL_TEMPLATE = `# 智能体全局指令
 ## 核心纪律 [core]
 
 - 章节标题不超过 12 个字。
-- 每章结尾留一个钩子。
+- 中文标点使用全角，引号用「」。
 
 ## 对话偏好 [dialogue]
 
@@ -149,29 +153,63 @@ function parseCached(): { preamble: string; sections: RuleSection[] } {
   return parsed
 }
 
-/** agents.md 不分节（旧版整段文本）时整体视为核心节，行为与历史版本一致 */
+/** 取全局 agents.md 命中分节（旧版整段文本落入 preamble，行为与历史版本一致） */
 function pickRules(tags: readonly string[]): string {
   const raw = readGlobalInstructions()
   if (!raw.trim()) return ''
-  const { preamble, sections } = parseCached()
+  return filterRules(parseCached(), tags)
+}
+
+/** 项目指令与全局同构解析：纯文本（无 ## 分节）整体是 preamble，恒注入；分节按 tag 过滤 */
+function pickProjectRules(projectId: string, tags: readonly string[]): string {
+  const raw = readProjectInstructions(projectId)
+  if (!raw.trim()) return ''
+  return filterRules(parseRuleSections(raw), tags)
+}
+
+/** preamble 恒注入 + 无标签/[core]/命中标签的节，统一过滤规则（全局/项目共用） */
+function filterRules(
+  parsed: { preamble: string; sections: RuleSection[] },
+  tags: readonly string[]
+): string {
   const wanted = new Set(tags.map((t) => t.trim().toLowerCase()).filter(Boolean))
   const parts = [
-    preamble,
-    ...sections
+    parsed.preamble,
+    ...parsed.sections
       .filter((s) => s.tag === null || s.tag === 'core' || wanted.has(s.tag))
       .map((s) => s.text.trim())
   ].filter(Boolean)
   return parts.join('\n\n')
 }
 
-/** 核心节（文件头 + [core] + 无标签节）：agent 系统提示固定注入的部分 */
+/** 核心节（文件头 + [core] + 无标签节）：agent 系统提示固定注入的部分（全局） */
 export function coreWritingRules(): string {
   return pickRules([])
 }
 
-/** 取 tags 命中的分节全文（含核心节），无内容返回空串；get_writing_rules 工具与 pipeline 共用 */
-export function writingRulesFor(tags: readonly string[]): string {
-  return pickRules(tags)
+/** 项目指令的核心节（preamble + [core] + 无标签节）：agent 系统提示固定注入的部分 */
+export function projectCoreRules(projectId: string): string {
+  return pickProjectRules(projectId, [])
+}
+
+const GLOBAL_RULES_HEADER =
+  '【用户全局写作规则（跨项目偏好；与技能模板冲突时以本节为准，与项目指令冲突时以项目为准）】'
+const PROJECT_RULES_HEADER =
+  '【本项目指令（最高优先级：与技能模板、全局写作规则冲突时以本节为准）】'
+
+/** 全局+项目命中节拼装块（全局在前、项目在后，各带优先级 header）；两处都为空返回空串 */
+export function writingRulesBlock(tags: readonly string[], projectId: string): string {
+  const global = pickRules(tags)
+  const project = pickProjectRules(projectId, tags)
+  const parts: string[] = []
+  if (global) parts.push(`${GLOBAL_RULES_HEADER}\n${global}`)
+  if (project) parts.push(`${PROJECT_RULES_HEADER}\n${project}`)
+  return parts.join('\n\n')
+}
+
+/** 取 tags 命中的分节块全文（全局+项目，含核心节），无内容返回空串；get_writing_rules 工具与 pipeline 共用 */
+export function writingRulesFor(tags: readonly string[], projectId: string): string {
+  return writingRulesBlock(tags, projectId)
 }
 
 /** 写正文任务的规则分节（chapterRunner 逐段写作与 chapter 管线共用） */
@@ -185,11 +223,13 @@ export const CHAPTER_RULE_TAGS = [
   'character'
 ] as const
 
-/** 把 tags 命中的分节（含核心节）追加到 system 末尾；agents.md 为空时原样返回 */
-export function appendWritingRules(system: string, tags: readonly string[]): string {
-  const rules = pickRules(tags)
-  if (!rules) return system
-  const header =
-    '【用户全局写作规则（按本次任务带上的分节；与技能模板冲突时以本节为准，与项目风格指南/项目指令冲突时以项目为准）】'
-  return system ? `${system}\n\n${header}\n${rules}` : `${header}\n${rules}`
+/** 把 tags 命中的分节块追加到 system 末尾（全局在前、项目在后，项目标最高优先级）；两处都为空时原样返回 */
+export function appendWritingRules(
+  system: string,
+  tags: readonly string[],
+  projectId: string
+): string {
+  const block = writingRulesBlock(tags, projectId)
+  if (!block) return system
+  return system ? `${system}\n\n${block}` : block
 }

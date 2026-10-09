@@ -10,6 +10,7 @@ import {
   type ProviderId,
   providerPreset
 } from '../shared/providers'
+import { DEFAULT_SKILL_BINDINGS, type SkillBindings } from '../shared/skillBindings'
 import type {
   ModelRouting,
   ProviderProfile,
@@ -33,6 +34,8 @@ interface StoredSettings {
   quota5hPrompts: number
   currentProjectId: string
   server: ServerConfig
+  /** 管线动作→技能名覆盖（缺键回退默认绑定） */
+  skillBindings: SkillBindings
 }
 
 interface LegacySettings {
@@ -103,8 +106,22 @@ function emptyStored(): StoredSettings {
     apiKeys: {},
     quota5hPrompts: 0,
     currentProjectId: '',
-    server: defaultServerConfig()
+    server: defaultServerConfig(),
+    skillBindings: {}
   }
+}
+
+function normalizeSkillBindings(raw: unknown): SkillBindings {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: SkillBindings = {}
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (!Array.isArray(value)) continue
+    out[key] = value
+      .filter((x): x is string => typeof x === 'string')
+      .map((x) => x.trim())
+      .filter(Boolean)
+  }
+  return out
 }
 
 function readStored(): StoredSettings {
@@ -147,7 +164,8 @@ function readStored(): StoredSettings {
     apiKeys,
     quota5hPrompts: Math.max(0, Math.floor(raw.quota5hPrompts ?? 0) || 0),
     currentProjectId: raw.currentProjectId ?? '',
-    server: normalizeServer(raw.server)
+    server: normalizeServer(raw.server),
+    skillBindings: normalizeSkillBindings(raw.skillBindings)
   }
 }
 
@@ -347,8 +365,14 @@ export async function loadSettingsView(): Promise<SettingsView> {
     modelRouting: profile.modelRouting,
     quota5hPrompts: stored.quota5hPrompts,
     promptCache: providerPreset(provider).supportsCache && profile.promptCache,
-    currentProjectId: stored.currentProjectId
+    currentProjectId: stored.currentProjectId,
+    skillBindings: { ...DEFAULT_SKILL_BINDINGS, ...stored.skillBindings }
   }
+}
+
+/** 管线技能覆盖绑定（仅含用户覆盖的键；缺键由 resolveSkillNames 回退默认） */
+export function getSkillBindings(): SkillBindings {
+  return readStored().skillBindings
 }
 
 export async function saveSettings(patch: SettingsPatch): Promise<SettingsView> {
@@ -381,7 +405,11 @@ export async function saveSettings(patch: SettingsPatch): Promise<SettingsView> 
         ? Math.max(0, Math.floor(patch.quota5hPrompts) || 0)
         : stored.quota5hPrompts,
     currentProjectId: patch.currentProjectId ?? stored.currentProjectId,
-    server: stored.server
+    server: stored.server,
+    skillBindings:
+      patch.skillBindings !== undefined
+        ? normalizeSkillBindings(patch.skillBindings)
+        : stored.skillBindings
   }
   if (patch.apiKey !== undefined) {
     const trimmed = patch.apiKey.trim()

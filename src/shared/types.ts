@@ -121,6 +121,8 @@ export interface SettingsView {
   quota5hPrompts: number
   promptCache: boolean
   currentProjectId: string
+  /** 生效的技能绑定（默认绑定 + settings.json 覆盖），供设置界面展示与调试 */
+  skillBindings: Record<string, string[]>
 }
 
 export interface ServerConfig {
@@ -331,6 +333,8 @@ export interface SkillMeta {
   name: string
   description: string
   filename: string
+  /** frontmatter always: true —— 每次智能体任务无条件整段注入系统提示 */
+  always: boolean
 }
 
 export interface SkillFile extends SkillMeta {

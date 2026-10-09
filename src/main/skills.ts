@@ -8,9 +8,14 @@ export function globalSkillsDir(): string {
   return join(app.getPath('userData'), 'skills')
 }
 
-function parseFrontmatter(raw: string): { name: string; description: string; version: number } {
+function parseFrontmatter(raw: string): {
+  name: string
+  description: string
+  version: number
+  always: boolean
+} {
   const match = /^---\r?\n([\s\S]*?)\r?\n---/.exec(raw)
-  if (!match) return { name: '', description: '', version: 0 }
+  if (!match) return { name: '', description: '', version: 0, always: false }
   const meta: Record<string, string> = {}
   for (const line of match[1].split(/\r?\n/)) {
     const kv = /^([a-zA-Z_]+)\s*:\s*(.*)$/.exec(line.trim())
@@ -19,7 +24,8 @@ function parseFrontmatter(raw: string): { name: string; description: string; ver
   return {
     name: meta.name ?? '',
     description: meta.description ?? '',
-    version: Number(meta.version) || 0
+    version: Number(meta.version) || 0,
+    always: /^(true|1|yes)$/i.test(meta.always ?? '')
   }
 }
 
@@ -38,10 +44,17 @@ export function listSkills(): SkillMeta[] {
       return {
         name: meta.name || filename.replace(/\.md$/, ''),
         description: meta.description,
-        filename
+        filename,
+        always: meta.always
       }
     })
     .sort((a, b) => a.name.localeCompare(b.name))
+}
+
+/** 去掉 frontmatter 后的技能正文 */
+export function stripFrontmatter(raw: string): string {
+  const match = /^---\r?\n[\s\S]*?\r?\n---/.exec(raw)
+  return (match ? raw.slice(match[0].length) : raw).trim()
 }
 
 export function getSkill(filename: string): SkillFile | null {
@@ -54,6 +67,7 @@ export function getSkill(filename: string): SkillFile | null {
     name: meta.name || filename.replace(/\.md$/, ''),
     description: meta.description,
     filename,
+    always: meta.always,
     raw
   }
 }

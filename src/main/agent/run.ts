@@ -15,9 +15,10 @@ import type {
 import type { EventSink } from '../eventSink'
 import { chatStream, pickRatelimitHeaders } from '../llm'
 import { resolveRequestAuth } from '../settings'
+import { getSkill, listSkills, stripFrontmatter } from '../skills'
 import * as store from '../store'
 import { appendUsage } from '../usage'
-import { coreWritingRules, readProjectInstructions } from './instructions'
+import { coreWritingRules, projectCoreRules } from './instructions'
 import { drainInjections } from './queue'
 import {
   AGENT_MAX_TOKENS,
@@ -280,7 +281,15 @@ function buildSystemPrompt(projectId: string): string {
   const project = store.listProjects().find((p) => p.id === projectId)
   if (!project) throw new Error('项目不存在，无法启动智能体')
   const globalInstr = coreWritingRules().trim()
-  const projectInstr = readProjectInstructions(projectId).trim()
+  const projectInstr = projectCoreRules(projectId).trim()
+  const skillIndex = listSkills()
+  const alwaysSkillBodies = skillIndex
+    .filter((s) => s.always)
+    .map((s) => {
+      const file = getSkill(s.filename)
+      return file ? `── 技能：${file.name} ──\n${stripFrontmatter(file.raw)}` : ''
+    })
+    .filter(Boolean)
   return [
     '你是小说项目的智能体编辑助理，通过工具直接读写当前项目的资料库（人物、世界观、大纲、章节正文、伏笔）。',
     '',
@@ -289,11 +298,30 @@ function buildSystemPrompt(projectId: string): string {
     ...(globalInstr
       ? [
           '',
-          '用户全局指令（核心节，所有项目生效；分节细则按任务经 get_writing_rules 工具拉取）：',
+          '用户全局指令（跨项目偏好；核心节恒注入，分节细则按任务经 get_writing_rules 工具拉取）：',
           globalInstr
         ]
       : []),
-    ...(projectInstr ? ['', '本项目用户指令（优先级高于全局指令）：', projectInstr] : []),
+    ...(projectInstr
+      ? [
+          '',
+          '本项目用户指令（最高优先级：与全局指令、技能模板冲突时以本项目为准；分节细则同样经 get_writing_rules 拉取）：',
+          projectInstr
+        ]
+      : []),
+    ...(alwaysSkillBodies.length
+      ? ['', '常驻技能（每次任务无条件适用；与用户指令冲突时以指令为准）：', ...alwaysSkillBodies]
+      : []),
+    ...(skillIndex.length
+      ? [
+          '',
+          '可用技能索引（需要详细写法/模板时用 load_skill 按文件名加载全文；标注「已常驻」的技能已在上方给出全文）：',
+          ...skillIndex.map(
+            (s) =>
+              `- ${s.filename.replace(/\.md$/, '')}${s.always ? '（已常驻）' : ''}：${s.description}`
+          )
+        ]
+      : []),
     '',
     '工作规则：',
     '1. 修改前先用读工具核实目标（例如按名字找到准确 id），禁止凭记忆猜测 id',
@@ -315,7 +343,7 @@ function buildSystemPrompt(projectId: string): string {
     '17. 世界观类型管理：优先复用现有类型；条目换类型用 set_worldbuild_category（目标类型不存在会自动创建）；确需新类型用 worldbuild_type 的 op=create（可同时带 before/after/first/last 之一插到语义相邻处）；删类型用 op=delete（类型下还有条目时先逐条 set_worldbuild_category 迁走再删）',
     '18. 长任务（批量改写、全书检查、跨卷校对）中收到「上下文过大」系统提示、或确认早前细节已处理完时，主动用 compact_context 把历史压成摘要再继续；摘要必须包含任务目标与范围、已完成的修改（含条目 id 与新值）、待办事项、重要发现与决定、连续性数字硬账（人数/金额/库存/伤势等当前值），宁可写长不可漏关键 id',
     '19. 任务未完成时禁止停下征询意见或等待指示：直接继续调用工具执行下一步。只有两种情况可以停下：任务真正全部完成（此时输出最终总结），或遇到必须由用户决策的分叉（此时明确列出选项与你的建议）。压缩上下文后不要回复确认性文字，直接继续干活',
-    '20. 开始创作任务（写正文/大纲/卷创意/人物卡/世界观/伏笔规划/润色扩写）前，先调 get_writing_rules 拉取该任务相关的写作分节并遵守。常用 tags：写正文 ["chapter","prose","dialogue","hooks","plot","continuity","character"]；改稿润色 ["polish","prose","dialogue","hooks","continuity"]；大纲/卷创意/对齐 ["outline","plot","fore"]；人物卡 ["character"]；世界观条目 ["worldbuild"]；伏笔登记/回收 ["fore"]；批量写作/审校 ["agent","chapter","prose","continuity"]'
+    '20. 开始创作任务（写正文/大纲/卷创意/人物卡/世界观/伏笔规划/润色扩写）前，先调 get_writing_rules 拉取该任务相关的写作分节并遵守（本项目指令 > 全局规则 > 技能模板）。常用 tags：写正文 ["chapter","prose","dialogue","hooks","plot","continuity","character"]；改稿润色 ["polish","prose","dialogue","hooks","continuity"]；大纲/卷创意/对齐 ["outline","plot","fore"]；人物卡 ["character"]；世界观条目 ["worldbuild"]；伏笔登记/回收 ["fore"]；批量写作/审校 ["agent","chapter","prose","continuity"]。需要某类任务的详细写法/模板时，按上方技能索引用 load_skill 加载对应技能全文'
   ].join('\n')
 }
 

@@ -89,7 +89,7 @@ export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): 
     p.volume
   )
   const system = [
-    skillBody('outline-architect'),
+    skillBody('outline'),
     project?.styleGuide && `【作品风格】\n${project.styleGuide}`,
     wb && `【已有世界观】\n${wb}`,
     chars && `【已有人物】\n${chars}`,
@@ -105,7 +105,7 @@ export function buildOutlineRequest(p: OutlineGenParams, batch?: OutlineBatch): 
   ]
     .filter(Boolean)
     .join('\n\n')
-  const systemWithRules = appendWritingRules(system, ['outline', 'plot', 'fore'])
+  const systemWithRules = appendWritingRules(system, ['outline', 'plot', 'fore'], p.projectId)
   const user = outlineUserPrompt(p, batch ?? null)
   return {
     model: '',
@@ -155,7 +155,7 @@ export function buildVolumeIdeaRequest(
     .join('\n\n')
   return {
     model: '',
-    system: appendWritingRules(system, ['outline', 'plot', 'fore']),
+    system: appendWritingRules(system, ['outline', 'plot', 'fore'], projectId),
     messages: [{ role: 'user', content: `本卷要求：${req}\n\n请输出第 ${volume} 卷的卷创意。` }],
     maxTokens: 4096,
     temperature: 0.8,
@@ -190,7 +190,7 @@ export function buildRulesRefineRequest(
   ]
     .filter(Boolean)
     .join('\n')
-  const systemWithRules = appendWritingRules(system, ['outline', 'plot'])
+  const systemWithRules = appendWritingRules(system, ['outline', 'plot'], projectId)
   const user = [
     `【第 ${volume} 卷上下文（用于让规则贴合实际，不得改变规则原意）】`,
     project?.styleGuide && `风格：${project.styleGuide.slice(0, 200)}`,
@@ -258,7 +258,7 @@ export function buildPremiseDraftRequest(projectId: string): ChatParams {
     .join('\n')
   return {
     model: '',
-    system: appendWritingRules(system, ['outline', 'plot', 'worldbuild', 'character']),
+    system: appendWritingRules(system, ['outline', 'plot', 'worldbuild', 'character'], projectId),
     messages: [{ role: 'user', content: user }],
     maxTokens: 4096,
     temperature: 0.8,
@@ -613,7 +613,7 @@ export function buildAlignRequest(projectId: string): ChatParams {
   const user = `【已写章节实际剧情（最近 ${Math.min(30, written.length)} 章）】\n${written.slice(-30).join('\n')}\n\n【后续未写章节大纲（共 ${pending.length} 章）】\n${pending.join('\n')}\n\n请检查后续大纲与已写剧情的连贯性，输出需修订章节的 JSON 数组。`
   return {
     model: '',
-    system: appendWritingRules(system, ['outline', 'plot', 'fore']),
+    system: appendWritingRules(system, ['outline', 'plot', 'fore'], projectId),
     messages: [{ role: 'user', content: user }],
     maxTokens: 8192,
     temperature: 0.4,
