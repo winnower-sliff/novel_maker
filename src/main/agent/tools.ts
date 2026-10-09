@@ -1159,7 +1159,20 @@ const TOOLS: AgentTool[] = [
         {
           kind: s("'chapter' / 'character' / 'worldbuild'"),
           id: s('chapter=大纲条目 id；character/worldbuild=实体 id'),
-          edits: optArr('替换清单，1-20 条，每条 {find: 原文片段, replace: 新文本, all?: 全部替换}')
+          edits: {
+            type: 'array',
+            description:
+              '替换清单，1-20 条，每条 {find: 原文片段, replace: 新文本, all?: 全部替换}',
+            items: {
+              type: 'object',
+              properties: {
+                find: { type: 'string', description: '原文片段（须与正文逐字一致）' },
+                replace: { type: 'string', description: '新文本（空串=删除该片段）' },
+                all: { type: 'boolean', description: '是否全部替换（默认 false，仅单处）' }
+              },
+              required: ['find', 'replace']
+            }
+          }
         },
         ['kind', 'id', 'edits']
       )
