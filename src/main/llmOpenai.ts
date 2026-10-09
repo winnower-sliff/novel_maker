@@ -230,7 +230,12 @@ export async function chatStreamOpenai(
   let text = ''
   let model = params.model
   let stopReason: string | null = null
-  const toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }> = []
+  const toolUses: Array<{
+    id: string
+    name: string
+    input: Record<string, unknown>
+    inputError?: 'truncated' | 'invalid'
+  }> = []
   const toolAcc = new Map<number, { id: string; name: string; json: string }>()
   const stripper = new ThinkStripper()
 
@@ -322,14 +327,28 @@ export async function chatStreamOpenai(
   }
   for (const acc of toolAcc.values()) {
     let input: Record<string, unknown> = {}
+    let parseFailed = false
     if (acc.json.trim()) {
       try {
         input = JSON.parse(acc.json) as Record<string, unknown>
       } catch {
-        input = { _raw: acc.json }
+        parseFailed = true
       }
     }
-    toolUses.push({ id: acc.id, name: acc.name, input })
+    if (parseFailed)
+      console.warn(
+        `[llm] tool ${acc.name} 参数 JSON 解析失败（${acc.json.length} 字符），已丢弃片段防污染历史`
+      )
+    toolUses.push({
+      id: acc.id,
+      name: acc.name,
+      input,
+      ...(parseFailed
+        ? {
+            inputError: stopReason === 'max_tokens' ? ('truncated' as const) : ('invalid' as const)
+          }
+        : {})
+    })
   }
 
   return { text, usage, model, stopReason, durationMs: Date.now() - started, headers, toolUses }

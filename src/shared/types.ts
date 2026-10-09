@@ -75,7 +75,13 @@ export interface ChatResult {
   stopReason: string | null
   durationMs: number
   headers: Record<string, string>
-  toolUses: Array<{ id: string; name: string; input: Record<string, unknown> }>
+  toolUses: Array<{
+    id: string
+    name: string
+    input: Record<string, unknown>
+    /** 参数 JSON 解析失败标记（input 已清空，调用方不得执行）：truncated=输出被长度上限截断，invalid=JSON 不完整或非法 */
+    inputError?: 'truncated' | 'invalid'
+  }>
 }
 
 export interface UsageRecord {

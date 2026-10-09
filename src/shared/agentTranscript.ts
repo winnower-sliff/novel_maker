@@ -1,3 +1,4 @@
+import { recoverToolInput } from './toolInput'
 import type {
   AgentToolCall,
   AgentTranscriptEvent,
@@ -48,7 +49,10 @@ export function turnsToMessages(turns: AgentTurn[]): ChatMessage[] {
     for (const call of turn.toolCalls) {
       const denied = call.state === 'denied'
       if (call.result === undefined && !denied) continue
-      blocks.push({ type: 'tool_use', id: call.id, name: call.name, input: call.input })
+      // _raw 残骸解包；解不开的整对跳过，避免污染回灌历史（旧会话自愈）
+      const rec = recoverToolInput(call.input)
+      if (!rec.ok) continue
+      blocks.push({ type: 'tool_use', id: call.id, name: call.name, input: rec.input })
       resultBlocks.push({
         type: 'tool_result',
         tool_use_id: call.id,

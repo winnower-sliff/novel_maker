@@ -1,6 +1,7 @@
 import type { AgentToolResultEvent, EventChannels, EventContract } from '../../shared/contract'
 import { classifyLlmError } from '../../shared/llmError'
 import type { ProviderId } from '../../shared/providers'
+import { recoverToolInput } from '../../shared/toolInput'
 import type {
   AgentDonePayload,
   AgentToolResultStatus,
@@ -533,6 +534,17 @@ export async function runAgent(opts: {
         break
       }
 
+      // 参数恢复：解开历史遗留/模型模仿的 _raw 包裹；解不开的按解析失败处理（绝不让 _raw 回灌历史）
+      for (const tu of result.toolUses) {
+        if (tu.inputError) {
+          tu.input = {}
+          continue
+        }
+        const rec = recoverToolInput(tu.input)
+        tu.input = rec.ok ? rec.input : {}
+        if (!rec.ok) tu.inputError = 'invalid'
+      }
+
       const assistantBlocks: ContentBlock[] = []
       if (result.text) assistantBlocks.push({ type: 'text', text: result.text })
       for (const tu of result.toolUses) {
@@ -543,6 +555,26 @@ export async function runAgent(opts: {
       const resultBlocks: ContentBlock[] = []
       for (const tu of result.toolUses) {
         toolUseCount++
+        if (tu.inputError && TOOL_MAP.has(tu.name)) {
+          const why =
+            tu.inputError === 'truncated'
+              ? '工具参数输出被长度上限截断'
+              : '工具参数 JSON 不完整或非法'
+          const msg = `错误: ${why}，本次调用未执行、未产生任何修改。请重新调用 ${tu.name}：参数内容过长时请精简或分批，并确保参数为完整合法的 JSON`
+          persist({
+            kind: 'tool_call',
+            call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
+          })
+          send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'running' })
+          resultBlocks.push({
+            type: 'tool_result',
+            tool_use_id: tu.id,
+            content: msg,
+            is_error: true
+          })
+          emitToolResult({ id: tu.id, ok: false, result: msg })
+          continue
+        }
         if (tu.name === 'compact_context') {
           const summary = typeof tu.input?.summary === 'string' ? tu.input.summary.trim() : ''
           persist({
