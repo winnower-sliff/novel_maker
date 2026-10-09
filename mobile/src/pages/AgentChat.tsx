@@ -1,3 +1,4 @@
+import { PROVIDER_IDS, type ProviderId, providerPreset } from '@shared/providers'
 import type { AgentToolCall, AgentTurn } from '@shared/types'
 import { useQuery } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -6,7 +7,7 @@ import { Markdown } from '@mobile/components/Markdown'
 import { Badge, Button, Empty, Textarea } from '@mobile/components/ui'
 import { fmtRelative } from '@mobile/lib/format'
 import { findCompactPoint, toolLabel, toolSummary } from '@mobile/lib/agentTurns'
-import { qk } from '@renderer/lib/queries'
+import { qk, queries } from '@renderer/lib/queries'
 import {
   cancelQueued,
   queueRun,
@@ -182,12 +183,16 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     queryKey: qk.agentSessions(projectId),
     queryFn: () => window.api.agent.sessions(projectId)
   })
-  const [pickerOpen, setPickerOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const [instrOpen, setInstrOpen] = useState(false)
   const [showJump, setShowJump] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
-  // 会话选择器打开时，返回键先关闭它
-  useBackHandler(useCallback(() => setPickerOpen(false), []), pickerOpen)
+  const [engine, setEngine] = useState<ProviderId | ''>('')
+  const { data: settings } = useQuery(queries.settings())
+  // 临时引擎：选中则本次请求走该 provider 的默认模型，不落库（与桌面端一致）
+  const engineModel = engine ? (settings?.profiles[engine]?.defaultModel?.trim() ?? '') : ''
+  // 菜单打开时，返回键先关闭它
+  useBackHandler(useCallback(() => setMenuOpen(false), []), menuOpen)
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const atBottomRef = useRef(true)
 
@@ -296,7 +301,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     saveScroll()
     useAgentTabsStore.getState().setActive(projectId, key)
     switchSessionRun(sid)
-    setPickerOpen(false)
+    setMenuOpen(false)
   }
 
   const closeTab = (key: string): void => {
@@ -326,7 +331,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     saveScroll()
     useAgentTabsStore.getState().openTab(projectId, id)
     switchSessionRun(id)
-    setPickerOpen(false)
+    setMenuOpen(false)
     setHistoryOpen(false)
   }
 
@@ -336,9 +341,9 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     if (running) {
       // 运行中：入队（已有排队时按钮已禁用，此处防御）
       if (queuedNext) return
-      queueRun(text)
+      queueRun(text, engineModel || undefined, engine || undefined)
     } else {
-      startRun(input)
+      startRun(input, engineModel || undefined, engine || undefined)
     }
     if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, '')
     atBottomRef.current = true
@@ -437,47 +442,11 @@ export default function AgentChat({ projectId }: { projectId: string }) {
         <Button
           variant="ghost"
           className="shrink-0 px-2 py-1 text-xs"
-          onClick={() => setPickerOpen((v) => !v)}
+          onClick={() => setMenuOpen(true)}
         >
-          列表
-        </Button>
-        <Button
-          variant="ghost"
-          className="shrink-0 px-2 py-1 text-xs"
-          onClick={() => setInstrOpen(true)}
-        >
-          指令
+          ⋯
         </Button>
       </div>
-      {pickerOpen && (
-        <div className="max-h-64 overflow-y-auto border-b border-zinc-800 bg-zinc-900">
-          {sessions.length === 0 && <div className="p-3 text-xs text-zinc-600">暂无历史会话</div>}
-          {sessions.map((s) => {
-            const busy = runningIds.includes(s.id)
-            return (
-              <div
-                key={s.id}
-                role="button"
-                tabIndex={0}
-                className={`cursor-pointer px-4 py-2.5 text-sm active:bg-zinc-800 ${
-                  s.id === sessionId ? 'text-amber-400' : 'text-zinc-300'
-                }`}
-                onClick={() => openSession(s.id)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') openSession(s.id)
-                }}
-              >
-                <div className="flex items-center gap-2">
-                  {busy && <Badge className="bg-amber-600/15 text-amber-400">运行中</Badge>}
-                  <span className="min-w-0 flex-1 truncate">{s.title}</span>
-                </div>
-                <div className="text-[11px] text-zinc-600">{fmtRelative(s.updatedAt)}</div>
-              </div>
-            )
-          })}
-        </div>
-      )}
-
       <div className="relative min-h-0 flex-1">
         <div ref={scrollRef} onScroll={handleScroll} className="h-full space-y-3 overflow-y-auto p-3">
           {turns.length === 0 && <Empty text="给智能体下指令，例如「把第 3 章重写得更紧凑」" />}
@@ -583,6 +552,96 @@ export default function AgentChat({ projectId }: { projectId: string }) {
           <Badge className="bg-amber-600/15 text-amber-400">运行中</Badge>
         </div>
       )}
+
+      <OverlayCard open={menuOpen} onClose={() => setMenuOpen(false)} title="会话与引擎" widthClass="max-w-md">
+        <div className="space-y-4">
+          <div>
+            <div className="mb-2 text-xs font-medium text-zinc-500">
+              生成引擎（临时，不保存）
+            </div>
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => setEngine('')}
+                className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs ${
+                  engine === ''
+                    ? 'border-amber-600/60 bg-amber-600/10 text-amber-400'
+                    : 'border-zinc-800 bg-zinc-900 text-zinc-300 active:bg-zinc-800'
+                }`}
+              >
+                默认
+              </button>
+              {settings &&
+                PROVIDER_IDS.filter((id) => {
+                  const preset = providerPreset(id)
+                  if (preset.needsKey && !settings.configuredProviders.includes(id)) return false
+                  return !!settings.profiles[id]?.defaultModel?.trim()
+                }).map((id) => (
+                  <button
+                    key={id}
+                    type="button"
+                    onClick={() => setEngine(id)}
+                    className={`cursor-pointer rounded-full border px-3 py-1.5 text-xs ${
+                      engine === id
+                        ? 'border-amber-600/60 bg-amber-600/10 text-amber-400'
+                        : 'border-zinc-800 bg-zinc-900 text-zinc-300 active:bg-zinc-800'
+                    }`}
+                  >
+                    {providerPreset(id).label}
+                  </button>
+                ))}
+            </div>
+          </div>
+          <div>
+            <div className="mb-2 text-xs font-medium text-zinc-500">智能体指令</div>
+            <button
+              type="button"
+              onClick={() => {
+                setMenuOpen(false)
+                setInstrOpen(true)
+              }}
+              className="w-full cursor-pointer rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-left text-sm text-zinc-200 active:bg-zinc-800"
+            >
+              配置指令与写作要求 →
+            </button>
+          </div>
+          <div>
+            <div className="mb-2 text-xs font-medium text-zinc-500">历史会话</div>
+            {sessions.length === 0 && (
+              <div className="rounded-xl border border-zinc-800 px-3 py-3 text-xs text-zinc-600">
+                暂无历史会话
+              </div>
+            )}
+            <div className="max-h-56 space-y-1 overflow-y-auto">
+              {sessions.map((s) => {
+                const busy = runningIds.includes(s.id)
+                return (
+                  <div
+                    key={s.id}
+                    role="button"
+                    tabIndex={0}
+                    className={`cursor-pointer rounded-xl border px-3 py-2 active:bg-zinc-800 ${
+                      s.id === sessionId
+                        ? 'border-amber-600/40 bg-amber-600/5'
+                        : 'border-zinc-800 bg-zinc-900'
+                    }`}
+                    onClick={() => openSession(s.id)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') openSession(s.id)
+                    }}
+                  >
+                    <div className="flex items-center gap-2">
+                      {busy && <Badge className="bg-amber-600/15 text-amber-400">运行中</Badge>}
+                      <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">{s.title}</span>
+                    </div>
+                    <div className="text-[11px] text-zinc-600">{fmtRelative(s.updatedAt)}</div>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        </div>
+      </OverlayCard>
 
       <OverlayCard
         open={instrOpen}
