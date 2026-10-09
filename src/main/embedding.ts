@@ -5,7 +5,9 @@ import { app } from 'electron'
 import { getDb } from './db'
 import {
   getChapterByOutline,
+  getCharacter,
   getSummary,
+  getWorldbuild,
   listCharacters,
   listOutlines,
   listProjects,
@@ -108,6 +110,8 @@ async function ensurePipeline(): Promise<FeatureExtractionPipeline> {
       return pipe
     })().catch((err: unknown) => {
       state.loadError = `本地嵌入模型不可用：${(err as Error)?.message ?? String(err)}`
+      // 已失败的 promise 永久 reject：自动重置，下次调用（含重建索引）无需重启即可重试
+      state.loading = null
       state.downloading = false
       throw new Error(state.loadError)
     })
@@ -265,10 +269,29 @@ export async function semanticSearch(
   }
 }
 
-/** 重建指定项目（或全部项目）的嵌入索引。返回已嵌入条数；失败抛出原因。 */
+/** 分节增删或定点修改后重入队实体嵌入（合并视图文本） */
+export function reembedEntity(kind: 'character' | 'worldbuild', entityId: string): void {
+  if (kind === 'character') {
+    const c = getCharacter(entityId)
+    if (c)
+      enqueueEmbedding(c.projectId, 'character', c.id, `${c.name} ${c.role} ${c.tags} ${c.card}`)
+  } else {
+    const e = getWorldbuild(entityId)
+    if (e)
+      enqueueEmbedding(
+        e.projectId,
+        'worldbuild',
+        e.id,
+        `${e.title} ${e.keys} ${e.tags} ${e.content}`
+      )
+  }
+}
+
+/** 重建指定项目（或全部项目）的嵌入索引。返回库内实际条数；失败抛出原因。 */
 export async function rebuildEmbeddings(projectId?: string): Promise<number> {
+  // 用户显式重试：清掉上次失败记录（loading 已在失败 catch 里自动重置），允许重新加载模型
+  state.loadError = ''
   const ids = projectId ? [projectId] : listProjects().map((p) => p.id)
-  let n = 0
   for (const pid of ids) {
     for (const e of listWorldbuild(pid)) {
       enqueueEmbedding(
@@ -277,11 +300,9 @@ export async function rebuildEmbeddings(projectId?: string): Promise<number> {
         e.id,
         `${e.title} ${e.keys} ${e.tags} ${e.content} ${e.relation}`
       )
-      n++
     }
     for (const c of listCharacters(pid)) {
       enqueueEmbedding(pid, 'character', c.id, `${c.name} ${c.role} ${c.tags} ${c.card}`)
-      n++
     }
     for (const o of listOutlines(pid)) {
       const chapter = getChapterByOutline(o.id)
@@ -293,10 +314,15 @@ export async function rebuildEmbeddings(projectId?: string): Promise<number> {
           o.id,
           `第${o.chapterNo}章 ${o.title}：${s.summary} ${s.events.join('；')}`
         )
-        n++
       }
     }
   }
   await state.queue
-  return n
+  // 返回库内真实条数：单条嵌入失败会被静默降级，入队数不代表成功数
+  const row = (
+    projectId
+      ? getDb().prepare('SELECT COUNT(*) AS c FROM embeddings WHERE project_id = ?').get(projectId)
+      : getDb().prepare('SELECT COUNT(*) AS c FROM embeddings').get()
+  ) as { c: number }
+  return Number(row.c)
 }

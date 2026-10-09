@@ -1,6 +1,7 @@
 /**
- * 人物卡分节切分/合并（单一事实源在 character_sections 表，card 列只是合并视图缓存）。
- * 合并视图格式与旧版整卡兼容：`## 名 #tags` 头 + `### 字段` 正文块 + 末尾 `关联：[[...]]`，
+ * 实体卡（人物/世界观条目）分节切分/合并：人物单一事实源在 character_sections 表、
+ * 世界观在 worldbuild_sections 表，主表 card/content 列只是合并视图缓存。
+ * 合并视图格式与旧版整卡兼容：`## 实体头` + `### 字段` 正文块 + 末尾 `关联：[[...]]`，
  * 使 graph/语义检索/上下文注入等读侧无需感知分节存储。
  */
 
@@ -17,7 +18,7 @@ export interface SplitCardResult {
 }
 
 /** 把旧式整卡 markdown 切分为 sections + relation（迁移与旧调用路径共用） */
-export function splitCharacterCard(card: string): SplitCardResult {
+export function splitEntityCard(card: string): SplitCardResult {
   const sections: ParsedSection[] = []
   let relation = ''
   let cur: ParsedSection | null = null
@@ -64,14 +65,13 @@ export function splitCharacterCard(card: string): SplitCardResult {
   return { sections, relation }
 }
 
-/** 合并视图：`## 名 #tags` + `### title` 正文块 + `关联：` 尾行 */
-export function mergeCharacterCard(
-  name: string,
-  tags: string,
+/** 合并视图：`## 实体头`（调用方拼，人物 `## 名 #tags`、世界观 `## [类型] 标题 #tags`）+ `### title` 正文块 + `关联：` 尾行 */
+export function mergeEntityCard(
+  heading: string,
   sections: ParsedSection[],
   relation: string
 ): string {
-  const parts: string[] = [`## ${name.trim()}${tags.trim() ? ` ${tags.trim()}` : ''}`]
+  const parts: string[] = [heading]
   for (const s of sections) {
     parts.push('', s.title ? `### ${s.title}` : '')
     if (s.content.trim() !== '') parts.push(s.content.trim())

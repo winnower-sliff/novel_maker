@@ -347,17 +347,21 @@ export default function WorldSub({ projectId }: { projectId: string }) {
   )
 }
 
+interface SectionDraft {
+  id?: string
+  title: string
+  content: string
+}
+
 interface WorldFields {
   title: string
   tags: string
-  content: string
   relation: string
 }
 
 const toWorldFields = (w: WorldbuildEntry): WorldFields => ({
   title: w.title,
   tags: w.tags,
-  content: w.content,
   relation: w.relation
 })
 
@@ -375,13 +379,39 @@ function WorldEditor({
   const [mode, setMode] = useState<'view' | 'edit'>('view')
   const [fields, setFields] = useState<WorldFields>(() => toWorldFields(entry))
   const baseRef = useRef<WorldFields>(toWorldFields(entry))
+  // 分节是存储事实源：view 模式只渲染合并视图 content，进入 edit 才拉分节编辑
+  const [sections, setSections] = useState<SectionDraft[]>([])
+  const secsBaseRef = useRef<SectionDraft[] | null>(null)
+  const [secsLoaded, setSecsLoaded] = useState(false)
   const [saving, setSaving] = useState(false)
   const [deleting, setDeleting] = useState(false)
+
+  useEffect(() => {
+    if (mode !== 'edit' || secsLoaded) return
+    let alive = true
+    void window.api.novel
+      .sections('worldbuild', projectId, entry.id)
+      .then((secs) => {
+        if (!alive) return
+        const drafts = secs.map((s) => ({ id: s.id, title: s.title, content: s.content }))
+        setSections(drafts)
+        secsBaseRef.current = drafts
+        setSecsLoaded(true)
+      })
+      .catch(() => {})
+    return () => {
+      alive = false
+    }
+  }, [mode, secsLoaded, projectId, entry.id])
+
   const dirty =
     fields.title !== baseRef.current.title ||
     fields.tags !== baseRef.current.tags ||
-    fields.content !== baseRef.current.content ||
     fields.relation !== baseRef.current.relation
+  const secsDirty =
+    secsBaseRef.current !== null &&
+    JSON.stringify(sections) !== JSON.stringify(secsBaseRef.current)
+  const anyDirty = dirty || secsDirty
   const tags = splitTags(fields.tags)
   const patch = (p: Partial<WorldFields>): void => setFields((f) => ({ ...f, ...p }))
 
@@ -389,17 +419,26 @@ function WorldEditor({
     if (!fields.title.trim() || saving) return
     setSaving(true)
     try {
-      await window.api.novel.worldbuildSave({
+      const clean = sections
+        .filter((s) => s.title.trim() || s.content.trim())
+        .map((s) => ({ id: s.id, title: s.title.trim(), content: s.content }))
+      const saved = await window.api.novel.worldbuildSave({
         id: entry.id,
         projectId,
         category: entry.category,
         title: fields.title,
         tags: fields.tags,
-        content: fields.content,
+        sections: clean,
         relation: fields.relation
       })
       onSaved()
-      baseRef.current = { ...fields }
+      const nextFields = toWorldFields(saved)
+      setFields(nextFields)
+      baseRef.current = nextFields
+      // 分节基线作废：下次进编辑重拉，取服务端生成的真实分节 id（clean 里新增节没有 id）
+      setSections([])
+      secsBaseRef.current = null
+      setSecsLoaded(false)
       setMode('view')
     } finally {
       setSaving(false)
@@ -407,8 +446,9 @@ function WorldEditor({
   }
 
   const cancelEdit = (): void => {
-    if (dirty && !window.confirm('放弃未保存的修改？')) return
+    if (anyDirty && !window.confirm('放弃未保存的修改？')) return
     setFields({ ...baseRef.current })
+    setSections(secsBaseRef.current ?? [])
     setMode('view')
   }
 
@@ -451,7 +491,7 @@ function WorldEditor({
         >
           {deleting ? <Spinner className="h-3.5 w-3.5" /> : '删除'}
         </Button>
-        <span className="text-xs text-zinc-600">{dirty ? '有未保存修改' : '已保存'}</span>
+        <span className="text-xs text-zinc-600">{anyDirty ? '有未保存修改' : '已保存'}</span>
         <Button
           variant="ghost"
           className="ml-auto px-3.5 py-1.5 text-xs"
@@ -462,7 +502,7 @@ function WorldEditor({
         </Button>
         <Button
           className="px-3.5 py-1.5 text-xs"
-          disabled={!dirty || saving || !fields.title.trim()}
+          disabled={!anyDirty || saving || !fields.title.trim()}
           onClick={() => void save()}
         >
           {saving ? <Spinner className="h-3.5 w-3.5" /> : '保存'}
@@ -488,11 +528,11 @@ function WorldEditor({
               ))}
             </div>
           )}
-          {fields.content.trim() ? (
+          {entry.content.trim() ? (
             <section>
               <Label>内容</Label>
               <div className="rounded-xl border border-zinc-800 bg-zinc-900/40 p-3">
-                <Markdown text={fields.content} className="text-sm leading-6 text-zinc-200" />
+                <Markdown text={entry.content} className="text-sm leading-6 text-zinc-200" />
               </div>
             </section>
           ) : (
@@ -528,12 +568,55 @@ function WorldEditor({
             />
           </Label>
           <Label>
-            内容
-            <Textarea
-              rows={14}
-              value={fields.content}
-              onChange={(e) => patch({ content: e.target.value })}
-            />
+            条目分节
+            {!secsLoaded ? (
+              <div className="mt-1.5 rounded-md border border-zinc-800 p-3 text-xs text-zinc-600">
+                分节加载中…
+              </div>
+            ) : (
+              <div className="mt-1.5 space-y-2">
+                {sections.map((s, i) => (
+                  <div key={s.id ?? `new-${i}`} className="rounded-md border border-zinc-800 p-2">
+                    <div className="mb-1 flex items-center gap-2">
+                      <Input
+                        className="h-7 flex-1 text-xs"
+                        value={s.title}
+                        placeholder="字段名，如 概述"
+                        onChange={(e) =>
+                          setSections((arr) =>
+                            arr.map((x, j) => (j === i ? { ...x, title: e.target.value } : x))
+                          )
+                        }
+                      />
+                      <Button
+                        variant="ghost"
+                        className="px-1.5 py-0.5 text-xs text-red-400/90"
+                        onClick={() => setSections((arr) => arr.filter((_, j) => j !== i))}
+                      >
+                        删
+                      </Button>
+                    </div>
+                    <Textarea
+                      rows={Math.min(12, Math.max(3, Math.ceil(s.content.length / 30)))}
+                      value={s.content}
+                      placeholder="该节的正文（markdown，要点式）"
+                      onChange={(e) =>
+                        setSections((arr) =>
+                          arr.map((x, j) => (j === i ? { ...x, content: e.target.value } : x))
+                        )
+                      }
+                    />
+                  </div>
+                ))}
+                <Button
+                  variant="ghost"
+                  className="w-full px-2 py-1 text-xs"
+                  onClick={() => setSections((arr) => [...arr, { title: '', content: '' }])}
+                >
+                  + 添加分节
+                </Button>
+              </div>
+            )}
           </Label>
         </>
       )}

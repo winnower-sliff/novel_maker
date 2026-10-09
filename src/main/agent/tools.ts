@@ -6,6 +6,7 @@ import {
 } from '../../shared/foreRef'
 import { splitTags } from '../../shared/tags'
 import type { OutlineItem, ToolDef } from '../../shared/types'
+import { reembedEntity } from '../embedding'
 import { chatStream, pickRatelimitHeaders } from '../llm'
 import { applyVolumeSummaryResult, buildVolumeSummaryRequest } from '../pipeline'
 import { resolveRequestAuth } from '../settings'
@@ -153,7 +154,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'get_entity',
       description:
-        '按 id 读取单条内容（修改前取原文用）。kind=character 返回人物元信息与分节目录（sections 只含 id/标题/字数，不含正文——读正文用 get_character_section，只读个别字段时无需整卡拉取）；kind=worldbuild 返回世界观词条全文（含 category/tags/keys）；kind=chapter 传大纲条目 id，返回该章正文全文（超长会截断）',
+        '按 id 读取单条内容（修改前取原文用）。kind=character 返回人物元信息与分节目录；kind=worldbuild 返回词条元信息与分节目录（两者 sections 只含 id/标题/字数，不含正文——读正文用 get_section，只读个别字段时无需整条拉取）；kind=chapter 传大纲条目 id，返回该章正文全文（超长会截断）',
       input_schema: schema(
         {
           kind: s('内容类型：character / worldbuild / chapter'),
@@ -167,8 +168,8 @@ const TOOLS: AgentTool[] = [
       const kind = reqStr(input, 'kind')
       const id = reqStr(input, 'id')
       if (kind === 'character') {
-        const c = store.listCharacters(projectId).find((x) => x.id === id)
-        if (!c) throw new Error('未找到该人物')
+        const c = store.getCharacter(id)
+        if (!c || c.projectId !== projectId) throw new Error('未找到该人物')
         const sections = store.getCharacterSections(c.id)
         return {
           kind,
@@ -183,12 +184,13 @@ const TOOLS: AgentTool[] = [
             title: s.title || '（未命名）',
             chars: s.content.length
           })),
-          note: '分节正文未随本结果返回；需要读某节内容时用 get_character_section 传分节 id'
+          note: '分节正文未随本结果返回；需要读某节内容时用 get_section 传分节 id'
         }
       }
       if (kind === 'worldbuild') {
-        const e = store.listWorldbuild(projectId).find((x) => x.id === id)
-        if (!e) throw new Error('未找到该词条')
+        const e = store.getWorldbuild(id)
+        if (!e || e.projectId !== projectId) throw new Error('未找到该词条')
+        const sections = store.getWorldbuildSections(e.id)
         return {
           kind,
           id: e.id,
@@ -197,7 +199,12 @@ const TOOLS: AgentTool[] = [
           tags: e.tags,
           keys: e.keys,
           relation: e.relation,
-          content: e.content
+          sections: sections.map((s) => ({
+            id: s.id,
+            title: s.title || '（未命名）',
+            chars: s.content.length
+          })),
+          note: '分节正文未随本结果返回；需要读某节内容时用 get_section 传分节 id'
         }
       }
       if (kind === 'chapter') {
@@ -220,26 +227,46 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
-      name: 'get_character_section',
+      name: 'get_section',
       description:
-        '读人物卡单个分节的正文。先 get_entity(kind=character) 拿分节目录（sections[].id），再传分节 id 读全文',
+        '读人物卡或世界观词条单个分节的正文。先 get_entity(kind=character/worldbuild) 拿分节目录（sections[].id），再传 kind+分节 id 读全文',
       input_schema: schema(
         {
-          id: s('分节 id（get_entity(kind=character) 返回的 sections[].id）')
+          kind: s('实体类型：character / worldbuild'),
+          id: s('分节 id（get_entity 返回的 sections[].id）')
         },
-        ['id']
+        ['kind', 'id']
       )
     },
     danger: false,
     handler: (input, projectId) => {
-      const sec = store.getCharacterSection(reqStr(input, 'id'))
-      if (!sec) throw new Error('未找到该分节')
-      const owner = store.getCharacter(sec.characterId)
+      const kind = reqStr(input, 'kind')
+      const sec =
+        kind === 'character'
+          ? store.getCharacterSection(reqStr(input, 'id'))
+          : kind === 'worldbuild'
+            ? store.getWorldbuildSection(reqStr(input, 'id'))
+            : undefined
+      if (!sec) throw new Error("未找到该分节（kind 必须是 'character' / 'worldbuild'）")
+      if (kind === 'character') {
+        const owner = store.getCharacter(sec.entityId)
+        if (!owner || owner.projectId !== projectId) throw new Error('该分节不属于当前项目')
+        return {
+          kind,
+          id: sec.id,
+          entityId: sec.entityId,
+          entityName: owner.name,
+          title: sec.title,
+          content: sec.content
+        }
+      }
+      const owner = store.getWorldbuild(sec.entityId)
       if (!owner || owner.projectId !== projectId) throw new Error('该分节不属于当前项目')
       return {
+        kind,
         id: sec.id,
-        characterId: sec.characterId,
-        characterName: owner.name,
+        entityId: sec.entityId,
+        entityName: `[${owner.category}] ${owner.title}`,
         title: sec.title,
         content: sec.content
       }
@@ -249,7 +276,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_character',
       description:
-        '新建或修改人物元信息。传 id 表示修改既有人物；不传 id 表示新建（新建后用 save_character_section 逐节写卡）。tags 为标签（逗号分隔，2-4 个；修改时省略则保留原标签；优先复用已有标签，没有合适的就新建可被多个人物共享的主题标签）。relation 为关联字符串，如「[[丹塔|曾依附丹塔换取庇护]]」；链接只允许指向世界观条目，严禁 [[ ]] 链人物名，省略则保留原值。注意：本工具不写卡面内容——新建人物后先 get_entity(kind=character) 拿分节目录，再用 save_character_section 逐节写；改已有字段内容也用 save_character_section',
+        '新建或修改人物元信息。传 id 表示修改既有人物；不传 id 表示新建（新建后用 save_section 逐节写卡）。tags 为标签（逗号分隔，2-4 个；修改时省略则保留原标签；优先复用已有标签，没有合适的就新建可被多个人物共享的主题标签）。relation 为关联字符串，如「[[丹塔|曾依附丹塔换取庇护]]」；链接只允许指向世界观条目，严禁 [[ ]] 链人物名，省略则保留原值，传空串清空。注意：本工具不写卡面内容——新建人物后先 get_entity(kind=character) 拿分节目录，再用 save_section 逐节写；改已有字段内容也用 save_section',
       input_schema: schema(
         {
           id: optS('要修改的人物 id（新建时省略）'),
@@ -263,12 +290,14 @@ const TOOLS: AgentTool[] = [
     },
     danger: false,
     handler: (input, projectId) => {
+      // 空串视为未传（模型偶尔输出空洞 tags，直接透传会清空原标签，违反标签保留约定）
+      const rawTags = optStr(input, 'tags')
       const saved = store.saveCharacter({
         id: optStr(input, 'id'),
         projectId,
         name: reqStr(input, 'name'),
         role: optStr(input, 'role'),
-        tags: optStr(input, 'tags'),
+        tags: rawTags !== undefined && rawTags.trim() === '' ? undefined : rawTags,
         relation: optStr(input, 'relation')
       })
       return {
@@ -277,55 +306,84 @@ const TOOLS: AgentTool[] = [
         name: saved.name,
         created: !optStr(input, 'id'),
         sections: store.getCharacterSections(saved.id).map((s) => ({ id: s.id, title: s.title })),
-        note: '写/改卡面内容用 save_character_section'
+        note: '写/改卡面内容用 save_section（kind=character）'
       }
     }
   },
   {
     def: {
-      name: 'save_character_section',
+      name: 'save_section',
       description:
-        '写人物卡的一个分节（字段）。不传 id 为新增分节（追加到卡尾）；传 id 为覆盖该分节（title 可用于改名）。title 是字段名（如 基本信息/性格核心/关系网），content 是该字段 markdown 正文。新建人物时先 save_character 建档，再逐节写卡',
+        '写人物卡或世界观词条的一个分节（字段）。不传 id 为新增分节（追加到卡尾）；传 id 为覆盖该分节（title 可用于改名）。title 是字段名（人物如 基本信息/性格核心/关系网，世界观如 概述/等级划分/内部矛盾），content 是该字段 markdown 正文。新建实体先 save_character / save_worldbuild 建档，再逐节写内容',
       input_schema: schema(
         {
-          characterId: s('人物 id'),
+          kind: s('实体类型：character / worldbuild'),
+          entityId: s('实体 id（人物 id 或词条 id）'),
           id: optS('要覆盖的分节 id（新增时省略）'),
-          title: s('字段名，如 基本信息 / 性格核心 / 弧光预设'),
+          title: s('字段名，如 基本信息 / 概述 / 等级划分'),
           content: s('该字段 markdown 正文')
         },
-        ['characterId', 'title', 'content']
+        ['kind', 'entityId', 'title', 'content']
       )
     },
     danger: false,
     handler: (input, projectId) => {
-      const characterId = reqStr(input, 'characterId')
-      const hit = store.listCharacters(projectId).find((x) => x.id === characterId)
-      if (!hit) throw new Error('未找到该人物')
-      const saved = store.saveCharacterSection({
-        characterId,
-        id: optStr(input, 'id'),
-        title: reqStr(input, 'title'),
-        content: reqStr(input, 'content')
-      })
-      return {
-        ok: true,
-        id: saved.id,
-        title: saved.title,
-        updated: !!optStr(input, 'id'),
-        sections: store.getCharacterSections(characterId).map((s) => ({ id: s.id, title: s.title }))
+      const kind = reqStr(input, 'kind')
+      const entityId = reqStr(input, 'entityId')
+      const title = reqStr(input, 'title')
+      const content = reqStr(input, 'content')
+      const id = optStr(input, 'id')
+      if (kind === 'character') {
+        const owner = store.getCharacter(entityId)
+        if (!owner || owner.projectId !== projectId) throw new Error('未找到该人物')
+        const saved = store.saveCharacterSection({
+          characterId: entityId,
+          id,
+          title,
+          content
+        })
+        reembedEntity('character', entityId)
+        return {
+          ok: true,
+          kind,
+          id: saved.id,
+          title: saved.title,
+          updated: !!id,
+          sections: store.getCharacterSections(entityId).map((s) => ({ id: s.id, title: s.title }))
+        }
       }
+      if (kind === 'worldbuild') {
+        const owner = store.getWorldbuild(entityId)
+        if (!owner || owner.projectId !== projectId) throw new Error('未找到该词条')
+        const saved = store.saveWorldbuildSection({
+          worldbuildId: entityId,
+          id,
+          title,
+          content
+        })
+        reembedEntity('worldbuild', entityId)
+        return {
+          ok: true,
+          kind,
+          id: saved.id,
+          title: saved.title,
+          updated: !!id,
+          sections: store.getWorldbuildSections(entityId).map((s) => ({ id: s.id, title: s.title }))
+        }
+      }
+      throw new Error("kind 必须是 'character' / 'worldbuild'")
     }
   },
   {
     def: {
       name: 'delete_entity',
       description:
-        '删除内容（不可恢复，需用户确认）。kind=character 时传 section_ids 数组则只删除指定分节（保留人物），不传则删除整张人物卡；kind=worldbuild 删世界观词条；kind=outline 删大纲条目；kind=foreshadow 删伏笔',
+        '删除内容（不可恢复，需用户确认）。kind=character 或 worldbuild 时传 section_ids 数组则只删除指定分节（保留实体），不传或传空数组则删除整条；kind=outline 删大纲条目；kind=foreshadow 删伏笔',
       input_schema: schema(
         {
           kind: s('内容类型：character / worldbuild / outline / foreshadow'),
-          id: s('要删除的条目 id（kind=character 且带 section_ids 时，id 为人物 id）'),
-          sectionIds: optArr('kind=character 时可选：只删这些分节 id（不传删整卡）')
+          id: s('要删除的条目 id（带 section_ids 时为实体 id）'),
+          sectionIds: optArr('kind=character/worldbuild 时可选：只删这些分节 id（不传删整条）')
         },
         ['kind', 'id']
       )
@@ -335,10 +393,11 @@ const TOOLS: AgentTool[] = [
       const kind = reqStr(input, 'kind')
       const id = reqStr(input, 'id')
       if (kind === 'character') {
-        const c = store.listCharacters(projectId).find((x) => x.id === id)
-        if (!c) throw new Error('未找到该人物')
+        const c = store.getCharacter(id)
+        if (!c || c.projectId !== projectId) throw new Error('未找到该人物')
         const sectionIds = optStrArr(input, 'sectionIds')
-        if (sectionIds) {
+        // 空数组视为未传（模型常把可选数组写成 []，此时应删整卡而非删 0 节）
+        if (sectionIds && sectionIds.length > 0) {
           const n = store.deleteCharacterSections(c.id, sectionIds.map(String))
           return { ok: true, kind, deletedSections: n, kept: c.name }
         }
@@ -346,8 +405,14 @@ const TOOLS: AgentTool[] = [
         return { ok: true, kind, deleted: c.name }
       }
       if (kind === 'worldbuild') {
-        const e = store.listWorldbuild(projectId).find((x) => x.id === id)
-        if (!e) throw new Error('未找到该词条')
+        const e = store.getWorldbuild(id)
+        if (!e || e.projectId !== projectId) throw new Error('未找到该词条')
+        const sectionIds = optStrArr(input, 'sectionIds')
+        // 空数组视为未传（同上）
+        if (sectionIds && sectionIds.length > 0) {
+          const n = store.deleteWorldbuildSections(e.id, sectionIds.map(String))
+          return { ok: true, kind, deletedSections: n, kept: e.title }
+        }
         store.deleteWorldbuild(e.id)
         return { ok: true, kind, deleted: e.title }
       }
@@ -414,7 +479,7 @@ const TOOLS: AgentTool[] = [
     def: {
       name: 'save_worldbuild',
       description:
-        '新建或修改世界观词条。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）；keys 为检索别名（逗号分隔，同一概念的其他叫法/简称/别称，供写作上下文按名命中，如「青云宗,青云,青宗」）；relation 为人物/剧情关联（一句话说明该条目与哪个人物或哪条剧情线绑定、是什么关系，可含 [[世界观条目]] 链接；修改时省略保留原值，传空串清空）。正文 [[ ]] 链接只允许指向世界观条目标题，严禁链人物名（提及人物直接写名字）',
+        '新建或修改世界观词条元信息。传 id 表示修改；不传 id 表示新建。category 为类型（每条目一个，优先复用现有类型，不轻易新建）；tags 为标签（逗号分隔，2-6 个；新建时必填，修改时省略则保留原标签；优先复用现有标签，没有合适的就新建可被多个条目共享的上位主题标签，禁止无标签条目，且不得与类型重名）；keys 为检索别名（逗号分隔，同一概念的其他叫法/简称/别称，供写作上下文按名命中，如「青云宗,青云,青宗」；省略保留原值，传空串清空）；relation 为人物/剧情关联（一句话说明该条目与哪个人物或哪条剧情线绑定、是什么关系，可含 [[世界观条目]] 链接；修改时省略保留原值，传空串清空）。注意：本工具不写正文——正文用 save_section(kind=worldbuild) 逐节写；正文 [[ ]] 链接只允许指向世界观条目标题，严禁链人物名（提及人物直接写名字）',
       input_schema: schema(
         {
           id: optS('要修改的词条 id（新建时省略）'),
@@ -422,7 +487,6 @@ const TOOLS: AgentTool[] = [
           title: s('标题'),
           tags: optS('标签，逗号分隔（如：精灵,森林,魔法）'),
           keys: optS('检索别名，逗号分隔（同一概念的其他叫法）'),
-          content: optS('正文内容'),
           relation: optS(
             '人物/剧情关联（该条目与人物或剧情线的关系说明，可含 [[世界观条目]] 链接）'
           )
@@ -456,10 +520,21 @@ const TOOLS: AgentTool[] = [
         title: reqStr(input, 'title'),
         tags: tags || undefined,
         keys: optStr(input, 'keys'),
-        content: optStr(input, 'content'),
         relation: optStr(input, 'relation')
       })
-      return { ok: true, id: saved.id, title: saved.title, created: !optStr(input, 'id') }
+      const noTags =
+        !optStr(input, 'id') && !saved.tags
+          ? '警告：新词条没有有效标签（可能传入的标签全部与类型重名被过滤）。请尽快再调一次 save_worldbuild 补 tags，禁止无标签条目'
+          : undefined
+      return {
+        ok: true,
+        id: saved.id,
+        title: saved.title,
+        created: !optStr(input, 'id'),
+        ...(noTags ? { warning: noTags } : {}),
+        sections: store.getWorldbuildSections(saved.id).map((s) => ({ id: s.id, title: s.title })),
+        note: '写/改正文内容用 save_section（kind=worldbuild）'
+      }
     }
   },
   {
@@ -1076,6 +1151,154 @@ const TOOLS: AgentTool[] = [
   },
   {
     def: {
+      name: 'edit_text',
+      description:
+        '定点局部修改既有文本（字面量 search/replace）：只替换匹配片段，其余内容原样保留，不必传全文。修改前先取回原文（get_entity/get_section 读分节、grep_project 定位），find 必须与正文逐字一致（区分大小写与空白，不能照抄 grep 片段的省略号）。kind=chapter 改章节正文（id=大纲条目 id）；kind=character 改人物卡、kind=worldbuild 改词条（id=实体 id；在各分节正文上独立定位、写回对应分节，跨分节或含标题行的 find 匹配不到会报错，请缩小 find 到单个分节内部）。edits 按顺序应用、全部校验通过才写库（任一失败整体不写入）：每条 find 须唯一匹配，0 处或多处（未开 all）都报错；all=true 替换该片段所有匹配处（批量改名用）；replace 传空串=删除该片段。整段/整章重写不要用本工具，用 save_chapter / save_section 全量覆盖',
+      input_schema: schema(
+        {
+          kind: s("'chapter' / 'character' / 'worldbuild'"),
+          id: s('chapter=大纲条目 id；character/worldbuild=实体 id'),
+          edits: optArr('替换清单，1-20 条，每条 {find: 原文片段, replace: 新文本, all?: 全部替换}')
+        },
+        ['kind', 'id', 'edits']
+      )
+    },
+    danger: false,
+    dangerCheck: (input, projectId) => {
+      if (reqStr(input, 'kind') !== 'chapter') return null
+      if (!Array.isArray(input.edits) || input.edits.length === 0) return null
+      const o = store.getOutline(reqStr(input, 'id'))
+      if (!o || o.projectId !== projectId) return null
+      return `将定点修改第${o.chapterNo}章《${o.title}》正文（${input.edits.length} 条替换）`
+    },
+    handler: (input, projectId) => {
+      const kind = reqStr(input, 'kind')
+      if (kind !== 'chapter' && kind !== 'character' && kind !== 'worldbuild')
+        throw new Error("kind 必须是 'chapter' / 'character' / 'worldbuild'")
+      const rawEdits = input.edits
+      if (!Array.isArray(rawEdits) || rawEdits.length === 0) throw new Error('edits 必须是非空数组')
+      if (rawEdits.length > 20) throw new Error('edits 单次最多 20 条，请分批调用')
+      interface EditJob {
+        idx: number
+        find: string
+        replace: string
+        all: boolean
+        matches: number
+        where: string
+      }
+      const edits: EditJob[] = rawEdits.map((raw, idx) => {
+        const e = (raw ?? {}) as Record<string, unknown>
+        const find = typeof e.find === 'string' ? e.find : ''
+        const replace = typeof e.replace === 'string' ? e.replace : ''
+        if (!find.trim()) throw new Error(`edits[${idx}].find 不能为空`)
+        if (find === replace) throw new Error(`edits[${idx}] find 与 replace 相同，无操作`)
+        return { idx, find, replace, all: e.all === true, matches: 0, where: '' }
+      })
+      const show = (t: string): string => {
+        const c = clip(t.replace(/\s+/g, ' ').trim(), 40)
+        return `「${c.text}${c.truncated ? '…' : ''}」`
+      }
+      // 在一组文本块（章节正文=1 块 / 分节=N 块）上顺序应用全部替换；
+      // get/set 闭包保证后一条 edit 看到前一条的结果；任何一条失败即抛错，不落库
+      const applyEdits = (
+        blocks: Array<{ label: string; get: () => string; set: (t: string) => void }>,
+        unit: string
+      ): void => {
+        const replaceOnce = (text: string, job: EditJob): string => {
+          const i = text.indexOf(job.find)
+          return i === -1 ? text : text.slice(0, i) + job.replace + text.slice(i + job.find.length)
+        }
+        for (const job of edits) {
+          const hits: Array<{ label: string; count: number }> = []
+          let total = 0
+          for (const b of blocks) {
+            let count = 0
+            let i = b.get().indexOf(job.find)
+            while (i !== -1) {
+              count++
+              i = b.get().indexOf(job.find, i + job.find.length)
+            }
+            if (count > 0) hits.push({ label: b.label, count })
+            total += count
+          }
+          if (total === 0)
+            throw new Error(
+              `edits[${job.idx}] 未找到目标片段 ${show(job.find)}。find 须与正文逐字一致：请用 get_entity/get_section 重新取原文（grep_project 片段含省略号不能照抄）`
+            )
+          if (total > 1 && !job.all) {
+            const ctx = hits.map((h) => `${h.label}×${h.count}`).join('、')
+            throw new Error(
+              `edits[${job.idx}] 目标片段在${unit}中出现 ${total} 处（${ctx}），请扩大 find 使其唯一，或对该条加 all=true 全部替换`
+            )
+          }
+          for (const b of blocks) {
+            const text = b.get()
+            if (!text.includes(job.find)) continue
+            b.set(job.all ? text.split(job.find).join(job.replace) : replaceOnce(text, job))
+          }
+          job.matches = total
+          job.where = hits.map((h) => h.label).join('、')
+        }
+      }
+      if (kind === 'chapter') {
+        const o = getOutlineOwned(reqStr(input, 'id'), projectId)
+        const chapter = store.getChapterByOutline(o.id)
+        if (!chapter?.content.trim())
+          throw new Error(`第${o.chapterNo}章《${o.title}》尚无正文，请先用 save_chapter 写入`)
+        let content = chapter.content
+        applyEdits([{ label: '正文', get: () => content, set: (t) => (content = t) }], '本章正文')
+        const saved = store.saveChapter({ outlineId: o.id, projectId, content })
+        return {
+          ok: true,
+          kind,
+          id: o.id,
+          chapterNo: o.chapterNo,
+          applied: edits.length,
+          totalMatches: edits.reduce((a, e) => a + e.matches, 0),
+          wordCount: saved.wordCount,
+          version: saved.version
+        }
+      }
+      const id = reqStr(input, 'id')
+      const owner =
+        kind === 'character'
+          ? store.listCharacters(projectId).find((c) => c.id === id)
+          : store.listWorldbuild(projectId).find((e) => e.id === id)
+      if (!owner)
+        throw new Error(`未找到该${kind === 'character' ? '人物' : '词条'}（id 不属于当前项目）`)
+      const sections =
+        kind === 'character'
+          ? store.getCharacterSections(owner.id)
+          : store.getWorldbuildSections(owner.id)
+      if (sections.length === 0) throw new Error('该实体还没有分节内容，请先用 save_section 写入')
+      const work = sections.map((sec) => ({ id: sec.id, title: sec.title, content: sec.content }))
+      applyEdits(
+        work.map((w) => ({
+          label: w.title ? `分节「${w.title}」` : '无标题分节',
+          get: () => w.content,
+          set: (t) => (w.content = t)
+        })),
+        kind === 'character' ? '该人物卡' : '该词条'
+      )
+      const changed = work.filter((w, i) => w.content !== sections[i].content)
+      if (changed.length > 0) {
+        if (kind === 'character') store.saveCharacterSectionsBatch(owner.id, changed)
+        else store.saveWorldbuildSectionsBatch(owner.id, changed)
+        reembedEntity(kind, owner.id)
+      }
+      return {
+        ok: true,
+        kind,
+        id: owner.id,
+        name: 'name' in owner ? owner.name : owner.title,
+        applied: edits.length,
+        totalMatches: edits.reduce((a, e) => a + e.matches, 0),
+        changedSections: changed.map((w) => w.title || '(无标题)')
+      }
+    }
+  },
+  {
+    def: {
       name: 'get_book_digest',
       description:
         '获取全书级概览（本地聚合，零成本）：各卷摘要、卷级大纲骨架（每卷首末章与章数）、主要人物当前状态、未回收伏笔统计、最新章节摘要。回答“全书整体脉络/主题/走向”这类全局问题前先调用它，再按需深入具体卷/章',
@@ -1433,7 +1656,7 @@ export const READ_TOOLS = new Set([
   'get_project',
   'list_characters',
   'get_entity',
-  'get_character_section',
+  'get_section',
   'list_worldbuild',
   'list_outlines',
   'get_outline_plan',

@@ -1,4 +1,4 @@
-/** 整卡 markdown（AI 生成预览/旧格式）→ 分节数组；与主进程 splitCharacterCard 切分规则对齐：
+/** 整卡 markdown（AI 生成预览/旧格式）→ 分节数组；与主进程 splitEntityCard 切分规则对齐：
  * `##` 人物头丢弃、`###`~`######` 起分节、「关联：」行→relation、`- 字段：内容` 列表项→分节 */
 export interface ParsedSection {
   title: string

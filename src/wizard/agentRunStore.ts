@@ -7,6 +7,7 @@
 
 import { eventsToTurns } from '@shared/agentTranscript'
 import { classifyLlmError } from '@shared/llmError'
+import type { ProviderId } from '@shared/providers'
 import type {
   AgentDonePayload,
   AgentToolCall,
@@ -31,10 +32,11 @@ export interface SubProc {
   running: boolean
 }
 
-/** 运行中排队的下一条指令（text + 发起排队时的模型选择） */
+/** 运行中排队的下一条指令（text + 发起排队时的模型/引擎选择） */
 export interface QueuedNext {
   text: string
   model?: string
+  provider?: ProviderId
 }
 
 /** 单会话缓冲：服务端事件的本地投影材料 + 运行态 */
@@ -278,7 +280,7 @@ function applyBuf(sid: string, fn: (b: SessionBuf) => void): void {
     applyBuf(sid, (b) => {
       b.queuedNext = null
     })
-    launchRun(sid, queued.text, queued.model, false)
+    launchRun(sid, queued.text, queued.model, queued.provider, false)
   }
 }
 
@@ -386,11 +388,11 @@ function fetchEvents(sid: string): void {
 
 // —— 运行控制 ——
 
-export function startRun(input: string, model?: string): void {
+export function startRun(input: string, model?: string, provider?: ProviderId): void {
   const s = useAgentRunStore.getState()
   const text = input.trim()
   if (!text || !s.projectId) return
-  launchRun(s.activeId, text, model, true)
+  launchRun(s.activeId, text, model, provider, true)
 }
 
 /**
@@ -401,6 +403,7 @@ function launchRun(
   target: string | null,
   text: string,
   model: string | undefined,
+  provider: ProviderId | undefined,
   bumpToken: boolean
 ): void {
   const s = useAgentRunStore.getState()
@@ -418,7 +421,9 @@ function launchRun(
   }
   void window.api.agent
     .run(
-      target ? { projectId: pid, sessionId: target, text, model } : { projectId: pid, text, model }
+      target
+        ? { projectId: pid, sessionId: target, text, model, provider }
+        : { projectId: pid, text, model, provider }
     )
     .then((id) => {
       if (useAgentRunStore.getState().projectId !== pid) return
@@ -557,7 +562,7 @@ async function reconcileFailedStart(
  * 运行中排队下一条指令（每会话单条；成功收尾后自动续发，失败/中断保留）。
  * 非运行态调用视为误用，直接忽略（UI 侧应走 startRun）。
  */
-export function queueRun(text: string, model?: string): void {
+export function queueRun(text: string, model?: string, provider?: ProviderId): void {
   const s = useAgentRunStore.getState()
   const sid = s.activeId
   const queued = text.trim()
@@ -565,7 +570,7 @@ export function queueRun(text: string, model?: string): void {
   if (!sid) {
     // 草稿起步 invoke 在途：会话 id 未知，挂到草稿队列，run 建立后转入
     if (pendingStarts.has(null)) {
-      draftQueued = { text: queued, model }
+      draftQueued = { text: queued, model, provider }
       refreshView()
     }
     return
@@ -573,7 +578,7 @@ export function queueRun(text: string, model?: string): void {
   const buf = s.sessions[sid]
   if (!buf || (!buf.running && !pendingStarts.has(sid))) return
   applyBuf(sid, (b) => {
-    b.queuedNext = { text: queued, model }
+    b.queuedNext = { text: queued, model, provider }
   })
 }
 

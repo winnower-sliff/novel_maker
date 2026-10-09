@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { app } from 'electron'
-import { splitCharacterCard } from './characterCard'
+import { splitEntityCard } from './entityCard'
 
 let db: DatabaseSync | null = null
 
@@ -46,6 +46,15 @@ CREATE TABLE IF NOT EXISTS worldbuild (
   tags TEXT DEFAULT '',
   keys TEXT DEFAULT '',
   relation TEXT DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS worldbuild_sections (
+  id TEXT PRIMARY KEY,
+  worldbuild_id TEXT NOT NULL REFERENCES worldbuild(id) ON DELETE CASCADE,
+  title TEXT DEFAULT '',
+  content TEXT DEFAULT '',
+  sort_key INTEGER NOT NULL DEFAULT 0,
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -126,6 +135,7 @@ CREATE INDEX IF NOT EXISTS idx_embeddings_project ON embeddings(project_id, kind
 CREATE INDEX IF NOT EXISTS idx_characters_project ON characters(project_id);
 CREATE INDEX IF NOT EXISTS idx_character_sections_char ON character_sections(character_id, sort_key);
 CREATE INDEX IF NOT EXISTS idx_worldbuild_project ON worldbuild(project_id);
+CREATE INDEX IF NOT EXISTS idx_worldbuild_sections_wb ON worldbuild_sections(worldbuild_id, sort_key);
 CREATE INDEX IF NOT EXISTS idx_outlines_project ON outlines(project_id, volume, chapter_no);
 CREATE INDEX IF NOT EXISTS idx_chapters_project ON chapters(project_id);
 CREATE INDEX IF NOT EXISTS idx_foreshadows_project ON foreshadows(project_id);
@@ -144,8 +154,20 @@ CREATE TABLE IF NOT EXISTS agent_events (
   payload TEXT NOT NULL,
   PRIMARY KEY(session_id, seq)
 );
+CREATE TABLE IF NOT EXISTS agent_queue (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  text TEXT NOT NULL,
+  model TEXT DEFAULT '',
+  provider TEXT DEFAULT '',
+  position INTEGER NOT NULL DEFAULT 0,
+  created_at INTEGER NOT NULL
+);
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_project ON agent_sessions(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id, seq);
+CREATE INDEX IF NOT EXISTS idx_agent_queue_session ON agent_queue(session_id, kind, position);
 `
 
 export function getDb(): DatabaseSync {
@@ -210,6 +232,7 @@ function migrate(d: DatabaseSync): void {
     d.exec("ALTER TABLE characters ADD COLUMN relation TEXT DEFAULT ''")
   }
   backfillCharacterSections(d)
+  backfillWorldbuildSections(d)
   const foreCols = d.prepare('PRAGMA table_info(foreshadows)').all() as Array<{ name: string }>
   if (!foreCols.some((c) => c.name === 'planned_resolve')) {
     d.exec("ALTER TABLE foreshadows ADD COLUMN planned_resolve TEXT DEFAULT ''")
@@ -249,7 +272,7 @@ function backfillCharacterSections(d: DatabaseSync): void {
     "UPDATE characters SET card = '', relation = ?, updated_at = updated_at WHERE id = ?"
   )
   for (const r of rows) {
-    const { sections, relation } = splitCharacterCard(r.card)
+    const { sections, relation } = splitEntityCard(r.card)
     const ts = Date.now()
     d.exec('BEGIN')
     try {
@@ -257,6 +280,39 @@ function backfillCharacterSections(d: DatabaseSync): void {
         ins.run(randomUUID(), r.id, s.title, s.content, i, ts, ts)
       })
       upd.run(relation, r.id)
+      d.exec('COMMIT')
+    } catch (e) {
+      d.exec('ROLLBACK')
+      throw e
+    }
+  }
+}
+
+/**
+ * 世界观条目存量分节迁移（幂等）：content 非空的行切分为 worldbuild_sections 后置空 content。
+ * 切出的 relation 仅在非空时覆盖原列（条目可能已有 relation，空结果不冲掉旧值）。
+ * content 列保留不 DROP（规避 SQLite 改列风险），迁移后仅作为合并视图缓存由 store 维护。
+ */
+function backfillWorldbuildSections(d: DatabaseSync): void {
+  const rows = d
+    .prepare("SELECT id, content FROM worldbuild WHERE content IS NOT NULL AND content != ''")
+    .all() as Array<{ id: string; content: string }>
+  if (rows.length === 0) return
+  const ins = d.prepare(
+    'INSERT INTO worldbuild_sections (id, worldbuild_id, title, content, sort_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  )
+  const upd = d.prepare(
+    "UPDATE worldbuild SET content = '', relation = CASE WHEN ? != '' THEN ? ELSE relation END, updated_at = updated_at WHERE id = ?"
+  )
+  for (const r of rows) {
+    const { sections, relation } = splitEntityCard(r.content)
+    const ts = Date.now()
+    d.exec('BEGIN')
+    try {
+      sections.forEach((s, i) => {
+        ins.run(randomUUID(), r.id, s.title, s.content, i, ts, ts)
+      })
+      upd.run(relation, relation, r.id)
       d.exec('COMMIT')
     } catch (e) {
       d.exec('ROLLBACK')

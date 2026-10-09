@@ -15,11 +15,11 @@ import type {
   ChapterSummary,
   Character,
   CharacterAppearance,
-  CharacterSection,
   ChatMessage,
   ChatResult,
   ContentBlock,
   EmbeddingStatus,
+  EntitySection,
   Foreshadow,
   LlmErrorHint,
   ModelProbeResult,
@@ -130,7 +130,7 @@ export const ProjectInputSchema = z.object({
   agentInstructions: z.string().optional()
 })
 
-export const CharacterSectionInputSchema = z.object({
+export const EntitySectionInputSchema = z.object({
   id: z.string().optional(),
   title: z.string(),
   content: z.string()
@@ -144,7 +144,7 @@ export const CharacterInputSchema = z.object({
   /** 旧式整卡输入：传了则切分为分节替换落库（sections 未传时生效）；显式空串清空全部分节 */
   card: z.string().optional(),
   /** 全量分节数组：传了则按数组顺序替换该人物全部分节（优先于 card） */
-  sections: z.array(CharacterSectionInputSchema).optional(),
+  sections: z.array(EntitySectionInputSchema).optional(),
   relation: z.string().optional(),
   state: z.string().optional()
 })
@@ -155,9 +155,15 @@ export const WorldbuildInputSchema = z.object({
   title: z.string(),
   tags: z.string().optional(),
   keys: z.string().optional(),
+  /** 旧式整条输入：传了则切分为分节替换落库（sections 未传时生效）；显式空串清空全部分节 */
   content: z.string().optional(),
+  /** 全量分节数组：传了则按数组顺序替换该条目全部分节（优先于 content） */
+  sections: z.array(EntitySectionInputSchema).optional(),
   relation: z.string().optional()
 })
+
+/** 分节归属的实体类型 */
+export const EntityKindSchema = z.enum(['character', 'worldbuild'])
 
 export const OutlineInputSchema = z.object({
   projectId: z.string(),
@@ -278,7 +284,9 @@ export const AgentRunParamsSchema = z.object({
   text: z.string().optional(),
   /** 旧客户端过渡：全量 messages 直跑 */
   messages: z.array(ChatMessageSchema).optional(),
-  model: z.string().optional()
+  model: z.string().optional(),
+  /** 临时指定本次会话的 provider（覆盖 modelRouting 与当前默认），仅本次生效、不落库 */
+  provider: ProviderIdSchema.optional()
 })
 
 export const WorldbuildPreviewEntrySchema = z.object({
@@ -511,23 +519,26 @@ export const invokeContract = {
     ret: ret<Character>()
   },
   'novel:characterDelete': { args: z.tuple([z.string()]), ret: ret<void>() },
-  'novel:characterSections': {
-    args: z.tuple([z.string()]),
-    ret: ret<CharacterSection[]>()
+  'novel:sections': {
+    args: z.tuple([EntityKindSchema, z.string(), z.string()]),
+    ret: ret<EntitySection[]>()
   },
-  'novel:characterSectionSave': {
+  'novel:sectionSave': {
     args: z.tuple([
       z.object({
-        characterId: z.string(),
+        kind: EntityKindSchema,
+        /** 归属项目 id：handler 校验实体属于该项目，防跨项目误操作 */
+        projectId: z.string(),
+        entityId: z.string(),
         id: z.string().optional(),
         title: z.string(),
         content: z.string()
       })
     ]),
-    ret: ret<CharacterSection>()
+    ret: ret<EntitySection>()
   },
-  'novel:characterSectionDelete': {
-    args: z.tuple([z.string(), z.array(z.string())]),
+  'novel:sectionDelete': {
+    args: z.tuple([EntityKindSchema, z.string(), z.string(), z.array(z.string())]),
     ret: ret<number>()
   },
   'novel:characterAppearances': {
@@ -755,9 +766,9 @@ export interface Api {
     characters: InvokeFn<'novel:characters'>
     characterSave: InvokeFn<'novel:characterSave'>
     characterDelete: InvokeFn<'novel:characterDelete'>
-    characterSections: InvokeFn<'novel:characterSections'>
-    characterSectionSave: InvokeFn<'novel:characterSectionSave'>
-    characterSectionDelete: InvokeFn<'novel:characterSectionDelete'>
+    sections: InvokeFn<'novel:sections'>
+    sectionSave: InvokeFn<'novel:sectionSave'>
+    sectionDelete: InvokeFn<'novel:sectionDelete'>
     characterAppearances: InvokeFn<'novel:characterAppearances'>
     worldbuild: InvokeFn<'novel:worldbuild'>
     worldbuildSave: InvokeFn<'novel:worldbuildSave'>

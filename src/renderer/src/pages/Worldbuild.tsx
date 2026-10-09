@@ -46,17 +46,31 @@ function typeColor(type: string): string {
   return GROUP_COLORS[type] ?? '#a1a1aa'
 }
 
+interface SectionDraft {
+  id?: string
+  title: string
+  content: string
+}
+
 interface EditState {
   id?: string
   category: string
   title: string
   tags: string
   keys: string
-  content: string
   relation: string
+  sections: SectionDraft[]
 }
 
-const EMPTY: EditState = { category: '', title: '', tags: '', keys: '', content: '', relation: '' }
+// sections 冻结为空数组：EMPTY 只作重置与 spread 源，使用处必须重建数组，防原地 mutate 污染常量
+const EMPTY: EditState = {
+  category: '',
+  title: '',
+  tags: '',
+  keys: '',
+  relation: '',
+  sections: Object.freeze([]) as unknown as SectionDraft[]
+}
 
 type Preview = { type: 'entry'; entry: WorldbuildEntry } | { type: 'char'; char: Character } | null
 
@@ -214,6 +228,9 @@ export default function Worldbuild({
   const [centerSignal, setCenterSignal] = useState(0)
   const [edit, setEdit] = useState<EditState>(EMPTY)
   const [editOpen, setEditOpen] = useState(false)
+  const [secsLoading, setSecsLoading] = useState(false)
+  // 分节拉取代际号：关窗/换条目后使在途请求失效，防旧请求污染新弹窗
+  const secsReqRef = useRef(0)
   const [genOpen, setGenOpen] = useState(false)
   const [highlightIds, _setHighlightIds] = useState<string[]>([])
   const [selectMode, setSelectMode] = useState(false)
@@ -243,6 +260,7 @@ export default function Worldbuild({
     setShowTagLabels(true)
     setEdit(EMPTY)
     setEditOpen(false)
+    setSecsLoading(false)
     setPreview(null)
     setGraphActiveId(null)
     setSelectMode(false)
@@ -400,20 +418,40 @@ export default function Worldbuild({
       .filter((g) => g.items.length > 0)
   }, [filter, filtered, types])
 
-  const startEdit = useCallback((e: WorldbuildEntry): void => {
-    const next: EditState = {
-      id: e.id,
-      category: e.category,
-      title: e.title,
-      tags: e.tags,
-      keys: e.keys,
-      content: e.content,
-      relation: e.relation
-    }
-    setEdit(next)
-    editInitialRef.current = next
-    setEditOpen(true)
-  }, [])
+  const startEdit = useCallback(
+    (e: WorldbuildEntry): void => {
+      const next: EditState = {
+        id: e.id,
+        category: e.category,
+        title: e.title,
+        tags: e.tags,
+        keys: e.keys,
+        relation: e.relation,
+        sections: []
+      }
+      setEdit(next)
+      editInitialRef.current = next
+      setEditOpen(true)
+      const reqId = ++secsReqRef.current
+      setSecsLoading(true)
+      void window.api.novel
+        .sections('worldbuild', projectId, e.id)
+        .then((secs) => {
+          if (secsReqRef.current !== reqId) return
+          const drafts = secs.map((s) => ({ id: s.id, title: s.title, content: s.content }))
+          setEdit((cur) => (cur.id === e.id ? { ...cur, sections: drafts } : cur))
+          if (editInitialRef.current.id === e.id)
+            editInitialRef.current = { ...editInitialRef.current, sections: drafts }
+          setSecsLoading(false)
+        })
+        .catch((err: unknown) => {
+          if (secsReqRef.current !== reqId) return
+          pushToast('error', err instanceof Error ? err.message : String(err))
+          setSecsLoading(false)
+        })
+    },
+    [projectId]
+  )
 
   const editFromPreview = useCallback(
     (entry: WorldbuildEntry): void => {
@@ -424,16 +462,37 @@ export default function Worldbuild({
   )
 
   const openNew = useCallback((): void => {
-    const next: EditState = { ...EMPTY, category: types[0] ?? '' }
+    secsReqRef.current++
+    const next: EditState = {
+      ...EMPTY,
+      category: types[0] ?? '',
+      sections: [{ title: '概述', content: '' }]
+    }
     setEdit(next)
     editInitialRef.current = next
     setEditOpen(true)
+    setSecsLoading(false)
   }, [types])
+
+  const setSection = (i: number, patch: Partial<SectionDraft>): void => {
+    setEdit((cur) => ({
+      ...cur,
+      sections: cur.sections.map((s, j) => (j === i ? { ...s, ...patch } : s))
+    }))
+  }
+
+  const addSection = (): void => {
+    setEdit((cur) => ({ ...cur, sections: [...cur.sections, { title: '', content: '' }] }))
+  }
+
+  const removeSection = (i: number): void => {
+    setEdit((cur) => ({ ...cur, sections: cur.sections.filter((_, j) => j !== i) }))
+  }
 
   const editDirty =
     editOpen &&
     (edit.title !== editInitialRef.current.title ||
-      edit.content !== editInitialRef.current.content ||
+      JSON.stringify(edit.sections) !== JSON.stringify(editInitialRef.current.sections) ||
       edit.category !== editInitialRef.current.category ||
       edit.tags !== editInitialRef.current.tags ||
       edit.keys !== editInitialRef.current.keys ||
@@ -441,8 +500,10 @@ export default function Worldbuild({
 
   const closeEdit = useCallback((): void => {
     if (editDirty && !window.confirm('有未保存的修改，确定放弃并关闭？')) return
+    secsReqRef.current++
     setEditOpen(false)
     setEdit(EMPTY)
+    setSecsLoading(false)
   }, [editDirty])
 
   if (!projectId) {
@@ -517,7 +578,9 @@ export default function Worldbuild({
           title: edit.title.trim(),
           tags: tags.join(','),
           keys: splitTags(edit.keys).join(','),
-          content: edit.content,
+          sections: edit.sections
+            .filter((s) => s.title.trim() || s.content.trim())
+            .map((s) => ({ id: s.id, title: s.title.trim(), content: s.content })),
           relation: edit.relation.trim()
         })
         .then(() => {
@@ -525,6 +588,9 @@ export default function Worldbuild({
           setEdit(EMPTY)
           load()
         })
+        .catch((err: unknown) =>
+          pushToast('error', err instanceof Error ? err.message : String(err))
+        )
     }
     if (typeSet.has(category)) {
       doSave(category)
@@ -609,7 +675,7 @@ export default function Worldbuild({
               <Button variant="ghost" onClick={() => setGenOpen(true)}>
                 AI 生成…
               </Button>
-              <Button variant="ghost" onClick={() => setEdit(EMPTY)}>
+              <Button variant="ghost" onClick={() => openNew()}>
                 新增条目
               </Button>
             </EmptyGuide>
@@ -1040,18 +1106,54 @@ export default function Worldbuild({
             </div>
           </div>
           <div className="flex min-h-0 flex-1 flex-col">
-            <Label>条目内容（markdown，要点式；选中文字可用 AI 改写；[[条目名]] 可建立链接）</Label>
-            <AiTextarea
-              className="min-h-72 flex-1"
-              value={edit.content}
-              onChange={(v: string) => setEdit({ ...edit, content: v })}
-              placeholder="条目内容（markdown，要点式）"
-              context={
-                edit.id
-                  ? `这是世界观条目「${edit.title || '未命名'}」（类型：${edit.category}）的完整内容：\n${edit.content}`
-                  : undefined
-              }
-            />
+            <Label>条目分节（markdown，要点式；正文选中可用 AI 改写；[[条目名]] 可建立链接）</Label>
+            {secsLoading ? (
+              <div className="flex flex-1 items-center justify-center text-xs text-zinc-600">
+                分节加载中…
+              </div>
+            ) : (
+              <>
+                <div className="min-h-0 flex-1 divide-y divide-zinc-800 overflow-y-auto rounded-md border border-zinc-800">
+                  {edit.sections.map((s, i) => (
+                    <div key={s.id ?? `new-${i}`} className="p-3">
+                      <div className="mb-1.5 flex items-center gap-2">
+                        <Input
+                          className="h-7 w-44 text-xs"
+                          value={s.title}
+                          onChange={(e) => setSection(i, { title: e.target.value })}
+                          placeholder="字段名，如 概述"
+                        />
+                        <span className="flex-1" />
+                        <Button
+                          variant="ghost"
+                          className="px-1.5 py-0.5 text-xs text-red-400"
+                          onClick={() => removeSection(i)}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                      <AiTextarea
+                        className="min-h-24"
+                        value={s.content}
+                        onChange={(v) => setSection(i, { content: v })}
+                        placeholder="该节的正文（markdown，要点式）"
+                        context={`这是世界观条目「${edit.title || '未命名'}」（类型：${edit.category}）「${s.title || '未命名分节'}」分节的内容：\n${s.content}`}
+                      />
+                    </div>
+                  ))}
+                  {edit.sections.length === 0 && (
+                    <div className="p-3 text-center text-xs text-zinc-600">暂无分节</div>
+                  )}
+                </div>
+                <Button
+                  variant="ghost"
+                  className="mt-2 self-start px-2 py-1 text-xs"
+                  onClick={addSection}
+                >
+                  + 添加分节
+                </Button>
+              </>
+            )}
           </div>
         </div>
       </OverlayCard>

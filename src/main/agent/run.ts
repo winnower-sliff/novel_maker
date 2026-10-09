@@ -1,5 +1,6 @@
 import type { AgentToolResultEvent, EventChannels, EventContract } from '../../shared/contract'
 import { classifyLlmError } from '../../shared/llmError'
+import type { ProviderId } from '../../shared/providers'
 import type {
   AgentDonePayload,
   AgentToolResultStatus,
@@ -294,7 +295,7 @@ function buildSystemPrompt(projectId: string): string {
     '',
     '工作规则：',
     '1. 修改前先用读工具核实目标（例如按名字找到准确 id），禁止凭记忆猜测 id',
-    '2. 修改既有内容时，先取回原文，在原文基础上修改，不要凭空整段重写',
+    '2. 修改既有内容时，先取回原文，在原文基础上修改，不要凭空整段重写；小范围定点修改（换名/改几句/修矛盾/批量改名）优先用 edit_text 字面量替换（find 与原文逐字一致，多处时报错会列出位置），只把确实需要大改的整段/整章交给 save_chapter / save_section 全量覆盖',
     '3. 新建条目时不传 id；修改时必须传 id',
     '4. 每完成一个任务，用简短中文总结做了什么；不要输出与任务无关的内容',
     '5. 若某操作被用户拒绝，不要重试同一操作，改为说明原因并询问下一步建议',
@@ -333,6 +334,8 @@ export async function runAgent(opts: {
   messages: ChatMessage[]
   model: string
   signal: AbortSignal
+  /** 临时指定本次会话的 provider（覆盖路由与默认，智能体页「引擎」切换用） */
+  provider?: ProviderId
   /** transcript 事实源落库钩子（会话事件按发生顺序持久化；内部吞错，不影响 run） */
   persist?: (ev: AgentTranscriptInput) => void
 }): Promise<AgentDonePayload> {
@@ -346,7 +349,7 @@ export async function runAgent(opts: {
       sink.send(channel, ...([requestId, ...rest] as unknown as EventContract[C]))
   }
 
-  const auth = await resolveRequestAuth('agent')
+  const auth = await resolveRequestAuth('agent', opts.provider)
   if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
   const contextWindow = auth.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   const system = buildSystemPrompt(projectId)

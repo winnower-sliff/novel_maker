@@ -6,7 +6,7 @@ import type {
   ChapterSummary,
   Character,
   CharacterInput,
-  CharacterSection,
+  EntitySection,
   Foreshadow,
   ForeshadowInput,
   OutlineInput,
@@ -18,8 +18,8 @@ import type {
   WorldbuildEntry,
   WorldbuildInput
 } from '../shared/types'
-import { mergeCharacterCard, splitCharacterCard } from './characterCard'
 import { getDb } from './db'
+import { mergeEntityCard, splitEntityCard } from './entityCard'
 
 type Row = Record<string, unknown>
 
@@ -68,10 +68,32 @@ type SectionRow = {
   updated_at: number
 }
 
-function mapSection(r: SectionRow): CharacterSection {
+type WbSectionRow = {
+  id: string
+  worldbuild_id: string
+  title: string
+  content: string
+  sort_key: number
+  created_at: number
+  updated_at: number
+}
+
+function mapSection(r: SectionRow): EntitySection {
   return {
     id: r.id,
-    characterId: r.character_id,
+    entityId: r.character_id,
+    title: r.title ?? '',
+    content: r.content ?? '',
+    sortKey: r.sort_key ?? 0,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at
+  }
+}
+
+function mapWbSection(r: WbSectionRow): EntitySection {
+  return {
+    id: r.id,
+    entityId: r.worldbuild_id,
     title: r.title ?? '',
     content: r.content ?? '',
     sortKey: r.sort_key ?? 0,
@@ -90,7 +112,7 @@ function attachCards(db: ReturnType<typeof getDb>, chars: Character[]): Characte
       `SELECT * FROM character_sections WHERE character_id IN (${ph}) ORDER BY character_id, sort_key, created_at`
     )
     .all(...ids) as unknown as SectionRow[]
-  const grouped = new Map<string, CharacterSection[]>()
+  const grouped = new Map<string, EntitySection[]>()
   for (const r of rows) {
     const arr = grouped.get(r.character_id)
     if (arr) arr.push(mapSection(r))
@@ -98,7 +120,43 @@ function attachCards(db: ReturnType<typeof getDb>, chars: Character[]): Characte
   }
   return chars.map((c) => {
     const sections = grouped.get(c.id) ?? []
-    return { ...c, card: mergeCharacterCard(c.name, c.tags, sections, c.relation) }
+    return {
+      ...c,
+      card: mergeEntityCard(
+        `## ${c.name}${c.tags.trim() ? ` ${c.tags}` : ''}`,
+        sections,
+        c.relation
+      )
+    }
+  })
+}
+
+/** 为世界观条目批量拼合并视图 content（分节是事实源，content 列恒空）；头格式对齐 worldbuilder 生成协议 `## [类型] 标题 #tags` */
+function attachWbContents(
+  db: ReturnType<typeof getDb>,
+  entries: WorldbuildEntry[]
+): WorldbuildEntry[] {
+  if (entries.length === 0) return entries
+  const ids = entries.map((e) => e.id)
+  const ph = ids.map(() => '?').join(',')
+  const rows = db
+    .prepare(
+      `SELECT * FROM worldbuild_sections WHERE worldbuild_id IN (${ph}) ORDER BY worldbuild_id, sort_key, created_at`
+    )
+    .all(...ids) as unknown as WbSectionRow[]
+  const grouped = new Map<string, EntitySection[]>()
+  for (const r of rows) {
+    const arr = grouped.get(r.worldbuild_id)
+    if (arr) arr.push(mapWbSection(r))
+    else grouped.set(r.worldbuild_id, [mapWbSection(r)])
+  }
+  return entries.map((e) => {
+    const sections = grouped.get(e.id) ?? []
+    const tags = e.tags.trim() ? ` ${e.tags}` : ''
+    return {
+      ...e,
+      content: mergeEntityCard(`## [${e.category}] ${e.title}${tags}`, sections, e.relation)
+    }
   })
 }
 
@@ -272,7 +330,7 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
       input.sections !== undefined
         ? input.sections.map((s) => ({ title: s.title, content: s.content }))
         : input.card !== undefined
-          ? splitCharacterCard(input.card).sections
+          ? splitEntityCard(input.card).sections
           : undefined
     if (sections !== undefined) replaceCharacterSectionsInner(db, targetId, sections)
     db.exec('COMMIT')
@@ -286,7 +344,7 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
   return attachCards(db, [saved])[0]
 }
 
-export function getCharacterSections(characterId: string): CharacterSection[] {
+export function getCharacterSections(characterId: string): EntitySection[] {
   return (
     getDb()
       .prepare(
@@ -296,7 +354,7 @@ export function getCharacterSections(characterId: string): CharacterSection[] {
   ).map(mapSection)
 }
 
-export function getCharacterSection(id: string): CharacterSection | undefined {
+export function getCharacterSection(id: string): EntitySection | undefined {
   const row = getDb().prepare('SELECT * FROM character_sections WHERE id = ?').get(id) as unknown as
     | SectionRow
     | undefined
@@ -308,7 +366,7 @@ export function saveCharacterSection(input: {
   id?: string
   title: string
   content: string
-}): CharacterSection {
+}): EntitySection {
   const db = getDb()
   const ts = now()
   if (input.id) {
@@ -352,15 +410,42 @@ export function deleteCharacterSections(characterId: string, ids: string[]): num
   }
 }
 
+/** 事务批量覆盖既有分节（edit_text 定点修改用）：任一更新失败整体回滚 */
+export function saveCharacterSectionsBatch(
+  characterId: string,
+  sections: Array<{ id: string; title: string; content: string }>
+): void {
+  const db = getDb()
+  const ts = now()
+  const upd = db.prepare(
+    'UPDATE character_sections SET title = ?, content = ?, updated_at = ? WHERE id = ?'
+  )
+  db.exec('BEGIN')
+  try {
+    for (const s of sections) {
+      if (upd.run(s.title, s.content, ts, s.id).changes === 0)
+        throw new Error(`分节不存在或不属于该人物: ${s.id}`)
+    }
+    db.prepare('UPDATE characters SET updated_at = ? WHERE id = ?').run(ts, characterId)
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
 export function deleteCharacter(id: string): void {
   getDb().prepare('DELETE FROM characters WHERE id = ?').run(id)
 }
 
 export function listWorldbuild(projectId: string): WorldbuildEntry[] {
-  return getDb()
-    .prepare('SELECT * FROM worldbuild WHERE project_id = ? ORDER BY category, created_at')
-    .all(projectId)
-    .map((r) => mapWorldbuild(r as Row))
+  const db = getDb()
+  const entries = (
+    db
+      .prepare('SELECT * FROM worldbuild WHERE project_id = ? ORDER BY category, created_at')
+      .all(projectId) as Row[]
+  ).map((r) => mapWorldbuild(r))
+  return attachWbContents(db, entries)
 }
 
 /** 标题改名后全局传播 [[旧标题]] -> [[新标题]]（覆盖世界观/人物卡/大纲/章节里的引用，含带 |关系 的写法） */
@@ -376,8 +461,8 @@ function propagateWikiRenames(
   const like = `%[[${o}]%`
   let changed = 0
   const pairs: Array<[string, string]> = [
-    ['worldbuild', 'content'],
     ['worldbuild', 'relation'],
+    ['worldbuild_sections', 'content'],
     ['characters', 'relation'],
     ['character_sections', 'content'],
     ['outlines', 'synopsis'],
@@ -393,58 +478,190 @@ function propagateWikiRenames(
     return Number(r.changes)
   }
   for (const [table, col] of pairs) {
-    // character_sections 无 project_id 列，经 characters 间接限定
-    changed += replace(
-      table,
-      col,
+    // 两个 section 表无 project_id 列，经主表间接限定
+    const where =
       table === 'character_sections'
         ? 'character_id IN (SELECT id FROM characters WHERE project_id = ?)'
-        : 'project_id = ?'
-    )
+        : table === 'worldbuild_sections'
+          ? 'worldbuild_id IN (SELECT id FROM worldbuild WHERE project_id = ?)'
+          : 'project_id = ?'
+    changed += replace(table, col, where)
   }
   return changed
+}
+
+export function getWorldbuild(id: string): WorldbuildEntry | null {
+  const row = getDb().prepare('SELECT * FROM worldbuild WHERE id = ?').get(id) as Row | undefined
+  if (!row) return null
+  return attachWbContents(getDb(), [mapWorldbuild(row)])[0]
+}
+
+function replaceWorldbuildSectionsInner(
+  db: ReturnType<typeof getDb>,
+  worldbuildId: string,
+  sections: Array<{ title: string; content: string }>
+): void {
+  db.prepare('DELETE FROM worldbuild_sections WHERE worldbuild_id = ?').run(worldbuildId)
+  const ins = db.prepare(
+    'INSERT INTO worldbuild_sections (id, worldbuild_id, title, content, sort_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  )
+  const ts = now()
+  sections.forEach((s, i) => {
+    ins.run(randomUUID(), worldbuildId, s.title, s.content, i, ts, ts)
+  })
 }
 
 export function saveWorldbuild(input: WorldbuildInput & { id?: string }): WorldbuildEntry {
   const db = getDb()
   const ts = now()
-  if (input.id) {
-    const cur = mapWorldbuild(
-      db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(input.id) as Row
-    )
-    if (input.title?.trim() && input.title.trim() !== cur.title.trim()) {
-      propagateWikiRenames(db, input.projectId, cur.title, input.title)
+  let targetId: string
+  db.exec('BEGIN')
+  try {
+    if (input.id) {
+      const row = db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(input.id) as
+        | Row
+        | undefined
+      if (!row) throw new Error(`世界观条目不存在：${input.id}`)
+      const cur = mapWorldbuild(row)
+      if (input.title?.trim() && input.title.trim() !== cur.title.trim()) {
+        propagateWikiRenames(db, input.projectId, cur.title, input.title)
+      }
+      db.prepare(
+        'UPDATE worldbuild SET category = ?, title = ?, tags = ?, keys = ?, relation = ?, updated_at = ? WHERE id = ?'
+      ).run(
+        input.category,
+        input.title,
+        input.tags ?? cur.tags,
+        input.keys ?? cur.keys,
+        input.relation ?? cur.relation,
+        ts,
+        input.id
+      )
+      targetId = input.id
+    } else {
+      targetId = randomUUID()
+      db.prepare(
+        'INSERT INTO worldbuild (id, project_id, category, title, tags, keys, content, relation, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      ).run(
+        targetId,
+        input.projectId,
+        input.category,
+        input.title,
+        input.tags ?? '',
+        input.keys ?? '',
+        '',
+        input.relation ?? '',
+        ts,
+        ts
+      )
     }
-    db.prepare(
-      'UPDATE worldbuild SET category = ?, title = ?, tags = ?, keys = ?, content = ?, relation = ?, updated_at = ? WHERE id = ?'
-    ).run(
-      input.category,
-      input.title,
-      input.tags ?? cur.tags,
-      input.keys ?? cur.keys,
-      input.content ?? cur.content,
-      input.relation ?? cur.relation,
-      ts,
-      input.id
-    )
-    return mapWorldbuild(db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(input.id) as Row)
+    // 分节写入：sections 全量替换优先；否则旧式 content 整条切分替换（两者都未传则不动）
+    const sections =
+      input.sections !== undefined
+        ? input.sections.map((s) => ({ title: s.title, content: s.content }))
+        : input.content !== undefined
+          ? splitEntityCard(input.content).sections
+          : undefined
+    if (sections !== undefined) replaceWorldbuildSectionsInner(db, targetId, sections)
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
   }
-  const id = randomUUID()
-  db.prepare(
-    'INSERT INTO worldbuild (id, project_id, category, title, tags, keys, content, relation, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
-  ).run(
-    id,
-    input.projectId,
-    input.category,
-    input.title,
-    input.tags ?? '',
-    input.keys ?? '',
-    input.content ?? '',
-    input.relation ?? '',
-    ts,
-    ts
+  const saved = mapWorldbuild(
+    db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(targetId) as Row
   )
-  return mapWorldbuild(db.prepare('SELECT * FROM worldbuild WHERE id = ?').get(id) as Row)
+  return attachWbContents(db, [saved])[0]
+}
+
+export function getWorldbuildSections(worldbuildId: string): EntitySection[] {
+  return (
+    getDb()
+      .prepare(
+        'SELECT * FROM worldbuild_sections WHERE worldbuild_id = ? ORDER BY sort_key, created_at'
+      )
+      .all(worldbuildId) as unknown as WbSectionRow[]
+  ).map(mapWbSection)
+}
+
+export function getWorldbuildSection(id: string): EntitySection | undefined {
+  const row = getDb()
+    .prepare('SELECT * FROM worldbuild_sections WHERE id = ?')
+    .get(id) as unknown as WbSectionRow | undefined
+  return row ? mapWbSection(row) : undefined
+}
+
+export function saveWorldbuildSection(input: {
+  worldbuildId: string
+  id?: string
+  title: string
+  content: string
+}): EntitySection {
+  const db = getDb()
+  const ts = now()
+  if (input.id) {
+    const cur = getWorldbuildSections(input.worldbuildId).find((s) => s.id === input.id)
+    if (!cur) throw new Error('分节不存在或不属于该世界观条目')
+    db.prepare(
+      'UPDATE worldbuild_sections SET title = ?, content = ?, updated_at = ? WHERE id = ?'
+    ).run(input.title, input.content, ts, input.id)
+  } else {
+    const max = db
+      .prepare('SELECT MAX(sort_key) AS m FROM worldbuild_sections WHERE worldbuild_id = ?')
+      .get(input.worldbuildId) as { m: number | null }
+    db.prepare(
+      'INSERT INTO worldbuild_sections (id, worldbuild_id, title, content, sort_key, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)'
+    ).run(randomUUID(), input.worldbuildId, input.title, input.content, (max.m ?? -1) + 1, ts, ts)
+  }
+  db.prepare('UPDATE worldbuild SET updated_at = ? WHERE id = ?').run(ts, input.worldbuildId)
+  const row = input.id
+    ? db.prepare('SELECT * FROM worldbuild_sections WHERE id = ?').get(input.id)
+    : (db
+        .prepare(
+          'SELECT * FROM worldbuild_sections WHERE worldbuild_id = ? ORDER BY sort_key DESC, created_at DESC LIMIT 1'
+        )
+        .get(input.worldbuildId) as unknown as WbSectionRow)
+  return mapWbSection(row as WbSectionRow)
+}
+
+export function deleteWorldbuildSections(worldbuildId: string, ids: string[]): number {
+  const db = getDb()
+  const del = db.prepare('DELETE FROM worldbuild_sections WHERE worldbuild_id = ? AND id = ?')
+  db.exec('BEGIN')
+  try {
+    let n = 0
+    for (const id of ids) n += Number(del.run(worldbuildId, id).changes)
+    db.prepare('UPDATE worldbuild SET updated_at = ? WHERE id = ?').run(now(), worldbuildId)
+    db.exec('COMMIT')
+    return n
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
+}
+
+/** 事务批量覆盖既有分节（edit_text 定点修改用）：任一更新失败整体回滚 */
+export function saveWorldbuildSectionsBatch(
+  worldbuildId: string,
+  sections: Array<{ id: string; title: string; content: string }>
+): void {
+  const db = getDb()
+  const ts = now()
+  const upd = db.prepare(
+    'UPDATE worldbuild_sections SET title = ?, content = ?, updated_at = ? WHERE id = ?'
+  )
+  db.exec('BEGIN')
+  try {
+    for (const s of sections) {
+      if (upd.run(s.title, s.content, ts, s.id).changes === 0)
+        throw new Error(`分节不存在或不属于该世界观条目: ${s.id}`)
+    }
+    db.prepare('UPDATE worldbuild SET updated_at = ? WHERE id = ?').run(ts, worldbuildId)
+    db.exec('COMMIT')
+  } catch (err) {
+    db.exec('ROLLBACK')
+    throw err
+  }
 }
 
 export function deleteWorldbuild(id: string): void {

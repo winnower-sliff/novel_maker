@@ -211,12 +211,20 @@ export function startAgentRun(
     text?: string
     messages?: ChatMessage[]
     model?: string
+    /** 临时指定本次会话的 provider（智能体页「引擎」切换用） */
+    provider?: ProviderId
   }
 ): string | AgentRunHandle {
   // 旧客户端过渡路径：messages 直跑、不落 transcript（旧端 persistRun/sessionSave 自管）
   if (params.text === undefined) {
     if (!params.messages) throw new Error('缺少 text 或 messages 参数')
-    return startLegacyAgentRun(sink, params.projectId, params.messages, params.model)
+    return startLegacyAgentRun(
+      sink,
+      params.projectId,
+      params.messages,
+      params.model,
+      params.provider
+    )
   }
 
   const text = params.text
@@ -248,7 +256,7 @@ export function startAgentRun(
   void (async () => {
     let payload: Awaited<ReturnType<typeof runAgent>>
     try {
-      const auth = await resolveRequestAuth('agent')
+      const auth = await resolveRequestAuth('agent', params.provider)
       payload = await runAgent({
         sink,
         requestId,
@@ -256,6 +264,7 @@ export function startAgentRun(
         messages,
         model: params.model?.trim() || auth.model,
         signal: controller.signal,
+        provider: params.provider,
         persist
       })
     } catch (err) {
@@ -296,7 +305,8 @@ function startLegacyAgentRun(
   sink: EventSink,
   projectId: string,
   messages: ChatMessage[],
-  model?: string
+  model?: string,
+  provider?: ProviderId
 ): string {
   const requestId = randomUUID()
   const controller = new AbortController()
@@ -306,14 +316,15 @@ function startLegacyAgentRun(
   void (async () => {
     let payload: Awaited<ReturnType<typeof runAgent>>
     try {
-      const auth = await resolveRequestAuth('agent')
+      const auth = await resolveRequestAuth('agent', provider)
       payload = await runAgent({
         sink,
         requestId,
         projectId,
         messages,
         model: model?.trim() || auth.model,
-        signal: controller.signal
+        signal: controller.signal,
+        provider
       })
     } catch (err) {
       const message = controller.signal.aborted

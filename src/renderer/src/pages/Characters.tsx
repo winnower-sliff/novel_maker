@@ -1,9 +1,11 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { parseCardSections } from '../../../shared/characterSections'
+import { splitTags } from '../../../shared/tags'
 import { CharacterGenPanel } from '../../../wizard/CharacterGenPanel'
 import { parseWikiLinks, useCharacterRegen } from '../../../wizard/characterTools'
 import { AiTextarea } from '../components/AiTextarea'
+import { Markdown } from '../components/Markdown'
 import { Badge, Button, Card, Input, Label } from '../components/ui'
 import { desktopWizardUi } from '../lib/desktopWizardUi'
 import type { Navigate } from '../lib/nav'
@@ -26,6 +28,47 @@ interface EditState {
   state: string
 }
 
+const toDrafts = (secs: { id: string; title: string; content: string }[]): SectionDraft[] =>
+  secs.map((s) => ({ id: s.id, title: s.title, content: s.content }))
+
+type MetaField = 'name' | 'role' | 'tags' | 'relation'
+
+function MetaInput({
+  value,
+  saving,
+  placeholder,
+  width,
+  onChange,
+  onSave,
+  onCancel
+}: {
+  value: string
+  saving: boolean
+  placeholder: string
+  width?: string
+  onChange: (v: string) => void
+  onSave: () => void
+  onCancel: () => void
+}) {
+  return (
+    <span className="inline-flex flex-wrap items-center gap-1.5">
+      <Input
+        className={`h-7 text-xs ${width ?? 'w-44'}`}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        placeholder={placeholder}
+        autoFocus
+      />
+      <Button className="px-2 py-0.5 text-xs" disabled={saving} onClick={onSave}>
+        {saving ? '保存中…' : '保存'}
+      </Button>
+      <Button variant="ghost" className="px-2 py-0.5 text-xs" onClick={onCancel}>
+        取消
+      </Button>
+    </span>
+  )
+}
+
 export default function Characters({
   projectId,
   onNavigate
@@ -42,6 +85,15 @@ export default function Characters({
   const [edit, setEdit] = useState<EditState | null>(null)
   const [genOpen, setGenOpen] = useState(false)
   const regen = useCharacterRegen(projectId)
+  // 分节交互：默认渲染态；draft 非空表示某节处于编辑/新增态（单节切换）
+  const [draft, setDraft] = useState<(SectionDraft & { isNew: boolean }) | null>(null)
+  const [savingSec, setSavingSec] = useState(false)
+  // 元信息逐字段 inline 编辑：metaDraft 非空表示某字段处于编辑态（同屏只开一个）
+  const [metaDraft, setMetaDraft] = useState<{ field: MetaField; value: string } | null>(null)
+  const [savingMeta, setSavingMeta] = useState(false)
+  // 动态状态整块编辑：stateDraft 非 null 表示编辑中
+  const [stateDraft, setStateDraft] = useState<string | null>(null)
+  const [savingState, setSavingState] = useState(false)
 
   const load = (): void => {
     void queryClient.invalidateQueries({ queryKey: qk.characters(projectId) })
@@ -53,6 +105,9 @@ export default function Characters({
   // biome-ignore lint/correctness/useExhaustiveDependencies: projectId 仅作重置信号
   useEffect(() => {
     setEdit(null)
+    setDraft(null)
+    setMetaDraft(null)
+    setStateDraft(null)
     regen.reset()
   }, [projectId])
 
@@ -65,10 +120,27 @@ export default function Characters({
     )
   }
 
+  const applySections = (
+    id: string,
+    secs: { id: string; title: string; content: string }[]
+  ): void => {
+    setEdit((cur) => (cur && cur.id === id ? { ...cur, sections: toDrafts(secs) } : cur))
+  }
+
+  const reloadSections = (id: string): void => {
+    void window.api.novel
+      .sections('character', projectId, id)
+      .then((secs) => applySections(id, secs))
+      .catch((err: unknown) => pushToast('error', err instanceof Error ? err.message : String(err)))
+  }
+
   const pick = (c: (typeof list)[number]): void => {
     regen.reset()
+    setDraft(null)
+    setMetaDraft(null)
+    setStateDraft(null)
     void window.api.novel
-      .characterSections(c.id)
+      .sections('character', projectId, c.id)
       .then((secs) => {
         setEdit({
           id: c.id,
@@ -76,37 +148,141 @@ export default function Characters({
           role: c.role,
           tags: c.tags,
           relation: c.relation,
-          sections: secs.map((s) => ({ id: s.id, title: s.title, content: s.content })),
+          sections: toDrafts(secs),
           state: c.state
         })
       })
       .catch((err: unknown) => pushToast('error', err instanceof Error ? err.message : String(err)))
   }
 
-  const save = (): void => {
-    if (!edit?.name.trim()) return
+  const startEditSection = (s: SectionDraft): void => {
+    regen.reset()
+    setDraft({ id: s.id, title: s.title, content: s.content, isNew: false })
+  }
+
+  const cancelDraft = (): void => setDraft(null)
+
+  const saveDraft = (): void => {
+    if (!edit || !draft || savingSec) return
+    if (!draft.title.trim() && !draft.content.trim()) {
+      pushToast('error', '标题与内容不能都为空')
+      return
+    }
+    setSavingSec(true)
     void window.api.novel
-      .characterSave({
-        id: edit.id || undefined,
+      .sectionSave({
+        kind: 'character',
         projectId,
-        name: edit.name.trim(),
-        role: edit.role,
-        tags: edit.tags,
-        relation: edit.relation,
-        sections: edit.sections
-          .filter((s) => s.title.trim() || s.content.trim())
-          .map((s) => ({ id: s.id, title: s.title.trim(), content: s.content })),
-        state: edit.state
+        entityId: edit.id,
+        id: draft.isNew ? undefined : draft.id,
+        title: draft.title.trim(),
+        content: draft.content
       })
-      .then((saved) => {
-        setEdit((prev) => (prev && !prev.id ? { ...prev, id: saved.id } : prev))
+      .then(() => {
+        setDraft(null)
+        reloadSections(edit.id)
+        load()
+      })
+      .catch((err: unknown) => pushToast('error', err instanceof Error ? err.message : String(err)))
+      .finally(() => setSavingSec(false))
+  }
+
+  const deleteSection = (s: SectionDraft): void => {
+    if (!edit || !s.id) return
+    if (!window.confirm(`删除分节「${s.title || '未命名'}」？此操作不可恢复。`)) return
+    void window.api.novel
+      .sectionDelete('character', projectId, edit.id, [s.id])
+      .then(() => {
+        reloadSections(edit.id)
         load()
       })
       .catch((err: unknown) => pushToast('error', err instanceof Error ? err.message : String(err)))
   }
 
+  const addSection = (): void => {
+    regen.reset()
+    setDraft({ title: '', content: '', isNew: true })
+  }
+
+  // 元信息逐字段保存：只提交被编辑的字段（+必填 name），不触碰分节与状态
+  const startMetaEdit = (field: MetaField): void => {
+    if (!edit) return
+    regen.reset()
+    setMetaDraft({ field, value: edit[field] })
+  }
+
+  const cancelMetaEdit = (): void => setMetaDraft(null)
+
+  const saveMetaField = (): void => {
+    if (!edit || !metaDraft || savingMeta) return
+    const { field, value } = metaDraft
+    if (field === 'name' && !value.trim()) {
+      pushToast('error', '姓名不能为空')
+      return
+    }
+    if (!edit.name.trim() && field !== 'name') {
+      pushToast('error', '请先设置姓名')
+      return
+    }
+    setSavingMeta(true)
+    const base = {
+      id: edit.id,
+      projectId,
+      name: field === 'name' ? value.trim() : edit.name.trim()
+    }
+    const payload = field === 'name' ? base : { ...base, [field]: value }
+    void window.api.novel
+      .characterSave(payload)
+      .then((saved) => {
+        setMetaDraft(null)
+        // 本地写回（load 不刷新本地 edit）；新建流程回写 id，避免后续保存落到无主人物
+        setEdit((cur) =>
+          cur
+            ? {
+                ...cur,
+                id: saved.id || cur.id,
+                ...(field === 'name' ? { name: value.trim() } : { [field]: value })
+              }
+            : cur
+        )
+        load()
+        pushToast('success', '已保存')
+      })
+      .catch((err: unknown) => pushToast('error', err instanceof Error ? err.message : String(err)))
+      .finally(() => setSavingMeta(false))
+  }
+
+  // 动态状态保存：单独提交 state，不触碰分节与元信息
+  const startStateEdit = (): void => {
+    if (!edit) return
+    regen.reset()
+    setStateDraft(edit.state)
+  }
+
+  const cancelStateEdit = (): void => setStateDraft(null)
+
+  const saveState = (): void => {
+    if (!edit || stateDraft === null || savingState) return
+    if (!edit.name.trim()) {
+      pushToast('error', '请先设置姓名')
+      return
+    }
+    setSavingState(true)
+    void window.api.novel
+      .characterSave({ id: edit.id, projectId, name: edit.name.trim(), state: stateDraft })
+      .then((saved) => {
+        setStateDraft(null)
+        setEdit((cur) => (cur ? { ...cur, id: saved.id || cur.id, state: stateDraft } : cur))
+        load()
+        pushToast('success', '状态已保存')
+      })
+      .catch((err: unknown) => pushToast('error', err instanceof Error ? err.message : String(err)))
+      .finally(() => setSavingState(false))
+  }
+
   const newBlank = (): void => {
     regen.reset()
+    setDraft(null)
     setEdit({
       id: '',
       name: '',
@@ -116,26 +292,6 @@ export default function Characters({
       sections: [{ title: '基本信息', content: '' }],
       state: ''
     })
-  }
-
-  const setSection = (i: number, patch: Partial<SectionDraft>): void => {
-    setEdit((prev) =>
-      prev
-        ? { ...prev, sections: prev.sections.map((s, j) => (j === i ? { ...s, ...patch } : s)) }
-        : prev
-    )
-  }
-
-  const addSection = (): void => {
-    setEdit((prev) =>
-      prev ? { ...prev, sections: [...prev.sections, { title: '', content: '' }] } : prev
-    )
-  }
-
-  const removeSection = (i: number): void => {
-    setEdit((prev) =>
-      prev ? { ...prev, sections: prev.sections.filter((_, j) => j !== i) } : prev
-    )
   }
 
   const app = edit?.id ? appearances?.[edit.id] : undefined
@@ -214,43 +370,114 @@ export default function Characters({
           </div>
         ) : (
           <>
-            <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
-              <div>
-                <Label>姓名 *</Label>
-                <Input
-                  value={edit.name}
-                  onChange={(e) => setEdit({ ...edit, name: e.target.value })}
-                  placeholder="例：韩立"
-                />
+            <div className="mb-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+                {metaDraft?.field === 'name' ? (
+                  <MetaInput
+                    value={metaDraft.value}
+                    saving={savingMeta}
+                    placeholder="例：韩立"
+                    onChange={(v) => setMetaDraft({ field: 'name', value: v })}
+                    onSave={saveMetaField}
+                    onCancel={cancelMetaEdit}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="group/name flex items-baseline gap-1.5 text-left"
+                    onClick={() => startMetaEdit('name')}
+                  >
+                    <span className="text-lg font-semibold text-zinc-100">
+                      {edit.name || '未命名'}
+                    </span>
+                    <span className="text-xs text-zinc-600 opacity-0 transition-opacity group-hover/name:opacity-100">
+                      编辑
+                    </span>
+                  </button>
+                )}
+                {metaDraft?.field === 'role' ? (
+                  <MetaInput
+                    value={metaDraft.value}
+                    saving={savingMeta}
+                    placeholder="主角/反派/师尊…"
+                    width="w-32"
+                    onChange={(v) => setMetaDraft({ field: 'role', value: v })}
+                    onSave={saveMetaField}
+                    onCancel={cancelMetaEdit}
+                  />
+                ) : edit.role ? (
+                  <button type="button" onClick={() => startMetaEdit('role')}>
+                    <Badge>{edit.role}</Badge>
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    className="text-xs text-zinc-600 transition-colors hover:text-zinc-400"
+                    onClick={() => startMetaEdit('role')}
+                  >
+                    定位未设置
+                  </button>
+                )}
+                {metaDraft?.field === 'tags' ? (
+                  <MetaInput
+                    value={metaDraft.value}
+                    saving={savingMeta}
+                    placeholder="谨慎,苟道"
+                    onChange={(v) => setMetaDraft({ field: 'tags', value: v })}
+                    onSave={saveMetaField}
+                    onCancel={cancelMetaEdit}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="group/tags flex flex-wrap items-center gap-1"
+                    onClick={() => startMetaEdit('tags')}
+                  >
+                    {splitTags(edit.tags).length > 0 ? (
+                      splitTags(edit.tags).map((t) => <Badge key={t}>{t}</Badge>)
+                    ) : (
+                      <span className="text-xs text-zinc-600">标签未设置</span>
+                    )}
+                    <span className="text-xs text-zinc-600 opacity-0 transition-opacity group-hover/tags:opacity-100">
+                      编辑
+                    </span>
+                  </button>
+                )}
               </div>
-              <div>
-                <Label>定位</Label>
-                <Input
-                  value={edit.role}
-                  onChange={(e) => setEdit({ ...edit, role: e.target.value })}
-                  placeholder="主角/反派/师尊…"
-                />
+              <div className="mt-2 border-t border-zinc-800 pt-2">
+                {metaDraft?.field === 'relation' ? (
+                  <MetaInput
+                    value={metaDraft.value}
+                    saving={savingMeta}
+                    placeholder="[[丹塔|曾依附丹塔]]、[[云岚宗|宿敌]]"
+                    width="w-full max-w-xl"
+                    onChange={(v) => setMetaDraft({ field: 'relation', value: v })}
+                    onSave={saveMetaField}
+                    onCancel={cancelMetaEdit}
+                  />
+                ) : (
+                  <button
+                    type="button"
+                    className="group/rel block w-full text-left"
+                    onClick={() => startMetaEdit('relation')}
+                  >
+                    {edit.relation.trim() ? (
+                      <Markdown text={edit.relation} className="text-xs leading-5 text-zinc-400" />
+                    ) : (
+                      <span className="text-xs text-zinc-600">
+                        关联未设置（[[世界观条目|关系短语]]，多个用、分隔）
+                      </span>
+                    )}
+                    <span className="ml-1.5 text-xs text-zinc-600 opacity-0 transition-opacity group-hover/rel:opacity-100">
+                      编辑
+                    </span>
+                  </button>
+                )}
               </div>
-              <div>
-                <Label>标签</Label>
-                <Input
-                  value={edit.tags}
-                  onChange={(e) => setEdit({ ...edit, tags: e.target.value })}
-                  placeholder="谨慎,苟道"
-                />
-              </div>
-            </div>
-            <div className="mt-3">
-              <Label>关联（[[世界观条目|关系短语]]，多个用、分隔）</Label>
-              <Input
-                value={edit.relation}
-                onChange={(e) => setEdit({ ...edit, relation: e.target.value })}
-                placeholder="[[丹塔|曾依附丹塔]]、[[云岚宗|宿敌]]"
-              />
             </div>
             <div className="mt-3 flex-1">
               <div className="flex items-center justify-between">
-                <Label>人物卡分节（M4 写作时自动注入相关人物；正文选中可用 AI 改写）</Label>
+                <Label>人物卡分节（M4 写作时自动注入相关人物；默认渲染，点编辑修改）</Label>
                 <Button
                   variant="ghost"
                   className="px-2 py-1 text-xs"
@@ -279,15 +506,43 @@ export default function Characters({
                       className="px-2 py-1 text-xs"
                       onClick={() => {
                         const p = regen.preview
-                        if (!p) return
+                        if (!p || !edit.id) return
                         const parsed = parseCardSections(p.main)
-                        setEdit({
-                          ...edit,
-                          sections: parsed.sections,
-                          relation: parsed.relation || edit.relation,
-                          tags: p.tags.join(',')
-                        })
-                        regen.reset()
+                        // 整卡替换走 sections 全量提交（批量替换特例），成功后全部进渲染态
+                        void window.api.novel
+                          .characterSave({
+                            id: edit.id,
+                            projectId,
+                            name:
+                              edit.name.trim() ||
+                              p.main.match(/^##\s*([^\n#]+)/)?.[1]?.trim() ||
+                              edit.name,
+                            role: edit.role,
+                            tags: p.tags.join(','),
+                            relation: parsed.relation || edit.relation,
+                            sections: parsed.sections
+                          })
+                          .then(() => {
+                            regen.reset()
+                            setDraft(null)
+                            setMetaDraft(null)
+                            setStateDraft(null)
+                            setEdit((cur) =>
+                              cur
+                                ? {
+                                    ...cur,
+                                    tags: p.tags.join(','),
+                                    relation: parsed.relation || cur.relation
+                                  }
+                                : cur
+                            )
+                            reloadSections(edit.id)
+                            load()
+                            pushToast('success', '人物卡已替换')
+                          })
+                          .catch((err: unknown) =>
+                            pushToast('error', err instanceof Error ? err.message : String(err))
+                          )
                       }}
                     >
                       替换人物卡
@@ -296,54 +551,159 @@ export default function Characters({
                 </div>
               )}
               <div className="divide-y divide-zinc-800 rounded-md border border-zinc-800">
-                {edit.sections.map((s, i) => (
-                  <div key={s.id ?? `new-${i}`} className="p-3">
+                {edit.sections.map((s) =>
+                  draft && !draft.isNew && draft.id === s.id ? (
+                    <div key={s.id} className="bg-zinc-900/60 p-3">
+                      <div className="mb-1.5 flex items-center gap-2">
+                        <Input
+                          className="h-7 w-44 text-xs"
+                          value={draft.title}
+                          onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                          placeholder="字段名，如 基本信息"
+                        />
+                        <span className="flex-1" />
+                        <Button
+                          className="px-2 py-0.5 text-xs"
+                          disabled={savingSec}
+                          onClick={saveDraft}
+                        >
+                          {savingSec ? '保存中…' : '保存'}
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          className="px-2 py-0.5 text-xs"
+                          onClick={cancelDraft}
+                        >
+                          取消
+                        </Button>
+                      </div>
+                      <AiTextarea
+                        className="min-h-24"
+                        value={draft.content}
+                        onChange={(v) => setDraft({ ...draft, content: v })}
+                        placeholder="该字段的正文（markdown）"
+                        context={`这是人物「${edit.name || '未命名'}」（定位：${edit.role || '未填'}）人物卡「${draft.title || '未命名分节'}」分节的内容：\n${draft.content}`}
+                      />
+                    </div>
+                  ) : (
+                    <div key={s.id} className="group/sec p-3">
+                      <div className="mb-1 flex items-center gap-2">
+                        <span className="text-base font-semibold text-zinc-100">
+                          {s.title || '（未命名）'}
+                        </span>
+                        <span className="flex-1" />
+                        <Button
+                          variant="ghost"
+                          className="px-1.5 py-0.5 text-xs opacity-60 transition-opacity hover:opacity-100 group-hover/sec:opacity-100"
+                          onClick={() => startEditSection(s)}
+                        >
+                          编辑
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          className="px-1.5 py-0.5 text-xs text-red-400 opacity-60 transition-opacity hover:opacity-100 group-hover/sec:opacity-100"
+                          onClick={() => deleteSection(s)}
+                        >
+                          删除
+                        </Button>
+                      </div>
+                      {s.content.trim() ? (
+                        <Markdown text={s.content} className="text-xs leading-5 text-zinc-400" />
+                      ) : (
+                        <div className="text-xs text-zinc-600">（空）</div>
+                      )}
+                    </div>
+                  )
+                )}
+                {draft?.isNew && (
+                  <div className="bg-zinc-900/60 p-3">
                     <div className="mb-1.5 flex items-center gap-2">
                       <Input
                         className="h-7 w-44 text-xs"
-                        value={s.title}
-                        onChange={(e) => setSection(i, { title: e.target.value })}
+                        value={draft.title}
+                        onChange={(e) => setDraft({ ...draft, title: e.target.value })}
                         placeholder="字段名，如 基本信息"
                       />
                       <span className="flex-1" />
                       <Button
-                        variant="ghost"
-                        className="px-1.5 py-0.5 text-xs text-red-400"
-                        onClick={() => removeSection(i)}
+                        className="px-2 py-0.5 text-xs"
+                        disabled={savingSec}
+                        onClick={saveDraft}
                       >
-                        删除
+                        {savingSec ? '保存中…' : '保存'}
+                      </Button>
+                      <Button variant="ghost" className="px-2 py-0.5 text-xs" onClick={cancelDraft}>
+                        取消
                       </Button>
                     </div>
                     <AiTextarea
                       className="min-h-24"
-                      value={s.content}
-                      onChange={(v) => setSection(i, { content: v })}
+                      value={draft.content}
+                      onChange={(v) => setDraft({ ...draft, content: v })}
                       placeholder="该字段的正文（markdown）"
-                      context={`这是人物「${edit.name || '未命名'}」（定位：${edit.role || '未填'}）人物卡「${s.title || '未命名分节'}」分节的内容：\n${s.content}`}
+                      context={`这是人物「${edit.name || '未命名'}」（定位：${edit.role || '未填'}）人物卡「${draft.title || '未命名分节'}」分节的内容：\n${draft.content}`}
                     />
                   </div>
-                ))}
-                {edit.sections.length === 0 && (
+                )}
+                {edit.sections.length === 0 && !draft?.isNew && (
                   <div className="p-3 text-center text-xs text-zinc-600">暂无分节</div>
                 )}
               </div>
-              <Button variant="ghost" className="mt-2 px-2 py-1 text-xs" onClick={addSection}>
+              <Button
+                variant="ghost"
+                className="mt-2 px-2 py-1 text-xs"
+                disabled={!!draft}
+                onClick={addSection}
+              >
                 + 添加分节
               </Button>
             </div>
             <div className="mt-3">
-              <Label>
-                动态状态（定稿章节时由摘要自动同步：物品/能力/身心状态/关系/最近事件；写作时随人物卡注入）
-              </Label>
-              <textarea
-                className="w-full rounded-md border border-zinc-800 bg-zinc-950 p-2.5 font-mono text-xs leading-5 text-zinc-200 outline-none focus:border-zinc-600"
-                rows={Math.min(12, Math.max(3, Math.ceil(edit.state.length / 60)))}
-                value={edit.state}
-                onChange={(e) => setEdit({ ...edit, state: e.target.value })}
-                placeholder={
-                  '物品：寒铁长剑（断裂）\n身心状态：左臂旧伤未愈，对宗门起疑\n关系：与云岚由盟转敌\n最近事件：第12章 黑袍人交出半张地图'
-                }
-              />
+              <div className="flex items-center justify-between">
+                <Label>
+                  动态状态（定稿章节时由摘要自动同步：物品/能力/身心状态/关系/最近事件；写作时随人物卡注入）
+                </Label>
+                {stateDraft === null ? (
+                  <Button variant="ghost" className="px-2 py-1 text-xs" onClick={startStateEdit}>
+                    编辑
+                  </Button>
+                ) : (
+                  <span className="flex gap-1.5">
+                    <Button
+                      className="px-2 py-1 text-xs"
+                      disabled={savingState}
+                      onClick={saveState}
+                    >
+                      {savingState ? '保存中…' : '保存'}
+                    </Button>
+                    <Button variant="ghost" className="px-2 py-1 text-xs" onClick={cancelStateEdit}>
+                      取消
+                    </Button>
+                  </span>
+                )}
+              </div>
+              {stateDraft === null ? (
+                edit.state.trim() ? (
+                  <Markdown
+                    text={edit.state}
+                    className="rounded-md border border-zinc-800 bg-zinc-900/40 p-2.5 text-xs leading-5 text-zinc-400"
+                  />
+                ) : (
+                  <div className="rounded-md border border-zinc-800 bg-zinc-900/40 p-2.5 text-xs text-zinc-600">
+                    暂无动态状态
+                  </div>
+                )
+              ) : (
+                <textarea
+                  className="w-full rounded-md border border-zinc-800 bg-zinc-950 p-2.5 font-mono text-xs leading-5 text-zinc-200 outline-none focus:border-zinc-600"
+                  rows={Math.min(12, Math.max(3, Math.ceil(stateDraft.length / 60)))}
+                  value={stateDraft}
+                  onChange={(e) => setStateDraft(e.target.value)}
+                  placeholder={
+                    '物品：寒铁长剑（断裂）\n身心状态：左臂旧伤未愈，对宗门起疑\n关系：与云岚由盟转敌\n最近事件：第12章 黑袍人交出半张地图'
+                  }
+                />
+              )}
             </div>
             <div className="mt-3 grid grid-cols-1 gap-3 rounded-md border border-zinc-800 bg-zinc-900/40 p-3 sm:grid-cols-2">
               <div>
@@ -379,6 +739,9 @@ export default function Characters({
                     if (!window.confirm(`删除人物「${edit.name}」？`)) return
                     void window.api.novel.characterDelete(edit.id).then(() => {
                       setEdit(null)
+                      setDraft(null)
+                      setMetaDraft(null)
+                      setStateDraft(null)
                       load()
                     })
                   }}
@@ -391,12 +754,12 @@ export default function Characters({
                 onClick={() => {
                   regen.reset()
                   setEdit(null)
+                  setDraft(null)
+                  setMetaDraft(null)
+                  setStateDraft(null)
                 }}
               >
                 关闭
-              </Button>
-              <Button onClick={save} disabled={!edit.name.trim()}>
-                保存
               </Button>
             </div>
           </>

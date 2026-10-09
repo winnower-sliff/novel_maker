@@ -1,8 +1,21 @@
 import { buildChapterContext } from '../context'
-import { deleteEmbeddingsByRef, enqueueEmbedding } from '../embedding'
+import { deleteEmbeddingsByRef, enqueueEmbedding, reembedEntity } from '../embedding'
 import { commitWorldbuildChunk, relinkWorldbuildEntries, saveWorldbuildBatch } from '../pipeline'
 import * as store from '../store'
 import type { PartialHandlerTable } from './context'
+
+/** 校验分节归属实体存在于指定项目（防跨项目误操作） */
+function assertEntityInProject(
+  kind: 'character' | 'worldbuild',
+  projectId: string,
+  entityId: string
+): void {
+  const pid =
+    kind === 'character'
+      ? store.getCharacter(entityId)?.projectId
+      : store.getWorldbuild(entityId)?.projectId
+  if (pid !== projectId) throw new Error('实体不存在或不属于该项目')
+}
 
 export const novelHandlers = {
   'novel:projects': () => store.listProjects(),
@@ -24,21 +37,28 @@ export const novelHandlers = {
     deleteEmbeddingsByRef('character', id)
     store.deleteCharacter(id)
   },
-  'novel:characterSections': (_ctx, [characterId]) => store.getCharacterSections(characterId),
-  'novel:characterSectionSave': (_ctx, [input]) => {
-    const saved = store.saveCharacterSection(input)
-    const c = store.getCharacter(input.characterId)
-    if (c) {
-      enqueueEmbedding(c.projectId, 'character', c.id, `${c.name} ${c.role} ${c.tags} ${c.card}`)
-    }
+  'novel:sections': (_ctx, [kind, projectId, entityId]) => {
+    assertEntityInProject(kind, projectId, entityId)
+    return kind === 'character'
+      ? store.getCharacterSections(entityId)
+      : store.getWorldbuildSections(entityId)
+  },
+  'novel:sectionSave': (_ctx, [{ kind, projectId, entityId, ...rest }]) => {
+    assertEntityInProject(kind, projectId, entityId)
+    const saved =
+      kind === 'character'
+        ? store.saveCharacterSection({ characterId: entityId, ...rest })
+        : store.saveWorldbuildSection({ worldbuildId: entityId, ...rest })
+    reembedEntity(kind, entityId)
     return saved
   },
-  'novel:characterSectionDelete': (_ctx, [characterId, ids]) => {
-    const n = store.deleteCharacterSections(characterId, ids)
-    const c = store.getCharacter(characterId)
-    if (c) {
-      enqueueEmbedding(c.projectId, 'character', c.id, `${c.name} ${c.role} ${c.tags} ${c.card}`)
-    }
+  'novel:sectionDelete': (_ctx, [kind, projectId, entityId, ids]) => {
+    assertEntityInProject(kind, projectId, entityId)
+    const n =
+      kind === 'character'
+        ? store.deleteCharacterSections(entityId, ids)
+        : store.deleteWorldbuildSections(entityId, ids)
+    reembedEntity(kind, entityId)
     return n
   },
   'novel:characterAppearances': (_ctx, [projectId]) => {

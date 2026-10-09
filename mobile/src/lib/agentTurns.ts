@@ -17,6 +17,7 @@ export const TOOL_LABELS: Record<string, string> = {
   list_chapter_briefs: '章节·状态',
   get_chapter: '正文·读取',
   save_chapter: '正文·写入',
+  edit_text: '文本·定点修改',
   list_foreshadows: '伏笔·列表',
   save_foreshadow: '伏笔·保存',
   delete_foreshadow: '伏笔·删除',
@@ -37,8 +38,8 @@ export const TOOL_LABELS: Record<string, string> = {
   search_project: '语义·搜索',
   get_book_digest: '全书·概览',
   update_character_state: '人物·状态更新',
-  get_character_section: '人物·分节读取',
-  save_character_section: '人物·分节保存',
+  get_section: '分节·读取',
+  save_section: '分节·保存',
   refresh_volume_summary: '卷摘要·重建',
   reorder_worldbuild_type: '世界观·类型排序'
 }
@@ -63,6 +64,14 @@ export function toolSummary(call: AgentToolCall): string {
     case 'save_chapter': {
       const words = str(i, 'content').replace(/\s/g, '').length
       return `写入章节正文（${words} 字）`
+    }
+    case 'edit_text': {
+      const kindName =
+        { chapter: '章节', character: '人物', worldbuild: '词条' }[str(i, 'kind')] ?? str(i, 'kind')
+      const n = Array.isArray((i as { edits?: unknown }).edits)
+        ? ((i as { edits: unknown[] }).edits as unknown[]).length
+        : 0
+      return `定点修改${kindName}文本（${n} 条替换）`
     }
     case 'save_character':
       return `${str(i, 'id') ? '修改人物' : '新建人物'}：${str(i, 'name') || '(未命名)'}`
@@ -123,13 +132,15 @@ export function toolSummary(call: AgentToolCall): string {
       return '读取全书概览'
     case 'update_character_state':
       return `更新人物状态：${str(i, 'name') || `id 前 8 位 ${str(i, 'id').slice(0, 8)}`}`
-    case 'get_character_section': {
+    case 'get_section': {
       const t = str(i, 'title')
-      return `读取人物分节${t ? `：${t}` : ''}（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
+      const kind = str(i, 'kind')
+      return `读取${kind === 'worldbuild' ? '词条' : '人物'}分节${t ? `：${t}` : ''}（id 前 8 位 ${str(i, 'id').slice(0, 8)}）`
     }
-    case 'save_character_section': {
+    case 'save_section': {
       const t = str(i, 'title')
-      return `${str(i, 'id') ? '修改' : '新增'}人物分节：${t || '(未命名)'}`
+      const kind = str(i, 'kind')
+      return `${str(i, 'id') ? '修改' : '新增'}${kind === 'worldbuild' ? '词条' : '人物'}分节：${t || '(未命名)'}`
     }
     case 'refresh_volume_summary':
       return `重建第 ${str(i, 'volume') || '?'} 卷卷摘要`

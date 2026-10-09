@@ -265,10 +265,14 @@ export interface Character {
   updatedAt: number
 }
 
-/** 人物卡分节：title 为字段名（如「基本信息」），content 为该字段 markdown 正文 */
-export interface CharacterSection {
+/**
+ * 实体卡分节（人物/世界观通用）：title 为字段名（如「基本信息」「概述」），
+ * content 为该字段 markdown 正文；归属实体由 entityId + 使用场景区分
+ */
+export interface EntitySection {
   id: string
-  characterId: string
+  /** 归属实体 id（人物或世界观条目） */
+  entityId: string
   title: string
   content: string
   sortKey: number
@@ -289,6 +293,7 @@ export interface WorldbuildEntry {
   title: string
   tags: string
   keys: string
+  /** 合并视图：由 worldbuild_sections 拼装（存储事实源是分节表，content 列恒空） */
   content: string
   /** 人物/剧情关联：该条目与人物卡人物或剧情线的绑定关系，空串为未填 */
   relation: string

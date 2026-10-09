@@ -176,7 +176,7 @@ function CharacterEditor({
     if (mode !== 'edit' || isNew || secsLoaded) return
     let alive = true
     void window.api.novel
-      .characterSections(character.id)
+      .sections('character', projectId, character.id)
       .then((secs) => {
         if (!alive) return
         const drafts = secs.map((s) => ({ id: s.id, title: s.title, content: s.content }))
@@ -188,7 +188,7 @@ function CharacterEditor({
     return () => {
       alive = false
     }
-  }, [mode, isNew, secsLoaded, character.id])
+  }, [mode, isNew, secsLoaded, projectId, character.id])
 
   const secsDirty =
     secsBaseRef.current !== null &&
@@ -234,8 +234,10 @@ function CharacterEditor({
       const next = toFields(saved)
       setFields(next)
       baseRef.current = next
-      setSections(cleanSections)
-      secsBaseRef.current = cleanSections
+      // 分节基线作废：下次进编辑重拉，取服务端生成的真实分节 id（clean 里新增节没有 id）
+      setSections([])
+      secsBaseRef.current = null
+      setSecsLoaded(false)
       // 新建草稿没有 id，回去也没有可浏览的查看态，直接回列表
       if (isNew) onBack()
       else setMode('view')
