@@ -98,7 +98,7 @@ export default function Book({
     }
   }
 
-  // Book 内子视图（编辑器/阅读页/AiBar）各自注册返回键；都没注册（栈里只剩 Book）时，返回键回书架
+  // Book 内子视图（编辑器/阅读页）各自注册返回键；都没注册（栈里只剩 Book）时，返回键回书架
   useBackHandler(onClose)
 
   const qc = useQueryClient()
