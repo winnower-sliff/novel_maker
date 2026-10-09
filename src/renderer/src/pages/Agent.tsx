@@ -266,7 +266,7 @@ function ToolGroup({
   )
 }
 
-export default function Agent({ projectId }: { projectId: string }) {
+export default function Agent({ projectId, active }: { projectId: string; active: boolean }) {
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [probe, setProbe] = useState<ModelProbeResult | null>(null)
   const [model, setModel] = useState('')
@@ -318,6 +318,12 @@ export default function Agent({ projectId }: { projectId: string }) {
     const h = el.scrollHeight
     el.style.height = h > 0 ? `${Math.min(h, 192)}px` : ''
   }, [input, activeKey])
+
+  // 切进智能体页或页内切换会话 tab 时，光标自动落回输入框
+  // biome-ignore lint/correctness/useExhaustiveDependencies: activeKey 是故意的重触发信号（切 tab 时重新聚焦，effect 体内无需引用）
+  useEffect(() => {
+    if (active) taRef.current?.focus({ preventScroll: true })
+  }, [active, activeKey])
 
   const refreshSessions = (pid: string): void => {
     void queryClient.invalidateQueries({ queryKey: qk.agentSessions(pid) })

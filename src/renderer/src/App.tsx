@@ -623,7 +623,7 @@ export default function App() {
             />
           )}
           <div className={page === 'agent' ? 'h-full' : 'hidden'}>
-            <Agent projectId={currentProject?.id ?? ''} />
+            <Agent projectId={currentProject?.id ?? ''} active={page === 'agent'} />
           </div>
           {page === 'graph' && (
             <Suspense fallback={null}>
