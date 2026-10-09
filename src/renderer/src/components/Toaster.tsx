@@ -11,7 +11,9 @@ export function Toaster() {
           className={`pointer-events-auto flex items-start gap-2 rounded-md border px-3 py-2 text-xs shadow-xl ${
             t.tone === 'success'
               ? 'border-emerald-800 bg-emerald-950/95 text-emerald-200'
-              : 'border-red-800 bg-red-950/95 text-red-200'
+              : t.tone === 'info'
+                ? 'border-amber-800 bg-amber-950/95 text-amber-200'
+                : 'border-red-800 bg-red-950/95 text-red-200'
           }`}
         >
           <span className="flex-1 leading-5">{t.text}</span>
