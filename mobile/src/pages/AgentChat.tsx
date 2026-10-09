@@ -10,9 +10,12 @@ import { findCompactPoint, toolLabel, toolSummary } from '@mobile/lib/agentTurns
 import { qk, queries } from '@renderer/lib/queries'
 import {
   cancelQueued,
-  queueRun,
+  injectRun,
+  moveQueued,
+  queueTask,
   resolveConfirm,
   retryLoadActive,
+  resumeQueue,
   startRun,
   stopRun,
   switchSession as switchSessionRun,
@@ -212,7 +215,11 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const activeKey = tabsState?.activeKey ?? ''
   const tabs = tabsState?.tabs ?? []
   const input = useAgentTabsStore((s) => (activeKey ? s.drafts[activeKey] ?? '' : ''))
-  const queuedNext = useAgentRunStore((s) => s.queuedNext)
+  const queue = useAgentRunStore((s) => s.queue)
+  const interrupted = useAgentRunStore((s) => s.interrupted)
+  const injects = queue.filter((q) => q.kind === 'inject')
+  const tasks = queue.filter((q) => q.kind === 'task')
+  const frozen = !running && (!!error || interrupted) && tasks.length > 0
 
   // 输入框自动增高（内容超过上限后内部滚动）
   const taRef = useRef<HTMLTextAreaElement | null>(null)
@@ -339,9 +346,10 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     const text = input.trim()
     if (!text) return
     if (running) {
-      // 运行中：入队（已有排队时按钮已禁用，此处防御）
-      if (queuedNext) return
-      queueRun(text, engineModel || undefined, engine || undefined)
+      // 运行中：作为插入指令注入当前任务（工具返回后生效），失败回填草稿
+      void injectRun(text).then((ok) => {
+        if (!ok && activeKey) useAgentTabsStore.getState().setDraft(activeKey, text)
+      })
     } else {
       startRun(input, engineModel || undefined, engine || undefined)
     }
@@ -350,9 +358,18 @@ export default function AgentChat({ projectId }: { projectId: string }) {
     setShowJump(false)
   }
 
-  const cancelQueue = (): void => {
-    const text = cancelQueued()
-    if (text !== null && activeKey) useAgentTabsStore.getState().setDraft(activeKey, text)
+  const queueAsTask = (): void => {
+    const text = input.trim()
+    if (!text || !running) return
+    void queueTask(text, engineModel || undefined, engine || undefined).then((ok) => {
+      if (ok && activeKey) useAgentTabsStore.getState().setDraft(activeKey, '')
+    })
+  }
+
+  const cancelQueue = (id: string): void => {
+    void cancelQueued(id).then((text) => {
+      if (text !== null && activeKey) useAgentTabsStore.getState().setDraft(activeKey, text)
+    })
   }
 
   const stop = (): void => {
@@ -510,17 +527,65 @@ export default function AgentChat({ projectId }: { projectId: string }) {
         )}
       </div>
 
-      {queuedNext && (
-        <div className="flex items-center gap-2 border-t border-amber-900/40 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300">
-          <span className="shrink-0">已排队</span>
-          <span className="min-w-0 flex-1 truncate text-amber-200/80">{queuedNext.text}</span>
-          <button
-            type="button"
-            onClick={cancelQueue}
-            className="shrink-0 rounded px-1.5 py-0.5 text-amber-400 active:bg-amber-900/40"
-          >
-            取消
-          </button>
+      {queue.length > 0 && (
+        <div className="space-y-1 border-t border-amber-900/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
+          {injects.map((q) => (
+            <div key={q.id} className="flex items-center gap-2">
+              <span className="shrink-0 text-amber-400/80">插入</span>
+              <span className="min-w-0 flex-1 truncate text-amber-200/80">{q.text}</span>
+              <button
+                type="button"
+                onClick={() => cancelQueue(q.id)}
+                className="shrink-0 rounded px-1.5 py-0.5 text-amber-400 active:bg-amber-900/40"
+              >
+                取消
+              </button>
+            </div>
+          ))}
+          {tasks.map((q, i) => (
+            <div key={q.id} className="flex items-center gap-2">
+              <span className="shrink-0 text-amber-400/80">{i + 1}.</span>
+              <span className="min-w-0 flex-1 truncate text-amber-200/80">{q.text}</span>
+              <button
+                type="button"
+                disabled={i === 0}
+                onClick={() => moveQueued(q.id, 'up')}
+                className="shrink-0 rounded px-1 py-0.5 text-amber-400 disabled:opacity-30 active:bg-amber-900/40"
+              >
+                ↑
+              </button>
+              <button
+                type="button"
+                disabled={i === tasks.length - 1}
+                onClick={() => moveQueued(q.id, 'down')}
+                className="shrink-0 rounded px-1 py-0.5 text-amber-400 disabled:opacity-30 active:bg-amber-900/40"
+              >
+                ↓
+              </button>
+              <button
+                type="button"
+                onClick={() => cancelQueue(q.id)}
+                className="shrink-0 rounded px-1.5 py-0.5 text-amber-400 active:bg-amber-900/40"
+              >
+                取消
+              </button>
+            </div>
+          ))}
+          {frozen ? (
+            <button
+              type="button"
+              onClick={resumeQueue}
+              className="mt-1 w-full cursor-pointer rounded border border-amber-600/50 px-2 py-1 text-amber-300 active:bg-amber-900/40"
+            >
+              上条任务未完成，队列已暂停——点此继续
+            </button>
+          ) : (
+            <div className="text-[11px] text-amber-500/70">
+              {injects.length > 0 && '插入指令将在工具返回后注入当前任务'}
+              {injects.length > 0 && tasks.length > 0 ? '；' : ''}
+              {tasks.length > 0 && '任务完成后按序自动执行'}
+            </div>
+          )}
         </div>
       )}
       <div className="flex items-end gap-2 border-t border-zinc-800 bg-zinc-950/95 p-2.5 pb-[max(0.625rem,env(safe-area-inset-bottom))]">
@@ -532,19 +597,20 @@ export default function AgentChat({ projectId }: { projectId: string }) {
           }}
           rows={1}
           className="max-h-32 min-h-11 flex-1 py-2.5"
-          placeholder={running ? '可继续输入，排队完成后自动发送…' : '输入指令…'}
+          placeholder={running ? '任务运行中：发送将作为插入指令注入…' : '输入指令…'}
         />
         {running && (
           <Button variant="danger" className="shrink-0 px-3.5" onClick={stop}>
             停止
           </Button>
         )}
-        <Button
-          className="shrink-0 px-3.5"
-          disabled={!input.trim() || (!!queuedNext && running)}
-          onClick={send}
-        >
-          {running ? '排队' : '发送'}
+        {running && (
+          <Button variant="ghost" className="shrink-0 px-3.5" disabled={!input.trim()} onClick={queueAsTask}>
+            排队
+          </Button>
+        )}
+        <Button className="shrink-0 px-3.5" disabled={!input.trim()} onClick={send}>
+          {running ? '插入' : '发送'}
         </Button>
       </div>
       {running && (

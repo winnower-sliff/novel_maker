@@ -17,6 +17,7 @@ import { resolveRequestAuth } from '../settings'
 import * as store from '../store'
 import { appendUsage } from '../usage'
 import { coreWritingRules, readProjectInstructions } from './instructions'
+import { drainInjections } from './queue'
 import {
   AGENT_MAX_TOKENS,
   clip,
@@ -331,6 +332,8 @@ export async function runAgent(opts: {
   sink: EventSink
   requestId: string
   projectId: string
+  /** 所属会话（插入指令安全点按它对账；直连/旧路径可缺省） */
+  sessionId?: string
   messages: ChatMessage[]
   model: string
   signal: AbortSignal
@@ -698,6 +701,13 @@ export async function runAgent(opts: {
           `已主动压缩（第 ${autoCompacts} 次）：上下文用量约 ${usedTokens} tokens，已达窗口（约 ${contextWindow}）的 ${Math.round(PROACTIVE_COMPACT_RATIO * 100)}%，早期历史已替换为线索摘要，保留了最近的工作。不要输出确认性文字，直接继续调用工具完成任务`
         )
         turn--
+      }
+
+      // 插入指令安全点：本轮工具与压缩全部落账后、下一轮模型调用前，
+      // 把队列中的 inject 指令落为 user 事件并追加进 messages（正常 user 消息进历史回灌）
+      if (opts.sessionId && !signal.aborted) {
+        const injected = drainInjections(sink, opts.sessionId, persist)
+        for (const text of injected) messages.push({ role: 'user', content: text })
       }
 
       if (turn === MAX_TURNS - 1) hitLimit = true

@@ -1,3 +1,4 @@
+import type { ProviderId } from '@shared/providers'
 import type {
   AgentToolCall,
   AgentTurn,
@@ -11,9 +12,12 @@ import { AgentInstructionsPanel } from '../../../wizard/AgentInstructionsPanel'
 import type { SubProc } from '../../../wizard/agentRunStore'
 import {
   cancelQueued,
-  queueRun,
+  injectRun,
+  moveQueued,
+  queueTask,
   renameSessionTitle,
   resolveConfirm,
+  resumeQueue,
   retryLoadActive,
   startRun,
   stopRun,
@@ -23,6 +27,7 @@ import {
   useAgentRunStore
 } from '../../../wizard/agentRunStore'
 import { useAgentTabsStore } from '../../../wizard/agentTabsStore'
+import { EngineSelect } from '../components/EngineSelect'
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
 import { Badge, Button, Card, Select, Textarea } from '../components/ui'
@@ -265,6 +270,7 @@ export default function Agent({ projectId }: { projectId: string }) {
   const [settings, setSettings] = useState<SettingsView | null>(null)
   const [probe, setProbe] = useState<ModelProbeResult | null>(null)
   const [model, setModel] = useState('')
+  const [engine, setEngine] = useState<ProviderId | ''>('')
   const queryClient = useQueryClient()
   const { data: sessions = [] } = useQuery(queries.agentSessions(projectId))
   const [panelOpen, setPanelOpen] = useState(false)
@@ -287,7 +293,10 @@ export default function Agent({ projectId }: { projectId: string }) {
   const sessionId = useAgentRunStore((s) => s.sessionId)
   const loadFailed = useAgentRunStore((s) => s.loadFailed)
   const runningIds = useAgentRunStore((s) => s.runningIds)
-  const queuedNext = useAgentRunStore((s) => s.queuedNext)
+  const queue = useAgentRunStore((s) => s.queue)
+  const interrupted = useAgentRunStore((s) => s.interrupted)
+  const injects = queue.filter((q) => q.kind === 'inject')
+  const tasks = queue.filter((q) => q.kind === 'task')
   const confirmTarget = useAgentConfirmTarget()
 
   // tab 会话模型：每项目一组 tab（含至多一个草稿 tab），草稿/滚动随 tab 保留
@@ -329,30 +338,36 @@ export default function Agent({ projectId }: { projectId: string }) {
   // 项目变化：加载模型配置与失效会话列表（同一项目重复挂载为幂等 no-op）
   useEffect(() => {
     if (!projectId) return
-    void (async () => {
-      const s = await window.api.settings.get()
-      setSettings(s)
-      setModel(
-        (() => {
-          const r = s.modelRouting.agent
-          if (typeof r === 'string') return r || s.defaultModel
-          if (!r) return s.defaultModel
-          return r.provider && r.provider !== s.provider
-            ? s.defaultModel
-            : r.model || s.defaultModel
-        })()
-      )
-    })()
-    try {
-      void window.api.models
-        .probe({})
-        .then(setProbe)
-        .catch(() => setProbe(null))
-    } catch {
-      setProbe(null)
-    }
+    void window.api.settings.get().then(setSettings)
     void queryClient.invalidateQueries({ queryKey: qk.agentSessions(projectId) })
   }, [projectId, queryClient])
+
+  // 引擎/设置就绪：默认模型跟随所选引擎（空=按路由/默认），并按其 provider 重新探测模型列表
+  useEffect(() => {
+    if (!settings) return
+    if (engine) {
+      setModel(settings.profiles[engine]?.defaultModel?.trim() ?? '')
+      return
+    }
+    const r = settings.modelRouting.agent
+    setModel(
+      typeof r === 'string'
+        ? r || settings.defaultModel
+        : !r
+          ? settings.defaultModel
+          : r.provider && r.provider !== settings.provider
+            ? settings.defaultModel
+            : r.model || settings.defaultModel
+    )
+  }, [engine, settings])
+
+  useEffect(() => {
+    if (!projectId) return
+    void window.api.models
+      .probe(engine ? { provider: engine } : {})
+      .then(setProbe)
+      .catch(() => setProbe(null))
+  }, [projectId, engine])
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: dep 仅作重触发信号，加入会破坏语义
   useEffect(() => {
@@ -402,7 +417,10 @@ export default function Agent({ projectId }: { projectId: string }) {
       probe.models.forEach((m) => {
         ids.add(m)
       })
-    settings?.customModels
+    const customModels = engine
+      ? (settings?.profiles[engine]?.customModels ?? '')
+      : (settings?.customModels ?? '')
+    customModels
       .split(/[,，\s]+/)
       .map((s) => s.trim())
       .filter(Boolean)
@@ -413,24 +431,39 @@ export default function Agent({ projectId }: { projectId: string }) {
     return [...ids]
   })()
 
+  /** 运行中清空输入框的公共尾：乐观上屏，注入/排队失败且用户未敲入新内容时回填原文 */
+  const clearDraftKeeping = (ok: boolean): void => {
+    if (!ok && activeKey) {
+      const cur = useAgentTabsStore.getState().drafts[activeKey] ?? ''
+      if (!cur.trim()) useAgentTabsStore.getState().setDraft(activeKey, input)
+    }
+  }
+
   const send = (): void => {
     const text = input.trim()
     if (!text || !model) return
     if (running) {
-      // 运行中：入队（已有排队时按钮已禁用，此处防御）
-      if (queuedNext) return
-      queueRun(text, model)
+      // 运行中：发送=插入指令（主进程安全点注入当前任务）
+      void injectRun(text).then(clearDraftKeeping)
     } else {
-      startRun(input, model)
+      startRun(input, model, engine || undefined)
     }
     if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, '')
     atBottomRef.current = true
     setShowJump(false)
   }
 
-  const cancelQueue = (): void => {
-    const text = cancelQueued()
-    if (text !== null && activeKey) useAgentTabsStore.getState().setDraft(activeKey, text)
+  const queueAsTask = (): void => {
+    const text = input.trim()
+    if (!text || !model || !running) return
+    void queueTask(text, model, engine || undefined).then(clearDraftKeeping)
+    if (activeKey) useAgentTabsStore.getState().setDraft(activeKey, '')
+  }
+
+  const cancelQueue = (id: string): void => {
+    void cancelQueued(id).then((text) => {
+      if (text !== null && activeKey) useAgentTabsStore.getState().setDraft(activeKey, text)
+    })
   }
 
   const stop = (): void => {
@@ -724,6 +757,10 @@ export default function Agent({ projectId }: { projectId: string }) {
             </>
           )}
         </div>
+        <div className="w-[calc(50%-0.375rem)] sm:w-40">
+          <div className="mb-1.5 text-xs font-medium text-zinc-400">引擎</div>
+          <EngineSelect value={engine} onChange={(p) => setEngine(p ?? '')} className="w-full" />
+        </div>
         <div className="w-[calc(50%-0.375rem)] sm:w-56">
           <div className="mb-1.5 text-xs font-medium text-zinc-400">模型</div>
           <Select value={model} onChange={(e) => setModel(e.target.value)} className="w-full">
@@ -882,17 +919,68 @@ export default function Agent({ projectId }: { projectId: string }) {
       </Card>
 
       <div className="pb-[env(safe-area-inset-bottom)]">
-        {queuedNext && (
-          <div className="mb-2 flex items-center gap-2 rounded-md border border-amber-700/40 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300">
-            <span className="shrink-0">已排队，完成后自动发送</span>
-            <span className="min-w-0 flex-1 truncate text-amber-200/80">{queuedNext.text}</span>
-            <button
-              type="button"
-              onClick={cancelQueue}
-              className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-amber-400 transition-colors hover:bg-amber-900/40"
-            >
-              取消
-            </button>
+        {queue.length > 0 && (
+          <div className="mb-2 space-y-2 rounded-md border border-amber-700/40 bg-amber-950/30 px-3 py-2 text-xs">
+            {injects.length > 0 && (
+              <div>
+                <div className="mb-1 text-amber-400">插入指令（工具返回后注入当前任务）</div>
+                {injects.map((q) => (
+                  <div key={q.id} className="flex items-center gap-2 py-0.5">
+                    <span className="min-w-0 flex-1 truncate text-amber-200/80">{q.text}</span>
+                    <button
+                      type="button"
+                      onClick={() => cancelQueue(q.id)}
+                      className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-amber-400 transition-colors hover:bg-amber-900/40"
+                    >
+                      取消
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {tasks.length > 0 && (
+              <div>
+                <div className="mb-1 text-amber-400">排队任务（完成后按序自动执行）</div>
+                {tasks.map((q, i, arr) => (
+                  <div key={q.id} className="flex items-center gap-2 py-0.5">
+                    <span className="shrink-0 text-amber-500">{i + 1}.</span>
+                    <span className="min-w-0 flex-1 truncate text-amber-200/80">{q.text}</span>
+                    <button
+                      type="button"
+                      disabled={i === 0}
+                      onClick={() => moveQueued(q.id, 'up')}
+                      className="shrink-0 cursor-pointer rounded px-1 py-0.5 text-amber-400 transition-colors hover:bg-amber-900/40 disabled:cursor-default disabled:opacity-30"
+                    >
+                      ↑
+                    </button>
+                    <button
+                      type="button"
+                      disabled={i === arr.length - 1}
+                      onClick={() => moveQueued(q.id, 'down')}
+                      className="shrink-0 cursor-pointer rounded px-1 py-0.5 text-amber-400 transition-colors hover:bg-amber-900/40 disabled:cursor-default disabled:opacity-30"
+                    >
+                      ↓
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => cancelQueue(q.id)}
+                      className="shrink-0 cursor-pointer rounded px-1.5 py-0.5 text-amber-400 transition-colors hover:bg-amber-900/40"
+                    >
+                      取消
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
+            {!running && (!!error || interrupted) && tasks.length > 0 && (
+              <button
+                type="button"
+                onClick={resumeQueue}
+                className="cursor-pointer rounded border border-amber-700/60 px-2 py-1 text-amber-300 transition-colors hover:bg-amber-900/40"
+              >
+                上条任务未完成，队列已暂停 —— 继续执行
+              </button>
+            )}
           </div>
         )}
         <Textarea
@@ -914,11 +1002,15 @@ export default function Agent({ projectId }: { projectId: string }) {
             e.preventDefault()
             send()
           }}
-          placeholder="描述任务，Enter 发送，例如：帮我把主角的人物卡扩写到 500 字"
+          placeholder={
+            running
+              ? '任务运行中：发送将作为插入指令注入当前任务，Shift+Enter 换行'
+              : '描述任务，Enter 发送，例如：帮我把主角的人物卡扩写到 500 字'
+          }
         />
         <div className="mt-2 flex items-center justify-between">
           <span className="hidden text-xs text-zinc-600 sm:inline">
-            Enter 发送，Shift+Enter 换行
+            {running ? '发送 = 插入指令，排队 = 完成后执行' : 'Enter 发送，Shift+Enter 换行'}
           </span>
           <div className="flex gap-2">
             {running && (
@@ -926,8 +1018,13 @@ export default function Agent({ projectId }: { projectId: string }) {
                 停止
               </Button>
             )}
-            <Button onClick={send} disabled={!input.trim() || !model || (!!queuedNext && running)}>
-              {running ? '排队' : '发送'}
+            {running && (
+              <Button onClick={queueAsTask} disabled={!input.trim() || !model}>
+                排队
+              </Button>
+            )}
+            <Button onClick={send} disabled={!input.trim() || !model}>
+              {running ? '插入' : '发送'}
             </Button>
           </div>
         </div>

@@ -4,6 +4,7 @@ import {
   writeGlobalInstructions,
   writeProjectInstructions
 } from '../agent/instructions'
+import { addQueueItem, listQueue, moveQueueItem, removeQueueItem } from '../agent/queue'
 import {
   deleteSession,
   getSession,
@@ -15,7 +16,13 @@ import {
   upsertLegacySession
 } from '../agentTranscript'
 import type { PartialHandlerTable } from './context'
-import { abortAgentRun, abortSessionRun, genSessionTitle, startAgentRun } from './stream'
+import {
+  abortAgentRun,
+  abortSessionRun,
+  genSessionTitle,
+  resumeSessionQueue,
+  startAgentRun
+} from './stream'
 
 export const agentHandlers = {
   'agent:run': (ctx, [params]) => startAgentRun(ctx.sink, params),
@@ -52,5 +59,10 @@ export const agentHandlers = {
     }
     if (!projectId) throw new Error('缺少 projectId，无法保存本项目指令')
     writeProjectInstructions(projectId, text)
-  }
+  },
+  'agent:queueList': (_ctx, [projectId]) => listQueue(projectId),
+  'agent:queueAdd': (ctx, [input]) => addQueueItem(ctx.sink, input),
+  'agent:queueRemove': (ctx, [id]) => removeQueueItem(ctx.sink, id),
+  'agent:queueMove': (ctx, [id, dir]) => moveQueueItem(ctx.sink, id, dir),
+  'agent:queueResume': (ctx, [sessionId]) => resumeSessionQueue(ctx.sink, sessionId)
 } satisfies PartialHandlerTable

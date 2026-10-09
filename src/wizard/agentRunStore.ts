@@ -10,6 +10,7 @@ import { classifyLlmError } from '@shared/llmError'
 import type { ProviderId } from '@shared/providers'
 import type {
   AgentDonePayload,
+  AgentQueueItem,
   AgentToolCall,
   AgentTranscriptEvent,
   AgentTurn,
@@ -30,13 +31,6 @@ export interface SubProc {
   text: string
   tools: AgentToolCall[]
   running: boolean
-}
-
-/** 运行中排队的下一条指令（text + 发起排队时的模型/引擎选择） */
-export interface QueuedNext {
-  text: string
-  model?: string
-  provider?: ProviderId
 }
 
 /** 单会话缓冲：服务端事件的本地投影材料 + 运行态 */
@@ -62,8 +56,8 @@ interface SessionBuf {
   loadFail: string
   lastTouch: number
   wasRunning: boolean
-  /** 运行中排队待发的下一条指令（单条；成功收尾后自动续发） */
-  queuedNext: QueuedNext | null
+  /** 该会话持久化队列镜像（task=收尾续发，inject=运行中注入；事实源在主进程 agent_queue 表） */
+  queue: AgentQueueItem[]
 }
 
 interface AgentRunState {
@@ -84,8 +78,10 @@ interface AgentRunState {
   runningIds: string[]
   /** active 会话事件拉取失败（区别于 run 错误，可重试） */
   loadFailed: boolean
-  /** active 会话（或草稿）的排队待发指令 */
-  queuedNext: QueuedNext | null
+  /** active 会话（或草稿）的队列镜像 */
+  queue: AgentQueueItem[]
+  /** 上条 run 被用户停止（区别于 error，队列继续入口的判定依据） */
+  interrupted: boolean
 }
 
 export const useAgentRunStore = create<AgentRunState>(() => ({
@@ -103,7 +99,8 @@ export const useAgentRunStore = create<AgentRunState>(() => ({
   subProcs: {},
   runningIds: [],
   loadFailed: false,
-  queuedNext: null
+  queue: [],
+  interrupted: false
 }))
 
 // —— 模块级可变结构 ——
@@ -116,8 +113,6 @@ const pendingStarts = new Map<string | null, string>()
 /** 草稿视图的兜底错误（activeId=null 时无处挂 error） */
 let draftError = ''
 let draftErrorHint: LlmErrorHint | null = null
-/** 草稿起步 invoke 在途时的排队指令（会话 id 未知，run 建立后转入该会话缓冲） */
-let draftQueued: QueuedNext | null = null
 /** 当前项目在快照里仍 running 但本地无缓冲的会话（驱动活跃轮询） */
 const foreignRunning = new Set<string>()
 /** 会话缓冲上限：超出时淘汰非活跃非运行的 LRU */
@@ -154,7 +149,7 @@ function ensureBuf(sid: string): SessionBuf {
     loadFail: '',
     lastTouch: Date.now(),
     wasRunning: false,
-    queuedNext: null
+    queue: []
   }
   useAgentRunStore.setState({ sessions: { ...s.sessions, [sid]: buf } })
   evictStaleBufs()
@@ -166,7 +161,9 @@ function evictStaleBufs(): void {
   const ids = Object.keys(s.sessions)
   if (ids.length <= MAX_BUFS) return
   const evictable = ids
-    .filter((id) => id !== s.activeId && !s.sessions[id].running && !s.sessions[id].queuedNext)
+    .filter(
+      (id) => id !== s.activeId && !s.sessions[id].running && s.sessions[id].queue.length === 0
+    )
     .sort((a, b) => s.sessions[a].lastTouch - s.sessions[b].lastTouch)
   for (const id of evictable.slice(0, ids.length - MAX_BUFS)) {
     const next = { ...useAgentRunStore.getState().sessions }
@@ -232,7 +229,8 @@ function mirrorOf(sid: string, buf: SessionBuf): Partial<AgentRunState> {
     doneInfo: buf.doneInfo,
     subProcs: buf.subProcs,
     loadFailed: !!buf.loadFail,
-    queuedNext: buf.queuedNext
+    queue: buf.queue,
+    interrupted: buf.interrupted
   }
 }
 
@@ -250,7 +248,6 @@ function applyBuf(sid: string, fn: (b: SessionBuf) => void): void {
   const s = useAgentRunStore.getState()
   const buf = s.sessions[sid]
   if (!buf) return
-  const prevRunning = buf.wasRunning
   fn(buf)
   buf.lastTouch = Date.now()
   buf.turns = projectTurns(buf)
@@ -273,15 +270,6 @@ function applyBuf(sid: string, fn: (b: SessionBuf) => void): void {
     }
   }
   buf.wasRunning = buf.running
-  // 排队续发：本会话运行真正收尾且成功（无 error/中断）时，自动发出排队的下一条指令
-  const finished = prevRunning && !buf.running && !pendingStarts.get(sid)
-  if (finished && !buf.error && !buf.interrupted && buf.queuedNext) {
-    const queued = buf.queuedNext
-    applyBuf(sid, (b) => {
-      b.queuedNext = null
-    })
-    launchRun(sid, queued.text, queued.model, queued.provider, false)
-  }
 }
 
 /** 草稿/镜像统一刷新（activeId 为空时把 pendingStarts/draftError 投影到平面字段） */
@@ -307,7 +295,7 @@ function refreshView(): void {
     subProcs: {},
     runningIds: runningIdsOf(useAgentRunStore.getState().sessions),
     loadFailed: false,
-    queuedNext: draftQueued
+    queue: []
   })
 }
 
@@ -392,33 +380,15 @@ export function startRun(input: string, model?: string, provider?: ProviderId): 
   const s = useAgentRunStore.getState()
   const text = input.trim()
   if (!text || !s.projectId) return
-  launchRun(s.activeId, text, model, provider, true)
-}
-
-/**
- * 发起一次 run。target=目标会话（null=草稿起步）；bumpToken=false 用于排队自动续发
- * （复用当前代际，避免后台续发作废用户正在进行的 UI 发起）。
- */
-function launchRun(
-  target: string | null,
-  text: string,
-  model: string | undefined,
-  provider: ProviderId | undefined,
-  bumpToken: boolean
-): void {
-  const s = useAgentRunStore.getState()
+  const target = s.activeId
   const pid = s.projectId
-  if (!pid) return
   if (target && s.sessions[target]?.running) return
-  const token = bumpToken ? ++genToken : genToken
+  const token = ++genToken
   pendingStarts.set(target, text)
   refreshView()
   // pendingStarts 只影响 refreshView 的 running 镜像，显式同步徽章数据
   useAgentRunStore.setState({ runningIds: runningIdsOf(useAgentRunStore.getState().sessions) })
-  // 排队续发可能发生在后台会话：仅当目标就是当前视图（或草稿）时才驱动全局 UI 态
-  if (!target || s.activeId === target) {
-    setAgentUi({ running: true, confirming: false, ended: null })
-  }
+  setAgentUi({ running: true, confirming: false, ended: null })
   void window.api.agent
     .run(
       target
@@ -427,20 +397,12 @@ function launchRun(
     )
     .then((id) => {
       if (useAgentRunStore.getState().projectId !== pid) return
-      if (bumpToken && token !== genToken) return
+      if (token !== genToken) return
       if (typeof id === 'string') return // 旧路径（messages 直跑）不会出现在新客户端，防御
       pendingStarts.delete(target)
       pendingStarts.delete(id.sessionId)
       ridIndex.set(id.requestId, id.sessionId)
       ensureBuf(id.sessionId)
-      // 草稿起步：把 invoke 在途期间排队的指令转入新会话缓冲
-      if (!target && draftQueued) {
-        const queued = draftQueued
-        draftQueued = null
-        applyBuf(id.sessionId, (b) => {
-          b.queuedNext = queued
-        })
-      }
       applyBuf(id.sessionId, (b) => {
         b.running = true
         b.requestId = id.requestId
@@ -457,25 +419,10 @@ function launchRun(
       }
     })
     .catch(async (err: unknown) => {
-      if (bumpToken && token !== genToken) return
+      if (token !== genToken) return
       if (useAgentRunStore.getState().projectId !== pid) return
       pendingStarts.delete(target)
-      // 草稿起步失败：排队的指令没有会话可转入，清掉避免幽灵排队条（失败场景指令丢弃，与发送时已清空的输入框一致）
-      if (!target && draftQueued) {
-        draftQueued = null
-        refreshView()
-      }
       await reconcileFailedStart(pid, target, text, (err as Error).message)
-      // F1：排队续发失败且未被对账接管（真失败）→ 指令放回队列，保留用户重试机会
-      if (!bumpToken && target) {
-        const st = useAgentRunStore.getState()
-        const b = st.sessions[target]
-        if (b && !b.running && !b.queuedNext) {
-          applyBuf(target, (x) => {
-            x.queuedNext = { text, model }
-          })
-        }
-      }
     })
 }
 
@@ -559,46 +506,119 @@ async function reconcileFailedStart(
 }
 
 /**
- * 运行中排队下一条指令（每会话单条；成功收尾后自动续发，失败/中断保留）。
- * 非运行态调用视为误用，直接忽略（UI 侧应走 startRun）。
+ * 运行中向当前 run 注入修正指令（主进程安全点：工具返回后、下一轮模型调用前生效，
+ * 落为正常 user 消息进会话历史）。非运行态忽略；返回 false=未入队（UI 回填输入框）。
  */
-export function queueRun(text: string, model?: string, provider?: ProviderId): void {
+export async function injectRun(text: string): Promise<boolean> {
   const s = useAgentRunStore.getState()
   const sid = s.activeId
-  const queued = text.trim()
-  if (!queued) return
-  if (!sid) {
-    // 草稿起步 invoke 在途：会话 id 未知，挂到草稿队列，run 建立后转入
-    if (pendingStarts.has(null)) {
-      draftQueued = { text: queued, model, provider }
-      refreshView()
-    }
-    return
-  }
+  const t = text.trim()
+  if (!t || !sid || !s.projectId) return false
   const buf = s.sessions[sid]
-  if (!buf || (!buf.running && !pendingStarts.has(sid))) return
-  applyBuf(sid, (b) => {
-    b.queuedNext = { text: queued, model, provider }
-  })
+  if (!buf || !(buf.running || pendingStarts.has(sid))) return false
+  try {
+    await window.api.agent.queueAdd({
+      sessionId: sid,
+      projectId: s.projectId,
+      kind: 'inject',
+      text: t
+    })
+    return true
+  } catch {
+    return false
+  }
 }
 
-/** 取消排队：返回被取消的文本（UI 回填输入框） */
-export function cancelQueued(): string | null {
+/** 显式排队任务：run 成功收尾后由主进程按序续发（失败/停止冻结，手动继续）。非运行态忽略。 */
+export async function queueTask(
+  text: string,
+  model?: string,
+  provider?: ProviderId
+): Promise<boolean> {
   const s = useAgentRunStore.getState()
   const sid = s.activeId
-  if (!sid) {
-    const t = draftQueued
-    draftQueued = null
-    refreshView()
-    return t?.text ?? null
-  }
+  const t = text.trim()
+  if (!t || !sid || !s.projectId) return false
   const buf = s.sessions[sid]
-  if (!buf?.queuedNext) return null
-  const t = buf.queuedNext.text
-  applyBuf(sid, (b) => {
-    b.queuedNext = null
-  })
-  return t
+  if (!buf || !(buf.running || pendingStarts.has(sid))) return false
+  try {
+    await window.api.agent.queueAdd({
+      sessionId: sid,
+      projectId: s.projectId,
+      kind: 'task',
+      text: t,
+      model,
+      provider
+    })
+    return true
+  } catch {
+    return false
+  }
+}
+
+/** 取消队列项：返回被取消的文本（UI 回填输入框） */
+export async function cancelQueued(id: string): Promise<string | null> {
+  const s = useAgentRunStore.getState()
+  const item = s.queue.find((q) => q.id === id)
+  if (!item) return null
+  try {
+    await window.api.agent.queueRemove(id)
+  } catch {
+    return null
+  }
+  return item.text
+}
+
+/** 调整排队任务顺序（仅 task；inject 无顺序语义） */
+export function moveQueued(id: string, dir: 'up' | 'down'): void {
+  void window.api.agent.queueMove(id, dir).catch(() => {})
+}
+
+/** 手动继续冻结的队列（失败/停止后）：主进程消费下一条启动 run */
+export function resumeQueue(): void {
+  const s = useAgentRunStore.getState()
+  if (!s.sessionId) return
+  void window.api.agent
+    .queueResume(s.sessionId)
+    .then((res) => {
+      // null=会话活跃中/无可消费项，维持原状；否则乐观接管新 run（不等 10s 快照 tick）
+      if (!res) return
+      ridIndex.set(res.requestId, res.sessionId)
+      ensureBuf(res.sessionId)
+      applyBuf(res.sessionId, (b) => {
+        b.running = true
+        b.requestId = res.requestId
+        b.interrupted = false
+        b.error = ''
+        b.errorHint = null
+      })
+      fetchEvents(res.sessionId)
+    })
+    .catch(() => {})
+}
+
+/** 队列镜像分发：按会话分组写入 buf.queue（引用变化才写，防无谓重渲） */
+function applyQueueMirror(projectId: string, items: AgentQueueItem[]): void {
+  const s = useAgentRunStore.getState()
+  if (s.projectId !== projectId) return
+  const bySid = new Map<string, AgentQueueItem[]>()
+  for (const it of items) {
+    const arr = bySid.get(it.sessionId) ?? []
+    arr.push(it)
+    bySid.set(it.sessionId, arr)
+  }
+  let changed = false
+  for (const sid of Object.keys(s.sessions)) {
+    const next = bySid.get(sid) ?? []
+    const cur = s.sessions[sid].queue
+    if (cur.length !== next.length || cur.some((q, i) => q.id !== next[i].id)) {
+      applyBuf(sid, (b) => {
+        b.queue = next
+      })
+      changed = true
+    }
+  }
+  if (changed || !s.activeId) refreshView()
 }
 
 export function stopRun(): void {
@@ -686,6 +706,9 @@ export function switchSession(id: string | null): void {
     useAgentRunStore.setState({ activeId: id })
     useAgentRunStore.setState(mirrorOf(id, buf))
     if (!buf.loaded) fetchEvents(id)
+    // 队列镜像兜底刷新（广播只在变化时来，刚打开的会话可能缺历史队列）
+    const pid = useAgentRunStore.getState().projectId
+    if (pid) void window.api.agent.queueList(pid).then((items) => applyQueueMirror(pid, items))
   } else {
     useAgentRunStore.setState({ activeId: null })
     refreshView()
@@ -710,7 +733,6 @@ export function syncProject(projectId: string): void {
   foreignRunning.clear()
   draftError = ''
   draftErrorHint = null
-  draftQueued = null
   useAgentRunStore.setState({
     projectId: projectId || null,
     activeId: null,
@@ -726,7 +748,7 @@ export function syncProject(projectId: string): void {
     subProcs: {},
     runningIds: [],
     loadFailed: false,
-    queuedNext: null
+    queue: []
   })
   setAgentUi({ running: false, confirming: false })
   if (!projectId) return
@@ -977,6 +999,10 @@ export function ensureAgentRuntime(): void {
           fetchEvents(sid)
         }
       }
+    })
+
+    window.api.agent.onQueue((projectId, items) => {
+      applyQueueMirror(projectId, items)
     })
 
     window.api.agent.onDelta((id, text) => {

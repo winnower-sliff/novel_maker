@@ -3,6 +3,7 @@ import { PROVIDER_IDS } from './providers'
 import type {
   AgentDonePayload,
   AgentInstructionsView,
+  AgentQueueItem,
   AgentSession,
   AgentSessionBrief,
   AgentToolCall,
@@ -497,6 +498,26 @@ export const invokeContract = {
     args: z.tuple([z.enum(['global', 'project']), z.string(), z.string().optional()]),
     ret: ret<void>()
   },
+  'agent:queueList': { args: z.tuple([z.string()]), ret: ret<AgentQueueItem[]>() },
+  'agent:queueAdd': {
+    args: z.tuple([
+      z.object({
+        sessionId: z.string(),
+        projectId: z.string(),
+        kind: z.enum(['task', 'inject']),
+        text: z.string().min(1).max(20000),
+        model: z.string().optional(),
+        provider: z.string().optional()
+      })
+    ]),
+    ret: ret<AgentQueueItem>()
+  },
+  'agent:queueRemove': { args: z.tuple([z.string()]), ret: ret<void>() },
+  'agent:queueMove': { args: z.tuple([z.string(), z.enum(['up', 'down'])]), ret: ret<void>() },
+  'agent:queueResume': {
+    args: z.tuple([z.string()]),
+    ret: ret<{ requestId: string; sessionId: string } | null>()
+  },
 
   'usage:list': { args: z.tuple([z.number().optional()]), ret: ret<UsageRecord[]>() },
   'usage:stats': { args: z.tuple([]), ret: ret<UsageStats>() },
@@ -696,6 +717,7 @@ export interface EventContract {
   'agent:error': [requestId: string, message: string, hint?: LlmErrorHint]
   'agent:subEvent': [requestId: string, event: SubagentEvent]
   'agent:transcript': [requestId: string, sessionId: string, event: AgentTranscriptEvent]
+  'agent:queue': [projectId: string, items: AgentQueueItem[]]
   'write:batch': [projectId: string, snapshot: BatchSnapshot]
 }
 
@@ -711,6 +733,7 @@ export const EVENT_CHANNELS = [
   'agent:error',
   'agent:subEvent',
   'agent:transcript',
+  'agent:queue',
   'write:batch'
 ] as const satisfies readonly (keyof EventContract)[]
 
@@ -826,6 +849,11 @@ export interface Api {
     sessionTitle: InvokeFn<'agent:sessionTitle'>
     instructionsGet: InvokeFn<'agent:instructionsGet'>
     instructionsSave: InvokeFn<'agent:instructionsSave'>
+    queueList: InvokeFn<'agent:queueList'>
+    queueAdd: InvokeFn<'agent:queueAdd'>
+    queueRemove: InvokeFn<'agent:queueRemove'>
+    queueMove: InvokeFn<'agent:queueMove'>
+    queueResume: InvokeFn<'agent:queueResume'>
     onDelta: SubscribeFn<'agent:delta'>
     onToolCall: SubscribeFn<'agent:toolCall'>
     onToolResult: SubscribeFn<'agent:toolResult'>
@@ -833,6 +861,7 @@ export interface Api {
     onError: SubscribeFn<'agent:error'>
     onSubEvent: SubscribeFn<'agent:subEvent'>
     onTranscript: SubscribeFn<'agent:transcript'>
+    onQueue: SubscribeFn<'agent:queue'>
   }
   exporter: {
     run: InvokeFn<'exporter:run'>

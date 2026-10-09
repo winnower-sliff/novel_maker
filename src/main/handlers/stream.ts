@@ -21,6 +21,7 @@ import {
   getAgentToolResultStatuses,
   runAgent
 } from '../agent'
+import { consumeNext } from '../agent/queue'
 import {
   appendEvent,
   createSession,
@@ -261,6 +262,7 @@ export function startAgentRun(
         sink,
         requestId,
         projectId: params.projectId,
+        sessionId,
         messages,
         model: params.model?.trim() || auth.model,
         signal: controller.signal,
@@ -284,6 +286,22 @@ export function startAgentRun(
     recordDone(requestId, payload)
     persist({ kind: 'done', summary: payload })
     if (!sink.isClosed()) sink.send('agent:done', requestId, payload)
+    // 队列续发由主进程驱动（三端镜像不双发）：正常收尾才消费，error/abort 冻结待手动继续。
+    // launch 走 startAgentRun 自身的并发守卫；此处同步调用即可（收尾时 activeSessionRuns 已清）。
+    if (!controller.signal.aborted) {
+      consumeNext(
+        sink,
+        sessionId,
+        (next) =>
+          startAgentRun(sink, {
+            projectId: next.projectId,
+            sessionId,
+            text: next.text,
+            ...(next.model ? { model: next.model } : {}),
+            ...(next.provider ? { provider: next.provider as ProviderId } : {})
+          }) as AgentRunHandle
+      )
+    }
     // 首轮收尾后自动起名（失败静默，保留启发式标题）
     if (isFirstTurn) {
       void genSessionTitle(text, payload.text).then((t) => {
@@ -293,6 +311,24 @@ export function startAgentRun(
   })()
 
   return { requestId, sessionId }
+}
+
+/** 手动继续冻结的队列（error/停止后用户点「继续」）：该会话无活跃 run 时消费下一条（insert 优先） */
+export function resumeSessionQueue(sink: EventSink, sessionId: string): AgentRunHandle | null {
+  if (activeSessionRuns.has(sessionId)) return null
+  if (!getSession(sessionId)) return null
+  return consumeNext(
+    sink,
+    sessionId,
+    (next) =>
+      startAgentRun(sink, {
+        projectId: next.projectId,
+        sessionId,
+        text: next.text,
+        ...(next.model ? { model: next.model } : {}),
+        ...(next.provider ? { provider: next.provider as ProviderId } : {})
+      }) as AgentRunHandle
+  )
 }
 
 /** 启发式标题：首条用户消息前 20 字 */

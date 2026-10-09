@@ -575,6 +575,20 @@ export interface AgentSessionBrief {
   updatedAt: number
 }
 
+/** 智能体持久化队列项（agent_queue 表）：task=排队任务按序执行，inject=运行中插入指令 */
+export interface AgentQueueItem {
+  id: string
+  sessionId: string
+  projectId: string
+  kind: 'task' | 'inject'
+  text: string
+  model: string
+  provider: string
+  /** 仅 task 有意义：同会话内顺序，小者先执行 */
+  position: number
+  createdAt: number
+}
+
 export type SubagentEvent =
   | { type: 'start'; parentId: string; task: string; role: string }
   | { type: 'delta'; parentId: string; text: string }
