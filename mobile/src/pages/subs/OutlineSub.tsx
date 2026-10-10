@@ -339,49 +339,60 @@ function ForeshadowList({
     f.plannedResolve || f.plannedResolveOutlineId
       ? formatChapterRef(f.plannedResolve, f.plannedResolveOutlineId, nosById)
       : null
+  const [folded, setFolded] = useState(true)
 
   return (
     <div className="mt-4">
-      <div className="mb-1.5 px-1 text-xs font-medium text-zinc-500">伏笔台账（{list.length}）</div>
+      <button
+        type="button"
+        aria-expanded={!folded}
+        onClick={() => setFolded((prev) => !prev)}
+        className="mb-1.5 flex cursor-pointer items-center gap-1.5 px-1 text-xs font-medium text-zinc-500"
+      >
+        <span className={`transition-transform ${folded ? '' : 'rotate-90'}`}>▸</span>
+        伏笔台账（{list.length}）
+      </button>
       {list.length === 0 ? (
         <Empty text="暂无伏笔（写章/摘要时自动登记）" />
       ) : (
-        <div className="space-y-1.5">
-          {list.map((f: Foreshadow) => {
-            const planned = plannedRef(f)
-            return (
-              <Row
-                key={f.id}
-                title={f.content}
-                sub={
-                  isDanglingRef(f.plantedOutlineId, nosById)
-                    ? '埋设章已删除'
-                    : `埋设 ${formatChapterRef(f.plantedChapter, f.plantedOutlineId, nosById) || '?'}${
-                        planned === null
-                          ? isDanglingRef(f.plannedResolveOutlineId, nosById)
-                            ? ' · 计划回收待重设'
-                            : ''
-                          : ` · 计划回收 ${planned}`
-                      }`
-                }
-                right={
-                  <span
-                    className={`rounded-full px-2 py-0.5 text-[10px] ${
-                      f.status === 'resolved'
-                        ? 'bg-emerald-600/15 text-emerald-400'
-                        : f.status === 'abandoned'
-                          ? 'bg-zinc-700/40 text-zinc-400'
-                          : 'bg-amber-600/15 text-amber-400'
-                    }`}
-                  >
-                    {f.status}
-                  </span>
-                }
-                onClick={() => onEdit(f.id)}
-              />
-            )
-          })}
-        </div>
+        !folded && (
+          <div className="space-y-1.5">
+            {list.map((f: Foreshadow) => {
+              const planned = plannedRef(f)
+              return (
+                <Row
+                  key={f.id}
+                  title={f.content}
+                  sub={
+                    isDanglingRef(f.plantedOutlineId, nosById)
+                      ? '埋设章已删除'
+                      : `埋设 ${formatChapterRef(f.plantedChapter, f.plantedOutlineId, nosById) || '?'}${
+                          planned === null
+                            ? isDanglingRef(f.plannedResolveOutlineId, nosById)
+                              ? ' · 计划回收待重设'
+                              : ''
+                            : ` · 计划回收 ${planned}`
+                        }`
+                  }
+                  right={
+                    <span
+                      className={`rounded-full px-2 py-0.5 text-[10px] ${
+                        f.status === 'resolved'
+                          ? 'bg-emerald-600/15 text-emerald-400'
+                          : f.status === 'abandoned'
+                            ? 'bg-zinc-700/40 text-zinc-400'
+                            : 'bg-amber-600/15 text-amber-400'
+                      }`}
+                    >
+                      {f.status}
+                    </span>
+                  }
+                  onClick={() => onEdit(f.id)}
+                />
+              )
+            })}
+          </div>
+        )
       )}
     </div>
   )
