@@ -316,6 +316,28 @@ export const invokeContract = {
     args: z.tuple([z.enum(['global', 'project']), z.string(), z.string().optional()]),
     ret: ret<void>()
   },
+  'agent:instructionSectionSave': {
+    // 按节原子保存（与 agent 工具 update_instruction_section 共享实现）；ret=保存后的完整视图
+    args: z.tuple([
+      z.discriminatedUnion('kind', [
+        z.object({
+          kind: z.literal('section'),
+          scope: z.enum(['global', 'project']),
+          projectId: z.string().optional(),
+          title: z.string().min(1),
+          body: z.string().optional(),
+          tag: z.string().nullable().optional()
+        }),
+        z.object({
+          kind: z.literal('preamble'),
+          scope: z.enum(['global', 'project']),
+          projectId: z.string().optional(),
+          text: z.string()
+        })
+      ])
+    ]),
+    ret: ret<AgentInstructionsView>()
+  },
   'agent:queueList': { args: z.tuple([z.string()]), ret: ret<AgentQueueItem[]>() },
   'agent:queueAdd': {
     args: z.tuple([
@@ -626,6 +648,7 @@ export interface Api {
     sessionTitle: InvokeFn<'agent:sessionTitle'>
     instructionsGet: InvokeFn<'agent:instructionsGet'>
     instructionsSave: InvokeFn<'agent:instructionsSave'>
+    instructionSectionSave: InvokeFn<'agent:instructionSectionSave'>
     queueList: InvokeFn<'agent:queueList'>
     queueAdd: InvokeFn<'agent:queueAdd'>
     queueRemove: InvokeFn<'agent:queueRemove'>

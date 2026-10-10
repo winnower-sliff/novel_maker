@@ -141,6 +141,86 @@ export function parseSectionsView(raw: string): {
   }
 }
 
+// ── 分节原子编辑（agent 工具与 UI 通道共享同一实现）──
+
+const INSTRUCTIONS_MAX_CHARS = 20000
+
+export interface SectionEditInput {
+  /** 节标题（不含 ## 前缀），大小写不敏感定位 */
+  title: string
+  /** 新内容；undefined=只改 tag；空串=删除该节 */
+  body?: string
+  /** undefined=不改 tag；'' 或 null=改为恒注入；否则小写化存储 */
+  tag?: string | null
+}
+
+export interface SectionEditResult {
+  action: 'created' | 'updated' | 'deleted'
+  scope: 'global' | 'project'
+  title: string
+  tag: string | null
+}
+
+function normalizeTag(raw: string | null | undefined): string | null | undefined {
+  if (raw === undefined) return undefined
+  if (raw === null) return null
+  const t = raw.trim().toLowerCase()
+  return t || null
+}
+
+/** 按节修改指令（scope 校验、20000 字上限都在此把关）；title 定位、body 三态、tag 可选改 */
+export function applySectionEdit(
+  scope: string,
+  projectId: string,
+  edit: SectionEditInput
+): SectionEditResult {
+  if (scope !== 'global' && scope !== 'project')
+    throw new Error("scope 必须是 'global' 或 'project'")
+  const title = edit.title.trim()
+  if (!title) throw new Error('title 不能为空')
+  const tag = normalizeTag(edit.tag)
+  const body = edit.body
+  const raw = scope === 'global' ? readGlobalInstructions() : readProjectInstructions(projectId)
+  const { preamble, sections } = parseRuleSections(raw)
+  const writeBack = (out: string): void => {
+    if (out.length > INSTRUCTIONS_MAX_CHARS)
+      throw new Error(`指令过长（上限 ${INSTRUCTIONS_MAX_CHARS} 字），请精简`)
+    if (scope === 'global') writeGlobalInstructions(out)
+    else writeProjectInstructions(projectId, out)
+  }
+  const idx = sections.findIndex((sec) => sec.title.toLowerCase() === title.toLowerCase())
+  if (idx === -1) {
+    if (!body?.trim()) throw new Error(`分节「${title}」不存在；内容为空无法新建（传内容即可新建）`)
+    sections.push({ title, tag: tag ?? null, text: `## ${title}\n${body.trim()}` })
+    writeBack(serializeRuleSections(preamble, sections))
+    return { action: 'created', scope, title, tag: tag ?? null }
+  }
+  if (body !== undefined && !body.trim()) {
+    sections.splice(idx, 1)
+    writeBack(serializeRuleSections(preamble, sections))
+    return { action: 'deleted', scope, title, tag: null }
+  }
+  if (body?.trim()) {
+    sections[idx] = { ...sections[idx], text: `## ${sections[idx].title}\n${body.trim()}` }
+  }
+  if (tag !== undefined) sections[idx] = { ...sections[idx], tag }
+  writeBack(serializeRuleSections(preamble, sections))
+  return { action: 'updated', scope, title, tag: sections[idx].tag }
+}
+
+/** 只改指令开头段（preamble，每次任务恒注入）；分节原样保留 */
+export function applyPreambleEdit(scope: string, projectId: string, text: string): void {
+  if (scope !== 'global' && scope !== 'project')
+    throw new Error("scope 必须是 'global' 或 'project'")
+  const raw = scope === 'global' ? readGlobalInstructions() : readProjectInstructions(projectId)
+  const { sections } = parseRuleSections(raw)
+  const out = serializeRuleSections(text, sections)
+  if (out.length > INSTRUCTIONS_MAX_CHARS)
+    throw new Error(`指令过长（上限 ${INSTRUCTIONS_MAX_CHARS} 字），请精简`)
+  if (scope === 'global') writeGlobalInstructions(out)
+  else writeProjectInstructions(projectId, out)
+}
+
 /** 解析结果按 mtime+size 缓存：写盘后立即失效，兼顾「即改即生效」与逐段写作的重复解析 */
 let sectionCache: {
   mtimeMs: number

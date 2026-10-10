@@ -1042,7 +1042,10 @@ export default function Agent({ projectId, active }: { projectId: string; active
         title="智能体指令"
         widthClass="max-w-2xl"
       >
-        <AgentInstructionsPanel projectId={projectId} />
+        <AgentInstructionsPanel
+          projectId={projectId}
+          renderMarkdown={(md) => <Markdown text={md} />}
+        />
       </OverlayCard>
     </div>
   )

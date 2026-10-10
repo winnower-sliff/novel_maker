@@ -1,5 +1,17 @@
 import type { AgentInstructionsView, RuleSectionView } from '@shared/types'
-import { useEffect, useState } from 'react'
+import { type ReactNode, useEffect, useState } from 'react'
+import { OverlayCard } from './OverlayCard'
+
+const INPUT_CLS =
+  'rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50'
+const BTN_CLS =
+  'cursor-pointer rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800/60 active:bg-zinc-800 disabled:cursor-default disabled:opacity-40'
+const TEXTAREA_CLS =
+  'w-full resize-y rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs leading-5 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50'
+const SAVE_CLS =
+  'cursor-pointer rounded-md bg-amber-600/90 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600 disabled:cursor-default disabled:opacity-40'
+const DEL_CLS =
+  'cursor-pointer rounded-md border border-red-900/60 px-2 py-1 text-xs text-red-400/90 hover:bg-red-950/40 disabled:cursor-default disabled:opacity-40'
 
 const TAG_OPTIONS: Array<{ value: string; label: string }> = [
   { value: '', label: '无标签（每次注入）' },
@@ -16,442 +28,370 @@ const TAG_OPTIONS: Array<{ value: string; label: string }> = [
   { value: 'continuity', label: '[continuity] 连贯性' }
 ]
 
-const INPUT_CLS =
-  'rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1 text-xs text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50'
-const BTN_CLS =
-  'cursor-pointer rounded-md border border-zinc-700 px-2 py-1 text-xs text-zinc-300 hover:bg-zinc-800/60 active:bg-zinc-800 disabled:cursor-default disabled:opacity-40'
-const TEXTAREA_CLS =
-  'w-full resize-y rounded-md border border-zinc-800 bg-zinc-950 px-2 py-1.5 text-xs leading-5 text-zinc-200 outline-none placeholder:text-zinc-600 focus:border-zinc-600 disabled:opacity-50'
+const sanitizeTag = (raw: string): string => raw.toLowerCase().replace(/[^a-z0-9_-]/g, '')
 
-/** 与主进程解析器一致：标签只允许 ASCII（中文/非法字符清掉，空则退化为无标签） */
-function sanitizeTag(tag: string | null): string | null {
-  if (!tag) return null
-  const t = tag
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9_-]/g, '')
-  return t || null
+const injectHint = (tag: string | null): string =>
+  !tag || tag === 'core' ? '每次任务注入' : `随 [${tag}] 任务注入`
+
+type Tab = 'global' | 'project'
+
+interface Draft {
+  originalTitle: string | null
+  title: string
+  tag: string
+  body: string
 }
 
-function serializeSections(preamble: string, sections: RuleSectionView[]): string {
-  const body = sections
-    .map((s) => {
-      const title = s.title.trim() || '未命名节'
-      const tag = sanitizeTag(s.tag)
-      const line = tag ? `## ${title} [${tag}]` : `## ${title}`
-      const text = s.body.trim()
-      return text ? `${line}\n${text}` : line
-    })
-    .join('\n\n')
-  return [preamble.trim(), body].filter(Boolean).join('\n\n')
-}
-
-/** 带本地稳定 key 的编辑态节（序列化时多余字段被忽略） */
-interface EditSection extends RuleSectionView {
-  _id: string
-}
-
-let seq = 0
-function withIds(list: RuleSectionView[]): EditSection[] {
-  return list.map((s) => ({ ...s, _id: `sec${++seq}` }))
-}
-
-const toMsg = (e: unknown): string => (e instanceof Error ? e.message : String(e))
-
-function SectionTagEditor({
-  value,
-  onChange,
-  disabled
+function SectionCardBody({
+  body,
+  renderMarkdown
 }: {
-  value: string | null
-  onChange: (v: string | null) => void
-  disabled: boolean
+  body: string
+  renderMarkdown?: (md: string) => ReactNode
 }) {
-  const isPreset = value === null || TAG_OPTIONS.some((o) => o.value === value)
-  const [custom, setCustom] = useState(!isPreset)
-  return (
-    <div className="flex items-center gap-1">
-      <select
-        value={custom ? '__custom' : (value ?? '')}
-        disabled={disabled}
-        onChange={(e) => {
-          const v = e.target.value
-          if (v === '__custom') {
-            setCustom(true)
-          } else {
-            setCustom(false)
-            onChange(v === '' ? null : v)
-          }
-        }}
-        className={`${INPUT_CLS} cursor-pointer`}
-      >
-        {TAG_OPTIONS.map((o) => (
-          <option key={o.value} value={o.value}>
-            {o.label}
-          </option>
-        ))}
-        <option value="__custom">自定义…</option>
-      </select>
-      {custom && (
-        <input
-          value={value ?? ''}
-          disabled={disabled}
-          onChange={(e) => onChange(sanitizeTag(e.target.value))}
-          placeholder="tag"
-          className={`${INPUT_CLS} w-20`}
-        />
-      )}
-    </div>
-  )
+  if (!body.trim()) {
+    return <div className="text-xs text-zinc-600">（空）</div>
+  }
+  if (renderMarkdown) return <div className="text-sm">{renderMarkdown(body)}</div>
+  return <div className="whitespace-pre-wrap text-xs leading-5 text-zinc-300">{body}</div>
 }
 
-function SectionCard({
-  section,
-  index,
-  count,
-  disabled,
-  onPatch,
-  onRemove,
-  onMove
+export function AgentInstructionsPanel({
+  projectId,
+  renderMarkdown
 }: {
-  section: EditSection
-  index: number
-  count: number
-  disabled: boolean
-  onPatch: (patch: Partial<RuleSectionView>) => void
-  onRemove: () => void
-  onMove: (dir: -1 | 1) => void
+  projectId: string
+  renderMarkdown?: (md: string) => ReactNode
 }) {
-  const [open, setOpen] = useState(true)
-  return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40">
-      <div className="flex flex-wrap items-center gap-1.5 px-2.5 py-2">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-label={open ? '收起' : '展开'}
-          className="cursor-pointer text-xs text-zinc-500"
-        >
-          <span className={`inline-block transition-transform ${open ? 'rotate-90' : ''}`}>▸</span>
-        </button>
-        <input
-          value={section.title}
-          onChange={(e) => onPatch({ title: e.target.value })}
-          disabled={disabled}
-          placeholder="节标题"
-          className={`${INPUT_CLS} min-w-0 flex-1`}
-        />
-        <SectionTagEditor
-          value={section.tag}
-          onChange={(t) => onPatch({ tag: t })}
-          disabled={disabled}
-        />
-        <div className="flex items-center gap-1">
-          <button
-            type="button"
-            onClick={() => onMove(-1)}
-            disabled={disabled || index === 0}
-            aria-label="上移"
-            className={BTN_CLS}
-          >
-            ↑
-          </button>
-          <button
-            type="button"
-            onClick={() => onMove(1)}
-            disabled={disabled || index === count - 1}
-            aria-label="下移"
-            className={BTN_CLS}
-          >
-            ↓
-          </button>
-          <button
-            type="button"
-            onClick={onRemove}
-            disabled={disabled}
-            aria-label="删除"
-            className="cursor-pointer rounded-md border border-red-900/60 px-2 py-1 text-xs text-red-400/90 hover:bg-red-950/40 disabled:cursor-default disabled:opacity-40"
-          >
-            ✕
-          </button>
-        </div>
-      </div>
-      {open && (
-        <div className="border-t border-zinc-800/70 px-2.5 py-2">
-          <textarea
-            value={section.body}
-            onChange={(e) => onPatch({ body: e.target.value })}
-            disabled={disabled}
-            rows={4}
-            placeholder={'规则内容，例如：\n- 每章结尾留一个钩子'}
-            className={TEXTAREA_CLS}
-          />
-          <div className="mt-1.5 flex items-center justify-end">
-            <span className="text-[11px] text-zinc-600">
-              {!section.tag || section.tag === 'core'
-                ? '每次任务注入'
-                : `随 [${section.tag}] 任务注入`}
-            </span>
-          </div>
-        </div>
-      )}
-    </div>
-  )
-}
-
-function PreambleCard({
-  value,
-  onChange,
-  disabled
-}: {
-  value: string
-  onChange: (v: string) => void
-  disabled: boolean
-}) {
-  const [open, setOpen] = useState(true)
-  return (
-    <div className="rounded-lg border border-zinc-800 bg-zinc-900/40">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex w-full cursor-pointer items-center gap-1.5 px-2.5 py-2 text-left"
-      >
-        <span
-          className={`inline-block text-xs text-zinc-500 transition-transform ${open ? 'rotate-90' : ''}`}
-        >
-          ▸
-        </span>
-        <span className="text-xs text-zinc-400">文件头（## 分节之前的内容，每次注入）</span>
-      </button>
-      {open && (
-        <div className="border-t border-zinc-800/70 px-2.5 py-2">
-          <textarea
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            disabled={disabled}
-            rows={3}
-            placeholder="文件说明…（可留空）"
-            className={TEXTAREA_CLS}
-          />
-        </div>
-      )}
-    </div>
-  )
-}
-
-/** 智能体指令弹层内容（两端共用）：全局结构化分节编辑 + 项目纯文本，均带 AI 优化/建议 */
-export function AgentInstructionsPanel({ projectId }: { projectId: string }) {
-  const [loading, setLoading] = useState(true)
-  const [reloadKey, setReloadKey] = useState(0)
-  const [tab, setTab] = useState<'global' | 'project'>('global')
   const [view, setView] = useState<AgentInstructionsView | null>(null)
-  const [preamble, setPreamble] = useState('')
-  const [sections, setSections] = useState<EditSection[]>([])
-  const [projectDraft, setProjectDraft] = useState('')
-  const [baselineG, setBaselineG] = useState('')
-  const [baselineP, setBaselineP] = useState('')
+  const [tab, setTab] = useState<Tab>('global')
+  const [draft, setDraft] = useState<Draft | null>(null)
+  const [preambleDraft, setPreambleDraft] = useState<string | null>(null)
+  const [confirmDel, setConfirmDel] = useState(false)
   const [saving, setSaving] = useState(false)
-  const [saved, setSaved] = useState(false)
-  const [err, setErr] = useState('')
+  const [error, setError] = useState('')
 
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reloadKey 仅作重试触发
   useEffect(() => {
-    let stopped = false
-    setLoading(true)
-    setErr('')
+    let alive = true
     void window.api.agent
       .instructionsGet(projectId)
       .then((v) => {
-        if (stopped) return
-        setView(v)
-        setPreamble(v.globalPreamble)
-        setSections(withIds(v.globalSections))
-        setBaselineG(serializeSections(v.globalPreamble, v.globalSections))
-        setProjectDraft(v.projectText)
-        setBaselineP(v.projectText)
-        setLoading(false)
+        if (alive) setView(v)
       })
-      .catch((e: unknown) => {
-        if (stopped) return
-        setErr(toMsg(e))
-        setLoading(false)
-      })
+      .catch(() => {})
     return () => {
-      stopped = true
+      alive = false
     }
-  }, [projectId, reloadKey])
+  }, [projectId])
 
-  const dirtyG = serializeSections(preamble, sections) !== baselineG
-  const dirtyP = projectDraft !== baselineP
-  const dirty = tab === 'global' ? dirtyG : dirtyP
-  const locked = saving
+  const preamble = view ? (tab === 'global' ? view.globalPreamble : view.projectPreamble) : ''
+  const sections: RuleSectionView[] = view
+    ? tab === 'global'
+      ? view.globalSections
+      : view.projectSections
+    : []
 
-  const patchSection = (i: number, patch: Partial<RuleSectionView>): void => {
-    setSections((prev) => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)))
-    setSaved(false)
+  const openNew = (): void => {
+    setError('')
+    setConfirmDel(false)
+    setDraft({ originalTitle: null, title: '', tag: '', body: '' })
   }
 
-  const addSection = (): void => {
-    if (locked) return
-    setSections((prev) => [...prev, ...withIds([{ title: '', tag: null, body: '' }])])
-    setSaved(false)
+  const openSection = (s: RuleSectionView): void => {
+    setError('')
+    setConfirmDel(false)
+    setDraft({ originalTitle: s.title, title: s.title, tag: s.tag ?? '', body: s.body })
   }
 
-  const removeSection = (i: number): void => {
-    if (locked) return
-    if (!window.confirm('删除该节？保存后生效')) return
-    setSections((prev) => prev.filter((_, j) => j !== i))
-    setSaved(false)
+  const closeEditor = (): void => {
+    setDraft(null)
+    setConfirmDel(false)
+    setError('')
   }
 
-  const moveSection = (i: number, dir: -1 | 1): void => {
-    if (locked) return
-    setSections((prev) => {
-      const j = i + dir
-      if (j < 0 || j >= prev.length) return prev
-      const next = [...prev]
-      const tmp = next[i]
-      next[i] = next[j]
-      next[j] = tmp
-      return next
-    })
-    setSaved(false)
-  }
-
-  const save = (): void => {
-    if (!view || locked) return
+  const saveSection = async (): Promise<void> => {
+    if (!draft || saving) return
+    const title = draft.title.trim()
+    if (!title) {
+      setError('标题不能为空')
+      return
+    }
+    if (
+      draft.originalTitle === null &&
+      sections.some((s) => s.title.toLowerCase() === title.toLowerCase())
+    ) {
+      setError('已存在同名节，请换标题或直接编辑该节')
+      return
+    }
+    if (!draft.body.trim()) {
+      setError('正文不能为空（删除请用删除按钮）')
+      return
+    }
     setSaving(true)
-    setSaved(false)
-    setErr('')
-    const scope = tab
-    const text = scope === 'global' ? serializeSections(preamble, sections) : projectDraft
-    void window.api.agent
-      .instructionsSave(scope, text, projectId)
-      .then(() => {
-        setSaving(false)
-        setSaved(true)
-        if (scope === 'global') {
-          setBaselineG(text)
-          setView((v) => (v ? { ...v, globalText: text } : v))
-        } else {
-          setBaselineP(text)
-          setView((v) => (v ? { ...v, projectText: text } : v))
-        }
+    setError('')
+    try {
+      const next = await window.api.agent.instructionSectionSave({
+        kind: 'section',
+        scope: tab,
+        projectId,
+        title,
+        body: draft.body,
+        tag: draft.tag ? sanitizeTag(draft.tag) : null
       })
-      .catch((e: unknown) => {
-        setSaving(false)
-        setErr(toMsg(e))
-      })
+      setView(next)
+      closeEditor()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
   }
 
-  if (loading) {
-    return <div className="py-10 text-center text-xs text-zinc-500">加载中…</div>
+  const deleteSection = async (): Promise<void> => {
+    if (!draft?.originalTitle || saving) return
+    setSaving(true)
+    setError('')
+    try {
+      const next = await window.api.agent.instructionSectionSave({
+        kind: 'section',
+        scope: tab,
+        projectId,
+        title: draft.originalTitle,
+        body: '',
+        tag: null
+      })
+      setView(next)
+      closeEditor()
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
   }
-  if (!view) {
-    return (
-      <div className="flex flex-col items-center gap-2 py-10">
-        <p className="text-xs text-red-400">{err || '加载失败'}</p>
-        <button type="button" onClick={() => setReloadKey((k) => k + 1)} className={BTN_CLS}>
-          重试
-        </button>
-      </div>
-    )
+
+  const savePreamble = async (): Promise<void> => {
+    if (preambleDraft === null || saving) return
+    setSaving(true)
+    setError('')
+    try {
+      const next = await window.api.agent.instructionSectionSave({
+        kind: 'preamble',
+        scope: tab,
+        projectId,
+        text: preambleDraft
+      })
+      setView(next)
+      setPreambleDraft(null)
+    } catch (err) {
+      setError((err as Error).message)
+    } finally {
+      setSaving(false)
+    }
   }
+
+  const tabBtn = (key: Tab, label: string): ReactNode => (
+    <button
+      key={key}
+      type="button"
+      className={`cursor-pointer rounded-md border px-2.5 py-1 text-xs transition-colors disabled:cursor-default disabled:opacity-40 ${
+        tab === key
+          ? 'border-amber-600/60 bg-amber-600/10 text-amber-400'
+          : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+      }`}
+      onClick={() => setTab(key)}
+    >
+      {label}
+    </button>
+  )
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center gap-1.5">
-        {(
-          [
-            ['global', '全局（agents.md）'],
-            ['project', '本项目']
-          ] as Array<['global' | 'project', string]>
-        ).map(([key, label]) => (
-          <button
-            key={key}
-            type="button"
-            disabled={locked}
-            onClick={() => {
-              setTab(key)
-              setSaved(false)
-              setErr('')
-            }}
-            className={`cursor-pointer rounded-md border px-2.5 py-1 text-xs transition-colors disabled:cursor-default disabled:opacity-40 ${
-              tab === key
-                ? 'border-amber-600/60 bg-amber-600/10 text-amber-400'
-                : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
-            }`}
-          >
-            {label}
-          </button>
-        ))}
+    <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <div className="flex flex-wrap items-center gap-2">
+        {tabBtn('global', '全局')}
+        {tabBtn('project', '本项目')}
+        <span className="text-[11px] text-zinc-600">
+          {tab === 'global'
+            ? `存于 ${view?.globalPath ?? 'agents.md'}，所有项目生效；按 [tag] 分节注入，无标签/[core] 每次注入`
+            : '仅当前项目的智能体生效，优先级高于全局'}
+        </span>
       </div>
-      <p className="text-[11px] leading-4 text-zinc-600">
-        {tab === 'global'
-          ? `存于 ${view.globalPath}，所有项目生效；按 [tag] 分节注入，无标签/[core] 每次注入`
-          : '仅当前项目的智能体生效，优先级高于全局'}
-      </p>
-      {tab === 'global' ? (
-        <div className="flex flex-col gap-2">
-          <div className="flex items-center gap-2">
-            <button type="button" onClick={addSection} disabled={locked} className={BTN_CLS}>
-              ＋ 添加节
+
+      <div className="min-h-0 flex-1 space-y-3 overflow-y-auto pr-1">
+        <div className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+          <div className="mb-1.5 flex items-center gap-2">
+            <span className="text-xs font-medium text-zinc-300">开头段</span>
+            <span className="text-[11px] text-zinc-600">每次任务注入</span>
+            <button
+              type="button"
+              className={`${BTN_CLS} ml-auto`}
+              onClick={() => {
+                setError('')
+                setPreambleDraft(preamble)
+              }}
+            >
+              编辑
             </button>
           </div>
-          <PreambleCard
-            value={preamble}
-            onChange={(v) => {
-              setPreamble(v)
-              setSaved(false)
-            }}
-            disabled={locked}
-          />
-          {sections.map((s, i) => (
-            <SectionCard
-              key={s._id}
-              section={s}
-              index={i}
-              count={sections.length}
-              disabled={locked}
-              onPatch={(p) => patchSection(i, p)}
-              onRemove={() => removeSection(i)}
-              onMove={(d) => moveSection(i, d)}
-            />
-          ))}
-          {sections.length === 0 && (
-            <p className="py-2 text-center text-xs text-zinc-600">
-              暂无分节——点「＋ 添加节」自行起草
-            </p>
-          )}
+          <SectionCardBody body={preamble} renderMarkdown={renderMarkdown} />
         </div>
-      ) : (
-        <div className="flex flex-col gap-2">
-          <textarea
-            rows={12}
-            value={projectDraft}
-            onChange={(e) => {
-              setProjectDraft(e.target.value)
-              setSaved(false)
-            }}
-            disabled={locked}
-            placeholder="本项目专属的工作要求，例如「伏笔必须三章内回收」「主角称呼固定为『阿澈』」…（Markdown，支持 ## 标题 [tag] 分节）"
-            className={`${TEXTAREA_CLS} font-mono`}
-          />
-        </div>
-      )}
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={save}
-          disabled={locked || !dirty}
-          className="cursor-pointer rounded-md bg-amber-600/90 px-3 py-1.5 text-xs font-medium text-white hover:bg-amber-600 disabled:cursor-default disabled:opacity-40"
-        >
-          {saving ? '保存中…' : '保存'}
+
+        {sections.map((s) => (
+          <div key={s.title} className="rounded-lg border border-zinc-800 bg-zinc-900/40 p-3">
+            <div className="mb-1.5 flex flex-wrap items-center gap-2">
+              <span className="text-xs font-medium text-zinc-300">{s.title}</span>
+              <span className="rounded bg-zinc-800/80 px-1.5 py-0.5 text-[10px] text-zinc-400">
+                {injectHint(s.tag)}
+              </span>
+              <button type="button" className={`${BTN_CLS} ml-auto`} onClick={() => openSection(s)}>
+                编辑
+              </button>
+            </div>
+            <SectionCardBody body={s.body} renderMarkdown={renderMarkdown} />
+          </div>
+        ))}
+
+        {sections.length === 0 && !preamble.trim() && (
+          <div className="rounded-lg border border-dashed border-zinc-800 p-4 text-center text-xs text-zinc-600">
+            暂无指令——点「＋ 新增节」手写，或到智能体对话让 AI 起草
+          </div>
+        )}
+
+        <button type="button" className={`${BTN_CLS} w-full`} onClick={openNew}>
+          ＋ 新增节
         </button>
-        {saved && <span className="text-xs text-emerald-400">已保存，下次任务生效</span>}
-        {!saved && dirty && <span className="text-xs text-zinc-500">有未保存修改</span>}
-        {err && <span className="text-xs text-red-400">{err}</span>}
       </div>
+
+      <OverlayCard
+        open={draft !== null}
+        onClose={closeEditor}
+        title={draft?.originalTitle ? `编辑节：${draft.originalTitle}` : '新增节'}
+        widthClass="max-w-2xl"
+        footer={
+          <div className="flex w-full flex-wrap items-center gap-2">
+            {error && <span className="text-xs text-red-400/90">{error}</span>}
+            {draft?.originalTitle && (
+              <button
+                type="button"
+                className={`${DEL_CLS} mr-auto`}
+                disabled={saving}
+                onClick={() => {
+                  if (!confirmDel) {
+                    setConfirmDel(true)
+                    return
+                  }
+                  void deleteSection()
+                }}
+              >
+                {confirmDel ? '确认删除？' : '删除'}
+              </button>
+            )}
+            <button type="button" className={BTN_CLS} disabled={saving} onClick={closeEditor}>
+              取消
+            </button>
+            <button
+              type="button"
+              className={SAVE_CLS}
+              disabled={saving}
+              onClick={() => void saveSection()}
+            >
+              保存
+            </button>
+          </div>
+        }
+      >
+        {draft && (
+          <div className="space-y-2.5">
+            <label className="flex items-center gap-2 text-xs text-zinc-400">
+              <span className="w-12 shrink-0">标题</span>
+              <input
+                className={`${INPUT_CLS} flex-1`}
+                value={draft.title}
+                disabled={saving || draft.originalTitle !== null}
+                onChange={(e) => setDraft({ ...draft, title: e.target.value })}
+                placeholder="如：叙事纪律"
+              />
+            </label>
+            <div className="flex items-start gap-2 text-xs text-zinc-400">
+              <span className="w-12 shrink-0 pt-1.5">标签</span>
+              <div className="flex-1 space-y-1.5">
+                <div className="flex flex-wrap gap-1">
+                  {TAG_OPTIONS.map((o) => (
+                    <button
+                      key={o.value || 'none'}
+                      type="button"
+                      disabled={saving}
+                      onClick={() => setDraft({ ...draft, tag: o.value })}
+                      className={`cursor-pointer rounded-full border px-2 py-0.5 text-[11px] transition-colors disabled:cursor-default disabled:opacity-40 ${
+                        (draft.tag || '') === o.value
+                          ? 'border-amber-600/60 bg-amber-600/10 text-amber-400'
+                          : 'border-zinc-800 text-zinc-400 hover:border-zinc-700 hover:text-zinc-200'
+                      }`}
+                    >
+                      {o.label}
+                    </button>
+                  ))}
+                </div>
+                <input
+                  className={`${INPUT_CLS} w-full`}
+                  value={draft.tag}
+                  disabled={saving}
+                  onChange={(e) => setDraft({ ...draft, tag: sanitizeTag(e.target.value) })}
+                  placeholder="或输入自定义标签（a-z 0-9 _ -）"
+                />
+              </div>
+            </div>
+            <div className="flex items-start gap-2 text-xs text-zinc-400">
+              <span className="w-12 shrink-0 pt-1.5">正文</span>
+              <textarea
+                className={`${TEXTAREA_CLS} min-h-56 flex-1`}
+                value={draft.body}
+                disabled={saving}
+                onChange={(e) => setDraft({ ...draft, body: e.target.value })}
+                placeholder="markdown；支持 [[条目|关系]] 链接。留空不可保存，删除请用删除按钮。"
+              />
+            </div>
+          </div>
+        )}
+      </OverlayCard>
+
+      <OverlayCard
+        open={preambleDraft !== null}
+        onClose={() => {
+          setPreambleDraft(null)
+          setError('')
+        }}
+        title="编辑开头段"
+        widthClass="max-w-2xl"
+        footer={
+          <div className="flex w-full items-center gap-2">
+            {error && <span className="text-xs text-red-400/90">{error}</span>}
+            <button
+              type="button"
+              className={`${BTN_CLS} ml-auto`}
+              disabled={saving}
+              onClick={() => setPreambleDraft(null)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              className={SAVE_CLS}
+              disabled={saving}
+              onClick={() => void savePreamble()}
+            >
+              保存
+            </button>
+          </div>
+        }
+      >
+        <textarea
+          className={`${TEXTAREA_CLS} min-h-56`}
+          value={preambleDraft ?? ''}
+          disabled={saving}
+          onChange={(e) => setPreambleDraft(e.target.value)}
+          placeholder="写给智能体的总原则（每次任务注入）；按 [tag] 分节的细则请用下方分节管理。"
+        />
+      </OverlayCard>
     </div>
   )
 }

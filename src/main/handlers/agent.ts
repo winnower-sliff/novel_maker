@@ -1,5 +1,7 @@
 import { cancelAgentConfirms, resolveAgentConfirm } from '../agent'
 import {
+  applyPreambleEdit,
+  applySectionEdit,
   getInstructionsView,
   writeGlobalInstructions,
   writeProjectInstructions
@@ -59,6 +61,17 @@ export const agentHandlers = {
     }
     if (!projectId) throw new Error('缺少 projectId，无法保存本项目指令')
     writeProjectInstructions(projectId, text)
+  },
+  // 按节原子保存（分节/开头段），返回保存后的完整视图供 UI 直接刷新
+  'agent:instructionSectionSave': (_ctx, [input]) => {
+    const pid = input.projectId ?? ''
+    if (input.scope === 'project' && !pid) throw new Error('缺少 projectId，无法保存本项目指令')
+    if (input.kind === 'section') {
+      applySectionEdit(input.scope, pid, { title: input.title, body: input.body, tag: input.tag })
+    } else {
+      applyPreambleEdit(input.scope, pid, input.text)
+    }
+    return getInstructionsView(pid)
   },
   'agent:queueList': (_ctx, [projectId]) => listQueue(projectId),
   'agent:queueAdd': (ctx, [input]) => addQueueItem(ctx.sink, input),

@@ -16,11 +16,8 @@ import { getSkill, listSkills, stripFrontmatter } from '../skills'
 import * as store from '../store'
 import { appendUsage } from '../usage'
 import {
+  applySectionEdit,
   getInstructionsView,
-  parseRuleSections,
-  readGlobalInstructions,
-  readProjectInstructions,
-  serializeRuleSections,
   writeGlobalInstructions,
   writeProjectInstructions,
   writingRulesFor
@@ -1752,43 +1749,12 @@ const TOOLS: AgentTool[] = [
       `将修改智能体行为指令的分节「${
         typeof input.title === 'string' ? input.title : ''
       }」（${typeof input.scope === 'string' ? input.scope : ''}）`,
-    handler: (input, projectId) => {
-      const scope = reqStr(input, 'scope')
-      if (scope !== 'global' && scope !== 'project')
-        throw new Error("scope 必须是 'global' 或 'project'")
-      const title = reqStr(input, 'title').trim()
-      if (!title) throw new Error('title 不能为空')
-      const bodyOpt = optStr(input, 'body')
-      const tagRaw = optStr(input, 'tag')
-      const tag =
-        tagRaw === undefined ? undefined : tagRaw.trim() ? tagRaw.trim().toLowerCase() : null
-      const raw = scope === 'global' ? readGlobalInstructions() : readProjectInstructions(projectId)
-      const { preamble, sections } = parseRuleSections(raw)
-      const writeBack = (out: string): void => {
-        if (out.length > 20000) throw new Error('指令过长（上限 20000 字），请精简')
-        if (scope === 'global') writeGlobalInstructions(out)
-        else writeProjectInstructions(projectId, out)
-      }
-      const idx = sections.findIndex((sec) => sec.title.toLowerCase() === title.toLowerCase())
-      if (idx === -1) {
-        if (!bodyOpt?.trim())
-          throw new Error(`分节「${title}」不存在；body 为空无法新建（传 body 内容即可新建）`)
-        sections.push({ title, tag: tag ?? null, text: `## ${title}\n${bodyOpt.trim()}` })
-        writeBack(serializeRuleSections(preamble, sections))
-        return { ok: true, action: 'created', scope, title, tag: tag ?? null }
-      }
-      if (bodyOpt !== undefined && !bodyOpt.trim()) {
-        sections.splice(idx, 1)
-        writeBack(serializeRuleSections(preamble, sections))
-        return { ok: true, action: 'deleted', scope, title, tag: null }
-      }
-      if (!!bodyOpt?.trim()) {
-        sections[idx] = { ...sections[idx], text: `## ${sections[idx].title}\n${bodyOpt.trim()}` }
-      }
-      if (tag !== undefined) sections[idx] = { ...sections[idx], tag }
-      writeBack(serializeRuleSections(preamble, sections))
-      return { ok: true, action: 'updated', scope, title, tag: sections[idx].tag }
-    }
+    handler: (input, projectId) =>
+      applySectionEdit(reqStr(input, 'scope'), projectId, {
+        title: reqStr(input, 'title'),
+        body: optStr(input, 'body'),
+        tag: optStr(input, 'tag')
+      })
   },
   {
     def: {

@@ -715,7 +715,10 @@ export default function AgentChat({ projectId }: { projectId: string }) {
         title="智能体指令"
         fullscreenOnMobile
       >
-        <AgentInstructionsPanel projectId={projectId} />
+        <AgentInstructionsPanel
+          projectId={projectId}
+          renderMarkdown={(md) => <Markdown text={md} />}
+        />
       </OverlayCard>
     </div>
   )
