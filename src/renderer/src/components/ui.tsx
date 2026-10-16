@@ -6,6 +6,7 @@ import type {
   SelectHTMLAttributes,
   TextareaHTMLAttributes
 } from 'react'
+import { useEffect, useRef } from 'react'
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'primary' | 'ghost' | 'danger'
@@ -90,5 +91,52 @@ export function Badge({
     >
       {children}
     </span>
+  )
+}
+
+export function Popover({
+  open,
+  onOpenChange,
+  trigger,
+  children,
+  align = 'right',
+  className = ''
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  trigger: (props: { onClick: () => void }) => ReactNode
+  children: ReactNode
+  align?: 'left' | 'right'
+  className?: string
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!open) return
+    const onDown = (e: MouseEvent): void => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onOpenChange(false)
+    }
+    const onKey = (e: KeyboardEvent): void => {
+      if (e.key === 'Escape') onOpenChange(false)
+    }
+    document.addEventListener('mousedown', onDown)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onDown)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open, onOpenChange])
+  return (
+    <div ref={ref} className="relative">
+      {trigger({ onClick: () => onOpenChange(!open) })}
+      {open && (
+        <div
+          className={`absolute top-full z-30 mt-1 max-h-80 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl ${
+            align === 'right' ? 'right-0' : 'left-0'
+          } ${className}`}
+        >
+          {children}
+        </div>
+      )}
+    </div>
   )
 }

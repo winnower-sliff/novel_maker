@@ -30,7 +30,7 @@ import { useAgentTabsStore } from '../../../wizard/agentTabsStore'
 import { EngineSelect } from '../components/EngineSelect'
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
-import { Badge, Button, Card, Select, Textarea } from '../components/ui'
+import { Badge, Button, Card, Popover, Select, Textarea } from '../components/ui'
 import { findCompactPoint, toolLabel, toolSummary } from '../lib/agentTurns'
 import { fmtDuration, fmtRelative, fmtTokens } from '../lib/format'
 import { qk, queries } from '../lib/queries'
@@ -273,7 +273,7 @@ export default function Agent({ projectId, active }: { projectId: string; active
   const [engine, setEngine] = useState<ProviderId | ''>('')
   const queryClient = useQueryClient()
   const { data: sessions = [] } = useQuery(queries.agentSessions(projectId))
-  const [panelOpen, setPanelOpen] = useState(false)
+  const [menuOpen, setMenuOpen] = useState(false)
   const [renamingId, setRenamingId] = useState<string | null>(null)
   const [renameText, setRenameText] = useState('')
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null)
@@ -480,7 +480,7 @@ export default function Agent({ projectId, active }: { projectId: string; active
     saveScroll()
     useAgentTabsStore.getState().setActive(projectId, key)
     switchSessionRun(sid)
-    setPanelOpen(false)
+    setMenuOpen(false)
     setRenamingId(null)
     setConfirmDeleteId(null)
     setHistoryOpen(false)
@@ -504,7 +504,7 @@ export default function Agent({ projectId, active }: { projectId: string; active
       else st.newDraftTab(projectId)
       switchSessionRun(null)
     }
-    setPanelOpen(false)
+    setMenuOpen(false)
     setRenamingId(null)
     setConfirmDeleteId(null)
     setHistoryOpen(false)
@@ -514,7 +514,7 @@ export default function Agent({ projectId, active }: { projectId: string; active
     saveScroll()
     useAgentTabsStore.getState().openTab(projectId, id)
     switchSessionRun(id)
-    setPanelOpen(false)
+    setMenuOpen(false)
     setRenamingId(null)
     setConfirmDeleteId(null)
     setHistoryOpen(false)
@@ -639,152 +639,163 @@ export default function Agent({ projectId, active }: { projectId: string; active
             ＋
           </button>
         </div>
-        <div className="relative">
-          <Button variant="ghost" onClick={() => setPanelOpen((v) => !v)}>
-            会话管理
-          </Button>
-          {panelOpen && (
-            <>
-              <div
-                className="fixed inset-0 z-20"
-                aria-hidden="true"
-                onClick={() => {
-                  setPanelOpen(false)
-                  setRenamingId(null)
-                  setConfirmDeleteId(null)
-                }}
-              />
-              <div className="absolute right-0 top-full z-30 mt-1 max-h-80 w-72 overflow-y-auto rounded-md border border-zinc-700 bg-zinc-900 shadow-xl">
-                {sessions.length === 0 && (
-                  <div className="px-2.5 py-2 text-xs text-zinc-600">暂无历史会话</div>
-                )}
-                {sessions.map((s) => {
-                  const active = s.id === sessionId
-                  const busy = runningIds.includes(s.id)
-                  return (
-                    <div
-                      key={s.id}
-                      className={`flex items-center gap-1 border-t border-zinc-800/60 px-1.5 py-1.5 first:border-t-0 ${
-                        active ? 'bg-zinc-800/70' : ''
-                      }`}
-                    >
-                      {renamingId === s.id ? (
-                        <>
-                          <input
-                            // biome-ignore lint/a11y/noAutofocus: 会话重命名弹层打开时聚焦是预期交互
-                            autoFocus
-                            value={renameText}
-                            onChange={(e) => setRenameText(e.target.value)}
-                            onKeyDown={(e) => {
-                              if (e.key === 'Enter') {
-                                renameSession(s.id, renameText)
-                                setRenamingId(null)
-                              } else if (e.key === 'Escape') {
-                                setRenamingId(null)
-                              }
-                            }}
-                            className="min-w-0 flex-1 rounded border border-amber-600/60 bg-zinc-950 px-1.5 py-1 text-xs text-zinc-200 outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              renameSession(s.id, renameText)
-                              setRenamingId(null)
-                            }}
-                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-amber-400 hover:bg-zinc-800"
-                          >
-                            存
-                          </button>
-                        </>
-                      ) : confirmDeleteId === s.id ? (
-                        <>
-                          <span className="min-w-0 flex-1 truncate px-1 text-xs text-red-300">
-                            删除「{s.title}」？
-                          </span>
-                          <button
-                            type="button"
-                            onClick={() => deleteSessionById(s.id)}
-                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-red-400 hover:bg-zinc-800"
-                          >
-                            确认
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => setConfirmDeleteId(null)}
-                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
-                          >
-                            取消
-                          </button>
-                        </>
-                      ) : (
-                        <>
-                          <button
-                            type="button"
-                            onClick={() => openSession(s.id)}
-                            className="min-w-0 flex-1 cursor-pointer rounded px-1 py-0.5 text-left"
-                          >
-                            <div
-                              className={`flex items-center gap-1.5 truncate text-xs ${
-                                active ? 'font-medium text-amber-400' : 'text-zinc-200'
-                              }`}
-                            >
-                              {busy && <Badge tone="amber">运行中</Badge>}
-                              <span className="min-w-0 truncate">{s.title}</span>
-                            </div>
-                            <div className="text-[10px] text-zinc-500">
-                              {fmtRelative(s.updatedAt)}
-                            </div>
-                          </button>
-                          <button
-                            type="button"
-                            title="重命名"
-                            onClick={() => {
-                              setRenamingId(s.id)
-                              setRenameText(s.title)
-                            }}
-                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
-                          >
-                            改
-                          </button>
-                          <button
-                            type="button"
-                            title="删除（进行中的任务会被停止）"
-                            onClick={() => setConfirmDeleteId(s.id)}
-                            className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
-                          >
-                            删
-                          </button>
-                        </>
-                      )}
-                    </div>
-                  )
-                })}
-              </div>
-            </>
+        <Popover
+          open={menuOpen}
+          onOpenChange={(o) => {
+            setMenuOpen(o)
+            if (!o) {
+              setRenamingId(null)
+              setConfirmDeleteId(null)
+            }
+          }}
+          align="right"
+          className="w-80"
+          trigger={(p) => (
+            <Button variant="ghost" onClick={p.onClick} title="会话与引擎">
+              ⋯
+            </Button>
           )}
-        </div>
-        <div className="w-[calc(50%-0.375rem)] sm:w-40">
-          <div className="mb-1.5 text-xs font-medium text-zinc-400">引擎</div>
-          <EngineSelect value={engine} onChange={(p) => setEngine(p ?? '')} className="w-full" />
-        </div>
-        <div className="w-[calc(50%-0.375rem)] sm:w-56">
-          <div className="mb-1.5 text-xs font-medium text-zinc-400">模型</div>
-          <Select value={model} onChange={(e) => setModel(e.target.value)} className="w-full">
-            {modelOptions.map((m) => (
-              <option key={m} value={m}>
-                {m}
-              </option>
-            ))}
-          </Select>
-        </div>
-        <div className="sm:pt-5">
-          <Badge tone="amber">可直接读写当前项目的各板块</Badge>
-        </div>
-        <div className="sm:pt-5">
-          <Button variant="ghost" onClick={() => setInstrOpen(true)}>
-            指令
-          </Button>
-        </div>
+        >
+          <div className="px-2.5 py-2 text-[11px] leading-4 text-zinc-500">
+            可直接读写当前项目的各板块
+          </div>
+          <div className="flex items-end gap-2 border-t border-zinc-800/60 px-2.5 py-2.5">
+            <div className="min-w-0 flex-1">
+              <div className="mb-1.5 text-xs font-medium text-zinc-400">引擎</div>
+              <EngineSelect
+                value={engine}
+                onChange={(p) => setEngine(p ?? '')}
+                className="w-full"
+              />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="mb-1.5 text-xs font-medium text-zinc-400">模型</div>
+              <Select value={model} onChange={(e) => setModel(e.target.value)} className="w-full">
+                {modelOptions.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </Select>
+            </div>
+          </div>
+          <div className="border-t border-zinc-800/60 px-2.5 py-2">
+            <Button
+              variant="ghost"
+              className="w-full"
+              onClick={() => {
+                setMenuOpen(false)
+                setInstrOpen(true)
+              }}
+            >
+              指令与写作要求
+            </Button>
+          </div>
+          {sessions.length === 0 && (
+            <div className="border-t border-zinc-800/60 px-2.5 py-2 text-xs text-zinc-600">
+              暂无历史会话
+            </div>
+          )}
+          {sessions.map((s) => {
+            const active = s.id === sessionId
+            const busy = runningIds.includes(s.id)
+            return (
+              <div
+                key={s.id}
+                className={`flex items-center gap-1 border-t border-zinc-800/60 px-1.5 py-1.5 ${
+                  active ? 'bg-zinc-800/70' : ''
+                }`}
+              >
+                {renamingId === s.id ? (
+                  <>
+                    <input
+                      // biome-ignore lint/a11y/noAutofocus: 会话重命名弹层打开时聚焦是预期交互
+                      autoFocus
+                      value={renameText}
+                      onChange={(e) => setRenameText(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          renameSession(s.id, renameText)
+                          setRenamingId(null)
+                        } else if (e.key === 'Escape') {
+                          setRenamingId(null)
+                        }
+                      }}
+                      className="min-w-0 flex-1 rounded border border-amber-600/60 bg-zinc-950 px-1.5 py-1 text-xs text-zinc-200 outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => {
+                        renameSession(s.id, renameText)
+                        setRenamingId(null)
+                      }}
+                      className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-amber-400 hover:bg-zinc-800"
+                    >
+                      存
+                    </button>
+                  </>
+                ) : confirmDeleteId === s.id ? (
+                  <>
+                    <span className="min-w-0 flex-1 truncate px-1 text-xs text-red-300">
+                      删除「{s.title}」？
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => deleteSessionById(s.id)}
+                      className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-red-400 hover:bg-zinc-800"
+                    >
+                      确认
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setConfirmDeleteId(null)}
+                      className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-300"
+                    >
+                      取消
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => openSession(s.id)}
+                      className="min-w-0 flex-1 cursor-pointer rounded px-1 py-0.5 text-left"
+                    >
+                      <div
+                        className={`flex items-center gap-1.5 truncate text-xs ${
+                          active ? 'font-medium text-amber-400' : 'text-zinc-200'
+                        }`}
+                      >
+                        {busy && <Badge tone="amber">运行中</Badge>}
+                        <span className="min-w-0 truncate">{s.title}</span>
+                      </div>
+                      <div className="text-[10px] text-zinc-500">{fmtRelative(s.updatedAt)}</div>
+                    </button>
+                    <button
+                      type="button"
+                      title="重命名"
+                      onClick={() => {
+                        setRenamingId(s.id)
+                        setRenameText(s.title)
+                      }}
+                      className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-zinc-200"
+                    >
+                      改
+                    </button>
+                    <button
+                      type="button"
+                      title="删除（进行中的任务会被停止）"
+                      onClick={() => setConfirmDeleteId(s.id)}
+                      className="shrink-0 cursor-pointer rounded px-1.5 py-1 text-xs text-zinc-500 hover:bg-zinc-800 hover:text-red-400"
+                    >
+                      删
+                    </button>
+                  </>
+                )}
+              </div>
+            )
+          })}
+        </Popover>
       </div>
 
       <Card className="relative flex min-h-0 flex-1 flex-col overflow-hidden">

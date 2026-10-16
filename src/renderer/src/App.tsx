@@ -275,6 +275,9 @@ export default function App() {
   const [premiseCreate, setPremiseCreate] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [navOpen, setNavOpen] = useState(false)
+  const [navCollapsed, setNavCollapsed] = useState(
+    () => localStorage.getItem('nm.navCollapsed') === '1'
+  )
   const [sseDown, setSseDown] = useState(false)
   const agentBadge = useAgentNavBadge()
 
@@ -348,6 +351,13 @@ export default function App() {
   const clearGraphFocus = useCallback((): void => setGraphFocus(null), [])
   const clearWritingFocus = useCallback((): void => setWritingFocus(null), [])
 
+  const toggleNavCollapsed = useCallback((): void => {
+    setNavCollapsed((v) => {
+      localStorage.setItem('nm.navCollapsed', v ? '0' : '1')
+      return !v
+    })
+  }, [])
+
   // 离开基本设定页时退出新建模式
   useEffect(() => {
     if (page !== 'premise') setPremiseCreate(false)
@@ -368,21 +378,24 @@ export default function App() {
       <button
         type="button"
         key={item.id}
+        title={navCollapsed ? item.label : undefined}
         onClick={() => {
           if (item.id === 'premise') setPremiseCreate(false)
           navigate(item.id)
         }}
-        className={`flex w-full cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
+        className={`relative flex w-full cursor-pointer items-center gap-2.5 rounded-md px-3 py-2 text-sm transition-colors ${
           page === item.id
             ? 'bg-zinc-800 font-medium text-zinc-100'
             : 'text-zinc-400 hover:bg-zinc-800/50 hover:text-zinc-200'
-        }`}
+        } ${navCollapsed ? 'md:justify-center md:gap-0 md:px-0' : ''}`}
       >
         {item.icon}
-        {item.label}
+        <span className={`whitespace-nowrap ${navCollapsed ? 'md:hidden' : ''}`}>{item.label}</span>
         {item.id === 'agent' && page !== item.id && agentBadge && (
           <span
-            className={`ml-auto h-2 w-2 shrink-0 rounded-full ${AGENT_BADGE_DOT[agentBadge.tone]}`}
+            className={`h-2 w-2 shrink-0 rounded-full ${AGENT_BADGE_DOT[agentBadge.tone]} ${
+              navCollapsed ? 'md:absolute md:right-1.5 md:top-1.5' : 'ml-auto'
+            }`}
           />
         )}
       </button>
@@ -447,23 +460,27 @@ export default function App() {
           />
         )}
         <aside
-          className={`fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 transition-transform duration-200 md:static md:z-auto md:w-52 md:translate-x-0 ${
-            navOpen ? 'translate-x-0' : '-translate-x-full'
-          }`}
+          className={`fixed inset-y-0 left-0 z-50 flex w-64 shrink-0 flex-col border-r border-zinc-800 bg-zinc-900 transition-[translate,width] duration-200 md:relative md:z-auto md:translate-x-0 ${
+            navCollapsed ? 'md:w-12' : 'md:w-52'
+          } ${navOpen ? 'translate-x-0' : '-translate-x-full'}`}
         >
-          <div className="flex items-center gap-2.5 px-4 py-4">
+          <div
+            className={`flex items-center gap-2.5 px-4 py-4 ${
+              navCollapsed ? 'md:justify-center md:px-0' : ''
+            }`}
+          >
             <svg
               aria-hidden="true"
               viewBox="0 0 24 24"
               fill="none"
               stroke="currentColor"
               strokeWidth="1.8"
-              className="h-7 w-7 text-amber-500"
+              className="h-7 w-7 shrink-0 text-amber-500"
             >
               <path d="M12 6.5C10.5 5 8.5 4.5 4.5 4.5v13c4 0 6 .5 7.5 2 1.5-1.5 3.5-2 7.5-2v-13c-4 0-6 .5-7.5 2Z" />
               <path d="M12 6.5v13" />
             </svg>
-            <div className="min-w-0">
+            <div className={`min-w-0 ${navCollapsed ? 'md:hidden' : ''}`}>
               <div className="text-sm font-semibold text-zinc-100">Novel Maker</div>
               <div className="text-[10px] text-zinc-500">
                 {cfg ? `${providerPreset(cfg.provider).label} 长篇创作` : '长篇创作'}
@@ -487,7 +504,7 @@ export default function App() {
               </svg>
             </button>
           </div>
-          <div className="relative mx-3">
+          <div className={`relative mx-3 ${navCollapsed ? 'md:hidden' : ''}`}>
             <button
               type="button"
               onClick={() => setMenuOpen((v) => !v)}
@@ -564,19 +581,52 @@ export default function App() {
           </div>
           <nav className="mt-3 flex-1 space-y-4 overflow-y-auto px-2 pb-[calc(env(safe-area-inset-bottom)+0.5rem)]">
             <div className="space-y-1">
-              <div className="px-3 pb-1 text-[10px] font-medium tracking-wider text-zinc-600">
+              <div
+                className={`px-3 pb-1 text-[10px] font-medium tracking-wider text-zinc-600 ${
+                  navCollapsed ? 'md:hidden' : ''
+                }`}
+              >
                 创作
               </div>
               {renderNav(GROUP_CREATIVE)}
             </div>
-            <div className="space-y-1">
-              <div className="px-3 pb-1 text-[10px] font-medium tracking-wider text-zinc-600">
+            <div
+              className={`space-y-1 ${navCollapsed ? 'md:border-t md:border-zinc-800 md:pt-3' : ''}`}
+            >
+              <div
+                className={`px-3 pb-1 text-[10px] font-medium tracking-wider text-zinc-600 ${
+                  navCollapsed ? 'md:hidden' : ''
+                }`}
+              >
                 系统
               </div>
               {renderNav(GROUP_SYSTEM)}
             </div>
           </nav>
-          <div className="px-4 py-3 text-[10px] text-zinc-600">v0.2.0 · M3</div>
+          <div className={`px-4 py-3 text-[10px] text-zinc-600 ${navCollapsed ? 'md:hidden' : ''}`}>
+            v0.2.0 · M3
+          </div>
+          <button
+            type="button"
+            onClick={toggleNavCollapsed}
+            aria-label={navCollapsed ? '展开导航' : '收起导航'}
+            className="absolute -right-3 top-3 z-10 hidden h-6 w-6 cursor-pointer items-center justify-center rounded-full border border-zinc-700 bg-zinc-900 text-zinc-400 transition-colors hover:border-zinc-600 hover:text-zinc-200 md:flex"
+          >
+            <svg
+              aria-hidden="true"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              className="h-3.5 w-3.5"
+            >
+              {navCollapsed ? (
+                <path d="m9 18 6-6-6-6" strokeLinecap="round" strokeLinejoin="round" />
+              ) : (
+                <path d="m15 18-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
+              )}
+            </svg>
+          </button>
         </aside>
         <main className="flex-1 overflow-hidden">
           {page === 'projects' && (
