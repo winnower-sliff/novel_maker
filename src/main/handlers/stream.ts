@@ -19,13 +19,23 @@ import {
   getAgentToolResultStatuses,
   runAgent
 } from '../agent'
+import {
+  approvedBoard,
+  finishBoard,
+  getBoard,
+  hasAwaitingBoard,
+  revertApproval
+} from '../agent/boards'
+import { buildExecInstruction } from '../agent/plan'
 import { consumeNext } from '../agent/queue'
+import { MAX_TURNS } from '../agent/toolkit'
 import {
   appendEvent,
   createSession,
   getSession,
   lastSeqOf,
   rebuildMessages,
+  sessionResumeInfo,
   updateTitle
 } from '../agentTranscript'
 import type { EventSink } from '../eventSink'
@@ -35,6 +45,17 @@ import { appendUsage } from '../usage'
 
 const activeRequests = new Map<string, AbortController>()
 const activeAgentRuns = new Map<string, AbortController>()
+
+/** 中断恢复指令（按最后一条 run 的收尾状态合成；历史已全量回灌，模型自行判断中断点续做） */
+const RESUME_PROMPTS: Record<'hitLimit' | 'error' | 'aborted' | 'incomplete', string> = {
+  hitLimit:
+    '上一段任务达到了轮次上限，以下为部分进展。请评估当前状态，继续完成剩余工作并正常收尾。',
+  error: '上一段任务因错误中断。请检查上下文后继续完成剩余工作；若确无法继续，请说明原因后收尾。',
+  aborted:
+    '上一段任务被手动停止。请从中断处继续完成剩余工作；如认为方向需要调整，请先简要说明再继续。',
+  incomplete:
+    '应用重启导致上一段任务意外中断。请根据上下文判断实际进度，继续完成剩余工作并正常收尾。'
+}
 
 /** 批量编排（主进程）等待单次生成完成的回调：error 为 null 表示成功 */
 export type SettleCb = (error: string | null, payload?: unknown) => void
@@ -200,10 +221,22 @@ export function startAgentRun(
     model?: string
     /** 临时指定本次会话的 provider（智能体页「引擎」切换用） */
     provider?: ProviderId
+    /**
+     * 计划执行 run（planResolve approve 后由主进程启动）：轻装——不回灌计划期调研明细，
+     * 首条指令由批准后的看板合成。text 参数此时被忽略。
+     */
+    planExecBoardId?: string
+    /**
+     * 中断恢复（阶段⑤）：从 agent_events 事实源全量回灌重建上下文，恢复指令由服务端按
+     * 收尾状态合成（text 被忽略）；有 approved 看板则继续按授权执行；hitLimit 重置预算
+     * （全会 ≤3 次），其余中断延续预算（MAX_TURNS - 已耗轮数，下限保 4）。
+     */
+    resume?: boolean
   }
 ): string | AgentRunHandle {
-  // 旧客户端过渡路径：messages 直跑、不落 transcript（旧端 persistRun/sessionSave 自管）
-  if (params.text === undefined) {
+  // 旧客户端过渡路径：messages 直跑、不落 transcript（旧端 persistRun/sessionSave 自管）。
+  // planExecBoardId 的执行 run / resume 无 text，不走此分支
+  if (params.text === undefined && !params.planExecBoardId && !params.resume) {
     if (!params.messages) throw new Error('缺少 text 或 messages 参数')
     return startLegacyAgentRun(
       sink,
@@ -214,15 +247,50 @@ export function startAgentRun(
     )
   }
 
-  const text = params.text
+  // 执行 run（planExecBoardId）/resume 无 text：userText 由看板/恢复状态合成；其余相位 text 必有
+  const text = params.text ?? ''
   if (params.sessionId) {
     if (activeSessionRuns.has(params.sessionId))
       throw new Error('该会话已有进行中的任务，请先停止或等待完成')
     if (!getSession(params.sessionId)) throw new Error('会话不存在或已删除')
   }
+  if (params.resume && !params.sessionId) throw new Error('恢复任务需要指定会话')
+
+  // 中断恢复判定：以 agent_events 最后一条 run 的收尾状态为准（done/hitLimit/中断）
+  const resumeInfo = params.resume ? sessionResumeInfo(params.sessionId as string) : null
+  if (params.resume && !resumeInfo?.resumable) throw new Error('该会话没有可恢复的任务')
+  if (
+    params.resume &&
+    resumeInfo &&
+    resumeInfo.reason === 'hitLimit' &&
+    resumeInfo.hitLimitRuns >= 3
+  ) {
+    throw new Error('该任务的续跑次数已达上限（3 次），请开启新任务或手动给出更小的步骤')
+  }
+
   const sessionId =
     params.sessionId ?? createSession(params.projectId, makeSessionTitleText(text)).id
   const isFirstTurn = lastSeqOf(sessionId) === 0
+
+  // 计划模式相位：planResolve 批准的执行 run 优先；中断恢复时恢复 approved 看板的执行授权；
+  // 否则按会话 planMode 开关进计划期
+  const planBoard = params.planExecBoardId
+    ? getBoard(params.planExecBoardId)
+    : resumeInfo?.resumable
+      ? approvedBoard(sessionId)
+      : null
+  const planPhase = planBoard ? 'exec' : getSession(sessionId)?.planMode ? 'plan' : null
+  const execText = planBoard && !params.resume ? buildExecInstruction(planBoard) : null
+  // 恢复指令按收尾状态合成（全量回灌历史，模型自己判断中断点续做）
+  const resumeText =
+    resumeInfo?.resumable && resumeInfo.reason !== 'done'
+      ? `${RESUME_PROMPTS[resumeInfo.reason]}${
+          planBoard
+            ? ' 当前任务有已批准的执行计划与授权范围，请继续按计划执行，并用 update_board 勾销步骤进度。'
+            : ''
+        }`
+      : null
+  const userText = execText || resumeText || text
 
   const requestId = randomUUID()
   const controller = new AbortController()
@@ -236,14 +304,24 @@ export function startAgentRun(
       sink.send('agent:transcript', requestId, sessionId, stored)
     }
   }
-  persist({ kind: 'user', text })
-  const messages = rebuildMessages(sessionId)
+  persist({ kind: 'user', text: userText })
+  // 执行 run 轻装：messages 只含合成指令（计划期调研明细不回灌）；其余相位照常全量回灌
+  const messages =
+    planPhase === 'exec' && execText
+      ? [{ role: 'user', content: execText } as ChatMessage]
+      : rebuildMessages(sessionId)
   recordRunning(requestId, 'agent', { projectId: params.projectId, sessionId })
 
   void (async () => {
     let payload: Awaited<ReturnType<typeof runAgent>>
     try {
       const auth = await resolveRequestAuth('agent', params.provider)
+      // 恢复 run 的轮次预算：hitLimit(partial) 重置；其余中断延续（已耗轮数扣除，下限保 4）
+      const maxTurns = resumeInfo
+        ? resumeInfo.reason === 'hitLimit'
+          ? undefined
+          : Math.max(4, MAX_TURNS - resumeInfo.consumedTurns)
+        : undefined
       payload = await runAgent({
         sink,
         requestId,
@@ -253,7 +331,9 @@ export function startAgentRun(
         model: params.model?.trim() || auth.model,
         signal: controller.signal,
         provider: params.provider,
-        persist
+        persist,
+        ...(maxTurns !== undefined ? { maxTurns } : {}),
+        ...(planPhase ? { plan: { phase: planPhase } } : {})
       })
     } catch (err) {
       const message = controller.signal.aborted
@@ -264,6 +344,12 @@ export function startAgentRun(
       if (!sink.isClosed()) {
         sink.send('agent:error', requestId, message, buildErrorHint(err, message))
       }
+      // 执行 run 异步失败（非 abort）：回滚板到 awaiting_approval，否则板挂死 approved 用户无法重新裁决；
+      // abort 是主动停止，板保持 approved 走中断恢复
+      if (planPhase === 'exec' && planBoard && !controller.signal.aborted) {
+        const reverted = revertApproval(planBoard.id)
+        if (reverted) persist({ kind: 'board', board: reverted })
+      }
       return
     } finally {
       activeAgentRuns.delete(requestId)
@@ -272,9 +358,15 @@ export function startAgentRun(
     recordDone(requestId, payload)
     persist({ kind: 'done', summary: payload })
     if (!sink.isClosed()) sink.send('agent:done', requestId, payload)
+    // 执行 run 正常收尾：看板置 done（board 事件经 persist 落库广播；error/abort/hitLimit 保持 approved 供恢复/续跑）
+    if (planPhase === 'exec' && planBoard && !payload.hitLimit) {
+      const finished = finishBoard(planBoard.id)
+      if (finished) persist({ kind: 'board', board: finished })
+    }
     // 队列续发由主进程驱动（三端镜像不双发）：正常收尾才消费，error/abort 冻结待手动继续。
+    // 计划等待批准期间暂停消费（run 虽收尾但板未裁决，先执行队列任务会插队破坏计划语义）。
     // launch 走 startAgentRun 自身的并发守卫；此处同步调用即可（收尾时 activeSessionRuns 已清）。
-    if (!controller.signal.aborted) {
+    if (!controller.signal.aborted && !hasAwaitingBoard(sessionId)) {
       consumeNext(
         sink,
         sessionId,
@@ -299,10 +391,11 @@ export function startAgentRun(
   return { requestId, sessionId }
 }
 
-/** 手动继续冻结的队列（error/停止后用户点「继续」）：该会话无活跃 run 时消费下一条（insert 优先） */
+/** 手动继续冻结的队列（error/停止后用户点「继续」）：该会话无活跃 run 时消费下一条（insert 优先）；计划待批准期间暂停 */
 export function resumeSessionQueue(sink: EventSink, sessionId: string): AgentRunHandle | null {
   if (activeSessionRuns.has(sessionId)) return null
   if (!getSession(sessionId)) return null
+  if (hasAwaitingBoard(sessionId)) return null
   return consumeNext(
     sink,
     sessionId,

@@ -19,6 +19,7 @@ import {
   resolveConfirm,
   resumeQueue,
   retryLoadActive,
+  startResumeRun,
   startRun,
   stopRun,
   switchSession as switchSessionRun,
@@ -30,6 +31,7 @@ import { useAgentTabsStore } from '../../../wizard/agentTabsStore'
 import { EngineSelect } from '../components/EngineSelect'
 import { Markdown } from '../components/Markdown'
 import { OverlayCard } from '../components/OverlayCard'
+import { PlanBoardCard } from '../components/PlanBoardCard'
 import { Badge, Button, Card, Popover, Select, Textarea } from '../components/ui'
 import { findCompactPoint, toolLabel, toolSummary } from '../lib/agentTurns'
 import { fmtDuration, fmtRelative, fmtTokens } from '../lib/format'
@@ -544,6 +546,36 @@ export default function Agent({ projectId, active }: { projectId: string; active
   // 运行中不折叠压缩前的历史，只插分隔条；run 结束/静态加载才折叠
   const liveHistory = !!compactPoint && running
 
+  // —— 计划模式（会话级开关：写工具移出工具集，先出计划等批准） ——
+  const session = sessions.find((s) => s.id === sessionId)
+  const planMode = session?.planMode ?? false
+  const resumable = session?.resumable ?? false
+  const [planBusy, setPlanBusy] = useState(false)
+  const togglePlanMode = (): void => {
+    if (!sessionId || planBusy) return
+    setPlanBusy(true)
+    window.api.agent
+      .planMode(sessionId, !planMode)
+      .then(() => refreshSessions(projectId))
+      .catch(() => {})
+      .finally(() => setPlanBusy(false))
+  }
+
+  // 最新 approved 看板（执行中进度条数据源；awaiting 的板在流内卡上已有醒目按钮）
+  const activeBoard = (() => {
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const t = turns[i]
+      if (t.role !== 'board') continue
+      return t.board.status === 'approved' ? t.board : null
+    }
+    return null
+  })()
+  const scrollToBoard = (id: string): void => {
+    scrollRef.current
+      ?.querySelector(`[data-board-id="${CSS.escape(id)}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
   const renderTurn = (turn: AgentTurn, idx: number) =>
     turn.role === 'user' ? (
       <div key={idx} className="flex justify-end">
@@ -551,6 +583,13 @@ export default function Agent({ projectId, active }: { projectId: string; active
           {turn.text}
         </div>
       </div>
+    ) : turn.role === 'board' ? (
+      <PlanBoardCard
+        key={idx}
+        board={turn.board}
+        resolve={turn.resolve}
+        sessionId={sessionId ?? ''}
+      />
     ) : (
       <div key={idx} className="space-y-2">
         {buildRenderItems(turn).map((item) =>
@@ -767,6 +806,7 @@ export default function Agent({ projectId, active }: { projectId: string; active
                         }`}
                       >
                         {busy && <Badge tone="amber">运行中</Badge>}
+                        {s.resumable && !busy && <Badge tone="amber">可恢复</Badge>}
                         <span className="min-w-0 truncate">{s.title}</span>
                       </div>
                       <div className="text-[10px] text-zinc-500">{fmtRelative(s.updatedAt)}</div>
@@ -919,6 +959,15 @@ export default function Agent({ projectId, active }: { projectId: string; active
                   {doneInfo.changed && <Badge tone="green">已修改资料库</Badge>}
                   {doneInfo.denied && <Badge tone="amber">有操作被拒绝</Badge>}
                   {doneInfo.hitLimit && <Badge tone="red">达到步数上限</Badge>}
+                  {doneInfo.hitLimit && !running && (
+                    <button
+                      type="button"
+                      onClick={startResumeRun}
+                      className="cursor-pointer rounded border border-red-800/60 px-2 py-0.5 text-red-300 transition-colors hover:bg-red-950/40"
+                    >
+                      继续此任务
+                    </button>
+                  )}
                   {!!doneInfo.autoContinues && doneInfo.autoContinues > 0 && (
                     <Badge tone="amber">自动续跑 ×{doneInfo.autoContinues}</Badge>
                   )}
@@ -1000,6 +1049,46 @@ export default function Agent({ projectId, active }: { projectId: string; active
             )}
           </div>
         )}
+        {activeBoard && (
+          <button
+            type="button"
+            onClick={() => scrollToBoard(activeBoard.id)}
+            className="mb-2 flex w-full cursor-pointer items-center gap-2 rounded-md border border-amber-700/40 bg-zinc-900/60 px-3 py-1.5 text-xs text-zinc-400 transition-colors hover:border-amber-600/60"
+          >
+            <span className="shrink-0 font-medium text-amber-400">计划执行中</span>
+            <span className="shrink-0">
+              {activeBoard.steps.filter((s) => s.status === 'done').length}/
+              {activeBoard.steps.length} 步
+            </span>
+            <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+              {activeBoard.steps.map((s) => (
+                <span
+                  key={s.id}
+                  title={s.title}
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                    s.status === 'done'
+                      ? 'bg-emerald-500'
+                      : s.status === 'in_progress'
+                        ? 'bg-amber-400'
+                        : s.status === 'skipped'
+                          ? 'bg-zinc-700'
+                          : 'bg-zinc-700/60'
+                  }`}
+                />
+              ))}
+            </span>
+            <span className="shrink-0 text-zinc-600">查看看板</span>
+          </button>
+        )}
+        {resumable && !running && (
+          <button
+            type="button"
+            onClick={startResumeRun}
+            className="mb-2 w-full cursor-pointer rounded-md border border-amber-700/50 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300 transition-colors hover:border-amber-600/60"
+          >
+            ⟲ 上一个任务未完成 —— 继续中断的任务
+          </button>
+        )}
         <Textarea
           ref={taRef}
           rows={3}
@@ -1030,6 +1119,25 @@ export default function Agent({ projectId, active }: { projectId: string; active
             {running ? '发送 = 插入指令，排队 = 完成后执行' : 'Enter 发送，Shift+Enter 换行'}
           </span>
           <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={togglePlanMode}
+              disabled={!sessionId || planBusy}
+              title={
+                sessionId
+                  ? planMode
+                    ? '计划模式已开启：新任务先调研并提出计划，经批准与授权后才执行写入'
+                    : '开启计划模式：适合多步写入任务，先出计划等批准'
+                  : '发送首条消息建立会话后可用'
+              }
+              className={`cursor-pointer rounded-md border px-2.5 py-1.5 text-xs transition-colors disabled:cursor-default disabled:opacity-40 ${
+                planMode
+                  ? 'border-amber-500/70 bg-amber-600/15 text-amber-300'
+                  : 'border-zinc-700 bg-zinc-900 text-zinc-400 hover:border-zinc-600 hover:text-zinc-300'
+              }`}
+            >
+              计划{planMode ? ' ·开' : ''}
+            </button>
             {running && (
               <Button variant="danger" onClick={stop}>
                 停止

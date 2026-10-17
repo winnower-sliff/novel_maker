@@ -1,5 +1,5 @@
 import { randomUUID } from 'node:crypto'
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { app } from 'electron'
@@ -168,6 +168,20 @@ CREATE TABLE IF NOT EXISTS agent_queue (
 CREATE INDEX IF NOT EXISTS idx_agent_sessions_project ON agent_sessions(project_id, updated_at);
 CREATE INDEX IF NOT EXISTS idx_agent_events_session ON agent_events(session_id, seq);
 CREATE INDEX IF NOT EXISTS idx_agent_queue_session ON agent_queue(session_id, kind, position);
+CREATE TABLE IF NOT EXISTS agent_boards (
+  id TEXT PRIMARY KEY,
+  session_id TEXT NOT NULL REFERENCES agent_sessions(id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  run_id TEXT NOT NULL DEFAULT '',
+  goal TEXT NOT NULL DEFAULT '',
+  steps TEXT NOT NULL DEFAULT '[]',
+  ledger TEXT NOT NULL DEFAULT '',
+  status TEXT NOT NULL DEFAULT 'awaiting_approval',
+  feedback TEXT NOT NULL DEFAULT '',
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_boards_session ON agent_boards(session_id, created_at);
 `
 
 export function getDb(): DatabaseSync {
@@ -182,7 +196,27 @@ export function getDb(): DatabaseSync {
   return db
 }
 
+/**
+ * 迁移前备份（VACUUM INTO 生成紧凑快照，规避 WAL 半写状态）；失败仅告警不阻塞启动。
+ * 同名备份已存在（当日重复升级）时跳过。
+ */
+function backupBeforeHarnessMigration(d: DatabaseSync): void {
+  const stamp = new Date().toISOString().slice(0, 10).replaceAll('-', '')
+  const target = join(app.getPath('userData'), 'data', `novel.db.bak-${stamp}`)
+  try {
+    if (!existsSync(target)) d.exec(`VACUUM INTO '${target.replaceAll("'", "''")}'`)
+    console.warn(`[db] 迁移前已备份 → ${target}`)
+  } catch (err) {
+    console.warn('[db] 迁移前备份失败（继续迁移）:', err)
+  }
+}
+
 function migrate(d: DatabaseSync): void {
+  // harness 重设计（agent_sessions.plan_mode/agent_boards）落库前的旧库自动备份（仅一次）
+  const sessPre = d.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>
+  if (sessPre.length > 0 && !sessPre.some((c) => c.name === 'plan_mode')) {
+    backupBeforeHarnessMigration(d)
+  }
   const cols = d.prepare('PRAGMA table_info(worldbuild)').all() as Array<{ name: string }>
   if (!cols.some((c) => c.name === 'tags')) {
     d.exec("ALTER TABLE worldbuild ADD COLUMN tags TEXT DEFAULT ''")
@@ -253,6 +287,10 @@ function migrate(d: DatabaseSync): void {
   }
   if (!projCols.some((c) => c.name === 'style_sample')) {
     d.exec("ALTER TABLE projects ADD COLUMN style_sample TEXT DEFAULT ''")
+  }
+  const sessCols = d.prepare('PRAGMA table_info(agent_sessions)').all() as Array<{ name: string }>
+  if (!sessCols.some((c) => c.name === 'plan_mode')) {
+    d.exec('ALTER TABLE agent_sessions ADD COLUMN plan_mode INTEGER NOT NULL DEFAULT 0')
   }
 }
 

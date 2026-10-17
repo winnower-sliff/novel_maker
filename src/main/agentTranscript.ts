@@ -21,6 +21,7 @@ interface SessionRow {
   id: string
   project_id: string
   title: string
+  plan_mode: number
   created_at: number
   updated_at: number
 }
@@ -34,7 +35,23 @@ interface EventRow {
 }
 
 function toBrief(r: SessionRow): AgentSessionBrief {
-  return { id: r.id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at }
+  return {
+    id: r.id,
+    title: r.title,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    planMode: r.plan_mode === 1,
+    resumable: false
+  }
+}
+
+/** 计划模式会话级开关（桌面输入框区 / 手机顶栏 toggle，落 agent_sessions.plan_mode） */
+export function setPlanMode(id: string, enabled: boolean): AgentSessionBrief | null {
+  const db = getDb()
+  const r = getSession(id)
+  if (!r) return null
+  db.prepare('UPDATE agent_sessions SET plan_mode = ? WHERE id = ?').run(enabled ? 1 : 0, id)
+  return { ...r, planMode: enabled }
 }
 
 export function createSession(projectId: string, title: string): AgentSessionBrief {
@@ -44,6 +61,7 @@ export function createSession(projectId: string, title: string): AgentSessionBri
     id: randomUUID(),
     project_id: projectId,
     title,
+    plan_mode: 0,
     created_at: now,
     updated_at: now
   }
@@ -57,7 +75,7 @@ export function getSession(id: string): AgentSessionBrief | null {
   const r = getDb().prepare('SELECT * FROM agent_sessions WHERE id = ?').get(id) as
     | SessionRow
     | undefined
-  return r ? toBrief(r) : null
+  return r ? withResumable(toBrief(r)) : null
 }
 
 export function getSessionProjectId(id: string): string | null {
@@ -134,7 +152,109 @@ export function listSessions(projectId?: string): AgentSessionBrief[] {
     : getDb()
         .prepare('SELECT * FROM agent_sessions ORDER BY updated_at DESC, created_at DESC')
         .all()) as unknown as SessionRow[]
-  return rows.map(toBrief)
+  return rows.map((r) => withResumable(toBrief(r)))
+}
+
+/** 会话可恢复信息：最后一条 run 的收尾状态（阶段⑤中断恢复的判定源） */
+export interface SessionResumeInfo {
+  resumable: boolean
+  /**
+   * hitLimit=partial（轮次预算重置，全会上限 3 次）；
+   * aborted/error/incomplete=中断（预算延续：剩余轮数 = MAX_TURNS - consumedTurns）；
+   * done=无恢复点。
+   */
+  reason: 'done' | 'hitLimit' | 'error' | 'aborted' | 'incomplete'
+  /** 最后一段任务已消耗的轮数（最后一个 user 事件之后的 assistant 事件数；done 时取 summary.turns） */
+  consumedTurns: number
+  /** 历史上 hitLimit 收尾的 run 数（partial 续跑上限计数） */
+  hitLimitRuns: number
+}
+
+export function sessionResumeInfo(sessionId: string): SessionResumeInfo | null {
+  const db = getDb()
+  const last = db
+    .prepare(
+      'SELECT kind, payload FROM agent_events WHERE session_id = ? ORDER BY seq DESC LIMIT 1'
+    )
+    .get(sessionId) as { kind: string; payload: string } | undefined
+  if (!last) return null
+
+  // 最后一段任务的轮数：最后一个 user 事件（每次 run 的起点）之后的 assistant 事件数
+  const lastUser = db
+    .prepare(
+      "SELECT seq FROM agent_events WHERE session_id = ? AND kind = 'user' ORDER BY seq DESC LIMIT 1"
+    )
+    .get(sessionId) as { seq: number } | undefined
+  const consumedTurns = lastUser
+    ? (
+        db
+          .prepare(
+            "SELECT COUNT(*) AS c FROM agent_events WHERE session_id = ? AND kind = 'assistant' AND seq > ?"
+          )
+          .get(sessionId, lastUser.seq) as { c: number }
+      ).c
+    : 0
+  // 历史轮次总量：partial 续跑上限按全会话的 hitLimit run 数计
+  let hitLimitRuns = 0
+  for (const row of db
+    .prepare("SELECT payload FROM agent_events WHERE session_id = ? AND kind = 'done'")
+    .all(sessionId) as unknown as { payload: string }[]) {
+    try {
+      if ((JSON.parse(row.payload) as { hitLimit?: boolean }).hitLimit) hitLimitRuns++
+    } catch {
+      /* 损坏行忽略 */
+    }
+  }
+
+  const info = (resumable: boolean, reason: SessionResumeInfo['reason']): SessionResumeInfo => ({
+    resumable,
+    reason,
+    consumedTurns,
+    hitLimitRuns
+  })
+
+  if (last.kind === 'done') {
+    try {
+      const summary = JSON.parse(last.payload) as { hitLimit?: boolean }
+      return summary.hitLimit ? info(true, 'hitLimit') : info(false, 'done')
+    } catch {
+      return info(false, 'done')
+    }
+  }
+  if (last.kind === 'run_error') {
+    try {
+      const message = (JSON.parse(last.payload) as { message?: string }).message ?? ''
+      return info(true, message.includes('已停止') ? 'aborted' : 'error')
+    } catch {
+      return info(true, 'error')
+    }
+  }
+  if (last.kind === 'board') {
+    // 收尾序：done 先落、finishBoard 的 board 快照后落——板 done=已正常完成；
+    // approved=执行中断（abort/崩溃）；awaiting/rejected=等裁决（板卡上有按钮，非中断）
+    try {
+      const status = (JSON.parse(last.payload) as { board?: { status?: string } }).board?.status
+      return status === 'approved' ? info(true, 'incomplete') : info(false, 'done')
+    } catch {
+      return info(false, 'done')
+    }
+  }
+  if (last.kind === 'plan_resolve') {
+    // approve 后崩溃窗口（board 快照与执行 run 之间）；reject 后等待模型重提非中断
+    try {
+      return (JSON.parse(last.payload) as { action?: string }).action === 'approve'
+        ? info(true, 'incomplete')
+        : info(false, 'done')
+    } catch {
+      return info(false, 'done')
+    }
+  }
+  // user/assistant/tool_call/tool_result/sub_event 结尾：run 无收尾事件（崩溃/重启）
+  return info(true, 'incomplete')
+}
+
+function withResumable(brief: AgentSessionBrief): AgentSessionBrief {
+  return { ...brief, resumable: sessionResumeInfo(brief.id)?.resumable ?? false }
 }
 
 export function deleteSession(id: string): void {
@@ -153,6 +273,7 @@ export function loadSessionFull(id: string): AgentSession | null {
     title: r.title,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    planMode: r.plan_mode === 1,
     turns: eventsToTurns(loadEvents(id))
   }
 }
@@ -168,6 +289,7 @@ export function turnsToEvents(
 ): Array<AgentTranscriptInput & { ts?: number }> {
   const out: Array<AgentTranscriptInput & { ts?: number }> = []
   for (const t of turns) {
+    if (t.role === 'board') continue // 旧客户端 turns 无看板；防御性跳过（board 事实源在 agent_boards 表）
     if (t.role === 'user') {
       out.push({ kind: 'user', text: t.text, ts: t.ts })
       continue
