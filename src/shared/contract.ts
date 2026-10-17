@@ -214,7 +214,12 @@ export const AgentRunParamsSchema = z.object({
   messages: z.array(ChatMessageSchema).optional(),
   model: z.string().optional(),
   /** 临时指定本次会话的 provider（覆盖 modelRouting 与当前默认），仅本次生效、不落库 */
-  provider: ProviderIdSchema.optional()
+  provider: ProviderIdSchema.optional(),
+  /**
+   * 中断恢复（阶段⑤）：text 被忽略，服务端按最后一条 run 的收尾状态合成恢复指令——
+   * full rebuild 回灌历史；hitLimit(partial) 重置轮次预算（上限 3 次），其余中断延续预算。
+   */
+  resume: z.boolean().optional()
 })
 
 export const ExportOptionsSchema = z.object({

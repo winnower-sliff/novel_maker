@@ -426,6 +426,49 @@ export function startRun(input: string, model?: string, provider?: ProviderId): 
     })
 }
 
+/** 中断恢复（阶段⑤）：服务端按收尾状态合成恢复指令并全量回灌历史；无需用户输入 */
+export function startResumeRun(): void {
+  const s = useAgentRunStore.getState()
+  const target = s.activeId
+  const pid = s.projectId
+  if (!target || !pid || s.sessions[target]?.running) return
+  const token = ++genToken
+  pendingStarts.set(target, '…')
+  refreshView()
+  useAgentRunStore.setState({ runningIds: runningIdsOf(useAgentRunStore.getState().sessions) })
+  setAgentUi({ running: true, confirming: false, ended: null })
+  void window.api.agent
+    .run({ projectId: pid, sessionId: target, resume: true })
+    .then((id) => {
+      if (useAgentRunStore.getState().projectId !== pid) return
+      if (token !== genToken) return
+      if (typeof id === 'string') return
+      pendingStarts.delete(target)
+      pendingStarts.delete(id.sessionId)
+      ridIndex.set(id.requestId, id.sessionId)
+      ensureBuf(id.sessionId)
+      applyBuf(id.sessionId, (b) => {
+        b.running = true
+        b.requestId = id.requestId
+        b.error = ''
+        b.errorHint = null
+        b.doneInfo = null
+        b.interrupted = false
+      })
+      fetchEvents(id.sessionId)
+    })
+    .catch((err: unknown) => {
+      if (token !== genToken) return
+      if (useAgentRunStore.getState().projectId !== pid) return
+      pendingStarts.delete(target)
+      applyBuf(target, (b) => {
+        b.error = (err as Error).message || '恢复失败'
+      })
+      setAgentUi({ running: false, confirming: false, ended: null })
+      refreshView()
+    })
+}
+
 /**
  * invoke 失败对账：响应丢失≠任务未启动。按快照找回本会话（或唯一候选）运行并接管；
  * 找不到才判真失败——绝不因网络抖动把已发出的任务当成没发出。

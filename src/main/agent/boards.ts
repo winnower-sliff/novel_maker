@@ -76,6 +76,16 @@ export function hasAwaitingBoard(sessionId: string): boolean {
   return row !== undefined
 }
 
+/** 中断恢复用：该会话最新 approved 看板（执行中断后 resume 继续按授权执行） */
+export function approvedBoard(sessionId: string): AgentBoard | null {
+  const row = getDb()
+    .prepare(
+      "SELECT * FROM agent_boards WHERE session_id = ? AND status = 'approved' ORDER BY created_at DESC LIMIT 1"
+    )
+    .get(sessionId) as BoardRow | undefined
+  return row ? toBoard(row) : null
+}
+
 /** 模型提案的步骤（服务端分配 id、校验 resource、剥离空 writeScope） */
 export interface ProposedStep {
   title: string

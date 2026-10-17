@@ -513,6 +513,8 @@ export interface AgentSessionBrief {
   createdAt: number
   updatedAt: number
   planMode: boolean
+  /** 存在可恢复点：最后一条 run 未正常完成（中断/hitLimit partial），可点「继续中断的任务」 */
+  resumable: boolean
 }
 
 /** 计划步骤的写入范围资源类型（执行期 harness 按它做 id 级授权校验） */

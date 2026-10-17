@@ -17,6 +17,7 @@ import {
   resolveConfirm,
   retryLoadActive,
   resumeQueue,
+  startResumeRun,
   startRun,
   stopRun,
   switchSession as switchSessionRun,
@@ -385,6 +386,7 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   const queryClient = useQueryClient()
   const session = sessions.find((s) => s.id === sessionId)
   const planMode = session?.planMode ?? false
+  const resumable = session?.resumable ?? false
   const [planBusy, setPlanBusy] = useState(false)
   const togglePlanMode = (): void => {
     if (!sessionId || planBusy) return
@@ -410,6 +412,10 @@ export default function AgentChat({ projectId }: { projectId: string }) {
       ?.querySelector(`[data-board-id="${CSS.escape(id)}"]`)
       ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
   }
+
+  // 可恢复徽标（列表态展示用；active 会话的继续按钮在输入区上方）
+  const tabResumable = (sid: string | null): boolean =>
+    sid ? (sessions.find((s) => s.id === sid)?.resumable ?? false) : false
 
   const renderTurn = (turn: AgentTurn, idx: number) =>
     turn.role === 'user' ? (
@@ -605,6 +611,15 @@ export default function AgentChat({ projectId }: { projectId: string }) {
           <span className="shrink-0 text-zinc-600">查看</span>
         </button>
       )}
+      {resumable && !running && (
+        <button
+          type="button"
+          onClick={startResumeRun}
+          className="w-full cursor-pointer border-t border-amber-900/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-300 active:bg-amber-900/40"
+        >
+          ⟲ 上一个任务未完成——点此继续
+        </button>
+      )}
       {queue.length > 0 && (
         <div className="space-y-1 border-t border-amber-900/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
           {injects.map((q) => (
@@ -776,6 +791,9 @@ export default function AgentChat({ projectId }: { projectId: string }) {
                   >
                     <div className="flex items-center gap-2">
                       {busy && <Badge className="bg-amber-600/15 text-amber-400">运行中</Badge>}
+                      {!busy && tabResumable(s.id) && (
+                        <Badge className="bg-amber-600/15 text-amber-400">可恢复</Badge>
+                      )}
                       <span className="min-w-0 flex-1 truncate text-sm text-zinc-200">{s.title}</span>
                     </div>
                     <div className="text-[11px] text-zinc-600">{fmtRelative(s.updatedAt)}</div>

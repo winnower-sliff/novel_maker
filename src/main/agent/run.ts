@@ -155,6 +155,8 @@ export async function runAgent(opts: {
    * phase='exec' 执行期（写授权闸门+授权内免确认+看板勾销提醒）。缺省=正常模式（38 工具全集）。
    */
   plan?: { phase: 'plan' | 'exec' }
+  /** 轮次预算覆盖（阶段⑤中断恢复延续用）；缺省 MAX_TURNS */
+  maxTurns?: number
 }): Promise<AgentDonePayload> {
   const { sink, requestId, projectId, signal } = opts
   const persist = opts.persist ?? (() => {})
@@ -327,7 +329,7 @@ export async function runAgent(opts: {
         apiKey: auth.apiKey,
         baseUrl: auth.baseUrl,
         protocol: auth.protocol,
-        maxTurns: MAX_TURNS,
+        maxTurns: opts.maxTurns ?? MAX_TURNS,
         signal
       },
       {

@@ -19,6 +19,7 @@ import {
   resolveConfirm,
   resumeQueue,
   retryLoadActive,
+  startResumeRun,
   startRun,
   stopRun,
   switchSession as switchSessionRun,
@@ -548,6 +549,7 @@ export default function Agent({ projectId, active }: { projectId: string; active
   // —— 计划模式（会话级开关：写工具移出工具集，先出计划等批准） ——
   const session = sessions.find((s) => s.id === sessionId)
   const planMode = session?.planMode ?? false
+  const resumable = session?.resumable ?? false
   const [planBusy, setPlanBusy] = useState(false)
   const togglePlanMode = (): void => {
     if (!sessionId || planBusy) return
@@ -804,6 +806,7 @@ export default function Agent({ projectId, active }: { projectId: string; active
                         }`}
                       >
                         {busy && <Badge tone="amber">运行中</Badge>}
+                        {s.resumable && !busy && <Badge tone="amber">可恢复</Badge>}
                         <span className="min-w-0 truncate">{s.title}</span>
                       </div>
                       <div className="text-[10px] text-zinc-500">{fmtRelative(s.updatedAt)}</div>
@@ -956,6 +959,15 @@ export default function Agent({ projectId, active }: { projectId: string; active
                   {doneInfo.changed && <Badge tone="green">已修改资料库</Badge>}
                   {doneInfo.denied && <Badge tone="amber">有操作被拒绝</Badge>}
                   {doneInfo.hitLimit && <Badge tone="red">达到步数上限</Badge>}
+                  {doneInfo.hitLimit && !running && (
+                    <button
+                      type="button"
+                      onClick={startResumeRun}
+                      className="cursor-pointer rounded border border-red-800/60 px-2 py-0.5 text-red-300 transition-colors hover:bg-red-950/40"
+                    >
+                      继续此任务
+                    </button>
+                  )}
                   {!!doneInfo.autoContinues && doneInfo.autoContinues > 0 && (
                     <Badge tone="amber">自动续跑 ×{doneInfo.autoContinues}</Badge>
                   )}
@@ -1066,6 +1078,15 @@ export default function Agent({ projectId, active }: { projectId: string; active
               ))}
             </span>
             <span className="shrink-0 text-zinc-600">查看看板</span>
+          </button>
+        )}
+        {resumable && !running && (
+          <button
+            type="button"
+            onClick={startResumeRun}
+            className="mb-2 w-full cursor-pointer rounded-md border border-amber-700/50 bg-amber-950/30 px-3 py-1.5 text-xs text-amber-300 transition-colors hover:border-amber-600/60"
+          >
+            ⟲ 上一个任务未完成 —— 继续中断的任务
           </button>
         )}
         <Textarea
