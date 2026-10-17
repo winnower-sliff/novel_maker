@@ -74,75 +74,58 @@ export interface ExecOutcome {
   denied: boolean
 }
 
+interface ToolCall {
+  id: string
+  name: string
+  input: ToolInput
+  inputError?: 'truncated' | 'invalid'
+}
+
+/** 单个调用的结果落账槽位：按调用序归位（resultBlocks 顺序与 assistant tool_use 一致） */
+interface ResultSlot {
+  block: ContentBlock
+  ev: AgentToolResultEvent
+}
+
 /**
- * 单轮内的工具调用执行：逐个串行（写与确认流保持串行语义；阶段②在此落地只读并发分组）。
- * 每个调用的生命周期：未知/参数错误短路 → danger 判定 → 确认流 → 执行 → 结果落账。
+ * 单轮内的工具调用执行：连续只读调用聚批并发，写/确认/短路调用为串行点。
+ * 分段保序：running 卡按调用序发（UI 卡序=模型调用序）、toolResult 事件按完成序发
+ * （transcript 按 id 配对不受完成序影响）、resultBlocks 按调用序归位。
+ * 短路件（未知工具/参数错误）同步落账，会打断并发批（异常路径，不值得为它保批）。
  */
-export async function executeToolCalls(
-  calls: { id: string; name: string; input: ToolInput; inputError?: 'truncated' | 'invalid' }[],
-  deps: ExecDeps
-): Promise<ExecOutcome> {
+export async function executeToolCalls(calls: ToolCall[], deps: ExecDeps): Promise<ExecOutcome> {
   const { toolMap, projectId, readTools, emitToolCall, emitToolResult, confirm } = deps
-  const resultBlocks: ContentBlock[] = []
-  const toolResults: AgentToolResultEvent[] = []
-  let toolUseCount = 0
+  const slots: ResultSlot[] = new Array(calls.length)
   let changed = false
   let denied = false
 
-  const shortCircuit = (id: string, msg: string, opts?: { denied?: boolean }): void => {
-    resultBlocks.push({
-      type: 'tool_result',
-      tool_use_id: id,
-      content: msg,
-      is_error: true
-    })
-    const ev: AgentToolResultEvent = { id, ok: false, result: msg }
-    if (opts?.denied) ev.denied = true
-    toolResults.push(ev)
+  const settle = (index: number, block: ContentBlock, ev: AgentToolResultEvent): void => {
+    slots[index] = { block, ev }
     emitToolResult(ev)
   }
 
-  for (const tu of calls) {
-    toolUseCount++
+  const shortCircuit = (
+    index: number,
+    id: string,
+    msg: string,
+    opts?: { denied?: boolean }
+  ): void => {
+    const ev: AgentToolResultEvent = { id, ok: false, result: msg }
+    if (opts?.denied) ev.denied = true
+    settle(index, { type: 'tool_result', tool_use_id: id, content: msg, is_error: true }, ev)
+  }
 
+  /** 可并发时返回工具引用（调用与工具绑定，免去二次查表）；不可并发（不存在/参数错/委派/非只读/危险）返回 null */
+  const batchableTool = (tu: ToolCall): AgentTool | null => {
     const tool = toolMap.get(tu.name)
-    if (!tool) {
-      shortCircuit(tu.id, `错误: 未知工具 ${tu.name}`)
-      continue
-    }
+    if (!tool || tu.inputError || tool.execCtx) return null
+    if (!readTools.has(tu.name)) return null
+    // 只读工具按定义无 danger，这里防御性复核（误标只读的写工具绝不能并发）
+    return dangerOf(tool, tu.input, projectId) === null ? tool : null
+  }
 
-    if (tu.inputError) {
-      const why =
-        tu.inputError === 'truncated' ? '工具参数输出被长度上限截断' : '工具参数 JSON 不完整或非法'
-      emitToolCall({ id: tu.id, name: tu.name, input: tu.input, state: 'running' })
-      shortCircuit(
-        tu.id,
-        `错误: ${why}，本次调用未执行、未产生任何修改。请重新调用 ${tu.name}：参数内容过长时请精简或分批，并确保参数为完整合法的 JSON`
-      )
-      continue
-    }
-
-    const dangerReason = dangerOf(tool, tu.input, projectId)
-    if (dangerReason && !(deps.isAlwaysAllowed?.(tu.name) ?? false)) {
-      const call: AgentToolCallEvent = {
-        id: tu.id,
-        name: tu.name,
-        input: tu.input,
-        state: 'confirming',
-        dangerReason
-      }
-      emitToolCall(call)
-      const allowed = confirm ? await confirm(call) : false
-      if (!allowed) {
-        denied = true
-        shortCircuit(tu.id, '用户拒绝了该操作', { denied: true })
-        continue
-      }
-    } else {
-      // 无需确认的调用才发 running 卡；danger 确认放行后维持 confirming 卡（transcript 同 id 仅一卡）
-      emitToolCall({ id: tu.id, name: tu.name, input: tu.input, state: 'running' })
-    }
-
+  /** 执行单个已放行调用（并发批与串行点共用）；完成即落槽+发事件 */
+  const runOne = async (tu: ToolCall, tool: AgentTool, index: number): Promise<void> => {
     let ok: boolean
     let out: string
     try {
@@ -167,16 +150,81 @@ export async function executeToolCalls(
       out = `错误: ${(err as Error)?.message ?? String(err)}`
       ok = false
     }
-    resultBlocks.push({
-      type: 'tool_result',
-      tool_use_id: tu.id,
-      content: out,
-      is_error: ok ? undefined : true
-    })
-    const ev: AgentToolResultEvent = { id: tu.id, ok, result: out }
-    toolResults.push(ev)
-    emitToolResult(ev)
+    settle(
+      index,
+      { type: 'tool_result', tool_use_id: tu.id, content: out, is_error: ok ? undefined : true },
+      { id: tu.id, ok, result: out }
+    )
   }
 
-  return { resultBlocks, toolResults, toolUseCount, changed, denied }
+  for (let i = 0; i < calls.length; ) {
+    const tu = calls[i]
+
+    const first = batchableTool(tu)
+    if (first) {
+      const batch: { tu: ToolCall; tool: AgentTool }[] = [{ tu, tool: first }]
+      let j = i + 1
+      for (; j < calls.length; j++) {
+        const tool = batchableTool(calls[j])
+        if (!tool) break
+        batch.push({ tu: calls[j], tool })
+      }
+      // running 卡按调用序发，批内并发执行、结果按完成序发
+      for (const b of batch) {
+        emitToolCall({ id: b.tu.id, name: b.tu.name, input: b.tu.input, state: 'running' })
+      }
+      await Promise.all(batch.map((b, k) => runOne(b.tu, b.tool, i + k)))
+      i = j
+      continue
+    }
+
+    const tool = toolMap.get(tu.name)
+    if (!tool) {
+      shortCircuit(i, tu.id, `错误: 未知工具 ${tu.name}`)
+      i++
+      continue
+    }
+
+    if (tu.inputError) {
+      const why =
+        tu.inputError === 'truncated' ? '工具参数输出被长度上限截断' : '工具参数 JSON 不完整或非法'
+      emitToolCall({ id: tu.id, name: tu.name, input: tu.input, state: 'running' })
+      shortCircuit(
+        i,
+        tu.id,
+        `错误: ${why}，本次调用未执行、未产生任何修改。请重新调用 ${tu.name}：参数内容过长时请精简或分批，并确保参数为完整合法的 JSON`
+      )
+      i++
+      continue
+    }
+
+    const dangerReason = dangerOf(tool, tu.input, projectId)
+    if (dangerReason && !(deps.isAlwaysAllowed?.(tu.name) ?? false)) {
+      const call: AgentToolCallEvent = {
+        id: tu.id,
+        name: tu.name,
+        input: tu.input,
+        state: 'confirming',
+        dangerReason
+      }
+      emitToolCall(call)
+      const allowed = confirm ? await confirm(call) : false
+      if (!allowed) {
+        denied = true
+        shortCircuit(i, tu.id, '用户拒绝了该操作', { denied: true })
+        i++
+        continue
+      }
+    } else {
+      // 无需确认的调用才发 running 卡；danger 确认放行后维持 confirming 卡（transcript 同 id 仅一卡）
+      emitToolCall({ id: tu.id, name: tu.name, input: tu.input, state: 'running' })
+    }
+
+    await runOne(tu, tool, i)
+    i++
+  }
+
+  const toolResults = slots.map((s) => s.ev)
+  const resultBlocks = slots.map((s) => s.block)
+  return { resultBlocks, toolResults, toolUseCount: calls.length, changed, denied }
 }

@@ -271,3 +271,121 @@ describe('executeToolCalls 串行执行', () => {
     expect((outcome.resultBlocks[0] as ContentBlock).type).toBe('tool_result')
   })
 })
+
+describe('executeToolCalls 只读并发分段', () => {
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  const readTool = (name: string, ms: number, marks?: string[]): AgentTool =>
+    okTool(name, {
+      handler: async () => {
+        marks?.push(`${name}:start`)
+        await delay(ms)
+        marks?.push(`${name}:end`)
+        return `${name}-result`
+      }
+    })
+
+  it('连续只读调用并发执行，结果按调用序归位', async () => {
+    const marks: string[] = []
+    const toolMap = new Map<string, AgentTool>([
+      ['slow_read', readTool('slow_read', 40, marks)],
+      ['fast_read', readTool('fast_read', 1, marks)]
+    ])
+    const events: AgentToolResultEvent[] = []
+    const outcome = await executeToolCalls(
+      [call('a', 'slow_read'), call('b', 'fast_read')],
+      deps({
+        toolMap,
+        readTools: new Set(['slow_read', 'fast_read']),
+        emitToolResult: (e) => events.push(e)
+      })
+    )
+    // 并发：fast 在 slow 结束前启动并完成（若串行 fast:end 必在 slow:end 之后）
+    expect(marks.indexOf('fast_read:end')).toBeLessThan(marks.indexOf('slow_read:end'))
+    // resultBlocks 与 toolResults 按调用序（a 在前），事件流按完成序（b 在前）
+    expect(
+      outcome.resultBlocks.map((b) => (b.type === 'tool_result' ? b.tool_use_id : ''))
+    ).toEqual(['a', 'b'])
+    expect(outcome.toolResults.map((e) => e.id)).toEqual(['a', 'b'])
+    expect(events.map((e) => e.id)).toEqual(['b', 'a'])
+    expect(outcome.changed).toBe(false)
+  })
+
+  it('写工具是串行点：批先收尾再执行写', async () => {
+    const marks: string[] = []
+    const toolMap = new Map<string, AgentTool>([
+      ['r1', readTool('r1', 30, marks)],
+      [
+        'w1',
+        okTool('w1', {
+          handler: () => {
+            marks.push('w1:start')
+            return 'wrote'
+          }
+        })
+      ]
+    ])
+    await executeToolCalls(
+      [call('a', 'r1'), call('b', 'w1')],
+      deps({ toolMap, readTools: new Set(['r1']) })
+    )
+    expect(marks).toEqual(['r1:start', 'r1:end', 'w1:start'])
+  })
+
+  it('混合序列分段：读-写-读 各段保序', async () => {
+    const marks: string[] = []
+    const toolMap = new Map<string, AgentTool>([
+      ['r1', readTool('r1', 20, marks)],
+      [
+        'w1',
+        okTool('w1', {
+          handler: () => {
+            marks.push('w1:start')
+            return 'wrote'
+          }
+        })
+      ],
+      ['r2', readTool('r2', 20, marks)]
+    ])
+    const outcome = await executeToolCalls(
+      [call('a', 'r1'), call('b', 'w1'), call('c', 'r2')],
+      deps({ toolMap, readTools: new Set(['r1', 'r2']) })
+    )
+    expect(marks.indexOf('w1:start')).toBeGreaterThan(marks.indexOf('r1:end'))
+    expect(marks.indexOf('r2:start')).toBeGreaterThan(marks.indexOf('w1:start'))
+    expect(outcome.changed).toBe(true)
+  })
+
+  it('误标只读的危险工具不进并发批，走确认流串行', async () => {
+    const handler = vi.fn(() => 'done')
+    const toolMap = new Map<string, AgentTool>([
+      ['danger_read', okTool('danger_read', { danger: true, handler })]
+    ])
+    const callsEv: AgentToolCallEvent[] = []
+    const outcome = await executeToolCalls(
+      [call('a', 'danger_read'), call('b', 'danger_read')],
+      deps({ toolMap, emitToolCall: (c) => callsEv.push(c) })
+    )
+    // 确认缺省拒绝：两条都 denied 短路，handler 不执行
+    expect(handler).not.toHaveBeenCalled()
+    expect(outcome.denied).toBe(true)
+    expect(callsEv.every((c) => c.state === 'confirming')).toBe(true)
+  })
+
+  it('未知工具混在只读中间会打断批（各段仍正确落账）', async () => {
+    const marks: string[] = []
+    const toolMap = new Map<string, AgentTool>([
+      ['r1', readTool('r1', 1, marks)],
+      ['r2', readTool('r2', 1, marks)]
+    ])
+    const outcome = await executeToolCalls(
+      [call('a', 'r1'), call('x', 'nope'), call('c', 'r2')],
+      deps({ toolMap, readTools: new Set(['r1', 'r2']) })
+    )
+    expect(marks).toContain('r1:start')
+    expect(marks).toContain('r2:start')
+    expect(outcome.resultBlocks).toHaveLength(3)
+    expect(outcome.resultBlocks[1]).toMatchObject({ is_error: true })
+    expect(outcome.toolUseCount).toBe(3)
+  })
+})
