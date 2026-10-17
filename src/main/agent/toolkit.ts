@@ -23,6 +23,8 @@ export function agentMaxTokens(provider: string | undefined | null): number {
 
 export const MAX_SUB_TURNS = 10
 export const MAX_SUBAGENTS = 6
+/** 子代理同时运行上限（只读并行；可写子代理另受全局写锁互斥） */
+export const MAX_PARALLEL_SUBAGENTS = 3
 export const SUB_REPORT_CHARS = 8000
 export const SUB_MAX_TOKENS = 4096
 
@@ -44,6 +46,10 @@ export interface ToolExecContext {
   baseUrl: string
   protocol: Protocol
   promptCache: boolean
+  /** 计划模式相位（spawn_subagent 据此拦截 write 模式；legacy 直跑缺省） */
+  planPhase?: 'plan' | 'exec'
+  /** 执行期看板工具（get_board/update_board，persist 已绑定主 run）：可写子代理合并进工具集用于自查勾销 */
+  boardTools?: Map<string, AgentTool>
 }
 
 export interface AgentTool {

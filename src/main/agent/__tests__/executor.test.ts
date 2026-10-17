@@ -256,6 +256,34 @@ describe('executeToolCalls 串行执行', () => {
     expect(full.resultBlocks[0].type === 'tool_result' && full.resultBlocks[0].is_error).toBe(true)
   })
 
+  it('非 spawn 的 execCtx 工具（看板等）不消耗委派预算', async () => {
+    const budget = { used: 0, max: 1 }
+    const toolMap = new Map<string, AgentTool>([
+      ['get_board', okTool('get_board', { execCtx: async () => 'board-text' })]
+    ])
+    const outcome = await executeToolCalls(
+      [call('a', 'get_board'), call('b', 'get_board'), call('c', 'get_board')],
+      deps({
+        toolMap,
+        execCtxBase: {
+          sink: { isClosed: () => true, send: () => {} },
+          requestId: 'r1',
+          projectId: 'p1',
+          usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+          signal: new AbortController().signal,
+          model: 'm',
+          apiKey: 'k',
+          baseUrl: 'http://x',
+          protocol: 'anthropic' as const,
+          promptCache: false
+        },
+        subagentBudget: budget
+      })
+    )
+    expect(outcome.toolUseCount).toBe(3)
+    expect(budget.used).toBe(0)
+  })
+
   it('tool_result 与事件流水一致', async () => {
     const toolMap = new Map<string, AgentTool>([['t1', okTool('t1')]])
     const events: AgentToolResultEvent[] = []
@@ -479,5 +507,85 @@ describe('executeToolCalls writeGuard 写授权闸门', () => {
     expect(marks).toEqual(['r1', 'r2'])
     expect(outcome.toolUseCount).toBe(2)
     expect(guard).not.toHaveBeenCalled() // 并发批内只读工具不经闸门（batchableTool 已排除非只读）
+  })
+})
+
+describe('executeToolCalls spawn_subagent 并行与 changed 回传', () => {
+  const delay = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
+  const spawnTool = (run: (input: Record<string, unknown>) => Promise<unknown>): AgentTool => ({
+    ...okTool('spawn_subagent', { execCtx: (input) => run(input) }),
+    danger: false
+  })
+
+  const baseCtx = {
+    sink: { send: () => {}, isClosed: () => false },
+    requestId: 'r1',
+    projectId: 'p1',
+    usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 },
+    signal: new AbortController().signal,
+    model: 'm',
+    apiKey: 'k',
+    baseUrl: 'u',
+    protocol: 'anthropic',
+    promptCache: false
+  } as const
+
+  it('两个 spawn_subagent 同批并行（可写互斥在子代理层治理）', async () => {
+    const marks: string[] = []
+    const toolMap = new Map<string, AgentTool>([
+      [
+        'spawn_subagent',
+        spawnTool(async (input) => {
+          const tag = String(input.tag)
+          marks.push(`${tag}:start`)
+          await delay(tag === 'a' ? 40 : 1)
+          marks.push(`${tag}:end`)
+          return { report: `${tag}-report`, turns: 1 }
+        })
+      ]
+    ])
+    const events: AgentToolResultEvent[] = []
+    const budget = { used: 0, max: 6 }
+    const outcome = await executeToolCalls(
+      [call('a', 'spawn_subagent', { tag: 'a' }), call('b', 'spawn_subagent', { tag: 'b' })],
+      deps({
+        toolMap,
+        emitToolResult: (e) => events.push(e),
+        subagentBudget: budget,
+        execCtxBase: baseCtx
+      }) as Parameters<typeof executeToolCalls>[1]
+    )
+    // 并行：b 先完成
+    expect(marks.indexOf('b:end')).toBeLessThan(marks.indexOf('a:end'))
+    expect(
+      outcome.resultBlocks.map((b) => (b.type === 'tool_result' ? b.tool_use_id : ''))
+    ).toEqual(['a', 'b'])
+    expect(events.map((e) => e.id)).toEqual(['b', 'a'])
+    expect(budget.used).toBe(2)
+    // 子代理只读返回：主 run 不标 changed
+    expect(outcome.changed).toBe(false)
+  })
+
+  it('可写子代理 changed=true 回传主 run', async () => {
+    const toolMap = new Map<string, AgentTool>([
+      [
+        'spawn_subagent',
+        spawnTool(async () => {
+          await delay(1)
+          return { report: '已写入', turns: 2, changed: true }
+        })
+      ]
+    ])
+    const outcome = await executeToolCalls(
+      [call('a', 'spawn_subagent', { tag: 'a' })],
+      deps({
+        toolMap,
+        subagentBudget: { used: 0, max: 6 },
+        execCtxBase: baseCtx
+      }) as Parameters<typeof executeToolCalls>[1]
+    )
+    expect(outcome.changed).toBe(true)
+    expect(outcome.toolResults[0]?.result).toContain('已写入')
   })
 })

@@ -117,10 +117,15 @@ export async function executeToolCalls(calls: ToolCall[], deps: ExecDeps): Promi
     settle(index, { type: 'tool_result', tool_use_id: id, content: msg, is_error: true }, ev)
   }
 
-  /** 可并发时返回工具引用（调用与工具绑定，免去二次查表）；不可并发（不存在/参数错/委派/非只读/危险）返回 null */
+  /**
+   * 可并发时返回工具引用；只读工具与 spawn_subagent 可批（子代理内部并发≤3、可写互斥由
+   * subagent.ts 全局治理兜底），其余 execCtx 工具与写/危险工具不批
+   */
   const batchableTool = (tu: ToolCall): AgentTool | null => {
     const tool = toolMap.get(tu.name)
-    if (!tool || tu.inputError || tool.execCtx) return null
+    if (!tool || tu.inputError) return null
+    if (tu.name === 'spawn_subagent') return tool.execCtx ? tool : null
+    if (tool.execCtx) return null
     if (!readTools.has(tu.name)) return null
     // 只读工具按定义无 danger，这里防御性复核（误标只读的写工具绝不能并发）
     return dangerOf(tool, tu.input, projectId) === null ? tool : null
@@ -130,24 +135,29 @@ export async function executeToolCalls(calls: ToolCall[], deps: ExecDeps): Promi
   const runOne = async (tu: ToolCall, tool: AgentTool, index: number): Promise<void> => {
     let ok: boolean
     let out: string
+    let subChanged = false
     try {
       if (tool.execCtx) {
         if (!deps.execCtxBase) throw new Error('当前上下文不支持委派子智能体')
-        if (deps.subagentBudget) {
+        // 只有 spawn_subagent 消耗委派预算（get_board/update_board 等 execCtx 工具不是委派）
+        if (deps.subagentBudget && tu.name === 'spawn_subagent') {
           if (deps.subagentBudget.used >= deps.subagentBudget.max) {
             throw new Error('已达到本次任务的子智能体委派上限，请自行完成剩余工作并总结')
           }
           deps.subagentBudget.used++
         }
-        out = serializeResult(
-          await tool.execCtx(tu.input, { ...deps.execCtxBase, parentId: tu.id })
-        )
+        const sub = await tool.execCtx(tu.input, { ...deps.execCtxBase, parentId: tu.id })
+        // 可写子代理把 changed 回传给主 run（done 徽标「已修改资料库」）
+        if (sub && typeof sub === 'object' && (sub as { changed?: boolean }).changed === true)
+          subChanged = true
+        out = serializeResult(sub)
         ok = true
       } else {
         out = serializeResult(await tool.handler(tu.input, projectId))
         ok = true
       }
       if (!readTools.has(tu.name) && tu.name !== 'spawn_subagent') changed = true
+      if (subChanged) changed = true
     } catch (err) {
       out = `错误: ${(err as Error)?.message ?? String(err)}`
       ok = false

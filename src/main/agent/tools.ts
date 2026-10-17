@@ -4,6 +4,7 @@ import {
   isDanglingRef,
   resolveChapterRefToOutline
 } from '../../shared/foreRef'
+import type { ProviderId } from '../../shared/providers'
 import { splitTags } from '../../shared/tags'
 import type { OutlineItem, ToolDef } from '../../shared/types'
 import { buildChapterContext } from '../context'
@@ -1510,13 +1511,19 @@ export const TOOLS: AgentTool[] = [
     def: {
       name: 'spawn_subagent',
       description:
-        '委派一个只读子智能体独立完成调研/分析类子任务。子智能体拥有独立上下文与步数预算（仅只读工具：get_project/list_*/get_entity/grep_project/search_project/get_book_digest），不能写入；适合「通读全书找矛盾」「批量核对设定与人物一致性」「大范围语义调研」这类会耗尽你上下文的任务。task 必须自带完整上下文（调查范围、判断标准、期望报告格式），子智能体看不到你们的对话历史。返回其最终报告',
+        '委派一个子智能体独立完成子任务。默认只读调研（mode=read）：拥有独立上下文与步数预算（仅只读工具），适合「通读全书找矛盾」「批量核对一致性」「大范围语义调研」这类会耗尽你上下文的任务。mode=write 的可写子代理仅在计划执行期可用：它继承你的计划授权（授权范围外写入被拒、删除类不可用），适合把一整个授权步骤整体委派。多个只读子代理会并行执行（上限 3 个同时）；可写子代理之间自动串行。task 必须自带完整上下文（调查范围、判断标准、期望报告格式），子智能体看不到你们的对话历史。返回其最终报告',
       input_schema: schema(
         {
           task: s(
-            '子任务完整描述：调查什么、范围（哪些卷/章/板块）、判断标准、期望报告格式（如：列出矛盾点，每条含涉及章节与原文依据）'
+            '子任务完整描述：调查什么/写什么、范围（哪些卷/章/板块）、判断标准、期望报告格式'
           ),
-          role: optS('角色侧重，如 连续性审校/设定考据/时间线核查，默认通用调研')
+          role: optS('角色侧重，如 连续性审校/设定考据/时间线核查，默认通用调研'),
+          mode: optS(
+            "子代理权限：'read'（默认，只读调研）或 'write'（可写，仅计划执行期可用，继承计划授权）"
+          ),
+          model: optS(
+            '子代理生成引擎 provider id（如 glm/deepseek/ollama），留空沿用当前引擎；用于把调研派给本地引擎、写作留在云端的分流'
+          )
         },
         ['task']
       )
@@ -1525,12 +1532,39 @@ export const TOOLS: AgentTool[] = [
     handler: () => {
       throw new Error('spawn_subagent 需要流式上下文，当前环境不支持')
     },
-    execCtx: (input, ctx) =>
-      runSubAgent({
+    execCtx: async (input, ctx) => {
+      const writeMode = optStr(input, 'mode')?.trim() === 'write'
+      if (writeMode && ctx.planPhase !== 'exec')
+        throw new Error(
+          ctx.planPhase === 'plan'
+            ? '计划期子代理只能只读调研：写入类步骤等计划批准后在执行期再委派（mode=read）'
+            : '可写子代理仅在计划执行期可用：当前任务无计划授权，请以 mode=read 委派只读调研'
+        )
+      const provider = optStr(input, 'model')?.trim() as ProviderId | undefined
+      let authOverride: Parameters<typeof runSubAgent>[0]['authOverride']
+      if (provider) {
+        const r = await resolveRequestAuth('agent', provider)
+        // 显式指定引擎失败就报错引导，不静默回退：模型需要知道真实引擎以调整期望
+        if (r.fallbackReason)
+          throw new Error(
+            `${r.fallbackReason}；请勿再指定 model 参数（改用当前引擎委派），或提示用户先在设置中配置该引擎的 API Key`
+          )
+        authOverride = {
+          model: r.model,
+          apiKey: r.apiKey,
+          baseUrl: r.baseUrl,
+          protocol: r.protocol,
+          promptCache: r.promptCache
+        }
+      }
+      return runSubAgent({
         ...ctx,
         task: reqStr(input, 'task'),
-        role: optStr(input, 'role')?.trim() ?? ''
+        role: optStr(input, 'role')?.trim() ?? '',
+        writeMode,
+        authOverride
       })
+    }
   },
   {
     def: {
@@ -1884,7 +1918,9 @@ export const READ_TOOLS = new Set([
   'get_agent_instructions',
   'get_writing_rules',
   'load_skill',
-  'list_foreshadows'
+  'list_foreshadows',
+  'get_chapter_context',
+  'lint_chapter'
 ])
 
 export const SUB_TOOLS = TOOLS.filter((t) => READ_TOOLS.has(t.def.name))

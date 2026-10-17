@@ -294,7 +294,18 @@ export async function runAgent(opts: {
     apiKey: auth.apiKey,
     baseUrl: auth.baseUrl,
     protocol: auth.protocol,
-    promptCache: auth.promptCache
+    promptCache: auth.promptCache,
+    planPhase,
+    // 执行期给可写子代理配看板自查工具（persist 已绑定主 run，board 变化照常广播）
+    ...(planPhase === 'exec' && planTools
+      ? {
+          boardTools: new Map(
+            [...planTools.toolMap].filter(
+              ([name]) => name === 'get_board' || name === 'update_board'
+            )
+          )
+        }
+      : {})
   }
 
   const messages = [...opts.messages]
