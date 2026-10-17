@@ -1,10 +1,8 @@
-import { recoverToolInput } from '../../shared/toolInput'
-import type { ChatMessage, ContentBlock, SubagentEvent } from '../../shared/types'
-import { chatStream, pickRatelimitHeaders } from '../llm'
+import type { ChatMessage, SubagentEvent } from '../../shared/types'
 import * as store from '../store'
-import { appendUsage } from '../usage'
 import { coreWritingRules, projectCoreRules } from './instructions'
-import { serializeResult } from './run'
+import { runLoop } from './loop'
+import { createLoopCounters } from './policy/compact'
 import {
   clip,
   MAX_SUB_TURNS,
@@ -37,138 +35,56 @@ function buildSubSystemPrompt(projectId: string, role: string): string {
     .join('\n')
 }
 
+/** 子智能体与主代理共用 runLoop 骨架；差异（subEvent 包装、无确认/压缩/续跑）在组装层吸收 */
 export async function runSubAgent(ctx: ToolExecContext & { task: string; role: string }): Promise<{
   report: string
   turns: number
 }> {
-  const { sink, requestId, parentId, projectId, usage, signal, model, task, role } = ctx
+  const { sink, requestId, parentId, usage, signal, model, task, role } = ctx
   const send = (ev: SubagentEvent): void => {
     if (!sink.isClosed()) sink.send('agent:subEvent', requestId, ev)
   }
 
-  const system = buildSubSystemPrompt(projectId, role)
+  const system = buildSubSystemPrompt(ctx.projectId, role)
   const messages: ChatMessage[] = [{ role: 'user', content: task }]
   send({ type: 'start', parentId, task, role })
 
-  let report = ''
-  let turns = 0
-  for (let turn = 0; turn < MAX_SUB_TURNS; turn++) {
-    turns = turn + 1
-    const result = await chatStream(
-      {
-        model,
-        system,
-        messages,
-        tools: SUB_TOOLS.map((t) => t.def),
-        maxTokens: SUB_MAX_TOKENS,
-        purpose: 'agent',
-        cacheSystem: ctx.promptCache
-      },
-      { apiKey: ctx.apiKey, baseUrl: ctx.baseUrl, protocol: ctx.protocol },
-      (text) => send({ type: 'delta', parentId, text }),
+  const result = await runLoop(
+    messages,
+    {
+      system,
+      tools: SUB_TOOLS.map((t) => t.def),
+      toolMap: SUB_TOOL_MAP,
+      readTools: new Set(SUB_TOOLS.map((t) => t.def.name)),
+      projectId: ctx.projectId,
+      model,
+      maxTokens: SUB_MAX_TOKENS,
+      promptCache: ctx.promptCache,
+      apiKey: ctx.apiKey,
+      baseUrl: ctx.baseUrl,
+      protocol: ctx.protocol,
+      maxTurns: MAX_SUB_TURNS,
       signal
-    )
-    usage.inputTokens += result.usage.inputTokens
-    usage.outputTokens += result.usage.outputTokens
-    usage.cacheReadTokens += result.usage.cacheReadTokens
-    usage.cacheCreationTokens += result.usage.cacheCreationTokens
-    appendUsage({
-      ts: Date.now(),
-      model: result.model,
-      purpose: 'agent',
-      inputTokens: result.usage.inputTokens,
-      outputTokens: result.usage.outputTokens,
-      cacheReadTokens: result.usage.cacheReadTokens,
-      cacheCreationTokens: result.usage.cacheCreationTokens,
-      durationMs: result.durationMs,
-      ratelimit: pickRatelimitHeaders(result.headers)
-    })
-
-    if (result.toolUses.length === 0) {
-      report = result.text
-      break
+    },
+    {
+      emit: {
+        delta: (text) => send({ type: 'delta', parentId, text }),
+        toolCall: (call) =>
+          send({ type: 'toolCall', parentId, call: { ...call, state: 'running' } }),
+        toolResult: (ev) =>
+          send({ type: 'toolResult', parentId, id: ev.id, ok: ev.ok, result: ev.result })
+      },
+      usage,
+      counters: createLoopCounters()
     }
+  )
 
-    // 参数恢复：解开 _raw 包裹；解不开按解析失败处理（绝不让 _raw 回灌进子智能体历史）
-    for (const tu of result.toolUses) {
-      if (tu.inputError) {
-        tu.input = {}
-        continue
-      }
-      const rec = recoverToolInput(tu.input)
-      tu.input = rec.ok ? rec.input : {}
-      if (!rec.ok) tu.inputError = 'invalid'
-    }
-
-    const assistantBlocks: ContentBlock[] = []
-    if (result.text) assistantBlocks.push({ type: 'text', text: result.text })
-    for (const tu of result.toolUses) {
-      assistantBlocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input })
-    }
-    messages.push({ role: 'assistant', content: assistantBlocks })
-
-    const resultBlocks: ContentBlock[] = []
-    for (const tu of result.toolUses) {
-      const tool = SUB_TOOL_MAP.get(tu.name)
-      if (!tool) {
-        resultBlocks.push({
-          type: 'tool_result',
-          tool_use_id: tu.id,
-          content: `错误: 未知工具 ${tu.name}`,
-          is_error: true
-        })
-        continue
-      }
-      if (tu.inputError) {
-        const why =
-          tu.inputError === 'truncated'
-            ? '工具参数输出被长度上限截断'
-            : '工具参数 JSON 不完整或非法'
-        const msg = `错误: ${why}，本次调用未执行。请重新调用 ${tu.name}：参数内容过长时请精简或分批，并确保参数为完整合法的 JSON`
-        send({
-          type: 'toolCall',
-          parentId,
-          call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
-        })
-        resultBlocks.push({
-          type: 'tool_result',
-          tool_use_id: tu.id,
-          content: msg,
-          is_error: true
-        })
-        send({ type: 'toolResult', parentId, id: tu.id, ok: false, result: msg })
-        continue
-      }
-      send({
-        type: 'toolCall',
-        parentId,
-        call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
-      })
-      let ok: boolean
-      let out: string
-      try {
-        out = serializeResult(await tool.handler(tu.input, projectId))
-        ok = true
-      } catch (err) {
-        out = `错误: ${(err as Error)?.message ?? String(err)}`
-        ok = false
-      }
-      resultBlocks.push({
-        type: 'tool_result',
-        tool_use_id: tu.id,
-        content: out,
-        is_error: ok ? undefined : true
-      })
-      send({ type: 'toolResult', parentId, id: tu.id, ok, result: out })
-    }
-    messages.push({ role: 'user', content: resultBlocks })
-
-    if (turn === MAX_SUB_TURNS - 1) {
-      report = `${result.text}\n[达到子任务步数上限，以上为部分结论]`
-    }
-  }
-
-  report = clip(report || '（子智能体未产出文本结论）', SUB_REPORT_CHARS).text
-  send({ type: 'done', parentId, text: report, turns })
-  return { report, turns }
+  const report = clip(
+    result.hitLimit
+      ? `${result.text}\n[达到子任务步数上限，以上为部分结论]`
+      : result.text || '（子智能体未产出文本结论）',
+    SUB_REPORT_CHARS
+  ).text
+  send({ type: 'done', parentId, text: report, turns: result.turns })
+  return { report, turns: result.turns }
 }

@@ -1,238 +1,41 @@
 import type { AgentToolResultEvent, EventChannels, EventContract } from '../../shared/contract'
-import { classifyLlmError } from '../../shared/llmError'
 import type { ProviderId } from '../../shared/providers'
-import { recoverToolInput } from '../../shared/toolInput'
 import type {
   AgentDonePayload,
-  AgentToolResultStatus,
   AgentTranscriptInput,
   ChatMessage,
-  ContentBlock,
   PendingConfirmInfo,
   ToolDef,
   UsageInfo
 } from '../../shared/types'
 import type { EventSink } from '../eventSink'
-import { chatStream, pickRatelimitHeaders } from '../llm'
 import { resolveRequestAuth } from '../settings'
 import { getSkill, listSkills, stripFrontmatter } from '../skills'
 import * as store from '../store'
-import { appendUsage } from '../usage'
 import { coreWritingRules, projectCoreRules } from './instructions'
+import { type LoopEmit, runLoop } from './loop'
+import { createCompactPolicy, createLoopCounters, DEFAULT_CONTEXT_WINDOW } from './policy/compact'
+import { ConfirmRegistry } from './policy/confirm'
+import { createContinuePolicy } from './policy/continue'
 import { drainInjections } from './queue'
-import {
-  agentMaxTokens,
-  clip,
-  MAX_RESULT_CHARS,
-  MAX_SUBAGENTS,
-  MAX_TURNS,
-  type ToolExecContext
-} from './toolkit'
+import { agentMaxTokens, MAX_SUBAGENTS, MAX_TURNS, type ToolExecContext } from './toolkit'
 import { getToolDefs, READ_TOOLS, TOOL_MAP } from './tools'
 
 export function getAgentToolDefs(): ToolDef[] {
   return getToolDefs()
 }
 
-/** 确认等待超时：渲染端刷新/断连后无人应答时自动拒绝，防 run 在主进程死等（对齐 runRecords TTL） */
-const CONFIRM_TIMEOUT_MS = 10 * 60 * 1000
-
-/** 上下文窗口未知（custom/异常 provider）时的保守回退值 */
-const DEFAULT_CONTEXT_WINDOW = 128_000
-
-/** 输入 token 占窗口比超过该比率时在工具结果里软提示建议模型自主压缩（不强制，每轮至多一次） */
-const COMPACT_NUDGE_RATIO = 0.6
-
-/** 输入+输出 token 占窗口比超过该比率时程序化主动压缩（不等 context_too_long 报错） */
-const PROACTIVE_COMPACT_RATIO = 0.8
-
-/** 自动压缩兜底预算：输入超限（context_too_long）时程序化压缩的次数与保留字符预算（二级递减） */
-const MAX_AUTO_COMPACTS = 2
-const AUTO_COMPACT_BUDGET = 30_000
-const AUTO_COMPACT_BUDGET_HARD = 8_000
-
-/** 自动续跑预算：检测到疑似中途停摆时自动注入「继续」的次数上限，防失控烧钱 */
-const MAX_AUTO_CONTINUES = 2
-
-/** 征询语特征：模型任务未完却停下等指示时的高频措辞 */
-const STOP_PHRASES = [
-  /是否继续/,
-  /是否需要我/,
-  /请确认/,
-  /请指示/,
-  /等你?确认/,
-  /等你?指示/,
-  /等待.{0,6}(指示|确认|指令|批准)/,
-  /需要我(继续|接着|往下)/,
-  /要我(继续|接着|往下)/,
-  /可以继续吗/,
-  /还要继续吗/
-]
-
-/**
- * 疑似中途停摆判定：本 run 做过实际工作（有工具调用）且收尾文本呈现
- * 压缩后停顿或征询语特征。纯问答（无工具调用）不算，绝不打扰正常对话。
- */
-function looksLikePaused(text: string, toolUseCount: number, compacted: boolean): boolean {
-  if (toolUseCount === 0) return false
-  const t = text.trim()
-  if (!t) return false
-  if (compacted) return true
-  if (/[?？]\s*$/.test(t)) return true
-  return STOP_PHRASES.some((re) => re.test(t))
-}
-
-/** 单条消息粗估字符量（自动压缩预算用，无需精确 token） */
-function msgSize(m: ChatMessage): number {
-  if (typeof m.content === 'string') return m.content.length
-  let n = 0
-  for (const b of m.content) {
-    if (b.type === 'text') n += b.text.length
-    else if (b.type === 'tool_use') n += JSON.stringify(b.input ?? {}).length + 40
-    else if (b.type === 'tool_result')
-      n +=
-        (typeof b.content === 'string'
-          ? b.content.length
-          : JSON.stringify(b.content ?? '').length) + 20
-  }
-  return n
-}
-
-function isToolResultMsg(m: ChatMessage): boolean {
-  return (
-    m.role === 'user' &&
-    Array.isArray(m.content) &&
-    m.content.length > 0 &&
-    m.content.every((b) => b.type === 'tool_result')
-  )
-}
-
-interface MsgGroup {
-  msgs: ChatMessage[]
-  size: number
-  toolNames: string[]
-}
-
-/** 按轮切原子组：assistant 与其紧随的 tool_result user 绑定（配对约束不可拆散），普通 user 独立成组 */
-function groupMessages(messages: ChatMessage[]): MsgGroup[] {
-  const groups: MsgGroup[] = []
-  for (let i = 0; i < messages.length; ) {
-    const m = messages[i]
-    if (m.role === 'assistant') {
-      const next = messages[i + 1]
-      const msgs = next && isToolResultMsg(next) ? [m, next] : [m]
-      i += msgs.length
-      const toolNames: string[] = []
-      if (Array.isArray(m.content))
-        for (const b of m.content) if (b.type === 'tool_use') toolNames.push(b.name)
-      groups.push({ msgs, size: msgs.reduce((n, x) => n + msgSize(x), 0), toolNames })
-    } else {
-      groups.push({ msgs: [m], size: msgSize(m), toolNames: [] })
-      i++
-    }
-  }
-  return groups
-}
-
-function userText(m: ChatMessage): string {
-  if (typeof m.content === 'string') return m.content
-  return m.content
-    .filter((b) => b.type === 'text')
-    .map((b) => b.text)
-    .join('')
-}
-
-function firstUserText(messages: ChatMessage[]): string {
-  const first = messages[0]
-  if (first?.role !== 'user') return ''
-  return userText(first)
-}
-
-/**
- * 程序化自动压缩（输入超限兜底）：从尾往前按字符预算保留最近的工作（原子组切割），
- * 早期历史替换为线索摘要（原始任务 + 被丢弃段的工作统计），至少保留最后一组。
- * 落库为合成 compact_context 调用（input.summary 非空），重开会话回灌时按摘要裁剪。
- */
-function buildAutoCompact(
-  messages: ChatMessage[],
-  budget: number
-): { summary: string; kept: ChatMessage[] } {
-  const groups = groupMessages(messages)
-  const kept: MsgGroup[] = []
-  let used = 0
-  for (let i = groups.length - 1; i >= 0; i--) {
-    const g = groups[i]
-    if (kept.length > 0 && used + g.size > budget) break
-    kept.unshift(g)
-    used += g.size
-  }
-  const lines: string[] = []
-  const taskText = firstUserText(messages).slice(0, 800).trim()
-  if (taskText.startsWith('【上下文压缩】')) {
-    lines.push(`前次压缩摘要（继承，可能截取）：\n${taskText}`)
-  } else if (taskText) {
-    lines.push(`原始任务（截取）：${taskText}`)
-  }
-  // 前次压缩摘要组若落在保留区头部：内容已继承进新摘要，剔除避免双份
-  let absorbed = 0
-  if (
-    kept.length > 1 &&
-    kept[0].msgs[0]?.role === 'user' &&
-    userText(kept[0].msgs[0]).startsWith('【上下文压缩】')
-  ) {
-    kept.shift()
-    absorbed++
-  }
-  // 保留区头部若是普通 user 指令：并入摘要行，避免摘要后紧跟连续 user 消息（兼容层风险）
-  if (kept.length > 1) {
-    const head = kept[0].msgs[0]
-    if (head?.role === 'user' && !isToolResultMsg(head)) {
-      const t = userText(head).slice(0, 400).trim()
-      if (t) lines.push(`用户中途指令（保留）：${t}`)
-      kept.shift()
-      absorbed++
-    }
-  }
-  const dropped = groups.slice(0, groups.length - kept.length - absorbed)
-  if (dropped.length > 0) {
-    const toolCount = new Map<string, number>()
-    for (const g of dropped)
-      for (const n of g.toolNames) toolCount.set(n, (toolCount.get(n) ?? 0) + 1)
-    const stat = [...toolCount.entries()].map(([n, c]) => `${n}×${c}`).join('、')
-    lines.push(
-      `已省略早期 ${dropped.length} 组对话${stat ? `（工具调用：${stat}）` : ''}：详细内容已不可恢复，需要早期结论或数据时用工具重新查询项目资料，不要凭空回忆`
-    )
-  }
-  lines.push('以下从最近的工作继续，直接调用工具完成任务')
-  return { summary: lines.join('\n'), kept: kept.flatMap((g) => g.msgs) }
-}
-
-interface RunState {
-  confirms: Map<
-    string,
-    PendingConfirmInfo & { resolve: (allow: boolean) => void; timer: ReturnType<typeof setTimeout> }
-  >
-  alwaysAllowed: Set<string>
-  /** 已发出的工具结果全量流水：done 一次性下发 + snapshot 轻量对账，供渲染端校正刷新窗口丢失的工具卡 */
-  toolResults: AgentToolResultEvent[]
-}
-
-const activeRuns = new Map<string, RunState>()
+const activeRuns = new Map<
+  string,
+  { confirms: ConfirmRegistry; toolResults: AgentToolResultEvent[] }
+>()
 
 export function getAgentPendingConfirm(requestId: string): PendingConfirmInfo | null {
-  const run = activeRuns.get(requestId)
-  const pending = run ? [...run.confirms.values()][0] : undefined
-  if (!pending) return null
-  return {
-    confirmId: pending.confirmId,
-    toolName: pending.toolName,
-    input: pending.input,
-    dangerReason: pending.dangerReason
-  }
+  return activeRuns.get(requestId)?.confirms.peekPending() ?? null
 }
 
 /** running 期间已完成工具的轻量状态表（runtime:snapshot 周期对账用，不带 result 全文） */
-export function getAgentToolResultStatuses(requestId: string): AgentToolResultStatus[] {
+export function getAgentToolResultStatuses(requestId: string) {
   return (
     activeRuns.get(requestId)?.toolResults.map((r) => ({ id: r.id, ok: r.ok, denied: r.denied })) ??
     []
@@ -245,36 +48,11 @@ export function resolveAgentConfirm(
   allow: boolean,
   always: boolean
 ): boolean {
-  const run = activeRuns.get(requestId)
-  if (!run) return false
-  const pending = run.confirms.get(confirmId)
-  if (!pending) return false
-  clearTimeout(pending.timer)
-  run.confirms.delete(confirmId)
-  if (always && allow) run.alwaysAllowed.add(pending.toolName)
-  pending.resolve(allow)
-  return true
+  return activeRuns.get(requestId)?.confirms.resolve(confirmId, allow, always) ?? false
 }
 
 export function cancelAgentConfirms(requestId: string): void {
-  const run = activeRuns.get(requestId)
-  if (!run) return
-  for (const pending of run.confirms.values()) {
-    clearTimeout(pending.timer)
-    pending.resolve(false)
-  }
-  run.confirms.clear()
-}
-
-/** 等待渲染端应答；超时自动拒绝（resolve false）兜底，真实应答/中断会清掉 timer */
-function waitConfirm(runState: RunState, info: PendingConfirmInfo): Promise<boolean> {
-  return new Promise<boolean>((resolve) => {
-    const timer = setTimeout(() => {
-      runState.confirms.delete(info.confirmId)
-      resolve(false)
-    }, CONFIRM_TIMEOUT_MS)
-    runState.confirms.set(info.confirmId, { ...info, resolve, timer })
-  })
+  activeRuns.get(requestId)?.confirms.cancelAll()
 }
 
 function buildSystemPrompt(projectId: string): string {
@@ -347,16 +125,6 @@ function buildSystemPrompt(projectId: string): string {
   ].join('\n')
 }
 
-export function serializeResult(data: unknown): string {
-  let text: string
-  if (typeof data === 'string') text = data
-  else text = JSON.stringify(data, null, 0)
-  const c = clip(text, MAX_RESULT_CHARS)
-  return c.truncated
-    ? `${c.text}\n[结果过大被截断：请改用 category/volume 过滤、offset/limit 分页、detail=summary 或按 id 逐条读取后重试，勿基于截断数据下全局结论]`
-    : c.text
-}
-
 export async function runAgent(opts: {
   sink: EventSink
   requestId: string
@@ -383,15 +151,16 @@ export async function runAgent(opts: {
 
   const auth = await resolveRequestAuth('agent', opts.provider)
   if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
-  const contextWindow = auth.contextWindow ?? DEFAULT_CONTEXT_WINDOW
   const system = buildSystemPrompt(projectId)
 
-  const runState: RunState = { confirms: new Map(), alwaysAllowed: new Set(), toolResults: [] }
-  activeRuns.set(requestId, runState)
+  const confirms = new ConfirmRegistry()
+  const toolResults: AgentToolResultEvent[] = []
+  const runEntry = { confirms, toolResults }
+  activeRuns.set(requestId, runEntry)
 
   /** 发工具结果事件并登记流水（done 收尾时随 payload 下发，snapshot 期间轻量对账） */
   const emitToolResult = (ev: AgentToolResultEvent): void => {
-    runState.toolResults.push(ev)
+    toolResults.push(ev)
     persist({
       kind: 'tool_result',
       id: ev.id,
@@ -402,31 +171,26 @@ export async function runAgent(opts: {
     send('agent:toolResult', ev)
   }
 
-  /**
-   * 程序化压缩执行体（主动 80% 预防与被动超限兜底共用）：
-   * 落库 compact 卡（保证重开会话回灌也会裁剪）+ 整体替换 messages 为 摘要+kept
-   */
-  const doAutoCompact = (summary: string, kept: ChatMessage[], note: string): void => {
-    const cid = `auto_compact_${Date.now()}`
-    persist({
-      kind: 'tool_call',
-      call: { id: cid, name: 'compact_context', input: { summary }, state: 'running' }
-    })
-    send('agent:toolCall', {
-      id: cid,
-      name: 'compact_context',
-      input: { summary },
-      state: 'running'
-    })
-    emitToolResult({ id: cid, ok: true, result: note })
-    messages.length = 0
-    messages.push({
-      role: 'user',
-      content: `【上下文压缩】以下摘要替代了此前全部对话历史：\n${summary}`
-    })
-    messages.push(...kept)
-    compacted = true
-    compactSummary = summary
+  const counters = createLoopCounters()
+  const compactPolicy = createCompactPolicy({
+    counters,
+    messages: opts.messages,
+    contextWindow: auth.contextWindow ?? DEFAULT_CONTEXT_WINDOW,
+    emitToolCall: (call) => {
+      persist({ kind: 'tool_call', call })
+      send('agent:toolCall', call)
+    },
+    emitToolResult
+  })
+  const continuePolicy = createContinuePolicy(counters)
+
+  const emit: LoopEmit = {
+    delta: (text) => send('agent:delta', text),
+    toolCall: (call) => {
+      persist({ kind: 'tool_call', call })
+      send('agent:toolCall', call)
+    },
+    toolResult: emitToolResult
   }
 
   const usage: UsageInfo = {
@@ -448,350 +212,84 @@ export async function runAgent(opts: {
     protocol: auth.protocol,
     promptCache: auth.promptCache
   }
-  let subagentCount = 0
-  let pendingCompact: string | null = null
-  let compacted = false
-  let compactSummary = ''
-  let toolUseCount = 0
-  let autoContinues = 0
-  let autoCompacts = 0
 
   const messages = [...opts.messages]
-  const tools = getAgentToolDefs()
-  let requests = 0
-  let turnCount = 0
-  let changed = false
-  let denied = false
-  let finalText = ''
-  let lastModel = opts.model
-  let hitLimit = false
+  const subagentBudget = { used: 0, max: MAX_SUBAGENTS }
   const started = Date.now()
-  /** 当前 chatStream 已流出但尚未按轮落库的文本（中断/异常时在 finally 兜底持久化） */
-  let pendingTurnText = ''
 
   try {
-    for (let turn = 0; turn < MAX_TURNS; turn++) {
-      turnCount = turn + 1
-      let result: Awaited<ReturnType<typeof chatStream>>
-      try {
-        result = await chatStream(
-          {
-            model: opts.model || auth.model,
-            system,
-            messages,
-            tools,
-            maxTokens: agentMaxTokens(auth.provider),
-            purpose: 'agent',
-            cacheSystem: auth.promptCache
-          },
-          { apiKey: auth.apiKey, baseUrl: auth.baseUrl, protocol: auth.protocol },
-          (text) => {
-            pendingTurnText += text
-            send('agent:delta', text)
-          },
-          signal
-        )
-      } catch (err) {
-        // 自动压缩兜底：输入超上下文限制时程序化压缩后重试（不耗 MAX_TURNS），预算用尽才真报错
-        const errMsg = (err as Error)?.message ?? String(err)
-        if (
-          signal.aborted ||
-          autoCompacts >= MAX_AUTO_COMPACTS ||
-          classifyLlmError(errMsg).category !== 'context_too_long'
-        )
-          throw err
-        autoCompacts++
-        // 超限报错若发生在流中途（罕见）：已流出文本先落库再清，避免静默丢失
-        if (pendingTurnText.trim()) persist({ kind: 'assistant', text: pendingTurnText })
-        pendingTurnText = ''
-        const budget = autoCompacts === 1 ? AUTO_COMPACT_BUDGET : AUTO_COMPACT_BUDGET_HARD
-        const { summary, kept } = buildAutoCompact(messages, budget)
-        doAutoCompact(
-          summary,
-          kept,
-          `已自动压缩（第 ${autoCompacts} 次）：输入超出模型上下文长度限制，早期历史已替换为线索摘要，保留了最近的工作。不要输出确认性文字，直接继续调用工具完成任务`
-        )
-        turn--
-        continue
-      }
-      requests++
-      // transcript 按轮合并落库（空文本也落：纯工具轮的结构需要 assistant 占位）
-      persist({ kind: 'assistant', text: result.text })
-      pendingTurnText = ''
-      lastModel = result.model
-      usage.inputTokens += result.usage.inputTokens
-      usage.outputTokens += result.usage.outputTokens
-      usage.cacheReadTokens += result.usage.cacheReadTokens
-      usage.cacheCreationTokens += result.usage.cacheCreationTokens
-      appendUsage({
-        ts: Date.now(),
-        model: result.model,
-        purpose: 'agent',
-        inputTokens: result.usage.inputTokens,
-        outputTokens: result.usage.outputTokens,
-        cacheReadTokens: result.usage.cacheReadTokens,
-        cacheCreationTokens: result.usage.cacheCreationTokens,
-        durationMs: result.durationMs,
-        ratelimit: pickRatelimitHeaders(result.headers)
-      })
-
-      if (result.toolUses.length === 0) {
-        finalText = result.text
-        // 自动续跑：任务疑似中途停摆（压缩后停顿/征询语）时注入合成消息继续，
-        // 预算用尽即止；被中断（signal.aborted）不续，尊重用户停止意图
-        if (
-          !signal.aborted &&
-          autoContinues < MAX_AUTO_CONTINUES &&
-          looksLikePaused(finalText, toolUseCount, compacted)
-        ) {
-          autoContinues++
-          messages.push({
-            role: 'user',
-            content: [
-              '（系统自动续跑）检测到你可能在中途停下。请直接继续调用工具完成任务，无需征询意见；',
-              '若确已全部完成，直接输出最终总结后停止；若存在必须由用户决策的分叉，列出选项后停止。',
-              ...(autoContinues >= MAX_AUTO_CONTINUES
-                ? [
-                    '注意：自动续跑机会已用完，若本轮结束任务仍未完成，请明确交代已完成什么、还剩什么、为何停止。'
-                  ]
-                : [])
-            ].join('')
-          })
-          continue
-        }
-        break
-      }
-
-      // 参数恢复：解开历史遗留/模型模仿的 _raw 包裹；解不开的按解析失败处理（绝不让 _raw 回灌历史）
-      for (const tu of result.toolUses) {
-        if (tu.inputError) {
-          tu.input = {}
-          continue
-        }
-        const rec = recoverToolInput(tu.input)
-        tu.input = rec.ok ? rec.input : {}
-        if (!rec.ok) tu.inputError = 'invalid'
-      }
-
-      const assistantBlocks: ContentBlock[] = []
-      if (result.text) assistantBlocks.push({ type: 'text', text: result.text })
-      for (const tu of result.toolUses) {
-        assistantBlocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input })
-      }
-      messages.push({ role: 'assistant', content: assistantBlocks })
-
-      const resultBlocks: ContentBlock[] = []
-      for (const tu of result.toolUses) {
-        toolUseCount++
-        if (tu.inputError && TOOL_MAP.has(tu.name)) {
-          const why =
-            tu.inputError === 'truncated'
-              ? '工具参数输出被长度上限截断'
-              : '工具参数 JSON 不完整或非法'
-          const msg = `错误: ${why}，本次调用未执行、未产生任何修改。请重新调用 ${tu.name}：参数内容过长时请精简或分批，并确保参数为完整合法的 JSON`
-          persist({
-            kind: 'tool_call',
-            call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
-          })
-          send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'running' })
-          resultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: tu.id,
-            content: msg,
-            is_error: true
-          })
-          emitToolResult({ id: tu.id, ok: false, result: msg })
-          continue
-        }
-        if (tu.name === 'compact_context') {
-          const summary = typeof tu.input?.summary === 'string' ? tu.input.summary.trim() : ''
-          persist({
-            kind: 'tool_call',
-            call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
-          })
-          send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'running' })
-          if (!summary) {
-            resultBlocks.push({
-              type: 'tool_result',
-              tool_use_id: tu.id,
-              content: '错误: summary 不能为空（把任务目标、已完成修改含 id、待办写进摘要再压缩）',
-              is_error: true
-            })
-            emitToolResult({ id: tu.id, ok: false, result: 'summary 不能为空' })
-            continue
+    const result = await runLoop(
+      messages,
+      {
+        system,
+        tools: getAgentToolDefs(),
+        toolMap: TOOL_MAP,
+        readTools: READ_TOOLS,
+        projectId: opts.projectId,
+        model: opts.model || auth.model,
+        maxTokens: agentMaxTokens(auth.provider),
+        promptCache: auth.promptCache,
+        apiKey: auth.apiKey,
+        baseUrl: auth.baseUrl,
+        protocol: auth.protocol,
+        maxTurns: MAX_TURNS,
+        signal
+      },
+      {
+        emit,
+        usage,
+        counters,
+        confirm: async (call) =>
+          confirms.wait({
+            confirmId: call.id,
+            toolName: call.name,
+            input: call.input,
+            dangerReason: call.dangerReason
+          }),
+        isAlwaysAllowed: (name) => confirms.isAlwaysAllowed(name),
+        selfCompact: { toolName: 'compact_context' },
+        onStreamError: (err, sig) => compactPolicy.onContextTooLong(err, sig),
+        onAssistantTurn: (text, final) => {
+          if (final || text.trim()) persist({ kind: 'assistant', text })
+        },
+        appendNudge: (blocks, inputTokens) => compactPolicy.appendNudge(blocks, inputTokens),
+        onTurnEnd: async (st) => {
+          const retry = st.selfCompacted
+            ? false
+            : compactPolicy.afterTurn(st.inputTokens, st.outputTokens, st.hadToolUses, signal)
+          // 插入指令安全点：本轮工具与压缩全部落账后、下一轮模型调用前，
+          // 把队列中的 inject 指令落为 user 事件并追加进 messages（正常 user 消息进历史回灌）
+          if (opts.sessionId && !signal.aborted) {
+            const injected = drainInjections(sink, opts.sessionId, persist)
+            for (const text of injected) messages.push({ role: 'user', content: text })
           }
-          pendingCompact = summary
-          const msg =
-            '已压缩：此前全部对话历史已替换为该摘要。不要输出确认性文字，直接继续调用工具执行下一步工作'
-          resultBlocks.push({ type: 'tool_result', tool_use_id: tu.id, content: msg })
-          emitToolResult({ id: tu.id, ok: true, result: msg })
-          continue
-        }
-        const tool = TOOL_MAP.get(tu.name)
-        if (!tool) {
-          resultBlocks.push({
-            type: 'tool_result',
-            tool_use_id: tu.id,
-            content: `错误: 未知工具 ${tu.name}`,
-            is_error: true
-          })
-          emitToolResult({ id: tu.id, ok: false, result: `未知工具 ${tu.name}` })
-          continue
-        }
-
-        let dangerReason: string | null = null
-        if (tool.danger) dangerReason = '删除操作不可恢复'
-        if (tool.dangerCheck) {
-          try {
-            dangerReason = tool.dangerCheck(tu.input, projectId) ?? dangerReason
-          } catch {
-            /* 参数不合法时交给 handler 报错 */
-          }
-        }
-
-        if (dangerReason && !runState.alwaysAllowed.has(tu.name)) {
-          persist({
-            kind: 'tool_call',
-            call: {
-              id: tu.id,
-              name: tu.name,
-              input: tu.input,
-              state: 'confirming',
-              dangerReason
-            }
-          })
-          send('agent:toolCall', {
-            id: tu.id,
-            name: tu.name,
-            input: tu.input,
-            state: 'confirming',
-            dangerReason
-          })
-          const allowed = await waitConfirm(runState, {
-            confirmId: tu.id,
-            toolName: tu.name,
-            input: tu.input,
-            dangerReason: dangerReason ?? undefined
-          })
-          if (!allowed) {
-            denied = true
-            const msg = '用户拒绝了该操作'
-            resultBlocks.push({
-              type: 'tool_result',
-              tool_use_id: tu.id,
-              content: msg,
-              is_error: true
-            })
-            emitToolResult({ id: tu.id, ok: false, result: msg, denied: true })
-            continue
-          }
-        } else {
-          persist({
-            kind: 'tool_call',
-            call: { id: tu.id, name: tu.name, input: tu.input, state: 'running' }
-          })
-          send('agent:toolCall', { id: tu.id, name: tu.name, input: tu.input, state: 'running' })
-        }
-
-        let ok: boolean
-        let out: string
-        try {
-          if (tool.execCtx) {
-            if (subagentCount >= MAX_SUBAGENTS) {
-              throw new Error('已达到本次任务的子智能体委派上限，请自行完成剩余工作并总结')
-            }
-            subagentCount++
-            out = serializeResult(await tool.execCtx(tu.input, { ...execCtxBase, parentId: tu.id }))
-            ok = true
-          } else {
-            out = serializeResult(await tool.handler(tu.input, projectId))
-            ok = true
-          }
-          if (!READ_TOOLS.has(tu.name) && tu.name !== 'spawn_subagent') changed = true
-        } catch (err) {
-          out = `错误: ${(err as Error)?.message ?? String(err)}`
-          ok = false
-        }
-        resultBlocks.push({
-          type: 'tool_result',
-          tool_use_id: tu.id,
-          content: out,
-          is_error: ok ? undefined : true
-        })
-        emitToolResult({ id: tu.id, ok, result: out })
+          return retry
+        },
+        onStop: (text, toolUseCount, compacted) =>
+          continuePolicy.onStop(text, toolUseCount, compacted),
+        subagentBudget,
+        execCtxBase
       }
-      if (
-        result.usage.inputTokens >= COMPACT_NUDGE_RATIO * contextWindow &&
-        resultBlocks.length > 0
-      ) {
-        const last = resultBlocks[resultBlocks.length - 1]
-        if (last.type === 'tool_result')
-          last.content += `\n[系统提示：本次请求输入约 ${result.usage.inputTokens} tokens（窗口约 ${contextWindow}），上下文偏大。若早前细节已不再需要，建议调用 compact_context 压缩历史（先把任务目标、已完成修改含 id、待办事项写进摘要），压缩后直接继续调用工具，不要停下来等待确认]`
-      }
-      messages.push({ role: 'user', content: resultBlocks })
+    )
 
-      let selfCompacted = false
-      if (pendingCompact !== null) {
-        // 压缩必须在本轮 tool_use/tool_result 全部落账后整体替换，保证配对约束不被破坏
-        messages.length = 0
-        messages.push({
-          role: 'user',
-          content: `【上下文压缩】以下摘要替代了此前全部对话历史：\n${pendingCompact}`
-        })
-        compacted = true
-        compactSummary = pendingCompact
-        pendingCompact = null
-        selfCompacted = true
-      }
-
-      // 主动压缩：本轮实测用量逼近窗口（80%）且模型没有自主压缩时程序化裁剪，防下一轮请求超限报错
-      const usedTokens = result.usage.inputTokens + result.usage.outputTokens
-      if (
-        !selfCompacted &&
-        !signal.aborted &&
-        result.toolUses.length > 0 &&
-        autoCompacts < MAX_AUTO_COMPACTS &&
-        usedTokens >= PROACTIVE_COMPACT_RATIO * contextWindow
-      ) {
-        autoCompacts++
-        const { summary, kept } = buildAutoCompact(messages, AUTO_COMPACT_BUDGET)
-        doAutoCompact(
-          summary,
-          kept,
-          `已主动压缩（第 ${autoCompacts} 次）：上下文用量约 ${usedTokens} tokens，已达窗口（约 ${contextWindow}）的 ${Math.round(PROACTIVE_COMPACT_RATIO * 100)}%，早期历史已替换为线索摘要，保留了最近的工作。不要输出确认性文字，直接继续调用工具完成任务`
-        )
-        turn--
-      }
-
-      // 插入指令安全点：本轮工具与压缩全部落账后、下一轮模型调用前，
-      // 把队列中的 inject 指令落为 user 事件并追加进 messages（正常 user 消息进历史回灌）
-      if (opts.sessionId && !signal.aborted) {
-        const injected = drainInjections(sink, opts.sessionId, persist)
-        for (const text of injected) messages.push({ role: 'user', content: text })
-      }
-
-      if (turn === MAX_TURNS - 1) hitLimit = true
+    return {
+      text: result.text,
+      turns: result.turns,
+      requests: result.requests,
+      changed: result.changed,
+      denied: result.denied,
+      hitLimit: result.hitLimit,
+      subagents: subagentBudget.used,
+      usage,
+      model: result.model,
+      durationMs: Date.now() - started,
+      toolResults: result.toolResults,
+      autoContinues: result.autoContinues,
+      autoCompacts: result.autoCompacts,
+      ...(result.compacted ? { compact: { summary: result.compactSummary } } : {})
     }
   } finally {
-    if (pendingTurnText.trim()) persist({ kind: 'assistant', text: pendingTurnText })
-    cancelAgentConfirms(requestId)
+    confirms.cancelAll()
     activeRuns.delete(requestId)
-  }
-
-  return {
-    text: finalText,
-    turns: turnCount,
-    requests,
-    changed,
-    denied,
-    hitLimit,
-    subagents: subagentCount,
-    usage,
-    model: lastModel,
-    durationMs: Date.now() - started,
-    toolResults: runState.toolResults,
-    autoContinues,
-    autoCompacts,
-    ...(compacted ? { compact: { summary: compactSummary } } : {})
   }
 }

@@ -10,6 +10,7 @@
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p mobile/tsconfig.json",
+    "test": "vitest run",
     "lint": "biome check src mobile",
     "lint:fix": "biome check --write src mobile",
     "mobile:build": "vite build --config mobile/vite.config.ts",
@@ -48,6 +49,7 @@
     "electron-vite": "^5.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^7.3.6"
+    "vite": "^7.3.6",
+    "vitest": "^5.0.5"
   }
 }
