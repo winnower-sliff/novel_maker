@@ -39,6 +39,7 @@ export function turnsToMessages(turns: AgentTurn[]): ChatMessage[] {
     effective = turns.slice(cp.index + 1)
   }
   for (const turn of effective) {
+    if (turn.role === 'board') continue // 看板内容经执行指令/get_board 工具进上下文，board turn 不直接回灌
     if (turn.role === 'user') {
       messages.push({ role: 'user', content: turn.text })
       continue
@@ -83,6 +84,8 @@ export function makeSessionTitle(turns: AgentTurn[]): string {
 export function eventsToTurns(events: AgentTranscriptEvent[]): AgentTurn[] {
   const turns: AgentTurn[] = []
   const cards = new Map<string, AgentToolCall>()
+  // 看板卡按 boardId upsert：同板多次快照（提案→编辑→勾销→收尾）原地更新，流内只留一张活卡
+  const boardTurns = new Map<string, Extract<AgentTurn, { role: 'board' }>>()
   for (const ev of events) {
     switch (ev.kind) {
       case 'user':
@@ -91,6 +94,25 @@ export function eventsToTurns(events: AgentTranscriptEvent[]): AgentTurn[] {
       case 'assistant': {
         const turn: AgentTurn = { role: 'assistant', text: ev.text, toolCalls: [], ts: ev.ts }
         turns.push(turn)
+        break
+      }
+      case 'board': {
+        const existing = boardTurns.get(ev.board.id)
+        if (existing) {
+          existing.board = ev.board
+          existing.ts = ev.ts
+        } else {
+          const turn: AgentTurn = { role: 'board', board: ev.board, ts: ev.ts }
+          boardTurns.set(ev.board.id, turn)
+          turns.push(turn)
+        }
+        break
+      }
+      case 'plan_resolve': {
+        const target = boardTurns.get(ev.boardId)
+        if (target) {
+          target.resolve = { action: ev.action, feedback: ev.feedback, at: ev.ts }
+        }
         break
       }
       case 'tool_call': {

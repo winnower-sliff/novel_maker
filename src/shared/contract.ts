@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { PROVIDER_IDS } from './providers'
 import type {
+  AgentBoard,
   AgentDonePayload,
   AgentInstructionsView,
   AgentQueueItem,
@@ -358,6 +359,39 @@ export const invokeContract = {
     args: z.tuple([z.string()]),
     ret: ret<{ requestId: string; sessionId: string } | null>()
   },
+  'agent:planMode': {
+    // 计划模式会话级开关（桌面输入框区 / 手机顶栏 toggle）
+    args: z.tuple([z.string(), z.boolean()]),
+    ret: ret<AgentSession>()
+  },
+  'agent:planResolve': {
+    // 计划卡裁决：approve=批准（可带用户编辑后的步骤：删=不在清单、改=title/note、增=无 id 新行且无写授权；
+    // writeScope 不可改）/ reject=拒绝（可附意见供修订重提）
+    args: z.tuple([
+      z.object({
+        sessionId: z.string(),
+        boardId: z.string(),
+        action: z.enum(['approve', 'reject']),
+        feedback: z.string().max(4000).optional(),
+        steps: z
+          .array(
+            z.object({
+              id: z.string().optional(),
+              title: z.string().min(1).max(200),
+              note: z.string().max(2000).optional()
+            })
+          )
+          .max(24)
+          .optional()
+      })
+    ]),
+    ret: ret<AgentBoard>()
+  },
+  'agent:boardGet': {
+    // 最新活动看板（输入框上方状态条数据源；awaiting_approval/approved 优先，否则最近一张）
+    args: z.tuple([z.string()]),
+    ret: ret<AgentBoard | null>()
+  },
 
   'usage:list': { args: z.tuple([z.number().optional()]), ret: ret<UsageRecord[]>() },
   'usage:stats': { args: z.tuple([]), ret: ret<UsageStats>() },
@@ -654,6 +688,9 @@ export interface Api {
     queueRemove: InvokeFn<'agent:queueRemove'>
     queueMove: InvokeFn<'agent:queueMove'>
     queueResume: InvokeFn<'agent:queueResume'>
+    planMode: InvokeFn<'agent:planMode'>
+    planResolve: InvokeFn<'agent:planResolve'>
+    boardGet: InvokeFn<'agent:boardGet'>
     onDelta: SubscribeFn<'agent:delta'>
     onToolCall: SubscribeFn<'agent:toolCall'>
     onToolResult: SubscribeFn<'agent:toolResult'>

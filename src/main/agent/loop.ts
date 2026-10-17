@@ -51,6 +51,8 @@ export interface LoopHooks {
   confirm?: (call: AgentToolCallEvent) => Promise<boolean>
   /** 本 run 的「总是允许」工具白名单（命中跳过确认流） */
   isAlwaysAllowed?: (toolName: string) => boolean
+  /** 计划执行期写授权闸门（透传 executor.writeGuard）：返回拒绝理由则该调用短路 */
+  writeGuard?: (name: string, input: import('./toolkit').ToolInput) => string | null
   /** 自主压缩工具名拦截（主代理 compact_context；缺省无此特判）：空 summary 报错，有效 summary 延迟整体替换 */
   selfCompact?: { toolName: string }
   /** chatStream 抛错兜底（context_too_long 程序化压缩）：返回 true=已处理需重试 */
@@ -242,6 +244,7 @@ export async function runLoop(
         emitToolResult,
         confirm: hooks.confirm,
         isAlwaysAllowed: hooks.isAlwaysAllowed,
+        ...(hooks.writeGuard ? { writeGuard: hooks.writeGuard } : {}),
         execCtxBase: hooks.execCtxBase,
         subagentBudget: hooks.subagentBudget
       })

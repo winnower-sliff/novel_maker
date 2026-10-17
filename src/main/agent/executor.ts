@@ -61,6 +61,8 @@ export interface ExecDeps {
   confirm?: (call: AgentToolCallEvent) => Promise<boolean>
   /** 本 run 的「总是允许」工具白名单（命中则跳过确认流） */
   isAlwaysAllowed?: (toolName: string) => boolean
+  /** 计划执行期写授权闸门：返回拒绝理由则短路（is_error，不执行）；缺省视为放行 */
+  writeGuard?: (name: string, input: ToolInput) => string | null
   /** execCtx 类工具（spawn_subagent）的执行上下文（含 projectId/usage/signal 等，parentId 由 executor 补） */
   execCtxBase?: Omit<ToolExecContext, 'parentId'>
   subagentBudget?: { used: number; max: number }
@@ -196,6 +198,17 @@ export async function executeToolCalls(calls: ToolCall[], deps: ExecDeps): Promi
       )
       i++
       continue
+    }
+
+    // 计划执行期写授权闸门：授权外写入直接拒绝（不执行、不弹窗），先于 danger 判定
+    if (deps.writeGuard) {
+      const refuse = deps.writeGuard(tu.name, tu.input)
+      if (refuse) {
+        emitToolCall({ id: tu.id, name: tu.name, input: tu.input, state: 'running' })
+        shortCircuit(i, tu.id, `错误: ${refuse}`)
+        i++
+        continue
+      }
     }
 
     const dangerReason = dangerOf(tool, tu.input, projectId)

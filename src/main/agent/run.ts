@@ -1,6 +1,7 @@
 import type { AgentToolResultEvent, EventChannels, EventContract } from '../../shared/contract'
 import type { ProviderId } from '../../shared/providers'
 import type {
+  AgentBoard,
   AgentDonePayload,
   AgentTranscriptInput,
   ChatMessage,
@@ -12,8 +13,19 @@ import type { EventSink } from '../eventSink'
 import { resolveRequestAuth } from '../settings'
 import { getSkill, listSkills, stripFrontmatter } from '../skills'
 import * as store from '../store'
+import { activeBoard } from './boards'
 import { coreWritingRules, projectCoreRules } from './instructions'
 import { type LoopEmit, runLoop } from './loop'
+import {
+  authorizeCall,
+  DELETE_TOOLS,
+  EXEC_PROMPT,
+  executionToolDefs,
+  makePlanTools,
+  PLANNING_PROMPT,
+  planningToolDefs,
+  writeTargetOf
+} from './plan'
 import { createCompactPolicy, createLoopCounters, DEFAULT_CONTEXT_WINDOW } from './policy/compact'
 import { ConfirmRegistry } from './policy/confirm'
 import { createContinuePolicy } from './policy/continue'
@@ -138,6 +150,11 @@ export async function runAgent(opts: {
   provider?: ProviderId
   /** transcript 事实源落库钩子（会话事件按发生顺序持久化；内部吞错，不影响 run） */
   persist?: (ev: AgentTranscriptInput) => void
+  /**
+   * 计划模式上下文：phase='plan' 计划期（写工具移出工具集+提案工具+等批准停顿豁免）；
+   * phase='exec' 执行期（写授权闸门+授权内免确认+看板勾销提醒）。缺省=正常模式（38 工具全集）。
+   */
+  plan?: { phase: 'plan' | 'exec' }
 }): Promise<AgentDonePayload> {
   const { sink, requestId, projectId, signal } = opts
   const persist = opts.persist ?? (() => {})
@@ -151,7 +168,49 @@ export async function runAgent(opts: {
 
   const auth = await resolveRequestAuth('agent', opts.provider)
   if (!auth.apiKey && auth.needsKey) throw new Error('未配置 API Key，请先在设置中填写')
-  const system = buildSystemPrompt(projectId)
+
+  // 计划模式上下文：三工具绑定 sessionId+persist（board 事件落库即广播）
+  const planPhase = opts.plan?.phase
+  const planTools =
+    planPhase && opts.sessionId
+      ? makePlanTools({
+          sessionId: opts.sessionId,
+          projectId,
+          runId: requestId,
+          persist
+        })
+      : null
+
+  const system =
+    buildSystemPrompt(projectId) +
+    (planPhase === 'plan'
+      ? `\n\n${PLANNING_PROMPT}`
+      : planPhase === 'exec'
+        ? `\n\n${EXEC_PROMPT}`
+        : '')
+
+  // 工具集按相位筛选（计划期写工具移出=硬闸；执行期移除 propose_plan）；plan 工具并入 toolMap
+  const tools =
+    planPhase && planTools
+      ? planPhase === 'plan'
+        ? planningToolDefs(planTools.tools)
+        : executionToolDefs(planTools.tools)
+      : getAgentToolDefs()
+  // plan 三工具并入 toolMap；执行期 propose_plan 不进（executionToolDefs 已滤，幻觉调用按未知工具拒绝）；
+  // 计划期 update_board 不进（planningToolDefs 已滤，未批准不可勾销）——toolMap 与 defs 严格同步
+  const toolMap = new Map(TOOL_MAP)
+  if (planTools) {
+    for (const t of planTools.tools) {
+      if (planPhase === 'exec' && t.def.name === 'propose_plan') continue
+      if (planPhase === 'plan' && t.def.name === 'update_board') continue
+      toolMap.set(t.def.name, t)
+    }
+  }
+  // plan 三工具不改项目数据，不参与 changed 标记（execCtx 工具本就不进并发批）
+  const readTools =
+    planPhase && planTools
+      ? new Set([...READ_TOOLS, 'propose_plan', 'get_board', 'update_board'])
+      : READ_TOOLS
 
   const confirms = new ConfirmRegistry()
   const toolResults: AgentToolResultEvent[] = []
@@ -159,7 +218,30 @@ export async function runAgent(opts: {
   activeRuns.set(requestId, runEntry)
 
   /** 发工具结果事件并登记流水（done 收尾时随 payload 下发，snapshot 期间轻量对账） */
+  const callInputs = new Map<string, { name: string; input: Record<string, unknown> }>()
+  const nudgedSteps = new Set<string>()
+
+  /** 执行期看板提醒：写工具成功且命中某 pending 步骤授权范围时，在结果尾部提示勾销（每步骤一次） */
+  const maybeNudge = (ev: AgentToolResultEvent): void => {
+    if (planPhase !== 'exec' || !ev.ok || ev.denied) return
+    const call = callInputs.get(ev.id)
+    if (!call) return
+    const target = writeTargetOf(call.name, call.input)
+    if (!target) return
+    const board: AgentBoard | null = opts.sessionId ? activeBoard(opts.sessionId) : null
+    if (board?.status !== 'approved') return
+    for (const step of board.steps) {
+      if (step.status !== 'pending' && step.status !== 'in_progress') continue
+      if (!step.writeScope || step.writeScope.resource !== target.resource) continue
+      if (target.id && !step.writeScope.ids.includes(target.id)) continue
+      if (nudgedSteps.has(step.id)) continue
+      nudgedSteps.add(step.id)
+      ev.result += `\n\n[看板提醒：步骤「${step.title}」对应的写入已完成，请用 update_board 把它标记为 done（未完成则 in_progress），保持看板准确]`
+    }
+  }
+
   const emitToolResult = (ev: AgentToolResultEvent): void => {
+    maybeNudge(ev)
     toolResults.push(ev)
     persist({
       kind: 'tool_result',
@@ -187,6 +269,7 @@ export async function runAgent(opts: {
   const emit: LoopEmit = {
     delta: (text) => send('agent:delta', text),
     toolCall: (call) => {
+      callInputs.set(call.id, { name: call.name, input: call.input })
       persist({ kind: 'tool_call', call })
       send('agent:toolCall', call)
     },
@@ -204,6 +287,7 @@ export async function runAgent(opts: {
     sink,
     requestId,
     projectId,
+    sessionId: opts.sessionId,
     usage,
     signal,
     model: opts.model || auth.model,
@@ -222,9 +306,9 @@ export async function runAgent(opts: {
       messages,
       {
         system,
-        tools: getAgentToolDefs(),
-        toolMap: TOOL_MAP,
-        readTools: READ_TOOLS,
+        tools,
+        toolMap,
+        readTools,
         projectId: opts.projectId,
         model: opts.model || auth.model,
         maxTokens: agentMaxTokens(auth.provider),
@@ -239,14 +323,32 @@ export async function runAgent(opts: {
         emit,
         usage,
         counters,
-        confirm: async (call) =>
-          confirms.wait({
+        confirm: async (call) => {
+          // 执行期：计划授权内的 danger 写入免弹窗（含覆盖正文）；删除类绝对弹窗（授权不覆盖删除）
+          if (planPhase === 'exec' && !DELETE_TOOLS.has(call.name)) {
+            const board = opts.sessionId ? activeBoard(opts.sessionId) : null
+            if (authorizeCall(call.name, call.input, board).ok) return true
+          }
+          return confirms.wait({
             confirmId: call.id,
             toolName: call.name,
             input: call.input,
             dangerReason: call.dangerReason
-          }),
+          })
+        },
         isAlwaysAllowed: (name) => confirms.isAlwaysAllowed(name),
+        ...(planPhase === 'exec'
+          ? {
+              writeGuard: (name: string, input: Record<string, unknown>): string | null => {
+                const r = authorizeCall(
+                  name,
+                  input,
+                  opts.sessionId ? activeBoard(opts.sessionId) : null
+                )
+                return r.ok ? null : r.reason
+              }
+            }
+          : {}),
         selfCompact: { toolName: 'compact_context' },
         onStreamError: (err, sig) => compactPolicy.onContextTooLong(err, sig),
         onAssistantTurn: (text, final) => {
@@ -265,8 +367,11 @@ export async function runAgent(opts: {
           }
           return retry
         },
-        onStop: (text, toolUseCount, compacted) =>
-          continuePolicy.onStop(text, toolUseCount, compacted),
+        onStop: (text, toolUseCount, compacted) => {
+          // 计划期已提案：等批准是合法停顿，不做自动续跑（防 continuePolicy 误判「疑似停摆」）
+          if (planPhase === 'plan' && planTools?.proposed()) return null
+          return continuePolicy.onStop(text, toolUseCount, compacted)
+        },
         subagentBudget,
         execCtxBase
       }

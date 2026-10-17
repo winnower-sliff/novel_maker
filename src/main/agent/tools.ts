@@ -72,7 +72,7 @@ function readPlanEntry(raw: PlanRaw, volume: number): Record<string, unknown> {
   return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : {}
 }
 
-const TOOLS: AgentTool[] = [
+export const TOOLS: AgentTool[] = [
   {
     def: {
       name: 'get_project',

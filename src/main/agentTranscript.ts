@@ -21,6 +21,7 @@ interface SessionRow {
   id: string
   project_id: string
   title: string
+  plan_mode: number
   created_at: number
   updated_at: number
 }
@@ -34,7 +35,22 @@ interface EventRow {
 }
 
 function toBrief(r: SessionRow): AgentSessionBrief {
-  return { id: r.id, title: r.title, createdAt: r.created_at, updatedAt: r.updated_at }
+  return {
+    id: r.id,
+    title: r.title,
+    createdAt: r.created_at,
+    updatedAt: r.updated_at,
+    planMode: r.plan_mode === 1
+  }
+}
+
+/** 计划模式会话级开关（桌面输入框区 / 手机顶栏 toggle，落 agent_sessions.plan_mode） */
+export function setPlanMode(id: string, enabled: boolean): AgentSessionBrief | null {
+  const db = getDb()
+  const r = getSession(id)
+  if (!r) return null
+  db.prepare('UPDATE agent_sessions SET plan_mode = ? WHERE id = ?').run(enabled ? 1 : 0, id)
+  return { ...r, planMode: enabled }
 }
 
 export function createSession(projectId: string, title: string): AgentSessionBrief {
@@ -44,6 +60,7 @@ export function createSession(projectId: string, title: string): AgentSessionBri
     id: randomUUID(),
     project_id: projectId,
     title,
+    plan_mode: 0,
     created_at: now,
     updated_at: now
   }
@@ -153,6 +170,7 @@ export function loadSessionFull(id: string): AgentSession | null {
     title: r.title,
     createdAt: r.created_at,
     updatedAt: r.updated_at,
+    planMode: r.plan_mode === 1,
     turns: eventsToTurns(loadEvents(id))
   }
 }
@@ -168,6 +186,7 @@ export function turnsToEvents(
 ): Array<AgentTranscriptInput & { ts?: number }> {
   const out: Array<AgentTranscriptInput & { ts?: number }> = []
   for (const t of turns) {
+    if (t.role === 'board') continue // 旧客户端 turns 无看板；防御性跳过（board 事实源在 agent_boards 表）
     if (t.role === 'user') {
       out.push({ kind: 'user', text: t.text, ts: t.ts })
       continue

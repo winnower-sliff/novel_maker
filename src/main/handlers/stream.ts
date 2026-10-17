@@ -19,6 +19,8 @@ import {
   getAgentToolResultStatuses,
   runAgent
 } from '../agent'
+import { finishBoard, getBoard, hasAwaitingBoard, revertApproval } from '../agent/boards'
+import { buildExecInstruction } from '../agent/plan'
 import { consumeNext } from '../agent/queue'
 import {
   appendEvent,
@@ -200,10 +202,16 @@ export function startAgentRun(
     model?: string
     /** 临时指定本次会话的 provider（智能体页「引擎」切换用） */
     provider?: ProviderId
+    /**
+     * 计划执行 run（planResolve approve 后由主进程启动）：轻装——不回灌计划期调研明细，
+     * 首条指令由批准后的看板合成。text 参数此时被忽略。
+     */
+    planExecBoardId?: string
   }
 ): string | AgentRunHandle {
-  // 旧客户端过渡路径：messages 直跑、不落 transcript（旧端 persistRun/sessionSave 自管）
-  if (params.text === undefined) {
+  // 旧客户端过渡路径：messages 直跑、不落 transcript（旧端 persistRun/sessionSave 自管）。
+  // planExecBoardId 的执行 run 无 text（首条指令由看板合成），不走此分支
+  if (params.text === undefined && !params.planExecBoardId) {
     if (!params.messages) throw new Error('缺少 text 或 messages 参数')
     return startLegacyAgentRun(
       sink,
@@ -214,7 +222,8 @@ export function startAgentRun(
     )
   }
 
-  const text = params.text
+  // 执行 run（planExecBoardId）无 text：userText=看板合成指令；其余相位 text 必有（分支入口已保证）
+  const text = params.text ?? ''
   if (params.sessionId) {
     if (activeSessionRuns.has(params.sessionId))
       throw new Error('该会话已有进行中的任务，请先停止或等待完成')
@@ -223,6 +232,12 @@ export function startAgentRun(
   const sessionId =
     params.sessionId ?? createSession(params.projectId, makeSessionTitleText(text)).id
   const isFirstTurn = lastSeqOf(sessionId) === 0
+
+  // 计划模式相位：planResolve 批准的执行 run 优先；否则按会话 planMode 开关进计划期
+  const planBoard = params.planExecBoardId ? getBoard(params.planExecBoardId) : null
+  const planPhase = planBoard ? 'exec' : getSession(sessionId)?.planMode ? 'plan' : null
+  const execText = planBoard ? buildExecInstruction(planBoard) : null
+  const userText = execText || text
 
   const requestId = randomUUID()
   const controller = new AbortController()
@@ -236,8 +251,12 @@ export function startAgentRun(
       sink.send('agent:transcript', requestId, sessionId, stored)
     }
   }
-  persist({ kind: 'user', text })
-  const messages = rebuildMessages(sessionId)
+  persist({ kind: 'user', text: userText })
+  // 执行 run 轻装：messages 只含合成指令（计划期调研明细不回灌）；其余相位照常全量回灌
+  const messages =
+    planPhase === 'exec' && execText
+      ? [{ role: 'user', content: execText } as ChatMessage]
+      : rebuildMessages(sessionId)
   recordRunning(requestId, 'agent', { projectId: params.projectId, sessionId })
 
   void (async () => {
@@ -253,7 +272,8 @@ export function startAgentRun(
         model: params.model?.trim() || auth.model,
         signal: controller.signal,
         provider: params.provider,
-        persist
+        persist,
+        ...(planPhase ? { plan: { phase: planPhase } } : {})
       })
     } catch (err) {
       const message = controller.signal.aborted
@@ -264,6 +284,11 @@ export function startAgentRun(
       if (!sink.isClosed()) {
         sink.send('agent:error', requestId, message, buildErrorHint(err, message))
       }
+      // 执行 run 异步失败：回滚板到 awaiting_approval，否则板挂死 approved 用户无法重新裁决
+      if (planPhase === 'exec' && planBoard) {
+        const reverted = revertApproval(planBoard.id)
+        if (reverted) persist({ kind: 'board', board: reverted })
+      }
       return
     } finally {
       activeAgentRuns.delete(requestId)
@@ -272,9 +297,15 @@ export function startAgentRun(
     recordDone(requestId, payload)
     persist({ kind: 'done', summary: payload })
     if (!sink.isClosed()) sink.send('agent:done', requestId, payload)
+    // 执行 run 正常收尾：看板置 done（board 事件经 persist 落库广播；error/abort/hitLimit 保持 approved 供恢复/续跑）
+    if (planPhase === 'exec' && planBoard && !payload.hitLimit) {
+      const finished = finishBoard(planBoard.id)
+      if (finished) persist({ kind: 'board', board: finished })
+    }
     // 队列续发由主进程驱动（三端镜像不双发）：正常收尾才消费，error/abort 冻结待手动继续。
+    // 计划等待批准期间暂停消费（run 虽收尾但板未裁决，先执行队列任务会插队破坏计划语义）。
     // launch 走 startAgentRun 自身的并发守卫；此处同步调用即可（收尾时 activeSessionRuns 已清）。
-    if (!controller.signal.aborted) {
+    if (!controller.signal.aborted && !hasAwaitingBoard(sessionId)) {
       consumeNext(
         sink,
         sessionId,
@@ -299,10 +330,11 @@ export function startAgentRun(
   return { requestId, sessionId }
 }
 
-/** 手动继续冻结的队列（error/停止后用户点「继续」）：该会话无活跃 run 时消费下一条（insert 优先） */
+/** 手动继续冻结的队列（error/停止后用户点「继续」）：该会话无活跃 run 时消费下一条（insert 优先）；计划待批准期间暂停 */
 export function resumeSessionQueue(sink: EventSink, sessionId: string): AgentRunHandle | null {
   if (activeSessionRuns.has(sessionId)) return null
   if (!getSession(sessionId)) return null
+  if (hasAwaitingBoard(sessionId)) return null
   return consumeNext(
     sink,
     sessionId,

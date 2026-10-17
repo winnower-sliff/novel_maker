@@ -51,7 +51,10 @@ export const TOOL_LABELS: Record<string, string> = {
   get_section: '分节·读取',
   save_section: '分节·保存',
   refresh_volume_summary: '卷摘要·重建',
-  reorder_worldbuild_type: '世界观·类型排序'
+  reorder_worldbuild_type: '世界观·类型排序',
+  propose_plan: '计划·提案',
+  get_board: '看板·读取',
+  update_board: '看板·勾销'
 }
 
 function str(input: Record<string, unknown>, key: string): string {

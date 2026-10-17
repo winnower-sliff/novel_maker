@@ -1,9 +1,10 @@
 import { PROVIDER_IDS, type ProviderId, providerPreset } from '@shared/providers'
 import type { AgentToolCall, AgentTurn } from '@shared/types'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useBackHandler } from '@mobile/lib/backHandler'
 import { Markdown } from '@mobile/components/Markdown'
+import { PlanBoardCard } from '@mobile/components/PlanBoardCard'
 import { Badge, Button, Empty, Textarea } from '@mobile/components/ui'
 import { fmtRelative } from '@mobile/lib/format'
 import { findCompactPoint, toolLabel, toolSummary } from '@mobile/lib/agentTurns'
@@ -380,6 +381,36 @@ export default function AgentChat({ projectId }: { projectId: string }) {
   // 运行中不折叠压缩前的历史，只插分隔条；run 结束/静态加载才折叠
   const liveHistory = !!compactPoint && running
 
+  // —— 计划模式（会话级开关：写工具移出工具集，先出计划等批准） ——
+  const queryClient = useQueryClient()
+  const session = sessions.find((s) => s.id === sessionId)
+  const planMode = session?.planMode ?? false
+  const [planBusy, setPlanBusy] = useState(false)
+  const togglePlanMode = (): void => {
+    if (!sessionId || planBusy) return
+    setPlanBusy(true)
+    window.api.agent
+      .planMode(sessionId, !planMode)
+      .then(() => queryClient.invalidateQueries({ queryKey: qk.agentSessions(projectId) }))
+      .catch(() => {})
+      .finally(() => setPlanBusy(false))
+  }
+
+  // 最新 approved 看板（执行中进度条数据源；awaiting 的板在流内卡上已有醒目按钮）
+  const activeBoard = (() => {
+    for (let i = turns.length - 1; i >= 0; i--) {
+      const t = turns[i]
+      if (t.role !== 'board') continue
+      return t.board.status === 'approved' ? t.board : null
+    }
+    return null
+  })()
+  const scrollToBoard = (id: string): void => {
+    scrollRef.current
+      ?.querySelector(`[data-board-id="${CSS.escape(id)}"]`)
+      ?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+  }
+
   const renderTurn = (turn: AgentTurn, idx: number) =>
     turn.role === 'user' ? (
       <div key={idx} className="flex justify-end">
@@ -387,6 +418,8 @@ export default function AgentChat({ projectId }: { projectId: string }) {
           {turn.text}
         </div>
       </div>
+    ) : turn.role === 'board' ? (
+      <PlanBoardCard key={idx} board={turn.board} resolve={turn.resolve} sessionId={sessionId ?? ''} />
     ) : (
       <div key={idx} className="space-y-2">
         {buildRenderItems(turn).map((item) =>
@@ -453,6 +486,21 @@ export default function AgentChat({ projectId }: { projectId: string }) {
             )
           })}
         </div>
+        <Button
+          variant="ghost"
+          className={`shrink-0 px-2 py-1 text-xs ${planMode ? 'text-amber-400' : ''}`}
+          disabled={!sessionId || planBusy}
+          title={
+            sessionId
+              ? planMode
+                ? '计划模式已开启：新任务先出计划，批准后才执行写入'
+                : '开启计划模式：先出计划等批准'
+              : '发送首条消息建立会话后可用'
+          }
+          onClick={togglePlanMode}
+        >
+          计划{planMode ? ' ·开' : ''}
+        </Button>
         <Button variant="ghost" className="shrink-0 px-2 py-1 text-xs" onClick={newDraft}>
           ＋
         </Button>
@@ -527,6 +575,36 @@ export default function AgentChat({ projectId }: { projectId: string }) {
         )}
       </div>
 
+      {activeBoard && (
+        <button
+          type="button"
+          onClick={() => scrollToBoard(activeBoard.id)}
+          className="flex w-full cursor-pointer items-center gap-2 border-t border-amber-900/40 bg-zinc-900/60 px-3 py-1.5 text-xs text-zinc-400 active:bg-zinc-800"
+        >
+          <span className="shrink-0 font-medium text-amber-400">计划执行中</span>
+          <span className="shrink-0">
+            {activeBoard.steps.filter((s) => s.status === 'done').length}/{activeBoard.steps.length} 步
+          </span>
+          <span className="flex min-w-0 flex-1 items-center gap-1 overflow-hidden">
+            {activeBoard.steps.map((s) => (
+              <span
+                key={s.id}
+                title={s.title}
+                className={`h-1.5 w-1.5 shrink-0 rounded-full ${
+                  s.status === 'done'
+                    ? 'bg-emerald-500'
+                    : s.status === 'in_progress'
+                      ? 'bg-amber-400'
+                      : s.status === 'skipped'
+                        ? 'bg-zinc-700'
+                        : 'bg-zinc-700/60'
+                }`}
+              />
+            ))}
+          </span>
+          <span className="shrink-0 text-zinc-600">查看</span>
+        </button>
+      )}
       {queue.length > 0 && (
         <div className="space-y-1 border-t border-amber-900/40 bg-amber-950/30 px-3 py-2 text-xs text-amber-300">
           {injects.map((q) => (

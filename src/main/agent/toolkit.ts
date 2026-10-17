@@ -35,6 +35,8 @@ export interface ToolExecContext {
   requestId: string
   parentId: string
   projectId: string
+  /** 所属会话（plan 工具等会话域 execCtx 用；legacy 直跑路径缺省） */
+  sessionId?: string
   usage: UsageInfo
   signal: AbortSignal
   model: string

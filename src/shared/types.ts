@@ -472,6 +472,7 @@ export type AgentTurn =
       segments?: AgentSegment[]
       ts: number
     }
+  | { role: 'board'; board: AgentBoard; resolve?: PlanResolve; ts: number }
 
 /** agents.md 分节视图：tag=null 表示无标签（每次任务都注入） */
 export interface RuleSectionView {
@@ -501,6 +502,8 @@ export interface AgentSession {
   title: string
   createdAt: number
   updatedAt: number
+  /** 计划模式（会话级开关）：开启后含写入的任务先出计划等批准，纯只读任务模型可直接执行 */
+  planMode: boolean
   turns: AgentTurn[]
 }
 
@@ -509,6 +512,69 @@ export interface AgentSessionBrief {
   title: string
   createdAt: number
   updatedAt: number
+  planMode: boolean
+}
+
+/** 计划步骤的写入范围资源类型（执行期 harness 按它做 id 级授权校验） */
+export type PlanResource =
+  | 'project'
+  | 'character'
+  | 'worldbuild'
+  | 'outline'
+  | 'chapter'
+  | 'foreshadow'
+  | 'summary'
+  | 'instruction'
+
+export const PLAN_RESOURCES = [
+  'project',
+  'character',
+  'worldbuild',
+  'outline',
+  'chapter',
+  'foreshadow',
+  'summary',
+  'instruction'
+] as const satisfies readonly PlanResource[]
+
+/** 计划步骤：writeScope 声明本步骤预期写入的资源与目标 id 集（授权集，执行期硬校验） */
+export interface PlanStep {
+  id: string
+  title: string
+  note: string
+  status: 'pending' | 'in_progress' | 'done' | 'skipped'
+  writeScope?: { resource: PlanResource; ids: string[] }
+}
+
+export type AgentBoardStatus = 'awaiting_approval' | 'approved' | 'rejected' | 'done' | 'cancelled'
+
+/**
+ * 任务看板（run 级结构化记忆，agent_boards 表）：
+ * 会话内每个任务一个看板，计划→批准→执行勾销→压缩→恢复全链路共用同一事实源。
+ */
+export interface AgentBoard {
+  id: string
+  sessionId: string
+  projectId: string
+  /** 提交计划的任务 run（计划期 run） */
+  runId: string
+  goal: string
+  steps: PlanStep[]
+  /** 连续性硬账（自由文本，模型经 update_board 维护） */
+  ledger: string
+  status: AgentBoardStatus
+  /** 裁决附带文字（reject=用户修订意见，供 agent 重提参考；approve=批准时的附加说明，注入执行指令） */
+  feedback: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** 用户对计划卡的一次裁决（approve 后进入执行 run；reject 反馈意见供修订重提） */
+export interface PlanResolve {
+  action: 'approve' | 'reject'
+  feedback: string
+  /** 批准前用户编辑过的步骤（编辑后落库的本体已更新，这里只做展示冗余可省） */
+  at: number
 }
 
 /** 智能体持久化队列项（agent_queue 表）：task=排队任务按序执行，inject=运行中插入指令 */
@@ -600,6 +666,15 @@ export type AgentTranscriptEvent =
       ok: boolean
       result: string
       denied?: boolean
+    }
+  | { seq: number; ts: number; kind: 'board'; board: AgentBoard }
+  | {
+      seq: number
+      ts: number
+      kind: 'plan_resolve'
+      boardId: string
+      action: 'approve' | 'reject'
+      feedback: string
     }
   | { seq: number; ts: number; kind: 'run_error'; message: string }
   | { seq: number; ts: number; kind: 'done'; summary: AgentDoneSummary }

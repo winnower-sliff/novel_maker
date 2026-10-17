@@ -389,3 +389,95 @@ describe('executeToolCalls 只读并发分段', () => {
     expect(outcome.toolUseCount).toBe(3)
   })
 })
+
+describe('executeToolCalls writeGuard 写授权闸门', () => {
+  it('授权外写入短路拒绝：不执行 handler、is_error、非 denied', async () => {
+    const handler = vi.fn(() => 'ok')
+    const toolMap = new Map<string, AgentTool>([
+      ['save_x', okTool('save_x', { handler: handler as () => unknown })]
+    ])
+    const outcome = await executeToolCalls(
+      [call('a', 'save_x', { id: 'x1' })],
+      deps({
+        toolMap,
+        writeGuard: () => '目标（character x1）不在已批准计划的授权范围内'
+      })
+    )
+    expect(handler).not.toHaveBeenCalled()
+    expect(outcome.resultBlocks[0]).toMatchObject({ is_error: true })
+    expect(outcome.toolResults[0]).toMatchObject({ ok: false })
+    expect(outcome.toolResults[0].denied).toBeUndefined() // 授权拒绝≠用户拒绝
+    expect(outcome.toolResults[0].result).toContain('授权范围')
+  })
+
+  it('授权内放行正常执行', async () => {
+    const handler = vi.fn(() => 'saved')
+    const toolMap = new Map<string, AgentTool>([
+      ['save_x', okTool('save_x', { handler: handler as () => unknown })]
+    ])
+    const outcome = await executeToolCalls(
+      [call('a', 'save_x', { id: 'x1' })],
+      deps({ toolMap, writeGuard: () => null })
+    )
+    expect(handler).toHaveBeenCalledOnce()
+    expect(outcome.toolResults[0].ok).toBe(true)
+  })
+
+  it('writeGuard 拒绝的调用发出 running 卡（投影可配对）', async () => {
+    const callsEv: AgentToolCallEvent[] = []
+    const toolMap = new Map<string, AgentTool>([
+      ['save_x', okTool('save_x', { handler: () => 'ok' })]
+    ])
+    await executeToolCalls(
+      [call('a', 'save_x', { id: 'x1' })],
+      deps({
+        toolMap,
+        emitToolCall: (c) => callsEv.push(c),
+        writeGuard: () => '不在授权范围内'
+      })
+    )
+    expect(callsEv).toEqual([{ id: 'a', name: 'save_x', input: { id: 'x1' }, state: 'running' }])
+  })
+
+  it('writeGuard 在 danger 判定之前（先授权后确认）', async () => {
+    const handler = vi.fn(() => 'ok')
+    const toolMap = new Map<string, AgentTool>([
+      ['save_x', okTool('save_x', { danger: true, handler: handler as () => unknown })]
+    ])
+    const confirm = vi.fn(async () => true)
+    const outcome = await executeToolCalls(
+      [call('a', 'save_x', { id: 'x1' })],
+      deps({
+        toolMap,
+        confirm,
+        writeGuard: () => '不在授权范围内'
+      })
+    )
+    expect(handler).not.toHaveBeenCalled()
+    expect(confirm).not.toHaveBeenCalled() // 未过授权闸不进入确认流
+    expect(outcome.resultBlocks[0]).toMatchObject({ is_error: true })
+  })
+
+  it('只读并发批不受 writeGuard 影响（只读工具不放行拒绝路径）', async () => {
+    const marks: string[] = []
+    const readTool = (name: string): AgentTool =>
+      okTool(name, {
+        handler: () => {
+          marks.push(name)
+          return name
+        }
+      })
+    const toolMap = new Map<string, AgentTool>([
+      ['r1', readTool('r1')],
+      ['r2', readTool('r2')]
+    ])
+    const guard = vi.fn(() => null)
+    const outcome = await executeToolCalls(
+      [call('a', 'r1'), call('b', 'r2')],
+      deps({ toolMap, readTools: new Set(['r1', 'r2']), writeGuard: guard })
+    )
+    expect(marks).toEqual(['r1', 'r2'])
+    expect(outcome.toolUseCount).toBe(2)
+    expect(guard).not.toHaveBeenCalled() // 并发批内只读工具不经闸门（batchableTool 已排除非只读）
+  })
+})
