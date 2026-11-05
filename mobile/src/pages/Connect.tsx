@@ -39,7 +39,7 @@ export default function Connect() {
         </label>
         <input
           id="addr"
-          className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-base focus:border-amber-500 focus:outline-none"
+          className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-base focus:border-orange-500 focus:outline-none"
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
           placeholder="http://100.x.x.x:3910"
@@ -62,7 +62,7 @@ export default function Connect() {
         type="button"
         disabled={testing || !baseUrl}
         onClick={() => void connect()}
-        className="rounded-xl bg-amber-600 py-3.5 text-base font-semibold text-zinc-950 active:bg-amber-500 disabled:opacity-50"
+        className="rounded-xl bg-orange-600 py-3.5 text-base font-semibold text-white active:bg-orange-700 disabled:opacity-50"
       >
         {testing ? '连接中…' : '连接'}
       </button>

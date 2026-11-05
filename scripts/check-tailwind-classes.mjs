@@ -23,8 +23,8 @@ const COMMON = [
   ['line-clamp-2', 'mobile/pages/Write+Cards（摘要截断）']
 ]
 const MOBILE_ONLY = [
-  ['bg-amber-900\\/60', 'mobile/pages（kind 徽标/伏笔标签）'],
-  ['active\\:bg-emerald-700', 'mobile/pages/Write（主按钮按压态）']
+  ['bg-orange-950\\/70', 'mobile/pages（走向卡/伏笔徽标，v2 橙色主题）'],
+  ['active\\:bg-orange-700', 'mobile/pages/Write（主按钮按压态）']
 ]
 
 async function collectCss(d) {

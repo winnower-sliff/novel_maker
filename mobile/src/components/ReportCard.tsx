@@ -7,9 +7,9 @@ const KIND_TITLE: Record<string, string> = {
 }
 
 const LEVEL_COLOR: Record<string, string> = {
-  good: 'bg-emerald-900/60 text-emerald-300',
-  warn: 'bg-amber-900/60 text-amber-300',
-  bad: 'bg-rose-900/60 text-rose-300'
+  good: 'bg-orange-950/70 text-orange-300',
+  warn: 'bg-orange-800/70 text-orange-200',
+  bad: 'bg-red-900/60 text-red-300'
 }
 
 export default function ReportCard({ report }: { report: AgentReport }) {

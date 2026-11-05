@@ -42,7 +42,7 @@ export default function BookWorkspace() {
         <div className="min-w-0 flex-1">
           <div className="truncate text-base font-semibold">{book?.title ?? '…'}</div>
           {activeLine && activeLine.name !== '主线' && (
-            <div className="truncate text-xs text-amber-400/90">{activeLine.name}</div>
+            <div className="truncate text-xs text-orange-400/90">{activeLine.name}</div>
           )}
         </div>
         <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
@@ -64,7 +64,7 @@ export default function BookWorkspace() {
             type="button"
             className={
               'flex flex-col items-center gap-0.5 py-2 text-xs ' +
-              (bookSub === s.key ? 'text-emerald-400' : 'text-zinc-500')
+              (bookSub === s.key ? 'text-orange-400' : 'text-zinc-500')
             }
             onClick={() => setBookSub(s.key)}
           >

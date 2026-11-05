@@ -37,7 +37,7 @@ export default function QuickActionsBar({
             key={a.label}
             type="button"
             disabled={busy || !chapterId}
-            className="rounded-full border border-black/10 px-3 py-1.5 text-xs active:border-emerald-700 disabled:opacity-40 dark:border-zinc-700"
+            className="rounded-full border border-black/10 px-3 py-1.5 text-xs active:border-orange-700 disabled:opacity-40 dark:border-zinc-700"
             onClick={() => revise(a.instruction)}
           >
             {a.label}
@@ -48,7 +48,7 @@ export default function QuickActionsBar({
             key={a.label}
             type="button"
             disabled={busy}
-            className="rounded-full border border-sky-800/80 bg-sky-950/30 px-3 py-1.5 text-xs text-sky-300 active:border-sky-600 disabled:opacity-40"
+            className="rounded-full border border-orange-800/80 bg-orange-950/30 px-3 py-1.5 text-xs text-orange-300 active:border-orange-600 disabled:opacity-40"
             onClick={() => revise(a.instruction)}
           >
             {a.label}
@@ -57,7 +57,7 @@ export default function QuickActionsBar({
       </div>
       <div className="mt-3 flex gap-2">
         <input
-          className="min-w-0 flex-1 rounded-xl border border-black/10 bg-black/5 px-3 py-2 text-xs outline-none focus:border-emerald-700 dark:border-zinc-800 dark:bg-zinc-900"
+          className="min-w-0 flex-1 rounded-xl border border-black/10 bg-black/5 px-3 py-2 text-xs outline-none focus:border-orange-700 dark:border-zinc-800 dark:bg-zinc-900"
           placeholder="或直接说要怎么改…"
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
@@ -65,7 +65,7 @@ export default function QuickActionsBar({
         <button
           type="button"
           disabled={busy || !freeText.trim() || !chapterId}
-          className="rounded-xl bg-black/10 px-4 text-xs text-emerald-300 disabled:opacity-40 dark:bg-zinc-800"
+          className="rounded-xl bg-black/10 px-4 text-xs text-orange-300 disabled:opacity-40 dark:bg-zinc-800"
           onClick={() => revise(freeText.trim())}
         >
           改

@@ -68,16 +68,16 @@ export default function Lines() {
               key={l.id}
               className={
                 'rounded-xl border p-3 ' +
-                (active ? 'border-emerald-800 bg-emerald-950/20' : 'border-zinc-800 bg-zinc-900/60')
+                (active ? 'border-orange-800 bg-orange-950/20' : 'border-zinc-800 bg-zinc-900/60')
               }
               style={{ marginLeft: depth * 16 }}
             >
               <div className="flex items-center gap-2">
-                <span className={'min-w-0 flex-1 truncate text-sm ' + (active ? 'font-semibold text-emerald-300' : '')}>
+                <span className={'min-w-0 flex-1 truncate text-sm ' + (active ? 'font-semibold text-orange-300' : '')}>
                   {l.name}
                 </span>
                 {active ? (
-                  <span className="rounded-full bg-emerald-900/60 px-2 py-0.5 text-[11px] text-emerald-300">写作中</span>
+                  <span className="rounded-full bg-orange-900/60 px-2 py-0.5 text-[11px] text-orange-300">写作中</span>
                 ) : (
                   <button
                     type="button"
@@ -92,7 +92,7 @@ export default function Lines() {
                   <button
                     type="button"
                     disabled={busy}
-                    className="rounded-full p-1 text-zinc-700 hover:text-rose-400"
+                    className="rounded-full p-1 text-zinc-700 hover:text-red-400"
                     onClick={() => setConfirmDelete(l.id)}
                   >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -114,7 +114,7 @@ export default function Lines() {
       <button
         type="button"
         disabled={busy}
-        className="mt-5 w-full rounded-2xl bg-emerald-600 py-3.5 text-sm font-semibold disabled:opacity-50"
+        className="mt-5 w-full rounded-2xl bg-orange-600 py-3.5 text-sm font-semibold disabled:opacity-50"
         onClick={() => setForkOpen(true)}
       >
         从某章开新线
@@ -139,7 +139,7 @@ export default function Lines() {
             className="w-full rounded-t-2xl border-t border-zinc-800 bg-zinc-900 p-5 pb-safe"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-1 text-sm font-medium text-rose-300">删除这条故事线？</div>
+            <div className="mb-1 text-sm font-medium text-red-300">删除这条故事线？</div>
             <div className="mb-4 text-xs leading-relaxed text-zinc-500">
               该线及其子线的章节与设定变更都会消失（删前自动快照备份）。主线不可删。
             </div>
@@ -154,7 +154,7 @@ export default function Lines() {
               <button
                 type="button"
                 disabled={busy}
-                className="flex-1 rounded-xl bg-rose-600 py-2.5 text-sm font-medium"
+                className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-medium"
                 onClick={() => {
                   const id = confirmDelete
                   setConfirmDelete(null)
@@ -204,7 +204,7 @@ function ForkSheet({
               type="button"
               className={
                 'flex w-full items-baseline gap-2 rounded-lg px-3 py-2 text-left text-sm ' +
-                (chapterId === c.id ? 'bg-emerald-900/40 text-emerald-200' : 'bg-zinc-800/50 text-zinc-300')
+                (chapterId === c.id ? 'bg-orange-900/40 text-orange-200' : 'bg-zinc-800/50 text-zinc-300')
               }
               onClick={() => setChapterId(c.id)}
             >
@@ -217,7 +217,7 @@ function ForkSheet({
 
         <div className="mb-2 text-xs text-zinc-500">线名（留空让导演起名）</div>
         <input
-          className="mb-5 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-emerald-700"
+          className="mb-5 w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
           placeholder="如：复仇线"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -234,7 +234,7 @@ function ForkSheet({
           <button
             type="button"
             disabled={busy || !chapterId}
-            className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-medium disabled:opacity-50"
+            className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium disabled:opacity-50"
             onClick={async () => {
               await window.api.line.fork(bookId, chapterId, name.trim() || undefined)
               onDone()

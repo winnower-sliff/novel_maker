@@ -90,7 +90,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
         <button type="button" className="pt-2 text-sm text-zinc-400" onClick={finishOnboard}>
           稍后再说
         </button>
-        <div className="pt-2 text-sm font-medium text-amber-500">{stageLabel[stage] ?? stage}</div>
+        <div className="pt-2 text-sm font-medium text-orange-500">{stageLabel[stage] ?? stage}</div>
         <div className="w-16" />
       </header>
 
@@ -101,7 +101,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
               {t.text}
             </div>
           ) : (
-            <div key={i} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-amber-700/80 px-4 py-3 text-[15px]">
+            <div key={i} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-orange-700/80 px-4 py-3 text-[15px]">
               {t.text}
             </div>
           )
@@ -118,7 +118,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
               type="button"
               disabled={busy}
               onClick={() => void answer(opt)}
-              className="shrink-0 rounded-full border border-amber-600/60 px-4 py-2 text-sm text-amber-400 active:bg-amber-600 active:text-zinc-950"
+              className="shrink-0 rounded-full border border-orange-600/60 px-4 py-2 text-sm text-orange-400 active:bg-orange-700 active:text-white"
             >
               {opt}
             </button>
@@ -128,7 +128,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
 
       <div className="flex gap-2 px-4 pb-safe pt-2">
         <input
-          className="flex-1 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-[15px] focus:border-amber-500 focus:outline-none"
+          className="flex-1 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-[15px] focus:border-orange-500 focus:outline-none"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
@@ -140,7 +140,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
           type="button"
           disabled={busy || !input.trim()}
           onClick={() => void answer(input)}
-          className="rounded-xl bg-amber-600 px-5 font-semibold text-zinc-950 active:bg-amber-500 disabled:opacity-50"
+          className="rounded-xl bg-orange-600 px-5 font-semibold text-white active:bg-orange-700 disabled:opacity-50"
         >
           发送
         </button>

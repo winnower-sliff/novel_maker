@@ -69,7 +69,7 @@ export default function Shelf() {
             setCreating(true)
             createBook.mutate('新书')
           }}
-          className="w-full rounded-xl bg-amber-600 py-3.5 font-semibold text-zinc-950 active:bg-amber-500 disabled:opacity-50"
+          className="w-full rounded-xl bg-orange-600 py-3.5 font-semibold text-white active:bg-orange-700 disabled:opacity-50"
         >
           {creating ? '创建中…' : '＋ 开新书'}
         </button>

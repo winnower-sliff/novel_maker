@@ -78,7 +78,7 @@ function CardsList({ lineId }: { lineId: string }) {
           {KIND_LABEL[(c.kind ?? 'custom') as CardKind]}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm">{c.title}</span>
-        {c.pinned && <span className="text-[11px] text-emerald-400">已钉选</span>}
+        {c.pinned && <span className="text-[11px] text-orange-400">已钉选</span>}
         <span
           role="button"
           tabIndex={0}
@@ -134,7 +134,7 @@ function CardsList({ lineId }: { lineId: string }) {
             type="button"
             className={
               'shrink-0 rounded-full px-3 py-1 text-xs ' +
-              (kind === k ? 'bg-emerald-600 text-white' : 'bg-zinc-900 text-zinc-500')
+              (kind === k ? 'bg-orange-600 text-white' : 'bg-zinc-900 text-zinc-500')
             }
             onClick={() => setKind(k)}
           >
@@ -176,7 +176,7 @@ function CharactersList({ lineId }: { lineId: string }) {
           >
             <span className="min-w-0 flex-1 truncate text-sm font-medium">{ch.name}</span>
             {ch.role && <span className="truncate text-xs text-zinc-600">{ch.role}</span>}
-            {ch.pinned && <span className="text-[11px] text-emerald-400">已钉选</span>}
+            {ch.pinned && <span className="text-[11px] text-orange-400">已钉选</span>}
           </button>
           {expanded === ch.id && <CharacterDetail ch={ch} onPin={() => refetch()} />}
         </div>
@@ -253,8 +253,8 @@ function ForeshadowsList({ lineId }: { lineId: string }) {
             (f.status === 'resolved'
               ? 'bg-zinc-800 text-zinc-500'
               : f.status === 'planned'
-                ? 'bg-sky-900/60 text-sky-300'
-                : 'bg-amber-900/60 text-amber-300')
+                ? 'bg-orange-800/70 text-orange-200'
+                : 'bg-orange-950/70 text-orange-300')
           }
         >
           {f.status === 'resolved' ? '已回收' : f.status === 'planned' ? '已计划' : '埋设中'}
@@ -280,7 +280,7 @@ function ForeshadowsList({ lineId }: { lineId: string }) {
             key={label}
             type="button"
             className={
-              'rounded-full px-3 py-1 text-xs ' + (status === k ? 'bg-emerald-600 text-white' : 'bg-zinc-900 text-zinc-500')
+              'rounded-full px-3 py-1 text-xs ' + (status === k ? 'bg-orange-600 text-white' : 'bg-zinc-900 text-zinc-500')
             }
             onClick={() => setStatus(k)}
           >

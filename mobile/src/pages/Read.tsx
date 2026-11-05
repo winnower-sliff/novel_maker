@@ -173,7 +173,7 @@ export default function Read() {
                 type="button"
                 className={
                   'rounded-lg px-2.5 py-1 text-xs ' +
-                  (fontSize === s ? 'bg-emerald-600 text-white' : 'bg-black/10 dark:bg-zinc-800')
+                  (fontSize === s ? 'bg-orange-600 text-white' : 'bg-black/10 dark:bg-zinc-800')
                 }
                 onClick={() => {
                   setFontSize(s)
@@ -192,7 +192,7 @@ export default function Read() {
                 type="button"
                 className={
                   'rounded-lg px-2.5 py-1 text-xs ' +
-                  (theme === t ? 'bg-emerald-600 text-white' : 'bg-black/10 dark:bg-zinc-800')
+                  (theme === t ? 'bg-orange-600 text-white' : 'bg-black/10 dark:bg-zinc-800')
                 }
                 onClick={() => {
                   setTheme(t)
@@ -214,7 +214,7 @@ export default function Read() {
               <button
                 key={i}
                 type="button"
-                className="mb-4 w-full rounded-lg px-2 py-1 text-left ring-1 ring-transparent active:ring-emerald-500/60"
+                className="mb-4 w-full rounded-lg px-2 py-1 text-left ring-1 ring-transparent active:ring-orange-500/60"
                 onClick={() => {
                   setSegTarget(p)
                   setSegText('')
@@ -252,7 +252,7 @@ export default function Read() {
             className={
               'flex-1 rounded-xl border py-2.5 text-xs ' +
               (segmentMode
-                ? 'border-emerald-600 font-medium text-emerald-400'
+                ? 'border-orange-600 font-medium text-orange-400'
                 : 'border-black/10 opacity-70 dark:border-zinc-700')
             }
             onClick={() => setSegmentMode((v) => !v)}
@@ -284,7 +284,7 @@ export default function Read() {
           </button>
           <button
             type="button"
-            className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-medium text-white"
+            className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium text-white"
             onClick={next}
           >
             下一章
@@ -304,7 +304,7 @@ export default function Read() {
               {segTarget}
             </div>
             <textarea
-              className="mb-3 min-h-20 w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm outline-none focus:border-emerald-700"
+              className="mb-3 min-h-20 w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
               placeholder="这一段要怎么改？"
               value={segText}
               onChange={(e) => setSegText(e.target.value)}
@@ -320,7 +320,7 @@ export default function Read() {
               <button
                 type="button"
                 disabled={!segText.trim()}
-                className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-medium disabled:opacity-40"
+                className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium disabled:opacity-40"
                 onClick={async () => {
                   const target = segTarget
                   const instruction = segText.trim()
@@ -348,7 +348,7 @@ export default function Read() {
               <>
                 <button
                   type="button"
-                  className="mb-3 text-xs text-emerald-400"
+                  className="mb-3 text-xs text-orange-400"
                   onClick={() => setViewingVersion(null)}
                 >
                   ← 返回版本列表

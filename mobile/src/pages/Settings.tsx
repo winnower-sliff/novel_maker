@@ -51,7 +51,7 @@ export default function Settings() {
           <span
             className={
               'ml-3 shrink-0 rounded-full px-2 py-0.5 text-[11px] ' +
-              (server?.running ? 'bg-emerald-900/60 text-emerald-300' : 'bg-rose-900/60 text-rose-300')
+              (server?.running ? 'bg-orange-900/60 text-orange-300' : 'bg-red-900/60 text-red-300')
             }
           >
             {server?.running ? '已连接' : '未连接'}
@@ -198,7 +198,7 @@ function ModelForm() {
             type="button"
             className={
               'flex-1 rounded-lg py-2 text-xs ' +
-              (view.provider === p ? 'bg-emerald-600 text-white' : 'bg-zinc-800 text-zinc-400')
+              (view.provider === p ? 'bg-orange-600 text-white' : 'bg-zinc-800 text-zinc-400')
             }
             onClick={async () => {
               await window.api.settings.save({ provider: p })
@@ -216,7 +216,7 @@ function ModelForm() {
         <label className="mb-3 block">
           <span className="mb-1 block text-[11px] text-zinc-600">API 地址（OpenAI 兼容）</span>
           <input
-            className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-emerald-700"
+            className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
             placeholder="https://…/v1"
             value={currentBase}
             onChange={(e) => setBaseUrl(e.target.value)}
@@ -230,7 +230,7 @@ function ModelForm() {
         </span>
         <input
           type="password"
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-emerald-700"
+          className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
           placeholder="sk-…"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
@@ -240,19 +240,19 @@ function ModelForm() {
       <label className="mb-4 block">
         <span className="mb-1 block text-[11px] text-zinc-600">模型名</span>
         <input
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-emerald-700"
+          className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
           value={currentModel}
           onChange={(e) => setModel(e.target.value)}
         />
       </label>
 
-      {msg && <div className="mb-3 text-xs text-emerald-400">{msg}</div>}
+      {msg && <div className="mb-3 text-xs text-orange-400">{msg}</div>}
 
       <div className="flex gap-2">
         <button
           type="button"
           disabled={busy}
-          className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-medium disabled:opacity-50"
+          className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium disabled:opacity-50"
           onClick={save}
         >
           {busy ? '…' : '保存'}
@@ -323,7 +323,7 @@ function UpdateRow() {
       ) : state === 'found' ? (
         <button
           type="button"
-          className="w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-medium"
+          className="w-full rounded-xl bg-orange-600 py-2.5 text-sm font-medium"
           onClick={download}
         >
           {note}
@@ -335,13 +335,13 @@ function UpdateRow() {
       ) : (
         <button
           type="button"
-          className="w-full rounded-xl bg-emerald-600 py-2.5 text-sm font-medium"
+          className="w-full rounded-xl bg-orange-600 py-2.5 text-sm font-medium"
           onClick={install}
         >
           {note}
         </button>
       )}
-      {state === 'error' && <div className="mt-2 text-xs text-rose-400">{note}</div>}
+      {state === 'error' && <div className="mt-2 text-xs text-red-400">{note}</div>}
     </div>
   )
 }
