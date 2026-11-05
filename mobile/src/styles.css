@@ -32,3 +32,82 @@ body {
   -ms-overflow-style: none;
   scrollbar-width: none;
 }
+
+/* 聊天流 Markdown（浅橙主题） */
+.markdown-body > *:first-child {
+  margin-top: 0;
+}
+.markdown-body > *:last-child {
+  margin-bottom: 0;
+}
+.markdown-body p {
+  margin: 0.5em 0;
+  white-space: pre-wrap;
+}
+.markdown-body h1,
+.markdown-body h2,
+.markdown-body h3,
+.markdown-body h4 {
+  @apply font-bold text-stone-800;
+  margin: 0.8em 0 0.4em;
+  line-height: 1.35;
+}
+.markdown-body h1 {
+  font-size: 1.15em;
+}
+.markdown-body h2 {
+  font-size: 1.1em;
+}
+.markdown-body h3,
+.markdown-body h4 {
+  font-size: 1.05em;
+}
+.markdown-body ul,
+.markdown-body ol {
+  margin: 0.5em 0;
+  padding-left: 1.4em;
+}
+.markdown-body ul {
+  list-style: disc;
+}
+.markdown-body ol {
+  list-style: decimal;
+}
+.markdown-body li {
+  margin: 0.2em 0;
+}
+.markdown-body strong {
+  @apply font-bold text-stone-900;
+}
+.markdown-body em {
+  font-style: italic;
+}
+.markdown-body code {
+  @apply rounded bg-orange-100 px-1 py-0.5 font-mono text-[0.85em] text-orange-900;
+}
+.markdown-body pre {
+  @apply overflow-x-auto rounded-lg bg-orange-100 p-2.5;
+  margin: 0.5em 0;
+}
+.markdown-body pre code {
+  @apply bg-transparent p-0;
+}
+.markdown-body blockquote {
+  @apply border-l-2 border-orange-300 pl-2.5 text-stone-500;
+  margin: 0.5em 0;
+}
+.markdown-body hr {
+  @apply border-orange-200;
+  margin: 0.8em 0;
+}
+.markdown-body table {
+  @apply w-full border-collapse text-[0.9em];
+  margin: 0.5em 0;
+}
+.markdown-body th,
+.markdown-body td {
+  @apply border border-orange-200 px-1.5 py-1 text-left;
+}
+.markdown-body th {
+  @apply bg-orange-50 font-semibold;
+}

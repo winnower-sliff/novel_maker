@@ -3,6 +3,7 @@ import { useEffect, useRef, useState } from 'react'
 import type { ChatMessageRow, Job } from '@shared/types'
 import ReportCard from '../components/ReportCard'
 import QuickActionsBar from '../components/QuickActionsBar'
+import { Markdown } from '../components/Markdown'
 import { qk, useBook, useJobFlow, useMessages, useStatusCard } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 import { useKeyboardInset } from '../lib/useKeyboardInset'
@@ -200,8 +201,8 @@ function MessageRow({
   return (
     <div className="flex justify-start px-4 py-1.5">
       <div className="max-w-[88%]">
-        <div className="rounded-2xl rounded-tl-sm border border-orange-100 bg-white px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap text-stone-700">
-          {msg.content}
+        <div className="rounded-2xl rounded-tl-sm border border-orange-100 bg-white px-3.5 py-2 text-sm leading-relaxed text-stone-700">
+          <Markdown text={msg.content} />
         </div>
         <div className="mt-0.5 pl-1 text-[10px] text-stone-400">{hhmm(msg.createdAt)}</div>
       </div>
@@ -236,11 +237,13 @@ function JobCard({
     return interactive ? (
       <CardsInteractive job={job} refresh={refresh} />
     ) : (
-      <StaticBubble>
-        {job.payload.direction
-          ? `本章走向：${job.payload.direction.text}`
-          : `本章走向备选 ${job.payload.cards?.length ?? 0} 张`}
-      </StaticBubble>
+      <StaticBubble
+        text={
+          job.payload.direction
+            ? `本章走向：${job.payload.direction.text}`
+            : `本章走向备选 ${job.payload.cards?.length ?? 0} 张`
+        }
+      />
     )
   }
   if (step === 'chapter') return <ChapterDoneCard job={job} chaptersById={chaptersById} refresh={refreshAll} />
@@ -283,19 +286,19 @@ function JobCard({
       </div>
     )
   }
-  if (step === 'cancelled') return <StaticBubble>{msg0(job)}</StaticBubble>
-  return <StaticBubble>{step}</StaticBubble>
+  if (step === 'cancelled') return <StaticBubble text={msg0(job)} />
+  return <StaticBubble text={step} />
 }
 
 function msg0(job: Job): string {
   return job.error ? `已取消：${job.error}` : '已按你的要求取消'
 }
 
-function StaticBubble({ children }: { children: React.ReactNode }) {
+function StaticBubble({ text }: { text: string }) {
   return (
     <div className="flex justify-start px-4 py-1.5">
       <div className="rounded-2xl rounded-tl-sm border border-orange-100 bg-orange-50 px-3.5 py-2 text-sm leading-relaxed text-stone-600">
-        {children}
+        <Markdown text={text} />
       </div>
     </div>
   )
@@ -694,8 +697,8 @@ function AgentTicker({ job, refresh }: { job: Job; refresh: () => void }) {
 
         {isChat && (
           <div className="mt-2 max-h-56 overflow-y-auto no-scrollbar">
-            <div className="text-sm leading-relaxed whitespace-pre-wrap text-stone-700">
-              {chatText || '提笔中…'}
+            <div className="text-sm leading-relaxed text-stone-700">
+              <Markdown text={chatText || '提笔中…'} />
               <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-orange-400 align-middle" />
             </div>
           </div>

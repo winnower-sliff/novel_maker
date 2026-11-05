@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { useUiStore } from '@mobile/lib/uiStore'
 import { useKeyboardInset } from '@mobile/lib/useKeyboardInset'
+import { Markdown } from '../components/Markdown'
 
 /** 导演引导回复（契约 onboard:start/answer 的 ret 形态） */
 interface OnboardReply {
@@ -99,8 +100,8 @@ export default function Onboard({ bookId }: { bookId: string }) {
       <div className="no-scrollbar flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {turns.map((t, i) =>
           t.role === 'director' ? (
-            <div key={i} className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tl-sm bg-orange-100 px-4 py-3 text-[15px] leading-relaxed">
-              {t.text}
+            <div key={i} className="max-w-[85%] rounded-2xl rounded-tl-sm bg-orange-100 px-4 py-3 text-[15px] leading-relaxed">
+              <Markdown text={t.text} />
             </div>
           ) : (
             <div key={i} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-orange-700/80 px-4 py-3 text-[15px]">

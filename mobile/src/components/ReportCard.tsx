@@ -1,4 +1,5 @@
 import type { AgentReport } from '@shared/types'
+import { Markdown } from './Markdown'
 
 const KIND_TITLE: Record<string, string> = {
   review: '章审读报告',
@@ -23,7 +24,9 @@ export default function ReportCard({ report }: { report: AgentReport }) {
           <span className="text-xs text-stone-500">综合 {report.score} 分</span>
         )}
       </div>
-      <div className="text-xs leading-relaxed text-stone-600">{report.verdict}</div>
+      <div className="text-xs leading-relaxed text-stone-600">
+        <Markdown text={report.verdict} />
+      </div>
       {report.findings.length > 0 && (
         <div className="mt-3 space-y-2">
           {report.findings.map((f, i) => (
