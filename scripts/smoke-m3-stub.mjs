@@ -247,6 +247,15 @@ const CHAT_TAIL = [
   '目前只有第 1 章。断刀「沈」字的伏笔刚埋下，建议下一章让老船工主动试探林岸，把悬赏的紧迫感顶上来。',
   '可以。蔗糖舱的印记可以并成一条线：那批糖是七号泊位连夜装的，收货人写的却是个死人名字。'
 ]
+// SUBAGENT=1：追加一次「父→spawn_subagent→子读→子 finish→父 finish」交换（排 chat 后、revise 前）
+const SUB_QUEUE = [
+  { tool_calls: [{ name: 'spawn_subagent', arguments: { task: '查一下当前写到第几章，最新章的标题是什么。' } }] },
+  // 子代理轮（静默，不落工具卡）：list_chapters → finish 结论
+  { tool_calls: [{ name: 'list_chapters', arguments: {} }] },
+  { tool_calls: [{ name: 'finish', arguments: { message: '调查结论：目前共 1 章，最新章《雾夜登船》。' } }] },
+  // 父代理拿到结论直接收尾
+  { tool_calls: [{ name: 'finish', arguments: { message: '调查员回报：写到第 1 章《雾夜登船》，断刀伏笔已埋。建议下一章写船上试探。' } }] }
+]
 const REVISE_TEXT = [
   '雾津港的雾在半夜最重，重得像浸透了盐水的棉絮压在码头上方。林岸蹲在七号泊位的缆桩后面，断刀贴着肋骨，每一波浪头打上木桩，断口的麻布就往肉里磨一分。他没有动。远处盐帮的灯笼一盏一盏漂过来，光晕被雾泡开，像化开的蛋黄。',
   '脚步声近了。两个人，踩着木板很沉，是练过桩功的底子。「港务官担保今夜没有外船。」其中一个说。「担保？」另一个嗤了一声，「上个月担保过的人，现在就沉在泊位底下。」话音落进雾里，林岸数着他们的步点，把呼吸压到最缓。',
@@ -329,7 +338,14 @@ const AGENT_QUEUE = [
   },
   { tool_calls: [{ name: 'finish', arguments: { message: '第 1 章已入书，人物状态已更新。建议下一章写船上试探。' } }] },
   // chat（free agent）：一轮工具 + 两轮纯文本（CHAT_IN_QUEUE=0 时跳过，供 m4 直接 revise）
-  ...(process.env.CHAT_IN_QUEUE === '0' ? [] : CHAT_TAIL),
+  // SUBAGENT=1 时截掉尾条纯文本（首条 chat 固定吃 2 项，防止子代理交换错位），后接父→查员交换
+  ...(process.env.CHAT_IN_QUEUE === '0'
+    ? []
+    : process.env.SUBAGENT === '1'
+      ? [CHAT_TAIL[0], CHAT_TAIL[1]]
+      : CHAT_TAIL),
+  // SUBAGENT=1：父派只读调查员 + 子静默执行 + 结论回父
+  ...(process.env.SUBAGENT === '1' ? SUB_QUEUE : []),
   // revise（独立 job kind=revise，genRevise 吃纯文本）
   REVISE_TEXT,
   // review（七维章审读）

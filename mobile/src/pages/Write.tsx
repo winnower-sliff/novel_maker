@@ -482,6 +482,7 @@ const TOOL_LABEL: Record<string, string> = {
   list_samples: '翻范文库',
   read_sample: '读范文',
   search_project: '检索',
+  spawn_subagent: '派调查员',
   save_card: '存设定卡',
   save_character: '存人物',
   patch_character_state: '更新人物状态',

@@ -53,7 +53,7 @@ const dataDir = mkdtempSync(join(tmpdir(), 'nm-m6-smoke-'))
 writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ server: { port: PORT } }))
 
 const stub = spawn(process.execPath, ['scripts/smoke-m3-stub.mjs'], {
-  env: { ...process.env, AGENT_MODE: '1' },
+  env: { ...process.env, AGENT_MODE: '1', SUBAGENT: '1' },
   stdio: 'inherit'
 })
 const server = spawn(process.execPath, ['dist/main/index.js'], {
@@ -157,6 +157,20 @@ try {
   msgs = await invoke('message:list', book.id)
   const chatTools = msgs.filter((m) => m.meta?.kind === 'tool' && m.meta.jobId === cj.id)
   ok(chatTools.length >= 1 && chatTools[0].meta.tool === 'list_chapters', 'chat agent 用了 list_chapters 工具')
+
+  // ── spawn_subagent：父派只读调查员，子静默执行，结论回父 ──
+  {
+    let sj = await invoke('job:startChat', book.id, '派个调查员查一下写到第几章了，回头告诉我。')
+    sj = await waitJob(sj.id, (j) => j.state === 'done', 'subagent chat')
+    ok(String(sj.payload.answer ?? '').includes('调查员回报'), '父代理收尾带调查结论')
+    const sMsgs = await invoke('message:list', book.id)
+    const sCards = sMsgs.filter((m) => m.meta?.kind === 'tool' && m.meta.jobId === sj.id)
+    ok(
+      !sCards.some((m) => m.meta.tool === 'list_chapters'),
+      `子代理工具调用没落卡（实际 ${sCards.map((m) => m.meta.tool).join(',')}）`
+    )
+    ok((sCards[0].meta.summary ?? '').includes('调查员回报'), `spawn_subagent 卡带回合数（${sCards[0].meta.summary}）`)
+  }
 
   console.log(`\n[M6 冒烟] ${passed} 通过 / ${failed} 失败`)
   killAll()

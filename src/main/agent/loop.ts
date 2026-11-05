@@ -11,7 +11,7 @@ import { bookBasics, directorPersona, redlineBlock, wordListBlock } from '../dir
 import { autoFixDraft, genDraft, genRevise, selfCheck } from '../director/steps.js'
 import { lintChapter, stripHtmlComments } from '../lint.js'
 import * as store from '../store.js'
-import { execTool, type ToolCtx, type ToolResult } from './tools.js'
+import { execTool, type ToolCtx, type ToolResult, toolDefs } from './tools.js'
 
 /**
  * M6 agent 主循环：自由 LLM 工具循环（用户拍板「全面 agent 化」）。
@@ -33,6 +33,8 @@ export interface LoopOpts {
   /** 场景：写章（有 commit 链）或自由（无 commit） */
   mode: 'chapter' | 'free'
   maxTurns?: number
+  /** 覆盖系统提示（子代理用调查员提示；默认导演人格 agentSystem） */
+  system?: string
   /** 导演白话流式（chat 气泡预览；正文/改章不走这里——见 onProgress） */
   onDelta?: (t: string) => void
   /** 生成进度（正文/改章字数计数，聚合条显示；正文不进聊天流） */
@@ -88,6 +90,21 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
           segment: { type: 'string', description: '可选：只改这段原文（选段改）' }
         },
         required: ['chapterId', 'instruction']
+      }
+    },
+    {
+      name: 'spawn_subagent',
+      description:
+        '派只读调查员帮你翻资料（省你的上下文）：它自己多轮读章节/设定/人物/伏笔/范文/检索，只把最终结论带回来，调查过程不占你的空间。适合「把某线人物关系摸一遍」「查某伏笔现状」「找前文原句」这类读书量大的活；单点查询直接自己调读工具更快。',
+      input_schema: {
+        type: 'object',
+        properties: {
+          task: {
+            type: 'string',
+            description: '调查任务，要具体：查什么、按什么格式返回（一个子代理一个任务）'
+          }
+        },
+        required: ['task']
       }
     }
   ]
@@ -299,11 +316,49 @@ ${chapterDiscipline}
 ## 工具纪律
 - 每次工具调用都会以小卡形式给作者看，大方用。
 - 删除类工具已自动快照兜底，但删除前仍要确认作者意图。
-- 工具结果太长会被截断，需要细节就用读类工具分页看。`
+- 工具结果太长会被截断，需要细节就用读类工具分页看。
+- 要翻大量资料但只需要结论（摸人物关系、查伏笔现状、找前文原句）时，派 spawn_subagent 去调查——它只把最终结论带回你的上下文，省你自己的空间。日常单点查询不必派。`
 }
+
+/** 子代理调查员系统提示（fresh 会话，只读，静默执行） */
+const SUB_SYSTEM = `你是只读调查员，受导演指派调查小说项目的资料，只输出调查结论。
+
+## 纪律
+1. 你只有读类工具：绝不改动任何东西（也没有写类工具可用）。
+2. 自己多轮翻资料凑齐证据（章节/设定/人物/伏笔/范文/检索），调查是你一个人的事，不要中途交半成品。
+3. 材料够就 finish 汇报：按任务要求给要点/清单/原文摘录；需要原文的地方给准确引句；不要写调查流水账，不要客套。`
 
 const MAX_DATA = 30000
 const N = '\n'
+
+/** 子代理可用工具：全部读类 + finish */
+const READ_TOOLS = new Set([
+  'get_book_config',
+  'list_chapters',
+  'read_chapter',
+  'list_cards',
+  'get_card',
+  'list_characters',
+  'list_foreshadows',
+  'get_write_context',
+  'list_samples',
+  'read_sample',
+  'search_project'
+])
+
+function subTools(): ToolDef[] {
+  const defs = toolDefs().filter((d) => READ_TOOLS.has(d.name))
+  defs.push({
+    name: 'finish',
+    description: '调查完成时调用：给出最终结论。',
+    input_schema: {
+      type: 'object',
+      properties: { message: { type: 'string', description: '调查结论（要点/清单/原文摘录）' } },
+      required: ['message']
+    }
+  })
+  return defs
+}
 
 function clipData(s: string): string {
   return s.length > MAX_DATA ? `${s.slice(0, MAX_DATA)}\n…（结果过长已截断）` : s
@@ -340,7 +395,7 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
     const res = await callRaw(
       {
         slot: 'director',
-        system: agentSystem(book, mode),
+        system: opts.system ?? agentSystem(book, mode),
         user: task,
         jsonHint: '',
         params: {
@@ -542,6 +597,26 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
           ok: true,
           summary: `改好《${chapter.title}》`,
           data: `《${chapter.title}》已按「${briefOf(instruction)}」改写并替换（旧版进历史版本）。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
+        }
+      }
+      case 'spawn_subagent': {
+        const t = String(input.task ?? '').trim()
+        if (!t) return { ok: false, summary: '调查任务为空', data: 'spawn_subagent 需要 task 参数' }
+        const child = await runAgentLoop({
+          jobId,
+          bookId,
+          task: t,
+          history: [],
+          tools: subTools(),
+          mode: 'free',
+          maxTurns: 12,
+          system: SUB_SYSTEM,
+          say: () => {}
+        })
+        return {
+          ok: true,
+          summary: `调查员回报（${child.turns} 轮）`,
+          data: child.text
         }
       }
       case 'propose_chapter': {
