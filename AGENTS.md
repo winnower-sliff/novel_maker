@@ -8,12 +8,13 @@
 > 分叉树数据模型（不分卷、无状态机、无真删除）/ 导演循环（现状卡→走向卡片→两级大纲→流式正文→纪要卡）/
 > 无通知、无导出、无尺度字段、写完停手。M1 起本文件将被全面重写。
 >
-> **M1 已完成（server 解耦+托盘）**：纯 Node 底座 = src/main/{index,server,serverState,serverSessions,
-> eventSink,llm,llmOpenai,usage,config,paths,runs,connect,autostart,tray,handlers/}。要点：
+> **M1 已完成（server 解耦+托盘）**：纯 Node 底座 = src/main/{index,server,serverState,eventSink,
+> llm,llmOpenai,usage,config,paths,runs,connect,autostart,tray,handlers/}。要点：
 > - 命令：`npm run dev`（tsx watch）/ `build`（tsc→dist）/ `deploy`（build+杀旧+detached 拉新+健康探测）/ `typecheck` / `lint`
 > - 数据目录：`%APPDATA%/novel-maker-v2`（与 v1 userData 隔离！v1 settings 含 safeStorage 密文，混读必炸）；`NM_DATA_DIR` 覆盖
 > - invoke 约定：POST /api/invoke/:channel，body=`{"args":[元组]}`（元组整体传 handler，不 spread——坑 23 仍适用）
-> - 鉴权：x-nm-token header / ?token=；密码→token 走 POST /api/mobile/auth；未设密码时仅 loopback 放行并签发引导 token
+> - **无鉴权（2026-11 用户决策）**：Tailscale 网络即信任边界——无密码/token/二维码/登录限速；
+>   手机端手输一次地址（默认值预置）即用；serverSessions.ts/first-run 密码/qr 端点/托盘二维码与改密菜单已全部拆除
 > - NodeNext 要求相对 import 带 `.js` 扩展名（tsc 直出 ESM，无 bundler）
 > - systray 1.0.5 坑：CJS 老包（TS2.8 编译 exports.default 间接赋值，cjs-module-lexer 不识别），
 >   ESM default import 拿到的是 module.exports 对象，构造函数在 `.default` 上；TS7/NodeNext 也无法把 default 当类用

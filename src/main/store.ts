@@ -408,7 +408,7 @@ export function deleteLine(lineId: string): boolean {
     return acc
   }
   const all = collect(lineId)
-  const tx = db
+  const _tx = db
   db.exec('BEGIN')
   try {
     for (const id of all) db.prepare('DELETE FROM lines WHERE id = ?').run(id)

@@ -59,7 +59,7 @@ export interface TitleDraft {
 
 const JSON_HINT = `{"reply":"≤200字，有态度的引导语","options":["选项1","选项2","选项3"],"stage":"premise|world|characters|title|done","draft":{...按stage},"done":false}`
 
-function stageInstruction(stage: OnboardStage, book: Book, collected: string): string {
+function stageInstruction(stage: OnboardStage, _book: Book, collected: string): string {
   switch (stage) {
     case 'premise':
       return `当前阶段【设定采访】。你在用 3-6 轮快问快答收集：题材类型、基调、雷点红线（绝不能出现的剧情，如主角不能死/不要NTR）、文风偏好、单章字数偏好。每轮只问一个维度，给 3-4 个具体选项（可加一个「自定义」占位）。已收集：${collected || '（还没有）'}。

@@ -91,7 +91,6 @@ export interface ServerStatus {
   /** 局域网/Tailscale 可达地址（含端口），无则 null */
   url: string | null
   lanReachable: boolean
-  hasPassword: boolean
   clients: number
   /** 服务器版本（package.json version） */
   version: string

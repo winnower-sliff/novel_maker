@@ -187,7 +187,7 @@ export async function genDraft(
 
 export function selfCheck(
   book: Book,
-  lineId: string,
+  _lineId: string,
   draft: string,
   prevTail?: string
 ): LintReport {
@@ -266,7 +266,7 @@ ${chapter.content.slice(0, 12000)}
 
 /** 滚动记忆压缩（D2：细记层超阈值时把最老一段压进 memories，后台执行） */
 export async function compactMemories(
-  book: Book,
+  _book: Book,
   lineId: string,
   chapters: Array<{ orderNo: number; title: string; summary: string }>
 ): Promise<void> {

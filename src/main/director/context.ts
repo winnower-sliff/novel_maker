@@ -46,7 +46,7 @@ function characterText(c: Character): string {
 }
 
 /** 写作上下文（给各步骤 prompt 用） */
-export function buildWriteContext(book: Book, lineId: string): string {
+export function buildWriteContext(_book: Book, lineId: string): string {
   const sections: string[] = []
 
   // 1. 钉选引用（B7：钉选必进上下文）

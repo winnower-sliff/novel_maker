@@ -1,5 +1,5 @@
 import type { ServerStatus } from '../shared/types.js'
-import { getPort, hasPassword } from './config.js'
+import { getPort } from './config.js'
 
 const startedAt = Date.now()
 
@@ -8,7 +8,6 @@ let current: ServerStatus = {
   port: 0,
   url: null,
   lanReachable: false,
-  hasPassword: false,
   clients: 0,
   version: '',
   uptimeS: 0,
@@ -24,5 +23,5 @@ export function setServerStatus(patch: Partial<ServerStatus>): void {
 }
 
 export function refreshServerConfigFlags(): void {
-  current = { ...current, port: getPort(), hasPassword: hasPassword() }
+  current = { ...current, port: getPort() }
 }

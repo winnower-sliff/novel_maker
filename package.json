@@ -17,14 +17,12 @@
     "deploy": "node scripts/deploy.mjs"
   },
   "dependencies": {
-    "qrcode": "^1.5.4",
     "systray": "^1.0.5",
     "zod": "^4.6.5"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
     "@types/node": "^24.13.4",
-    "@types/qrcode": "^1.5.5",
     "tsx": "^4.20.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5"

@@ -1,4 +1,3 @@
-import { randomBytes, scryptSync, timingSafeEqual } from 'node:crypto'
 import { existsSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SettingsPatch } from '../shared/contract.js'
@@ -11,18 +10,16 @@ import {
 } from '../shared/providers.js'
 import type { ModelRouting, ProviderProfile, SettingsView } from '../shared/types.js'
 import { dataDir, ensureDataDir } from './paths.js'
-import { clearSessions } from './serverSessions.js'
 
 /**
- * 配置存储（settings.json）：服务器端口、访问密码（scrypt 哈希）、模型 provider/profile、
+ * 配置存储（settings.json）：服务器端口、模型 provider/profile、
  * API Key（明文存数据目录——单用户 PC 场景，目录继承用户 Profile ACL；无 Electron safeStorage）。
+ * v2 无鉴权：Tailscale 网络本身即信任边界（2026-11 用户决策），无密码/token。
  * 更新语义：可选字段未传保留原值，显式空串清除。
  */
 
 export interface ServerConfig {
   port: number
-  passwordHash: string
-  passwordSalt: string
 }
 
 interface StoredConfig {
@@ -41,7 +38,7 @@ function file(): string {
 
 function defaults(): StoredConfig {
   return {
-    server: { port: DEFAULT_PORT, passwordHash: '', passwordSalt: '' },
+    server: { port: DEFAULT_PORT },
     provider: 'glm',
     profiles: {},
     apiKeys: {},
@@ -53,15 +50,10 @@ function load(): StoredConfig {
   try {
     const raw = JSON.parse(readFileSync(file(), 'utf-8')) as Partial<StoredConfig>
     const d = defaults()
+    const rawPort = raw.server?.port
+    const port = typeof rawPort === 'number' && Number.isInteger(rawPort) && rawPort > 0 ? rawPort : d.server.port
     return {
-      server: {
-        port:
-          Number.isInteger(raw.server?.port) && (raw.server?.port ?? 0) > 0
-            ? raw.server!.port
-            : d.server.port,
-        passwordHash: typeof raw.server?.passwordHash === 'string' ? raw.server.passwordHash : '',
-        passwordSalt: typeof raw.server?.passwordSalt === 'string' ? raw.server.passwordSalt : ''
-      },
+      server: { port },
       provider: isProviderId(raw.provider) ? raw.provider : d.provider,
       profiles: raw.profiles ?? {},
       apiKeys: raw.apiKeys ?? {},
@@ -92,31 +84,6 @@ export function loadServerConfig(): ServerConfig {
 
 export function getPort(): number {
   return config().server.port
-}
-
-export function hashPassword(password: string): { salt: string; hash: string } {
-  const salt = randomBytes(16).toString('hex')
-  const hash = scryptSync(password, salt, 64).toString('hex')
-  return { salt, hash }
-}
-
-export function verifyPassword(password: string, salt: string, hash: string): boolean {
-  if (!salt || !hash) return false
-  const calculated = scryptSync(password, salt, 64)
-  const expected = Buffer.from(hash, 'hex')
-  return calculated.length === expected.length && timingSafeEqual(calculated, expected)
-}
-
-export function hasPassword(): boolean {
-  return !!config().server.passwordHash
-}
-
-export function setPassword(password: string): void {
-  const { salt, hash } = hashPassword(password)
-  config().server.passwordSalt = salt
-  config().server.passwordHash = hash
-  persist()
-  clearSessions()
 }
 
 export function setPort(port: number): void {

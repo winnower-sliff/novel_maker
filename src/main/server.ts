@@ -1,28 +1,22 @@
-import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
-import { extname, join, normalize, resolve } from 'node:path'
-import QRCode from 'qrcode'
+import { join, normalize, resolve } from 'node:path'
 import { invokeContract } from '../shared/contract.js'
 import { setGlobalSink } from './broadcast.js'
-import { loadServerConfig, verifyPassword } from './config.js'
+import { getPort } from './config.js'
 import type { EventSink } from './eventSink.js'
 import { appVersion, sharedHandlers } from './handlers/index.js'
 import { dataDir } from './paths.js'
-import { addSession, hasSession, removeSession } from './serverSessions.js'
-import { getServerStatus, setServerStatus } from './serverState.js'
+import { setServerStatus } from './serverState.js'
 
 /**
  * v2 HTTP 服务：手机 APK 唯一入口（无浏览器/WebSocket）。
- * - 鉴权：x-nm-token header / ?token= query（APK WebView 跨站 cookie 不可用）；
- *   未设密码时仅 loopback 放行（首次引导前本机可测试）。
- * - /api/invoke/:channel（JSON-RPC）+ /api/events（SSE）+ /api/mobile/auth（密码换 token）。
+ * 无鉴权：Tailscale 网络本身即信任边界（2026-11 用户决策，局域网直连）。
+ * - /api/invoke/:channel（JSON-RPC）+ /api/events（SSE）+ /api/mobile/*（APK 自更新）。
  */
 
 const MAX_BODY = 16 * 1024 * 1024
-const LOGIN_WINDOW_MS = 5 * 60 * 1000
-const LOGIN_MAX_ATTEMPTS = 10
 
 const MIME: Record<string, string> = {
   '.json': 'application/json; charset=utf-8',
@@ -32,8 +26,6 @@ const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
   '.apk': 'application/vnd.android.package-archive'
 }
-
-const loginAttempts = new Map<string, { count: number; resetAt: number }>()
 
 let server: Server | null = null
 let activePort = 0
@@ -82,34 +74,12 @@ export function lanAddresses(): { primary: string | null; tailscale: string | nu
   return { primary: candidates[0]?.ip ?? null, tailscale }
 }
 
-function isLoopback(req: IncomingMessage): boolean {
-  const addr = req.socket.remoteAddress ?? ''
-  return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
-}
-
-// ── 鉴权 ─────────────────────────────────────────────────────────────────────
-
-function reqToken(req: IncomingMessage): string | null {
-  const header = req.headers['x-nm-token']
-  if (typeof header === 'string' && header) return header
-  const query = new URL(req.url ?? '/', 'http://localhost').searchParams.get('token')
-  return query ?? null
-}
-
-function isAuthed(req: IncomingMessage): boolean {
-  const config = loadServerConfig()
-  if (!config.passwordHash) return isLoopback(req)
-  const token = reqToken(req)
-  if (!token) return false
-  return hasSession(token)
-}
-
 // ── 响应工具 ─────────────────────────────────────────────────────────────────
 
 function corsHeaders(req: IncomingMessage): Record<string, string> {
   const origin = req.headers.origin
   const headers: Record<string, string> = {
-    'access-control-allow-headers': 'content-type, x-nm-token',
+    'access-control-allow-headers': 'content-type',
     'access-control-allow-methods': 'GET, POST, OPTIONS'
   }
   if (origin) {
@@ -161,10 +131,6 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
 // ── SSE ──────────────────────────────────────────────────────────────────────
 
 function handleEvents(req: IncomingMessage, res: ServerResponse): void {
-  if (!isAuthed(req)) {
-    json(res, 401, { error: '未登录' }, req)
-    return
-  }
   res.writeHead(200, {
     'content-type': 'text/event-stream; charset=utf-8',
     'cache-control': 'no-cache, no-transform',
@@ -209,10 +175,6 @@ async function handleInvoke(
   res: ServerResponse,
   channel: string
 ): Promise<void> {
-  if (!isAuthed(req)) {
-    json(res, 401, { error: '未登录' }, req)
-    return
-  }
   const contractEntry = invokeContract[channel as keyof typeof invokeContract]
   if (!contractEntry) {
     json(res, 404, { error: `未知接口: ${channel}` }, req)
@@ -242,64 +204,6 @@ async function handleInvoke(
   }
 }
 
-async function handleMobileAuth(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const ip = req.socket.remoteAddress ?? 'unknown'
-  const now = Date.now()
-  const record = loginAttempts.get(ip)
-  if (record && record.resetAt > now && record.count >= LOGIN_MAX_ATTEMPTS) {
-    json(res, 429, { error: '尝试次数过多，请稍后再试' }, req)
-    return
-  }
-  const body = (await readJsonBody(req)) as { password?: string; label?: string } | null
-  const password = typeof body?.password === 'string' ? body.password : ''
-  const config = loadServerConfig()
-  if (!config.passwordHash) {
-    if (!isLoopback(req)) {
-      json(res, 403, { error: '服务器尚未设置访问密码，请在电脑托盘完成首次设置' }, req)
-      return
-    }
-    // 本机未设密码时直接签发引导 token
-    const token = randomBytes(32).toString('hex')
-    addSession(token, '引导')
-    json(res, 200, { token }, req)
-    return
-  }
-  if (!verifyPassword(password, config.passwordSalt, config.passwordHash)) {
-    const next =
-      record && record.resetAt > now
-        ? { count: record.count + 1, resetAt: record.resetAt }
-        : { count: 1, resetAt: now + LOGIN_WINDOW_MS }
-    loginAttempts.set(ip, next)
-    json(res, 401, { error: '密码错误' }, req)
-    return
-  }
-  loginAttempts.delete(ip)
-  const token = randomBytes(32).toString('hex')
-  addSession(token, typeof body?.label === 'string' ? body.label : undefined)
-  json(res, 200, { token }, req)
-}
-
-// ── 二维码（连接引导，无敏感信息，不鉴权） ──────────────────────────────────
-
-async function handleQr(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
-  const { primary, tailscale } = lanAddresses()
-  const hostParam = url.searchParams.get('host')
-  const host = hostParam || tailscale || primary || '127.0.0.1'
-  const port = activePort || loadServerConfig().port
-  const token = url.searchParams.get('token') // 可选：带上即为免密连接码
-  const payload = token
-    ? `nm://connect?host=${host}:${port}&token=${token}`
-    : `nm://connect?host=${host}:${port}`
-  const buf = await QRCode.toBuffer(payload, { width: 480, margin: 2 })
-  res.writeHead(200, {
-    'content-type': 'image/png',
-    'cache-control': 'no-store',
-    'x-nm-host': `${host}:${port}`,
-    ...corsHeaders(req)
-  })
-  res.end(buf)
-}
-
 // ── mobile 部署产物（M5 APK 自更新用，先保留骨架） ───────────────────────────
 
 interface MobileManifest {
@@ -321,10 +225,6 @@ function readMobileManifest(): MobileManifest | null {
 }
 
 function handleMobileVersion(req: IncomingMessage, res: ServerResponse): void {
-  if (!isAuthed(req)) {
-    json(res, 401, { error: '未登录' }, req)
-    return
-  }
   const manifest = readMobileManifest()
   if (!manifest) {
     json(res, 200, { version: null, buildAt: null, files: [] }, req)
@@ -334,10 +234,6 @@ function handleMobileVersion(req: IncomingMessage, res: ServerResponse): void {
 }
 
 function handleApkDownload(req: IncomingMessage, res: ServerResponse): void {
-  if (!isAuthed(req)) {
-    json(res, 401, { error: '未登录' }, req)
-    return
-  }
   const manifest = readMobileManifest()
   const apk = manifest?.apk
   if (!manifest || !apk) {
@@ -369,22 +265,14 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return
   }
   if (path === '/api/health') {
-    json(res, 200, { ok: true, version: appVersion(), authenticated: isAuthed(req) }, req)
+    json(res, 200, { ok: true, version: appVersion() }, req)
     return
   }
-  if (path === '/api/mobile/auth' && req.method === 'POST') return handleMobileAuth(req, res)
   if (path === '/api/events' && req.method === 'GET') return handleEvents(req, res)
-  if (path === '/api/qr.png' && req.method === 'GET') return handleQr(req, res, url)
   if (path === '/api/mobile/version' && req.method === 'GET') return handleMobileVersion(req, res)
   if (path === '/api/mobile/apk' && req.method === 'GET') return handleApkDownload(req, res)
   if (path.startsWith('/api/invoke/') && req.method === 'POST') {
     return handleInvoke(req, res, decodeURIComponent(path.slice('/api/invoke/'.length)))
-  }
-  if (path === '/api/logout' && req.method === 'POST') {
-    const token = reqToken(req)
-    if (token) removeSession(token)
-    json(res, 200, { ok: true }, req)
-    return
   }
   json(res, 404, { error: '接口不存在' }, req)
 }
@@ -405,7 +293,7 @@ function handleRequest(req: IncomingMessage, res: ServerResponse): void {
 
 export async function startServer(): Promise<void> {
   if (server) return
-  const config = loadServerConfig()
+  const port0 = getPort()
   const { primary, tailscale } = lanAddresses()
   // 串行队列等无请求上下文的场景也经 SSE 广播 job:update/job:delta
   setGlobalSink(webSink)
@@ -428,14 +316,13 @@ export async function startServer(): Promise<void> {
     })
 
   try {
-    activePort = await tryListen(config.port, 10)
+    activePort = await tryListen(port0, 10)
     const displayIp = tailscale ?? primary
     setServerStatus({
       running: true,
       port: activePort,
       url: displayIp ? `http://${displayIp}:${activePort}` : `http://localhost:${activePort}`,
       lanReachable: !!primary || !!tailscale,
-      hasPassword: !!config.passwordHash,
       clients: sseClients.size,
       version: appVersion(),
       error: null
@@ -444,10 +331,9 @@ export async function startServer(): Promise<void> {
     activePort = 0
     setServerStatus({
       running: false,
-      port: config.port,
+      port: port0,
       url: null,
       lanReachable: !!primary || !!tailscale,
-      hasPassword: !!config.passwordHash,
       clients: 0,
       version: appVersion(),
       error: (err as Error)?.message ?? String(err)

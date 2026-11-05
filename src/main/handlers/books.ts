@@ -26,7 +26,7 @@ import {
   saveForeshadow,
   updateBook
 } from '../store.js'
-import type { HandlerCtx, HandlerTable } from './types.js'
+import type { HandlerTable } from './types.js'
 
 /** 书架/分叉树/设定卡/人物/伏笔/对话历史 */
 

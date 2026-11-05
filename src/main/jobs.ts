@@ -1,11 +1,4 @@
-import type {
-  Book,
-  ChapterOutline,
-  DirectionCard,
-  Job,
-  JobPayload,
-  Scene
-} from '../shared/types.js'
+import type { ChapterOutline, DirectionCard, Job, JobPayload, Scene } from '../shared/types.js'
 import { emitJob, emitJobDelta } from './broadcast.js'
 import {
   autoFixDraft,
@@ -32,7 +25,6 @@ import {
   patchCharacterStates,
   previousChapter,
   saveCard,
-  saveCharacter,
   saveForeshadow,
   updateChapterSummary,
   updateJob

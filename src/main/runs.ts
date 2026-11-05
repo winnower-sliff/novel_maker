@@ -60,7 +60,7 @@ export function getRun(requestId: string): RunRecordPayload | null {
 
 export function abortRun(requestId: string): boolean {
   const entry = runs.get(requestId)
-  if (!entry || entry.status !== 'running') return false
+  if (entry?.status !== 'running') return false
   entry.abort.abort()
   return true
 }

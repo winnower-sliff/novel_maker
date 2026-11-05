@@ -416,7 +416,7 @@ export interface ApiTransport {
 }
 
 function eventMethodName(event: string): string {
-  return `on${event[0]!.toUpperCase()}${event.slice(1)}`
+  return `on${event[0]?.toUpperCase()}${event.slice(1)}`
 }
 
 export function buildApi(transport: ApiTransport): Api {

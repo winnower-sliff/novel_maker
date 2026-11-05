@@ -1,6 +1,6 @@
 // v2 入口：纯 Node 常驻服务 + 系统托盘，无 Electron。
-import { hasPassword, initConfig } from './config.js'
-import { connectHost, firstRunInit } from './connect.js'
+import { initConfig } from './config.js'
+import { connectHost } from './connect.js'
 import { recoverJobsOnBoot, watchdogTick } from './jobs.js'
 import { startServer } from './server.js'
 import { getServerStatus } from './serverState.js'
@@ -10,12 +10,6 @@ process.title = 'novel-maker'
 
 async function main(): Promise<void> {
   initConfig()
-
-  // 首次启动：生成随机密码 → first-run.txt → 记事本打开，手机扫码/输密码连接
-  if (!hasPassword()) {
-    const password = firstRunInit()
-    console.log(`[novel-maker] 首次启动，访问密码：${password}（已写入 first-run.txt）`)
-  }
 
   await startServer()
   // 写作任务恢复：重启前 running 的任务标 failed（W13 可 retry 续跑）+ 看门狗巡检

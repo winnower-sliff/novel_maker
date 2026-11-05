@@ -1,22 +1,19 @@
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Action, ClickEvent, Menu, MenuItem } from 'systray'
 import SysTrayModule from 'systray'
 import { autostartEnabled, autostartSupported, setAutostart } from './autostart.js'
-import { setPassword } from './config.js'
-import { connectHost, openWithSystem, randomPassword, writeConnectQr } from './connect.js'
-import { dataDir, resourcesDir } from './paths.js'
+import { connectHost } from './connect.js'
+import { resourcesDir } from './paths.js'
 import { restartServer, stopServer } from './server.js'
 import { getServerStatus } from './serverState.js'
 
 const MENU_STATUS = 0
-const MENU_SEP1 = 1
-const MENU_QR = 2
-const MENU_RESET_PASSWORD = 3
-const MENU_AUTOSTART = 4
-const MENU_SEP2 = 5
-const MENU_RESTART = 6
-const MENU_EXIT = 7
+const _MENU_SEP1 = 1
+const MENU_AUTOSTART = 2
+const _MENU_SEP2 = 3
+const MENU_RESTART = 4
+const MENU_EXIT = 5
 
 // systray 1.0.5 是 TS2.8 时代编译的 CJS 包（exports.default 间接赋值，
 // cjs-module-lexer 不识别），ESM default import 拿到的是 module.exports 对象，
@@ -47,15 +44,13 @@ function separator(tooltip = ''): MenuItem {
 
 function buildMenu(): MenuItem[] {
   return [
-    { title: statusTitle(), tooltip: 'novel-maker 服务状态', checked: false, enabled: false },
-    separator(),
-    { title: '显示连接二维码', tooltip: '手机扫码连接本服务', checked: false, enabled: true },
     {
-      title: '重置访问密码',
-      tooltip: '生成新密码并吊销所有已连接设备',
+      title: statusTitle(),
+      tooltip: 'novel-maker 服务状态（手机连接地址）',
       checked: false,
-      enabled: true
+      enabled: false
     },
+    separator(),
     {
       title: autostartSupported() ? '开机自启' : '开机自启（正式部署后可用）',
       tooltip: '开机自动启动服务',
@@ -85,26 +80,6 @@ export function refreshTray(): void {
   updateItem(MENU_AUTOSTART, { checked: autostartOn })
 }
 
-async function handleResetPassword(): Promise<void> {
-  const password = randomPassword()
-  setPassword(password)
-  const file = join(dataDir(), 'new-password.txt')
-  writeFileSync(
-    file,
-    [
-      'novel-maker 访问密码已重置',
-      '',
-      `新密码：${password}`,
-      '',
-      '所有已连接的手机需要重新输入此密码登录。',
-      '地址与密码也可在首次生成的 first-run.txt 中找到。',
-      ''
-    ].join('\n'),
-    'utf8'
-  )
-  openWithSystem(file)
-}
-
 async function handleRestart(): Promise<void> {
   try {
     await restartServer()
@@ -124,13 +99,6 @@ export async function startTray(): Promise<void> {
   tray.onClick(async (action: ClickEvent) => {
     try {
       switch (action.seq_id) {
-        case MENU_QR:
-          await writeConnectQr()
-          openWithSystem(join(dataDir(), 'connect-qr.png'))
-          break
-        case MENU_RESET_PASSWORD:
-          await handleResetPassword()
-          break
         case MENU_AUTOSTART:
           await setAutostart(!autostartOn)
           autostartOn = !autostartOn
