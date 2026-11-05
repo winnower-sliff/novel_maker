@@ -397,6 +397,8 @@ export interface ChapterRecap {
 export interface JobPayload {
   /** proposal 产物 */
   cards?: DirectionCard[]
+  /** 作者开章时的方向倾向（对话驱动 propose_chapter 带入，走向卡生成参考） */
+  directionHint?: string
   /** 用户选择（卡片序号或自由输入） */
   direction?: { source: 'card' | 'free'; cardIndex?: number; text: string }
   /** outline 产物 */

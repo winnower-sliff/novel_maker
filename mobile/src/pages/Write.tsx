@@ -86,51 +86,61 @@ export default function Write() {
           />
         ))}
         {active && (active.state === 'running' || active.state === 'queued') && (
-          <StreamingBar job={active} refresh={refresh} />
+          <AgentTicker job={active} refresh={refresh} />
         )}
         <div className="h-3" />
       </div>
 
-      <InputBar bookId={bookId} active={active} detail={detail} refresh={refreshAll} />
+      <InputBar bookId={bookId} active={active} refresh={refreshAll} />
     </div>
   )
 }
 
-// ── 顶部现状摘要（随流滚走） ─────────────────────────────────────────────────
+// ── 顶部现状摘要（一行胶囊，点开展开；随流滚走） ─────────────────────────────
 
 function StatusHead({ bookId }: { bookId: string }) {
   const { data: card } = useStatusCard(bookId)
+  const [open, setOpen] = useState(false)
   if (!card) return null
   return (
     <div className="px-4 pt-3">
-      <div className="rounded-2xl border border-orange-100 bg-white/60 p-3.5">
-        <div className="flex items-baseline justify-between">
-          <span className="text-xs font-semibold text-stone-600">现在写到</span>
-          <span className="text-[11px] text-stone-500">
-            {card.lineName} · 第 {card.chapterCount + 1} 章
-          </span>
+      <button
+        type="button"
+        className="flex w-full items-center gap-2 rounded-full border border-orange-100 bg-white/70 px-3.5 py-1.5 text-left"
+        onClick={() => setOpen(!open)}
+      >
+        <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-orange-400" />
+        <span className="min-w-0 flex-1 truncate text-[11px] text-stone-500">
+          {card.lineName} · 第 {card.chapterCount + 1} 章
+          {card.characters.length > 0 && ` · ${card.characters.slice(0, 3).map((c) => c.name).join('/')}`}
+          {card.openForeshadows.length > 0 && ` · 未闭合伏笔 ${card.openForeshadows.length}`}
+        </span>
+        <span className="shrink-0 text-[10px] text-stone-300">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="mt-2 rounded-2xl border border-orange-100 bg-white/60 p-3.5">
+          {card.characters.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {card.characters.slice(0, 6).map((c) => (
+                <span key={c.name} className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-stone-600">
+                  {c.name}
+                </span>
+              ))}
+            </div>
+          )}
+          {card.openForeshadows.length > 0 && (
+            <div className="mt-2 text-[11px] text-stone-500">
+              未闭合伏笔 {card.openForeshadows.length} 条
+              {card.openForeshadows.slice(0, 2).map((f) => (
+                <span key={f.title} className="text-orange-700/80">
+                  {' '}
+                  · {f.title}
+                </span>
+              ))}
+            </div>
+          )}
         </div>
-        {card.characters.length > 0 && (
-          <div className="mt-2 flex flex-wrap gap-1.5">
-            {card.characters.slice(0, 6).map((c) => (
-              <span key={c.name} className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-stone-600">
-                {c.name}
-              </span>
-            ))}
-          </div>
-        )}
-        {card.openForeshadows.length > 0 && (
-          <div className="mt-2 text-[11px] text-stone-500">
-            未闭合伏笔 {card.openForeshadows.length} 条
-            {card.openForeshadows.slice(0, 2).map((f) => (
-              <span key={f.title} className="text-orange-700/80">
-                {' '}
-                · {f.title}
-              </span>
-            ))}
-          </div>
-        )}
-      </div>
+      )}
       {card.staleDays != null && card.staleDays > 7 && (
         <div className="mt-2 rounded-xl border border-orange-200 bg-orange-50 p-3 text-xs leading-relaxed text-orange-700">
           已 {card.staleDays} 天没写。翻翻「阅读」接上前情，或直接开写——导演会在走向里帮你接上。
@@ -582,37 +592,71 @@ function RecapCard({ recap }: { recap: NonNullable<Job['payload']['recap']> }) {
   )
 }
 
-// ── 生成中流式条（时间轴尾部） ──────────────────────────────────────────────
+// ── agent 聚合条（时间轴尾部：干完收一行，过程只报进度；chat 白话仍流式） ──
 
 const RUN_LABEL: Record<string, string> = {
   proposal: '导演正在构思走向…',
-  agent: '导演自主工作中（查资料·写正文·自检·沉淀）…',
-  selfcheck: '自检中…',
-  finalize: '落章收尾中…'
+  agent: '导演自主工作中',
+  report: '出报告中…',
+  draft: '改章中',
+  finalize: '收尾中…'
 }
 
-function StreamingBar({ job, refresh }: { job: Job; refresh: () => void }) {
-  const streaming =
-    (job.kind === 'write' && job.step === 'agent') ||
-    job.kind === 'revise' ||
-    job.kind === 'chat'
-  const [text, setText] = useState('')
+interface ActItem {
+  tool: string
+  summary: string
+  ok: boolean
+  ts: number
+}
+
+function AgentTicker({ job, refresh }: { job: Job; refresh: () => void }) {
+  const [acts, setActs] = useState<ActItem[]>([])
+  const [progress, setProgress] = useState<{ phase: string; chars: number } | null>(null)
+  const [open, setOpen] = useState(false)
+  const [chatText, setChatText] = useState('')
   const [cancelConfirm, setCancelConfirm] = useState(false)
 
   useEffect(() => {
-    setText(job.payload.draftText ?? '')
-    const off = window.api.job.onDelta((jobId, chunk) => {
-      if (jobId === job.id) setText((t) => t + chunk)
+    setActs([])
+    setProgress(null)
+    setChatText('')
+    const offA = window.api.job.onActivity((jobId, act) => {
+      if (jobId === job.id) {
+        setActs((a) => [...a, { ...act, ts: Date.now() }])
+        setProgress(null) // 新工具开跑，进度归零
+      }
     })
-    return off
-  }, [job.id, job.payload.draftText])
+    const offP = window.api.job.onProgress((jobId, p) => {
+      if (jobId === job.id) setProgress(p)
+    })
+    // chat 白话流式（total 校验：失配即拉库，服务端唯一真相源）
+    const offD = window.api.job.onDelta((jobId, chunk, total) => {
+      if (jobId !== job.id) return
+      setChatText((t) => {
+        const next = t + chunk
+        if (next.length !== total) {
+          // 增量丢失（SSE 断连重连）：以落库快照为准
+          void window.api.job.get(jobId).then((j) => {
+            if (j?.payload.answer) setChatText(j.payload.answer)
+          })
+          return next
+        }
+        return next
+      })
+    })
+    return () => {
+      offA()
+      offP()
+      offD()
+    }
+  }, [job.id])
 
   useEffect(() => {
     if (stickToBottom()) {
       const el = document.getElementById('write-stream-box')
       if (el) el.scrollIntoView({ block: 'end' })
     }
-  }, [text])
+  }, [acts.length, progress?.chars, chatText])
 
   if (job.state === 'queued') {
     return (
@@ -623,39 +667,60 @@ function StreamingBar({ job, refresh }: { job: Job; refresh: () => void }) {
     )
   }
 
-  if (!streaming) {
-    return (
-      <div className="flex items-center gap-2 px-4 py-3 text-xs text-stone-500">
-        <span className="h-3.5 w-3.5 animate-spin rounded-full border-2 border-orange-200 border-t-orange-500" />
-        {RUN_LABEL[job.step] ?? '处理中…'}
-      </div>
-    )
-  }
-
-  const label =
-    job.kind === 'write' ? '导演工作中（工具调用见上方小卡）' : job.kind === 'revise' ? '改章中' : '导演正在回话'
+  const last = acts[acts.length - 1]
+  const isChat = job.kind === 'chat'
+  const statusLine = isChat
+    ? '导演正在回话'
+    : last
+      ? `${TOOL_LABEL[last.tool] ?? last.tool}·${last.summary}`
+      : (RUN_LABEL[job.step] ?? '处理中…')
+  const progressLine =
+    progress && (progress.phase === 'draft' ? `正在写正文·已 ${progress.chars} 字` : `改章中·已 ${progress.chars} 字`)
 
   return (
     <div id="write-stream-box" className="px-4 py-2">
       <div className="rounded-2xl border border-orange-100 bg-white p-3.5">
-        <div className="mb-2 flex items-center justify-between">
-          <div className="flex items-center gap-2 text-xs text-orange-600">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-orange-400" />
-            {label}
+        <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setOpen(!open)}>
+          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-orange-400" />
+          <span className="min-w-0 flex-1 truncate text-xs text-stone-600">
+            {progressLine ?? statusLine}
+          </span>
+          {!isChat && acts.length > 0 && (
+            <span className="shrink-0 text-[10px] text-stone-400">
+              {acts.length} 步 {open ? '▲' : '▼'}
+            </span>
+          )}
+        </button>
+
+        {isChat && (
+          <div className="mt-2 max-h-56 overflow-y-auto no-scrollbar">
+            <div className="text-sm leading-relaxed whitespace-pre-wrap text-stone-700">
+              {chatText || '提笔中…'}
+              <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-orange-400 align-middle" />
+            </div>
           </div>
+        )}
+
+        {open && !isChat && acts.length > 0 && (
+          <div className="mt-2 max-h-48 space-y-1 overflow-y-auto no-scrollbar border-t border-orange-100/70 pt-2">
+            {acts.map((a, i) => (
+              <div key={i} className="flex items-center gap-1.5 text-[11px]">
+                <span className={a.ok ? 'text-orange-400' : 'text-red-500'}>{a.ok ? '✓' : '✗'}</span>
+                <span className="shrink-0 text-stone-400">{TOOL_LABEL[a.tool] ?? a.tool}</span>
+                <span className={`min-w-0 flex-1 truncate ${a.ok ? 'text-stone-500' : 'text-red-600'}`}>{a.summary}</span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        <div className="mt-2 flex justify-end">
           <button
             type="button"
             className="rounded-lg border border-orange-100 px-2.5 py-1 text-[11px] text-stone-500"
-            onClick={() => (job.kind === 'chat' ? cancel() : setCancelConfirm(true))}
+            onClick={() => (isChat ? cancel() : setCancelConfirm(true))}
           >
             取消
           </button>
-        </div>
-        <div className="max-h-56 overflow-y-auto no-scrollbar">
-          <div className="text-sm leading-relaxed whitespace-pre-wrap text-stone-700">
-            {text || '提笔中…'}
-            <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-orange-400 align-middle" />
-          </div>
         </div>
       </div>
       {cancelConfirm && (
@@ -714,27 +779,18 @@ function stickToBottom(): boolean {
 function InputBar({
   bookId,
   active,
-  detail,
   refresh
 }: {
   bookId: string
   active: Job | null
-  detail: { chapters: Array<{ id: string }> } | undefined
   refresh: () => void
 }) {
-  const setBookSub = useUiStore((s) => s.setBookSub)
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
-  const [queued, setQueued] = useState(false)
   const kbInset = useKeyboardInset()
-  const lastChapter = detail?.chapters[detail.chapters.length - 1] ?? null
   const choosingDirection =
     !!active && active.state === 'waiting_user' && active.step === 'outline'
   const busyRunning = !!active && (active.state === 'running' || active.state === 'queued')
-
-  useEffect(() => {
-    if (!busyRunning) setQueued(false)
-  }, [busyRunning])
 
   const send = async () => {
     const t = text.trim()
@@ -758,75 +814,16 @@ function InputBar({
       className="border-t border-orange-100 bg-[#fbf6ec] px-3 pt-2 pb-safe"
       style={kbInset ? { paddingBottom: kbInset } : undefined}
     >
-      <div className="flex gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          className="flex-[1.6] rounded-xl bg-orange-600 py-2.5 text-sm font-semibold text-white active:bg-orange-700 disabled:opacity-50"
-          onClick={async () => {
-            setBusy(true)
-            setQueued(busyRunning)
-            try {
-              await window.api.job.startWrite(bookId)
-              refresh()
-            } finally {
-              setBusy(false)
-            }
-          }}
-        >
-          {queued ? '已排队 ✓' : detail?.chapters.length ? '写下一章' : '写第 1 章'}
-        </button>
-        <button
-          type="button"
-          disabled={busy || !lastChapter}
-          className="flex-1 rounded-xl border border-orange-200 py-2.5 text-xs text-stone-600 disabled:opacity-40"
-          onClick={async () => {
-            if (!lastChapter) return
-            setBusy(true)
-            try {
-              await window.api.job.startReview(lastChapter.id)
-              refresh()
-            } finally {
-              setBusy(false)
-            }
-          }}
-        >
-          审读上一章
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          className="flex-1 rounded-xl border border-orange-200 py-2.5 text-xs text-stone-600 disabled:opacity-40"
-          onClick={async () => {
-            setBusy(true)
-            try {
-              await window.api.job.startAudit(bookId)
-              refresh()
-            } finally {
-              setBusy(false)
-            }
-          }}
-        >
-          全书审计
-        </button>
-        <button
-          type="button"
-          className="flex-1 rounded-xl border border-orange-200 py-2.5 text-xs text-stone-600"
-          onClick={() => setBookSub('read')}
-        >
-          改这章
-        </button>
-      </div>
-      <div className="mt-2 flex items-end gap-2 pb-2">
+      <div className="flex items-end gap-2 pb-2">
         <textarea
           rows={1}
           className="min-h-[42px] max-h-28 min-w-0 flex-1 resize-none rounded-2xl border border-orange-100 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-orange-700"
           placeholder={
             choosingDirection
-              ? '或直接说你要的走向…'
+              ? '选上面的走向卡，或直接说你要的走向…'
               : busyRunning
                 ? '跟导演说…（会排队）'
-                : '跟导演聊剧情、要建议…'
+                : '跟导演聊剧情、要建议；想写新章直接说…'
           }
           value={text}
           onChange={(e) => setText(e.target.value)}

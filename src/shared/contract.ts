@@ -298,8 +298,12 @@ export interface EventContract {
   'llm:notice': [requestId: string, message: string]
   /** 任务状态变化（含 waiting_user 提醒、done/failed 终态） */
   'job:update': [jobId: string, job: Job]
-  /** 写作正文流式增量 */
-  'job:delta': [jobId: string, text: string]
+  /** agent 工具卡实时推送（每次工具调用一条） */
+  'job:activity': [jobId: string, act: { tool: string; summary: string; ok: boolean }]
+  /** 生成进度（正文/改章字数——正文不进聊天流，聚合条只报进度） */
+  'job:progress': [jobId: string, p: { phase: 'draft' | 'revise'; chars: number }]
+  /** 导演白话流式增量（chat 气泡）；total=累计长度，失配即全量补拉 */
+  'job:delta': [jobId: string, text: string, total: number]
 }
 
 export const EVENT_CHANNELS = [
@@ -308,6 +312,8 @@ export const EVENT_CHANNELS = [
   'llm:error',
   'llm:notice',
   'job:update',
+  'job:activity',
+  'job:progress',
   'job:delta'
 ] as const satisfies readonly (keyof EventContract)[]
 
@@ -395,6 +401,8 @@ export interface Api {
     get: InvokeFn<'job:get'>
     list: InvokeFn<'job:list'>
     onUpdate: SubscribeFn<'job:update'>
+    onActivity: SubscribeFn<'job:activity'>
+    onProgress: SubscribeFn<'job:progress'>
     onDelta: SubscribeFn<'job:delta'>
   }
   onboard: {

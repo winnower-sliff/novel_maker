@@ -1,7 +1,7 @@
 import type { ChatMessage, DirectionCard, Job, JobPayload } from '../shared/types.js'
 import { interceptorDefs, runAgentLoop } from './agent/loop.js'
 import { toolDefs } from './agent/tools.js'
-import { emitJob, emitJobDelta } from './broadcast.js'
+import { emitJob, emitJobActivity, emitJobDelta, emitJobProgress } from './broadcast.js'
 import {
   compactMemories,
   genAudit,
@@ -127,17 +127,49 @@ function requireJob(jobId: string): Job {
   return job
 }
 
-/** 流式正文节流落库（W13 中断恢复：断网/杀 APP 重连后，已生成部分从 payload.draftText 恢复显示） */
-function streamingSaver(jobId: string): (t: string) => void {
+/** 导演白话流式（chat 气泡）：delta 带累计长度 total，前端失配即全量补拉（服务端唯一真相源） */
+function chatSaver(jobId: string): (t: string) => void {
   let acc = ''
   let lastSave = 0
   return (t: string) => {
-    emitJobDelta(jobId, t)
     acc += t
+    emitJobDelta(jobId, t, acc.length)
+    const now = Date.now()
+    if (now - lastSave > 3000) {
+      lastSave = now
+      updateJob(jobId, { payload: { answer: acc } })
+    }
+  }
+}
+
+/** 正文/改章进度：不进聊天流，聚合条只报字数；3s 快照落 payload.draftText（恢复回看） */
+function progressSaver(jobId: string): (t: string) => void {
+  let acc = ''
+  let lastSave = 0
+  return (t: string) => {
+    acc += t
+    emitJobProgress(jobId, { phase: 'draft', chars: acc.replace(/\s/g, '').length })
     const now = Date.now()
     if (now - lastSave > 3000) {
       lastSave = now
       updateJob(jobId, { payload: { draftText: acc } })
+    }
+  }
+}
+
+/** agent say 落库工厂：工具卡同时实时广播（job:activity） */
+function agentSay(
+  jobId: string,
+  bookId: string
+): (content: string, meta?: Record<string, unknown>) => void {
+  return (content, meta) => {
+    appendMessage({ bookId, role: 'assistant', content, meta: { jobId, ...meta } })
+    if (meta?.kind === 'tool') {
+      emitJobActivity(jobId, {
+        tool: String(meta.tool ?? ''),
+        summary: String(meta.summary ?? ''),
+        ok: meta.ok !== false
+      })
     }
   }
 }
@@ -158,7 +190,7 @@ async function runProposal(job: Job): Promise<Job | null> {
   if (!book) throw new Error('书不存在')
   activeJobId = job.id
   updateJob(job.id, { state: 'running', step: 'proposal', watchdogAt: Date.now(), error: '' })
-  const cards: DirectionCard[] = await genDirections(book, job.lineId)
+  const cards: DirectionCard[] = await genDirections(book, job.lineId, job.payload.directionHint)
   note(job.id, 'cards', '本章走向备选已出，等你选一个方向')
   return updateJob(job.id, {
     state: 'waiting_user',
@@ -170,16 +202,31 @@ async function runProposal(job: Job): Promise<Job | null> {
 
 // ── 公开 API（handlers 调用） ────────────────────────────────────────────────
 
-export async function startWrite(bookId: string): Promise<Job> {
+export async function startWrite(bookId: string, hint?: string): Promise<Job> {
   const book = getBook(bookId)
   if (!book) throw new Error('书不存在')
   const line = activeLine(book)
   if (!line) throw new Error('书没有激活线')
   if (busy()) {
-    return insertJob({ bookId, lineId: line.id, kind: 'write' })
+    return insertJob({
+      bookId,
+      lineId: line.id,
+      kind: 'write',
+      payload: hint ? { directionHint: hint.slice(0, 300) } : undefined
+    })
   }
-  const job = insertJob({ bookId, lineId: line.id, kind: 'write' })
-  userMsg(bookId, `写第 ${effectiveChapters(line.id).length + 1} 章`)
+  const job = insertJob({
+    bookId,
+    lineId: line.id,
+    kind: 'write',
+    payload: hint ? { directionHint: hint.slice(0, 300) } : undefined
+  })
+  userMsg(
+    bookId,
+    hint
+      ? `写第 ${effectiveChapters(line.id).length + 1} 章（倾向：${hint.slice(0, 80)}）`
+      : `写第 ${effectiveChapters(line.id).length + 1} 章`
+  )
   activeJobId = job.id
   return guarded(job.id, () => runProposal(job))
 }
@@ -219,14 +266,6 @@ async function runAgentChapterJob(
   updateJob(job.id, { state: 'running', step: 'agent', watchdogAt: Date.now(), error: '' })
   const chapterNo = effectiveChapters(job.lineId).length + 1
   const task = `写第 ${chapterNo} 章。作者选定的走向：${direction.text}（${direction.source === 'card' ? '从走向卡选定' : '作者自定义'}）。按写章任务纪律自主完成全流程。`
-  const say = (content: string, meta?: Record<string, unknown>): void => {
-    appendMessage({
-      bookId: job.bookId,
-      role: 'assistant',
-      content,
-      meta: { jobId: job.id, ...meta }
-    })
-  }
   const result = await runAgentLoop({
     jobId: job.id,
     bookId: job.bookId,
@@ -234,8 +273,8 @@ async function runAgentChapterJob(
     history: [],
     mode: 'chapter',
     tools: [...toolDefs(), ...interceptorDefs('chapter')],
-    onDelta: streamingSaver(job.id),
-    say,
+    onDelta: chatSaver(job.id),
+    say: agentSay(job.id, job.bookId),
     onChapterCommitted: (chapter, extra) => {
       note(job.id, 'chapter', `《${chapter.title}》已入书`)
       updateJob(job.id, {
@@ -360,7 +399,7 @@ async function runReviseJob(job: Job): Promise<Job | null> {
   })
   const draft = await genRevise(
     { book, lineId: job.lineId, chapter, instruction: revise.instruction, segment: revise.segment },
-    streamingSaver(job.id)
+    progressSaver(job.id)
   )
   // 改章自检只报告不入闸：字数类指令（加长/缩短）天然会偏 targetWords，不参与字数检查；
   // 结果附在 payload.lint 供 UI 展示，问题大由作者再发指令（旧版本在 chapter_versions 可回退）
@@ -499,14 +538,40 @@ async function runChatJob(job: Job): Promise<Job | null> {
     history,
     mode: 'free',
     tools: [...toolDefs(), ...interceptorDefs('free')],
-    onDelta: streamingSaver(job.id),
-    say: (content, meta) =>
-      appendMessage({
-        bookId: job.bookId,
-        role: 'assistant',
-        content,
-        meta: { jobId: job.id, ...meta }
-      })
+    onDelta: chatSaver(job.id),
+    say: agentSay(job.id, job.bookId),
+    // 意图动作（对话驱动开章/审读/审计）：避免 loop→jobs 循环依赖，经 actions 注入
+    actions: {
+      startChapter: (hint) => {
+        void startWrite(job.bookId, hint).catch(() => {})
+        return hint ? `写章任务已排队（方向倾向已带上：${hint.slice(0, 60)}）` : '写章任务已排队'
+      },
+      review: async (chapterId) => {
+        const line = activeLine(getBook(job.bookId) ?? book)
+        const ch =
+          (chapterId ? getChapter(chapterId) : undefined) ?? previousChapter(line?.id ?? job.lineId)
+        if (!ch) return '没有可审读的章节'
+        const b = getBook(job.bookId) ?? book
+        const report = await genReview(b, ch.lineId, ch)
+        return `《${ch.title}》审读报告（${report.score} 分）：${report.verdict}\n维度发现：${report.findings
+          .map((f) => `[${f.dimension}/${f.level}] ${f.comment}`)
+          .join('；')}\n建议：${report.suggestions.join('；')}`
+      },
+      audit: async () => {
+        const b = getBook(job.bookId) ?? book
+        const chapters = effectiveChapters(job.lineId)
+        if (chapters.length < 2) return '章节太少（不足 2 章），无从审计'
+        const recent = chapters.slice(-10).map((c) => ({
+          orderNo: c.orderNo,
+          title: c.title,
+          summary: c.summary
+        }))
+        const report = await genAudit(b, job.lineId, recent, chapters.slice(-2))
+        return `全书审计报告（${report.score} 分）：${report.verdict}\n${report.findings
+          .map((f) => `[${f.dimension}/${f.level}] ${f.comment}`)
+          .join('；')}\n建议：${report.suggestions.join('；')}`
+      }
+    }
   })
   // loop 未落白话时（直接 finish）补一条，保证对话流有回音
   if (

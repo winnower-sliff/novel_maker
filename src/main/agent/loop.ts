@@ -33,8 +33,10 @@ export interface LoopOpts {
   /** 场景：写章（有 commit 链）或自由（无 commit） */
   mode: 'chapter' | 'free'
   maxTurns?: number
-  /** 流式 delta 广播（正文/改章） */
-  onDelta: (t: string) => void
+  /** 导演白话流式（chat 气泡预览；正文/改章不走这里——见 onProgress） */
+  onDelta?: (t: string) => void
+  /** 生成进度（正文/改章字数计数，聚合条显示；正文不进聊天流） */
+  onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
   /** 落一条 assistant 消息（agent 白话/工具卡） */
   say: (content: string, meta?: Record<string, unknown>) => void
   /** 落章后回调（note chapter 消息/recap 进 payload/记忆压缩/审计排队——jobs.ts 注入） */
@@ -42,6 +44,12 @@ export interface LoopOpts {
     chapter: { id: string; title: string; wordCount: number; orderNo: number; content: string },
     extra: { summary: string; quickActions: Array<{ label: string; instruction: string }> }
   ) => void
+  /** 意图动作（free 模式对话驱动；jobs.ts 注入避免循环依赖） */
+  actions?: {
+    startChapter?: (directionHint?: string) => string
+    review?: (chapterId?: string) => Promise<string>
+    audit?: () => Promise<string>
+  }
 }
 
 export interface LoopResult {
@@ -83,6 +91,41 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
       }
     }
   ]
+  if (mode === 'free') {
+    defs.push(
+      {
+        name: 'propose_chapter',
+        description:
+          '作者想写新章时调用：把写章任务排进队列（会先出 4 张走向卡供作者选，确认后 agent 自主完成全章）。当前有任务在跑则自动排队。',
+        input_schema: {
+          type: 'object',
+          properties: {
+            directionHint: {
+              type: 'string',
+              description: '可选：作者提到的方向倾向，会带给走向卡生成'
+            }
+          },
+          required: []
+        }
+      },
+      {
+        name: 'request_review',
+        description:
+          '审读指定章（七维报告带引文）。不传 chapterId 默认审最近一章。报告直接返回给你，向作者转述要点。',
+        input_schema: {
+          type: 'object',
+          properties: { chapterId: { type: 'string', description: '默认最近一章' } },
+          required: []
+        }
+      },
+      {
+        name: 'request_audit',
+        description:
+          '全书审计（文风漂移/剧情空转/连续性）。章数少于 2 会直接失败。报告返回给你，向作者转述要点。',
+        input_schema: { type: 'object', properties: {}, required: [] }
+      }
+    )
+  }
   if (mode === 'chapter') {
     defs.unshift(
       {
@@ -234,7 +277,6 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
       },
       opts.onDelta
     )
-
     // 白话（有 tool_use 时通常为空，跳过落消息避免噪音）
     if (res.text.trim() && !res.toolUses.length) {
       opts.say(res.text.trim(), { kind: 'chat', jobId })
@@ -322,11 +364,11 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
           scenes: (input.scenes as Scene[] | undefined) ?? null,
           direction: { source: 'free' as const, text: direction }
         }
-        let draft = await genDraft(input2, opts.onDelta)
+        let draft = await genDraft(input2, progressSaver('draft'))
         let report = selfCheck(b, line.id, draft, tailOf(line.id))
         if (report.issues.some((i) => i.level === 'major')) {
           // 自动修一轮（W6 纪律）
-          draft = await autoFixDraft(input2, draft, report, opts.onDelta)
+          draft = await autoFixDraft(input2, draft, report, progressSaver('draft'))
           report = selfCheck(b, line.id, draft, tailOf(line.id))
         }
         lastDraft = {
@@ -411,7 +453,7 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
             instruction,
             segment
           },
-          opts.onDelta
+          progressSaver('revise')
         )
         const clean = stripHtmlComments(rewritten)
         const report = lintChapter(clean, {
@@ -424,8 +466,45 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
           data: `《${chapter.title}》已按「${briefOf(instruction)}」改写并替换（旧版进历史版本）。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
         }
       }
+      case 'propose_chapter': {
+        const hint = typeof input.directionHint === 'string' ? input.directionHint : undefined
+        const msg = opts.actions?.startChapter?.(hint)
+        return {
+          ok: true,
+          summary: '已开章排队',
+          data:
+            msg ??
+            '写章任务已排进队列。等走向卡出来后作者选择，我会自主完成全章。现在可以跟作者说「已开章」。'
+        }
+      }
+      case 'request_review': {
+        const chapterId = typeof input.chapterId === 'string' ? input.chapterId : undefined
+        const text = await opts.actions?.review?.(chapterId)
+        return {
+          ok: !!text,
+          summary: '审读报告已出',
+          data: text ?? '审读功能不可用'
+        }
+      }
+      case 'request_audit': {
+        const text = await opts.actions?.audit?.()
+        return {
+          ok: !!text,
+          summary: '审计报告已出',
+          data: text ?? '审计功能不可用'
+        }
+      }
       default:
         return execTool(name, input, ctx)
+    }
+  }
+
+  /** 正文/改章进度：只报字数（正文不进聊天流），作者在聚合条看到「正在写正文·已 N 字」 */
+  function progressSaver(phase: 'draft' | 'revise'): (t: string) => void {
+    let chars = 0
+    return (t) => {
+      chars += t.replace(/\s/g, '').length
+      opts.onProgress?.({ phase, chars })
     }
   }
 }

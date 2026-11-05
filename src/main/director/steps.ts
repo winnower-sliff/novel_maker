@@ -29,7 +29,11 @@ function base(book: Book, lineId: string): string {
 
 // ── proposal：走向卡片（W2/G4 简版——导演直出；两段式候选筛由 M4 子代理接入） ──
 
-export async function genDirections(book: Book, lineId: string): Promise<DirectionCard[]> {
+export async function genDirections(
+  book: Book,
+  lineId: string,
+  hint?: string
+): Promise<DirectionCard[]> {
   const ctx = base(book, lineId)
   const cards = await callJson<{ cards: DirectionCard[] }>({
     slot: DIRECTOR_SLOT,
@@ -41,7 +45,7 @@ export async function genDirections(book: Book, lineId: string): Promise<Directi
 1. 四张卡片类型各不相同：steady（稳妥推进）/ twist（冒险转折）/ depth（人物深化）/ wild（野路子）。若剧情强需求可增减至 1-5 张，但类型尽量不重复。
 2. 每张卡片：title（短语）、preview（剧情预告 1-2 句，具体有画面）、structure（结构化标注：回收哪个伏笔/引入什么新元素/推动哪条人物线）、arc（弧线标注，如「开启 3 章追杀弧」「本章闭合某个弧」，无弧线则写「单章」）。
 3. 遵守反模式纪律：选项必有代价、无空选项。
-4. 已到期的伏笔优先安排回收。`,
+4. 已到期的伏笔优先安排回收。${hint ? `\n5. 作者提到的方向倾向（作参考，不必拘泥）：${hint.slice(0, 200)}` : ''}`,
     jsonHint: `{"cards":[{"kind":"steady|twist|depth|wild","title":"...","preview":"...","structure":"...","arc":"..."}]}`,
     maxTokens: 3000
   })
