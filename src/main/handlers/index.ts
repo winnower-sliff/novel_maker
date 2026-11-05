@@ -7,6 +7,9 @@ import { dataDir } from '../paths.js'
 import { abortRun, pollRuns, startStreaming } from '../runs.js'
 import { getServerStatus } from '../serverState.js'
 import { appendUsage, computeStats, listUsage } from '../usage.js'
+import { bookHandlers } from './books.js'
+import { jobHandlers } from './jobs.js'
+import { onboardHandlers } from './onboard.js'
 import type { HandlerTable } from './types.js'
 
 const require_ = createRequire(import.meta.url)
@@ -111,7 +114,10 @@ export const sharedHandlers: HandlerTable = {
   ...appHandlers,
   ...settingsHandlers,
   ...llmHandlers,
-  ...usageHandlers
+  ...usageHandlers,
+  ...bookHandlers,
+  ...jobHandlers,
+  ...onboardHandlers
 }
 
 export function appVersion(): string {

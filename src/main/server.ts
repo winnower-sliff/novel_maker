@@ -5,6 +5,7 @@ import { networkInterfaces } from 'node:os'
 import { extname, join, normalize, resolve } from 'node:path'
 import QRCode from 'qrcode'
 import { invokeContract } from '../shared/contract.js'
+import { setGlobalSink } from './broadcast.js'
 import { loadServerConfig, verifyPassword } from './config.js'
 import type { EventSink } from './eventSink.js'
 import { appVersion, sharedHandlers } from './handlers/index.js'
@@ -406,6 +407,8 @@ export async function startServer(): Promise<void> {
   if (server) return
   const config = loadServerConfig()
   const { primary, tailscale } = lanAddresses()
+  // 串行队列等无请求上下文的场景也经 SSE 广播 job:update/job:delta
+  setGlobalSink(webSink)
 
   const tryListen = (port: number, remaining: number): Promise<number> =>
     new Promise((resolveP, reject) => {

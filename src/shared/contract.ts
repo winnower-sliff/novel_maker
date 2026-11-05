@@ -1,12 +1,22 @@
 import { z } from 'zod'
 import { MODEL_SLOTS, PROVIDER_IDS } from './providers.js'
 import type {
+  Book,
+  Card,
+  Chapter,
+  ChapterVersion,
+  Character,
   ChatMessage,
+  ChatMessageRow,
   ContentBlock,
+  Foreshadow,
+  Job,
   LlmErrorHint,
   ModelProbeResult,
   ServerStatus,
   SettingsView,
+  StatusCard,
+  StoryLine,
   ToolDef,
   UsageRecord,
   UsageStats
@@ -44,6 +54,8 @@ export const ChatParamsSchema = z.object({
   maxTokens: z.number().optional(),
   temperature: z.number().optional(),
   tools: z.custom<ToolDef[]>((v) => Array.isArray(v)).optional(),
+  /** 结构化输出（GLM/DeepSeek/OpenAI 兼容端点通用） */
+  responseFormat: z.enum(['text', 'json_object']).optional(),
   /** 测试直连：跳过路由，直接用 provider+model+apiKey（API Key 明文仅本参数一次，不落库） */
   apiKeyOverride: z.string().optional()
 })
@@ -57,11 +69,11 @@ const ProviderProfileSchema = z.object({
 
 export const SettingsPatchSchema = z.object({
   provider: ProviderIdSchema.optional(),
-  profiles: z.record(ProviderIdSchema, ProviderProfileSchema.partial()).optional(),
+  profiles: z.partialRecord(ProviderIdSchema, ProviderProfileSchema.partial()).optional(),
   /** 明文 API Key 只写不读（保存后回读掩码）；空串清除 */
-  apiKeys: z.record(ProviderIdSchema, z.string()).optional(),
+  apiKeys: z.partialRecord(ProviderIdSchema, z.string()).optional(),
   routing: z
-    .record(ModelSlotSchema, z.object({ provider: ProviderIdSchema, model: z.string() }))
+    .partialRecord(ModelSlotSchema, z.object({ provider: ProviderIdSchema, model: z.string() }))
     .optional()
 })
 export type SettingsPatch = z.output<typeof SettingsPatchSchema>
@@ -72,6 +84,84 @@ export const ModelProbeOptionsSchema = z.object({
   apiKey: z.string().optional()
 })
 export type ModelProbeOptions = z.output<typeof ModelProbeOptionsSchema>
+
+// ── 领域输入 schema（M2） ─────────────────────────────────────────────────────
+
+export const BookCreateSchema = z.object({
+  title: z.string().min(1),
+  genre: z.string().optional(),
+  targetWords: z.number().int().positive().optional()
+})
+export type BookCreate = z.output<typeof BookCreateSchema>
+
+export const BookPatchSchema = z.object({
+  title: z.string().optional(),
+  intro: z.string().optional(),
+  genre: z.string().optional(),
+  styleName: z.string().optional(),
+  styleSample: z.string().optional(),
+  styleNotes: z.string().optional(),
+  targetWords: z.number().int().positive().optional(),
+  redlines: z.array(z.string()).optional(),
+  archived: z.boolean().optional()
+})
+
+export const CardKindSchema = z.enum(['geography', 'faction', 'history', 'power', 'item', 'custom'])
+
+export const CardInputSchema = z.object({
+  id: z.string().optional(),
+  lineId: z.string(),
+  kind: CardKindSchema.optional(),
+  title: z.string().min(1),
+  readerText: z.string().optional(),
+  authorText: z.string().optional(),
+  revealPlan: z.string().optional(),
+  pinned: z.boolean().optional(),
+  tags: z.array(z.string()).optional()
+})
+
+export const CharacterInputSchema = z.object({
+  id: z.string().optional(),
+  lineId: z.string(),
+  name: z.string().min(1),
+  role: z.string().optional(),
+  card: z.record(z.string(), z.unknown()).optional(),
+  state: z.record(z.string(), z.string()).optional(),
+  relations: z.array(z.object({ to: z.string(), label: z.string() })).optional(),
+  pinned: z.boolean().optional(),
+  tags: z.array(z.string()).optional()
+})
+
+export const ForeshadowInputSchema = z.object({
+  id: z.string().optional(),
+  lineId: z.string(),
+  title: z.string().min(1),
+  detail: z.string().optional(),
+  plantedChapterId: z.string().optional(),
+  plannedChapterId: z.string().optional(),
+  resolvedChapterId: z.string().optional(),
+  status: z.enum(['open', 'planned', 'resolved']).optional(),
+  priority: z.number().int().optional()
+})
+
+export const DirectionChoiceSchema = z.object({
+  source: z.enum(['card', 'free']),
+  cardIndex: z.number().int().optional(),
+  text: z.string().min(1)
+})
+
+export const SceneSchema = z.object({
+  id: z.string(),
+  summary: z.string(),
+  viewpoint: z.string(),
+  pace: z.string()
+})
+
+export const ChapterOutlinePatchSchema = z.object({
+  title: z.string().optional(),
+  synopsis: z.string().optional(),
+  beats: z.array(z.string()).optional()
+})
 
 // ── invoke 契约 ──────────────────────────────────────────────────────────────
 
@@ -97,7 +187,77 @@ export const invokeContract = {
     ret: ret<Record<string, RunRecordPayload>>()
   },
   'usage:list': { args: z.tuple([z.number().optional()]), ret: ret<UsageRecord[]>() },
-  'usage:stats': { args: z.tuple([]), ret: ret<UsageStats>() }
+  'usage:stats': { args: z.tuple([]), ret: ret<UsageStats>() },
+
+  // ── 书架 / 分叉树（D1-D6） ────────────────────────────────────────────────
+  'book:create': { args: z.tuple([BookCreateSchema]), ret: ret<Book>() },
+  'book:list': { args: z.tuple([]), ret: ret<Book[]>() },
+  'book:get': {
+    args: z.tuple([z.string()]),
+    ret: ret<{
+      book: Book
+      lines: StoryLine[]
+      chapters: Array<
+        Pick<Chapter, 'id' | 'lineId' | 'orderNo' | 'title' | 'wordCount' | 'updatedAt'>
+      >
+    }>()
+  },
+  'book:update': { args: z.tuple([z.string(), BookPatchSchema]), ret: ret<Book>() },
+  'book:delete': { args: z.tuple([z.string(), z.boolean()]), ret: ret<boolean>() },
+  'book:statusCard': { args: z.tuple([z.string()]), ret: ret<StatusCard | null>() },
+  'line:fork': {
+    args: z.tuple([z.string(), z.string(), z.string().optional(), z.string().optional()]),
+    ret: ret<StoryLine>()
+  },
+  'line:activate': { args: z.tuple([z.string(), z.string()]), ret: ret<boolean>() },
+  'line:delete': { args: z.tuple([z.string(), z.boolean()]), ret: ret<boolean>() },
+  'chapter:get': { args: z.tuple([z.string()]), ret: ret<Chapter | null>() },
+  'chapter:versions': { args: z.tuple([z.string()]), ret: ret<ChapterVersion[]>() },
+  'card:list': {
+    args: z.tuple([z.string(), CardKindSchema.optional(), z.string().optional()]),
+    ret: ret<Card[]>()
+  },
+  'card:save': { args: z.tuple([CardInputSchema]), ret: ret<Card | null>() },
+  'card:delete': { args: z.tuple([z.string()]), ret: ret<boolean>() },
+  'character:list': { args: z.tuple([z.string(), z.string().optional()]), ret: ret<Character[]>() },
+  'character:save': { args: z.tuple([CharacterInputSchema]), ret: ret<Character | null>() },
+  'character:delete': { args: z.tuple([z.string()]), ret: ret<boolean>() },
+  'foreshadow:list': {
+    args: z.tuple([z.string(), z.enum(['open', 'planned', 'resolved']).optional()]),
+    ret: ret<Foreshadow[]>()
+  },
+  'foreshadow:save': { args: z.tuple([ForeshadowInputSchema]), ret: ret<Foreshadow | null>() },
+  'message:list': {
+    args: z.tuple([z.string(), z.string().optional()]),
+    ret: ret<ChatMessageRow[]>()
+  },
+
+  // ── 写作任务流水线（W10/W12） ─────────────────────────────────────────────
+  'job:startWrite': { args: z.tuple([z.string()]), ret: ret<Job>() },
+  'job:chooseDirection': { args: z.tuple([z.string(), DirectionChoiceSchema]), ret: ret<Job>() },
+  'job:confirmOutline': {
+    args: z.tuple([z.string(), ChapterOutlinePatchSchema.optional()]),
+    ret: ret<Job>()
+  },
+  'job:confirmScenes': {
+    args: z.tuple([z.string(), z.array(SceneSchema).nullable()]),
+    ret: ret<Job>()
+  },
+  'job:acceptFlaws': { args: z.tuple([z.string()]), ret: ret<Job>() },
+  'job:retry': { args: z.tuple([z.string()]), ret: ret<Job>() },
+  'job:cancel': { args: z.tuple([z.string()]), ret: ret<Job>() },
+  'job:get': { args: z.tuple([z.string()]), ret: ret<Job | null>() },
+  'job:list': { args: z.tuple([z.string().optional()]), ret: ret<Job[]>() },
+
+  // ── 开书引导（B1-B4） ─────────────────────────────────────────────────────
+  'onboard:start': {
+    args: z.tuple([z.string()]),
+    ret: ret<{ reply: string; options: string[]; stage: string; draft?: unknown; done?: boolean }>()
+  },
+  'onboard:answer': {
+    args: z.tuple([z.string(), z.string()]),
+    ret: ret<{ reply: string; options: string[]; stage: string; draft?: unknown; done?: boolean }>()
+  }
 }
 
 export type InvokeChannels = keyof typeof invokeContract & string
@@ -133,13 +293,19 @@ export interface EventContract {
   'llm:done': [requestId: string, payload: DonePayload]
   'llm:error': [requestId: string, message: string, hint?: LlmErrorHint]
   'llm:notice': [requestId: string, message: string]
+  /** 任务状态变化（含 waiting_user 提醒、done/failed 终态） */
+  'job:update': [jobId: string, job: Job]
+  /** 写作正文流式增量 */
+  'job:delta': [jobId: string, text: string]
 }
 
 export const EVENT_CHANNELS = [
   'llm:delta',
   'llm:done',
   'llm:error',
-  'llm:notice'
+  'llm:notice',
+  'job:update',
+  'job:delta'
 ] as const satisfies readonly (keyof EventContract)[]
 
 export type EventChannels = keyof EventContract & string
@@ -178,6 +344,57 @@ export interface Api {
   usage: {
     list: InvokeFn<'usage:list'>
     stats: InvokeFn<'usage:stats'>
+  }
+  book: {
+    create: InvokeFn<'book:create'>
+    list: InvokeFn<'book:list'>
+    get: InvokeFn<'book:get'>
+    update: InvokeFn<'book:update'>
+    delete: InvokeFn<'book:delete'>
+    statusCard: InvokeFn<'book:statusCard'>
+  }
+  line: {
+    fork: InvokeFn<'line:fork'>
+    activate: InvokeFn<'line:activate'>
+    delete: InvokeFn<'line:delete'>
+  }
+  chapter: {
+    get: InvokeFn<'chapter:get'>
+    versions: InvokeFn<'chapter:versions'>
+  }
+  card: {
+    list: InvokeFn<'card:list'>
+    save: InvokeFn<'card:save'>
+    delete: InvokeFn<'card:delete'>
+  }
+  character: {
+    list: InvokeFn<'character:list'>
+    save: InvokeFn<'character:save'>
+    delete: InvokeFn<'character:delete'>
+  }
+  foreshadow: {
+    list: InvokeFn<'foreshadow:list'>
+    save: InvokeFn<'foreshadow:save'>
+  }
+  message: {
+    list: InvokeFn<'message:list'>
+  }
+  job: {
+    startWrite: InvokeFn<'job:startWrite'>
+    chooseDirection: InvokeFn<'job:chooseDirection'>
+    confirmOutline: InvokeFn<'job:confirmOutline'>
+    confirmScenes: InvokeFn<'job:confirmScenes'>
+    acceptFlaws: InvokeFn<'job:acceptFlaws'>
+    retry: InvokeFn<'job:retry'>
+    cancel: InvokeFn<'job:cancel'>
+    get: InvokeFn<'job:get'>
+    list: InvokeFn<'job:list'>
+    onUpdate: SubscribeFn<'job:update'>
+    onDelta: SubscribeFn<'job:delta'>
+  }
+  onboard: {
+    start: InvokeFn<'onboard:start'>
+    answer: InvokeFn<'onboard:answer'>
   }
 }
 

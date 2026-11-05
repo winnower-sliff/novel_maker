@@ -209,6 +209,7 @@ export async function chatStreamOpenai(
     body.tool_choice = 'auto'
   }
   if (params.temperature !== undefined) body.temperature = params.temperature
+  if (params.responseFormat) body.response_format = { type: params.responseFormat }
 
   const res = await fetchSse(url, openaiHeaders(auth.apiKey), body, signal)
 

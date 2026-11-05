@@ -19,6 +19,24 @@
 >   ESM default import 拿到的是 module.exports 对象，构造函数在 `.default` 上；TS7/NodeNext 也无法把 default 当类用
 >   ——tray.ts 手写窄接口 + 运行时解包，勿改回 `import SysTray from 'systray'` 直接 new
 > - handlers 目录 import 必须写 `./handlers/index.js`（NodeNext 不支持目录导入）
+>
+> **M2 已完成（分叉树数据层+导演内核，API 级第 1 回合冒烟 26 断言全绿）**：
+> - 数据层：`src/main/db.ts`（node:sqlite，11 表：books/lines/chapters/chapter_versions/cards/characters/
+>   foreshadows/memories/messages/jobs）+ `src/main/store.ts`（CRUD；**effectiveChapters**=分叉树核心读操作
+>   ——祖先线 fork 点前章节+本线章节按序拼接；**forkLine**=事务深拷贝 cards/characters/foreshadows+fork 点前
+>   memories 到新线，设定各线独立演化；chapter_versions 支持章内多版本回看）
+> - 导演循环：`src/main/jobs.ts`（流水线状态机+全局串行队列+看门狗 10min+重启恢复）五步 =
+>   proposal 走向卡片(4 张类型各异)→章级大纲→场景分镜(可跳过)→流式正文→自检(lint 硬闸)→纪要卡落库
+>   （stateChanges patch 人物活状态/cardOps 落卡/foreshadowOps plant-plan-resolve）；自检不过自动修一次再问
+> - LLM 调用：`src/main/director/`（callJson 结构化+网络重试+记账 / steps 各步 prompt / context 上下文装配
+>   预算 24000 钉选 35% 历史 25% 检索 15% / onboard 四阶段开书引导 / prompts 导演人格+红线+文风）
+> - 契约：contract.ts 新增 27 通道（book/line/chapter/card/character/foreshadow/message/job/onboard）+
+>   事件 job:update/job:delta（broadcast.ts setGlobalSink，server 启动时接 webSink）
+> - **zod4 坑**：`z.record(enumKey, V)` 语义=枚举所有键必需，partial 语义必须用 `z.partialRecord`
+>   （SettingsPatch 的 profiles/apiKeys/routing 已中招修过）
+> - **finalize 坑（已修）**：自检一次通过路径必须把 draft 显式传给 finalize（payload.draftText 该路径未落库）
+> - 冒烟：`npm run build && node scripts/smoke-m2.mjs`（队列式 LLM stub 冒烟全链路+分叉独立演化断言，
+>   scripts/smoke-llm-stub.mjs 可复用）；handlers 分域 Pick<HandlerTable,...> 标注，book:update 走 store.updateBook
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）
