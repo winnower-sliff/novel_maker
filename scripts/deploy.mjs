@@ -55,7 +55,9 @@ function killPids(pids) {
 }
 
 console.log('[deploy] 1/4 构建…')
-const build = spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', ['run', 'build'], {
+// 注意：Node ≥18.20 安全补丁禁止无 shell 直接 spawn .cmd（EINVAL），npm.cmd 不可用；
+// tsc（typescript 7）bin 是纯 Node ESM 脚本，直接用当前 node 跑
+const build = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'tsconfig.json'], {
   cwd: root,
   stdio: 'inherit',
 })

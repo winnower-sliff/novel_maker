@@ -27,11 +27,13 @@ function gitNotes() {
   }
 }
 
+/** 与 src/main/paths.ts dataDir() 保持一致（v2 数据目录，NM_DATA_DIR 可覆盖） */
 function appDataDir() {
+  if (process.env.NM_DATA_DIR) return process.env.NM_DATA_DIR
   if (process.platform === 'win32') {
-    return join(process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming'), 'novel-maker')
+    return join(process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming'), 'novel-maker-v2')
   }
-  return join(process.env.HOME ?? '', '.config', 'novel-maker')
+  return join(process.env.HOME ?? '', '.novel-maker-v2')
 }
 
 function arg(name) {

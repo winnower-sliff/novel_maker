@@ -14,7 +14,8 @@
     "lint": "biome check src mobile/src",
     "lint:fix": "biome check --write src mobile/src",
     "test": "vitest run",
-    "deploy": "node scripts/deploy.mjs"
+    "deploy": "node scripts/deploy.mjs",
+    "apk": "node scripts/build-apk.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^7.4.4",

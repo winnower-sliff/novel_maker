@@ -240,7 +240,8 @@ function handleApkDownload(req: IncomingMessage, res: ServerResponse): void {
     json(res, 404, { error: '暂无 APK 产物' }, req)
     return
   }
-  const root = resolve(join(dataDir(), 'mobile'))
+  // pack-mobile.mjs 部署结构：<dataDir>/mobile/files/<rel>（files 是产物根，防穿越基准）
+  const root = resolve(join(dataDir(), 'mobile', 'files'))
   const full = resolve(root, normalize(apk.path.replace(/^([/\\])+/, '')))
   if (!full.startsWith(root) || !existsSync(full)) {
     json(res, 404, { error: 'APK 文件不存在' }, req)
