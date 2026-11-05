@@ -395,6 +395,8 @@ const TOOL_LABEL: Record<string, string> = {
   list_characters: '翻人物',
   list_foreshadows: '翻伏笔',
   get_write_context: '备上下文',
+  list_samples: '翻范文库',
+  read_sample: '读范文',
   search_project: '检索',
   save_card: '存设定卡',
   save_character: '存人物',

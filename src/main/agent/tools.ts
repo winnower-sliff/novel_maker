@@ -125,6 +125,28 @@ export function toolDefs(): ToolDef[] {
       input_schema: { type: 'object', properties: {} }
     },
     {
+      name: 'list_samples',
+      description: '列范文库（作者导入的完整参考书）。绑定本书的范文标 ★。',
+      input_schema: { type: 'object', properties: {} }
+    },
+    {
+      name: 'read_sample',
+      description:
+        '节选阅读范文（像翻参考书）：默认从开头取 4000 字，传 offsetPct 按百分比跳转翻页。返回带「第 X-Y 字/共 N 字」位置标注。模仿句式节奏用，不要抄内容。',
+      input_schema: {
+        type: 'object',
+        properties: {
+          sampleId: {
+            type: 'string',
+            description: '范文 id（来自 list_samples，可省略=本书绑定的范文）'
+          },
+          name: { type: 'string', description: '范文全名兜底（没有 id 时按名匹配）' },
+          offsetPct: { type: 'number', description: '起始位置百分比 0-100（默认 0=开头）' },
+          maxChars: { type: 'number', description: '本次取多少字（默认 4000）' }
+        }
+      }
+    },
+    {
       name: 'search_project',
       description: '跨板块关键词搜索：设定卡/人物/伏笔一次全查。',
       input_schema: {
@@ -459,6 +481,50 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
         ok: true,
         summary: `搜「${q}」命中 ${rows.length} 条`,
         data: rows.length ? rows.join(N) : `没有找到与「${q}」相关的内容`
+      }
+    }
+    case 'list_samples': {
+      const book = ctxBook(ctx)
+      const all = store.listSamples()
+      const rows = all.map((s) => {
+        const bound = book.styleSampleSource === s.id ? ' ★本书绑定' : ''
+        return `${s.name}（${s.chars}字, id=${s.id}）${bound}`
+      })
+      return {
+        ok: true,
+        summary: `查范文库 ${all.length} 本`,
+        data: rows.length ? rows.join(N) : '（范文库为空）'
+      }
+    }
+    case 'read_sample': {
+      const book = ctxBook(ctx)
+      const all = store.listSamples()
+      const target = all.find(
+        (s) =>
+          (typeof input.sampleId === 'string' && s.id === input.sampleId) ||
+          (typeof input.name === 'string' && s.name.includes(input.name))
+      )
+      const chosen = target ?? all.find((s) => s.id === book.styleSampleSource)
+      if (!chosen)
+        return {
+          ok: false,
+          summary: '范文不存在',
+          data: '没有匹配的范文，先 list_samples 看看有哪些'
+        }
+      const full = store.getSample(chosen.id)
+      if (!full) return { ok: false, summary: '范文读取失败', data: `范文 ${chosen.name} 读取失败` }
+      const total = full.content.length
+      const pct =
+        typeof input.offsetPct === 'number' ? Math.max(0, Math.min(99, input.offsetPct)) : 0
+      const maxChars =
+        typeof input.maxChars === 'number' ? Math.max(500, Math.min(8000, input.maxChars)) : 4000
+      const start = Math.floor((total * pct) / 100)
+      const end = Math.min(total, start + maxChars)
+      const pos = `【范文《${full.name}》第 ${start + 1}-${end} 字 / 共 ${total} 字（${pct}% 处）】`
+      return {
+        ok: true,
+        summary: `读《${full.name}》${start + 1}-${end} 字（${pct}% 处）`,
+        data: `${pos}${N}${full.content.slice(start, end)}`
       }
     }
     case 'save_card': {

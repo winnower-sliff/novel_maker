@@ -10,6 +10,7 @@ import { appendUsage, computeStats, listUsage } from '../usage.js'
 import { bookHandlers } from './books.js'
 import { jobHandlers } from './jobs.js'
 import { onboardHandlers } from './onboard.js'
+import { sampleHandlers } from './samples.js'
 import type { HandlerTable } from './types.js'
 
 const require_ = createRequire(import.meta.url)
@@ -117,7 +118,8 @@ export const sharedHandlers: HandlerTable = {
   ...usageHandlers,
   ...bookHandlers,
   ...jobHandlers,
-  ...onboardHandlers
+  ...onboardHandlers,
+  ...sampleHandlers
 }
 
 export function appVersion(): string {

@@ -140,6 +140,25 @@ export interface UsageStats {
   byPurpose: GroupStats[]
 }
 
+// ── 范文（完整书入库，agent 经工具节选翻阅） ────────────────────────────────
+
+/** 已入库范文（samples 表行，content 全文仅经 getSample/read_sample 工具取） */
+export interface SampleInfo {
+  id: string
+  name: string
+  chars: number
+  preview: string
+  createdAt: number
+}
+
+/** imports 目录待导入文件 */
+export interface SampleFileInfo {
+  fileName: string
+  sizeBytes: number
+  chars: number
+  preview: string
+}
+
 // ── 领域模型：分叉树（DECISIONS.md D1-D6 / B6-B8 / W9 / W12） ────────────────
 
 export interface Book {
@@ -151,6 +170,8 @@ export interface Book {
   styleName: string
   styleSample: string
   styleNotes: string
+  /** 绑定的完整范文（samples.id，agent 经 read_sample 工具翻阅） */
+  styleSampleSource: string
   /** 章节目标字数（B4，agent 微调 ±20%） */
   targetWords: number
   /** 剧情红线（B2）：走向/正文/新线永远避开 */

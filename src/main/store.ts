@@ -18,6 +18,7 @@ import type {
   JobState,
   JobStep,
   MemoryBlock,
+  SampleInfo,
   StoryLine
 } from '../shared/types.js'
 import { getDb, snapshotDb } from './db.js'
@@ -33,6 +34,7 @@ function rowToBook(r: Record<string, unknown>): Book {
     styleName: (r.style_name as string) ?? '',
     styleSample: (r.style_sample as string) ?? '',
     styleNotes: (r.style_notes as string) ?? '',
+    styleSampleSource: (r.style_sample_source as string) ?? '',
     targetWords: (r.target_words as number) ?? 2000,
     redlines: JSON.parse((r.redlines as string) || '[]') as string[],
     positiveWords: JSON.parse((r.positive_words as string) || '[]') as string[],
@@ -218,6 +220,7 @@ export interface BookPatch {
   styleName?: string
   styleSample?: string
   styleNotes?: string
+  styleSampleSource?: string
   targetWords?: number
   redlines?: string[]
   positiveWords?: string[]
@@ -238,6 +241,7 @@ export function updateBook(id: string, patch: BookPatch): Book | null {
   if (patch.styleName !== undefined) push('style_name', patch.styleName)
   if (patch.styleSample !== undefined) push('style_sample', patch.styleSample)
   if (patch.styleNotes !== undefined) push('style_notes', patch.styleNotes)
+  if (patch.styleSampleSource !== undefined) push('style_sample_source', patch.styleSampleSource)
   if (patch.targetWords !== undefined) push('target_words', patch.targetWords)
   if (patch.redlines !== undefined) push('redlines', JSON.stringify(patch.redlines))
   if (patch.positiveWords !== undefined) push('positive_words', JSON.stringify(patch.positiveWords))
@@ -955,6 +959,76 @@ export function failStuckJobs(timeoutMs = 10 * 60 * 1000): void {
        WHERE state = 'running' AND watchdog_at > 0 AND watchdog_at < ?`
     )
     .run(Date.now(), Date.now() - timeoutMs)
+}
+
+// ── 范文（完整书入库，agent 节选翻阅） ───────────────────────────────────────
+
+function rowToSample(r: Record<string, unknown>): SampleInfo {
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    chars: (r.chars as number) ?? 0,
+    preview: (r.content as string).slice(0, 120),
+    createdAt: r.created_at as number
+  }
+}
+
+/** 同名范文已存在时覆盖更新（重复导入幂等） */
+export function saveSample(name: string, content: string): SampleInfo {
+  const db = getDb()
+  const clean = content.replace(/\r\n/g, '\n')
+  const chars = clean.length
+  const existing = db.prepare('SELECT id FROM samples WHERE name = ?').get(name) as
+    | { id: string }
+    | undefined
+  if (existing) {
+    db.prepare('UPDATE samples SET chars = ?, content = ? WHERE id = ?').run(
+      chars,
+      clean,
+      existing.id
+    )
+    const r = db.prepare('SELECT * FROM samples WHERE id = ?').get(existing.id) as Record<
+      string,
+      unknown
+    >
+    return rowToSample(r)
+  }
+  const id = randomUUID()
+  db.prepare(
+    'INSERT INTO samples (id, name, chars, content, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, name, chars, clean, Date.now())
+  return { id, name, chars, preview: clean.slice(0, 120), createdAt: Date.now() }
+}
+
+export function listSamples(): SampleInfo[] {
+  return (
+    getDb().prepare('SELECT * FROM samples ORDER BY created_at DESC').all() as Record<
+      string,
+      unknown
+    >[]
+  ).map(rowToSample)
+}
+
+export function getSample(
+  id: string
+): { id: string; name: string; chars: number; content: string } | null {
+  const r = getDb().prepare('SELECT * FROM samples WHERE id = ?').get(id) as
+    | Record<string, unknown>
+    | undefined
+  if (!r) return null
+  return {
+    id: r.id as string,
+    name: r.name as string,
+    chars: (r.chars as number) ?? 0,
+    content: (r.content as string) ?? ''
+  }
+}
+
+export function deleteSample(id: string): boolean {
+  const db = getDb()
+  // 解绑引用此范文的书，避免悬空
+  db.prepare("UPDATE books SET style_sample_source = '' WHERE style_sample_source = ?").run(id)
+  return db.prepare('DELETE FROM samples WHERE id = ?').run(id).changes > 0
 }
 
 /** 导出类型给 handlers/director 使用 */

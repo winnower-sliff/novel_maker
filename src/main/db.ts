@@ -147,6 +147,14 @@ CREATE TABLE IF NOT EXISTS jobs (
   updated_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS samples (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  chars INTEGER DEFAULT 0,
+  content TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_chapters_line ON chapters(line_id, order_no);
 CREATE INDEX IF NOT EXISTS idx_versions_chapter ON chapter_versions(chapter_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_cards_line ON cards(line_id, kind);
@@ -178,6 +186,8 @@ function migrate(d: DatabaseSync): void {
     d.exec("ALTER TABLE books ADD COLUMN positive_words TEXT DEFAULT '[]'")
   if (!cols.has('negative_words'))
     d.exec("ALTER TABLE books ADD COLUMN negative_words TEXT DEFAULT '[]'")
+  if (!cols.has('style_sample_source'))
+    d.exec("ALTER TABLE books ADD COLUMN style_sample_source TEXT DEFAULT ''")
 }
 
 /** 灾难恢复快照（删书/删线前调用，D4） */

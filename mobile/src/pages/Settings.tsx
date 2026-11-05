@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import type { SettingsView, UsageStats } from '@shared/types'
+import type { Book, SampleFileInfo, SampleInfo, SettingsView, UsageStats } from '@shared/types'
 import type { ProviderId } from '@shared/providers'
 import { useConnStore } from '../lib/conn'
 import { checkUpdate, downloadUpdate, installUpdate } from '../lib/apkUpdater'
@@ -80,6 +80,11 @@ export default function Settings() {
         <ModelForm />
       </Section>
 
+      {/* 范文库 */}
+      <Section title="范文库">
+        <SampleLib />
+      </Section>
+
       {/* 用量 */}
       <Section title="用量">
         {stats && (
@@ -123,6 +128,199 @@ function Section({ title, children }: { title: string; children: React.ReactNode
     <div className="mb-5 rounded-2xl border border-orange-100 bg-white p-4">
       <div className="mb-3 text-xs font-semibold text-stone-500">{title}</div>
       {children}
+    </div>
+  )
+}
+
+function SampleLib() {
+  const queryClient = useQueryClient()
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState('')
+  const [confirmDel, setConfirmDel] = useState<string | null>(null)
+
+  const { data: samples } = useQuery({
+    queryKey: ['samples'],
+    queryFn: async (): Promise<SampleInfo[]> => window.api.sample.list()
+  })
+  const { data: files } = useQuery({
+    queryKey: ['importFiles'],
+    queryFn: async (): Promise<SampleFileInfo[]> => window.api.sample.listDir()
+  })
+  const { data: books } = useQuery({
+    queryKey: ['books'],
+    queryFn: async (): Promise<Book[]> => window.api.book.list()
+  })
+
+  const bookTitle = (id: string | null | undefined) =>
+    books?.find((b) => b.id === id)?.title ?? '（书已删除）'
+
+  const refresh = () => {
+    queryClient.invalidateQueries({ queryKey: ['samples'] })
+    queryClient.invalidateQueries({ queryKey: ['importFiles'] })
+    queryClient.invalidateQueries({ queryKey: ['books'] })
+  }
+
+  const doImport = async (fileName: string) => {
+    setBusy(fileName)
+    setMsg('')
+    try {
+      await window.api.sample.import({ fileName })
+      setMsg('已导入')
+      refresh()
+    } catch (e) {
+      setMsg(`导入失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const doAttach = async (bookId: string, sampleId: string) => {
+    if (!bookId) return
+    setBusy(sampleId)
+    try {
+      await window.api.sample.attach(bookId, sampleId)
+      refresh()
+    } catch (e) {
+      setMsg(`绑定失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const doDelete = async (sampleId: string) => {
+    setBusy(sampleId)
+    try {
+      await window.api.sample.delete(sampleId)
+      setConfirmDel(null)
+      setMsg('已删除')
+      refresh()
+    } catch (e) {
+      setMsg(`删除失败：${e instanceof Error ? e.message : String(e)}`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  return (
+    <div>
+      {samples && samples.length > 0 ? (
+        <div className="space-y-3">
+          {samples.map((s) => {
+            const bound = books?.find((b) => b.styleSampleSource === s.id)
+            return (
+              <div key={s.id} className="rounded-xl bg-orange-50 p-3">
+                <div className="flex items-center justify-between">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm text-stone-700">{s.name}</div>
+                    <div className="mt-0.5 text-[11px] text-stone-400">
+                      {s.chars.toLocaleString()} 字
+                      {bound ? ` · 已绑定《${bound.title}》` : ' · 未绑定'}
+                    </div>
+                  </div>
+                  {bound ? (
+                    <button
+                      type="button"
+                      disabled={busy === s.id}
+                      className="shrink-0 rounded-lg border border-orange-200 px-2.5 py-1.5 text-[11px] text-stone-500 disabled:opacity-50"
+                      onClick={async () => {
+                        setBusy(s.id)
+                        try {
+                          await window.api.sample.detach(bound.id)
+                          refresh()
+                        } finally {
+                          setBusy('')
+                        }
+                      }}
+                    >
+                      解绑
+                    </button>
+                  ) : (
+                    confirmDel === s.id ? null : (
+                      <select
+                        className="shrink-0 rounded-lg border border-orange-200 bg-white px-2 py-1.5 text-[11px] text-stone-500"
+                        value=""
+                        disabled={busy === s.id}
+                        onChange={(e) => {
+                          if (e.target.value) doAttach(e.target.value, s.id)
+                        }}
+                      >
+                        <option value="">绑定到书…</option>
+                        {(books ?? [])
+                          .filter((b) => !b.archived)
+                          .map((b) => (
+                            <option key={b.id} value={b.id}>
+                              {b.title}
+                            </option>
+                          ))}
+                      </select>
+                    )
+                  )}
+                </div>
+                {confirmDel === s.id ? (
+                  <div className="mt-2 flex items-center gap-2">
+                    <span className="flex-1 text-[11px] text-red-600">删除范文？绑定的书会自动解绑</span>
+                    <button
+                      type="button"
+                      disabled={busy === s.id}
+                      className="rounded-lg bg-red-100 px-2.5 py-1 text-[11px] text-red-600"
+                      onClick={() => doDelete(s.id)}
+                    >
+                      删除
+                    </button>
+                    <button
+                      type="button"
+                      className="rounded-lg border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500"
+                      onClick={() => setConfirmDel(null)}
+                    >
+                      取消
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    type="button"
+                    className="mt-2 text-[11px] text-stone-400"
+                    onClick={() => setConfirmDel(s.id)}
+                  >
+                    删除
+                  </button>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="text-xs text-stone-400">还没有范文</div>
+      )}
+
+      <div className="mt-4 border-t border-orange-100 pt-3">
+        <div className="mb-2 text-[11px] text-stone-400">
+          电脑端把 txt 放进数据目录的 imports 文件夹，这里点导入（全文入库，agent 按需翻阅）
+        </div>
+        {files && files.length > 0 ? (
+          <div className="space-y-2">
+            {files.map((f) => (
+              <div key={f.fileName} className="flex items-center justify-between rounded-xl bg-orange-50 p-2.5">
+                <div className="min-w-0">
+                  <div className="truncate text-xs text-stone-700">{f.fileName}</div>
+                  <div className="text-[11px] text-stone-400">{f.chars.toLocaleString()} 字</div>
+                </div>
+                <button
+                  type="button"
+                  disabled={busy === f.fileName}
+                  className="shrink-0 rounded-lg bg-orange-600 px-3 py-1.5 text-[11px] text-white disabled:opacity-50"
+                  onClick={() => doImport(f.fileName)}
+                >
+                  {busy === f.fileName ? '导入中…' : '导入'}
+                </button>
+              </div>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-stone-400">（imports 目录暂无 txt 文件）</div>
+        )}
+      </div>
+
+      {msg && <div className="mt-2 text-xs text-orange-600">{msg}</div>}
     </div>
   )
 }

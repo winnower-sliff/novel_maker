@@ -143,13 +143,24 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
 }
 
 /** agent 系统提示（每轮重建，红线/正负词/文风随库内最新值注入） */
+function sampleBlock(book: Book): string {
+  if (!book.styleSampleSource) return ''
+  const s = store.getSample(book.styleSampleSource)
+  if (!s) return ''
+  return `
+
+## 绑定范文
+- 本书绑定范文《${s.name}》（全文 ${s.chars} 字），用 read_sample 节选翻阅（默认开头 4000 字，offsetPct 翻页）。
+- 用途：模仿它的句式/节奏/叙事腔调——绝不抄内容、不搬人物情节。动笔前先翻一段找语感。`
+}
+
 function agentSystem(book: Book, mode: 'chapter' | 'free'): string {
   const chapterDiscipline =
     mode === 'chapter'
       ? `
 
 ## 写章任务纪律（当前处于写章流程，作者已选定走向）
-1. 先 get_write_context 拿上下文（钉选设定/伏笔/人物现状/近章），再动笔。
+1. 先 get_write_context 拿上下文（钉选设定/伏笔/人物现状/近章），再动笔。${book.styleSampleSource ? '动笔前先 read_sample 翻一段范文找语感。' : ''}
 2. write_chapter_draft 一次成型；报告有问题而你判断可修→再 draft 一次；系统已自动修过一轮仍 major 的字数/接缝问题，若你判断无法两全→commit 前在 finish 里说明，或与作者商量（作者接受瑕疵）。
 3. commit_chapter 后立即做沉淀：新设定 save_card、人物动向 patch_character_state、伏笔三态 save_foreshadow。这是纪律，不许跳过。
 4. 全部做完 finish 收尾（汇报+建议下一章走向）。`
@@ -164,6 +175,7 @@ function agentSystem(book: Book, mode: 'chapter' | 'free'): string {
 ${bookBasics(book)}
 ${redlineBlock(book)}
 ${wordListBlock(book)}
+${sampleBlock(book)}
 ${chapterDiscipline}
 
 ## 工具纪律

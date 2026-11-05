@@ -13,6 +13,8 @@ import type {
   Job,
   LlmErrorHint,
   ModelProbeResult,
+  SampleFileInfo,
+  SampleInfo,
   ServerStatus,
   SettingsView,
   StatusCard,
@@ -152,6 +154,11 @@ export const DirectionChoiceSchema = z.object({
   text: z.string().min(1)
 })
 
+export const SampleImportSchema = z.object({
+  fileName: z.string().min(1),
+  name: z.string().min(1).optional()
+})
+
 // ── invoke 契约 ──────────────────────────────────────────────────────────────
 
 const ret = <T>(): T => null as unknown as T
@@ -245,7 +252,15 @@ export const invokeContract = {
   'onboard:answer': {
     args: z.tuple([z.string(), z.string()]),
     ret: ret<{ reply: string; options: string[]; stage: string; draft?: unknown; done?: boolean }>()
-  }
+  },
+
+  // ── 范文库（完整书入库，agent 节选翻阅） ────────────────────────────────────
+  'sample:listDir': { args: z.tuple([]), ret: ret<SampleFileInfo[]>() },
+  'sample:import': { args: z.tuple([SampleImportSchema]), ret: ret<SampleInfo>() },
+  'sample:list': { args: z.tuple([]), ret: ret<SampleInfo[]>() },
+  'sample:attach': { args: z.tuple([z.string(), z.string()]), ret: ret<Book>() },
+  'sample:detach': { args: z.tuple([z.string()]), ret: ret<Book>() },
+  'sample:delete': { args: z.tuple([z.string()]), ret: ret<boolean>() }
 }
 
 export type InvokeChannels = keyof typeof invokeContract & string
@@ -385,6 +400,14 @@ export interface Api {
   onboard: {
     start: InvokeFn<'onboard:start'>
     answer: InvokeFn<'onboard:answer'>
+  }
+  sample: {
+    listDir: InvokeFn<'sample:listDir'>
+    import: InvokeFn<'sample:import'>
+    list: InvokeFn<'sample:list'>
+    attach: InvokeFn<'sample:attach'>
+    detach: InvokeFn<'sample:detach'>
+    delete: InvokeFn<'sample:delete'>
   }
 }
 
