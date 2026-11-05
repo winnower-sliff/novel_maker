@@ -120,6 +120,17 @@ function CardsList({ lineId }: { lineId: string }) {
               <div className="text-xs leading-relaxed text-stone-500">{c.revealPlan}</div>
             </div>
           )}
+          {c.data && Object.keys(c.data).length > 0 && (
+            <div className="mt-3">
+              <div className="mb-1 text-[11px] text-stone-400">数据表</div>
+              {Object.entries(c.data).map(([k, v]) => (
+                <div key={k} className="mb-2">
+                  <div className="mb-0.5 text-xs font-medium text-stone-600">{k}</div>
+                  <JsonView value={v} />
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -159,6 +170,73 @@ function CardsList({ lineId }: { lineId: string }) {
   )
 }
 
+/** 设定页递归 JSON 渲染：对象→键值树、对象数组→表格、标量数组→列表、标量→文本；值类型不合法不崩 */
+function JsonView({ value }: { value: unknown }) {
+  if (value == null || value === '') return <span className="text-xs text-stone-300">—</span>
+  if (typeof value !== 'object') {
+    return <span className="whitespace-pre-wrap text-xs leading-relaxed text-stone-600">{String(value)}</span>
+  }
+  if (Array.isArray(value)) {
+    if (value.length === 0) return <span className="text-xs text-stone-300">—</span>
+    if (value.every((x) => x && typeof x === 'object' && !Array.isArray(x))) {
+      const rows = value as Array<Record<string, unknown>>
+      const cols = [...new Set(rows.flatMap((o) => Object.keys(o)))].slice(0, 6)
+      return (
+        <div className="no-scrollbar overflow-x-auto">
+          <table className="w-full border-collapse text-xs">
+            <thead>
+              <tr>
+                {cols.map((k) => (
+                  <th
+                    key={k}
+                    className="border border-orange-200 bg-orange-50 px-1.5 py-1 text-left font-semibold text-stone-500"
+                  >
+                    {k}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, i) => (
+                <tr key={i}>
+                  {cols.map((k) => (
+                    <td key={k} className="border border-orange-200 px-1.5 py-1 align-top text-stone-600">
+                      <JsonView value={row[k]} />
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )
+    }
+    return (
+      <ul className="list-disc space-y-0.5 pl-4">
+        {value.map((x, i) => (
+          <li key={i} className="text-xs text-stone-600">
+            <JsonView value={x} />
+          </li>
+        ))}
+      </ul>
+    )
+  }
+  const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v != null)
+  if (entries.length === 0) return <span className="text-xs text-stone-300">—</span>
+  return (
+    <div className="space-y-1.5">
+      {entries.map(([k, v]) => (
+        <div key={k}>
+          <div className="text-[11px] text-stone-400">{k}</div>
+          <div className="ml-1.5 border-l border-orange-100 pl-2">
+            <JsonView value={v} />
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
 function CharactersList({ lineId }: { lineId: string }) {
   const { data: characters = [], refetch } = useCharacters(lineId)
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -185,21 +263,33 @@ function CharactersList({ lineId }: { lineId: string }) {
   )
 }
 
+const STATE_BASE_KEYS = ['location', 'body', 'mood', 'items', 'knows', 'goal']
+
 function CharacterDetail({ ch, onPin }: { ch: Character; onPin: () => void }) {
-  const state = (ch.state ?? {}) as Record<string, string>
-  const keys = Object.keys(state)
+  const state = (ch.state ?? {}) as Record<string, unknown>
+  const stateBase = STATE_BASE_KEYS.filter((k) => typeof state[k] === 'string' && state[k])
+  const stateExtra = Object.keys(state).filter(
+    (k) => !STATE_BASE_KEYS.includes(k) && state[k] != null && typeof state[k] === 'object'
+  )
+  const cardKeys = Object.keys(ch.card ?? {}).filter((k) => ch.card[k] != null)
   return (
     <div className="border-t border-orange-100/70 px-4 py-3">
-      {keys.length > 0 && (
+      {stateBase.length > 0 && (
         <div className="mb-3 grid grid-cols-2 gap-2">
-          {keys.map((k) => (
+          {stateBase.map((k) => (
             <div key={k} className="rounded-lg bg-orange-50 p-2">
               <div className="text-[11px] text-stone-400">{k}</div>
-              <div className="text-xs text-stone-600">{state[k] ?? ''}</div>
+              <div className="text-xs text-stone-600">{state[k] as string}</div>
             </div>
           ))}
         </div>
       )}
+      {stateExtra.map((k) => (
+        <div key={k} className="mb-3">
+          <div className="mb-1 text-[11px] text-stone-400">{k}</div>
+          <JsonView value={state[k]} />
+        </div>
+      ))}
       {ch.relations && ch.relations.length > 0 && (
         <div className="mb-3">
           <div className="mb-1 text-[11px] text-stone-400">关系</div>
@@ -210,14 +300,17 @@ function CharacterDetail({ ch, onPin }: { ch: Character; onPin: () => void }) {
           ))}
         </div>
       )}
-      {ch.card && Object.keys(ch.card).length > 0 && (
+      {cardKeys.length > 0 && (
         <div className="mb-3">
           <div className="mb-1 text-[11px] text-stone-400">人设</div>
-          <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-500">
-            {Object.entries(ch.card)
-              .map(([k, v]) => `${k}：${typeof v === 'string' ? v : JSON.stringify(v)}`)
-              .join('\n')}
-          </div>
+          {cardKeys.map((k) => (
+            <div key={k} className="mb-1.5">
+              <div className="text-[11px] text-stone-400">{k}</div>
+              <div className="ml-1.5 border-l border-orange-100 pl-2">
+                <JsonView value={ch.card[k]} />
+              </div>
+            </div>
+          ))}
         </div>
       )}
       <button

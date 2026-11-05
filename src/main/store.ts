@@ -97,6 +97,7 @@ function rowToCard(r: Record<string, unknown>): Card {
     readerText: (r.reader_text as string) ?? '',
     authorText: (r.author_text as string) ?? '',
     revealPlan: (r.reveal_plan as string) ?? '',
+    data: JSON.parse((r.data as string) || '{}') as Record<string, unknown>,
     pinned: Boolean(r.pinned),
     tags: JSON.parse((r.tags as string) || '[]') as string[],
     createdAt: r.created_at as number,
@@ -316,7 +317,7 @@ export function forkLine(
 
   // 深拷贝列白名单（与 db.ts 建表列对齐；列名来自本常量，无注入面）
   const COPY_COLUMNS = {
-    cards: ['kind', 'title', 'reader_text', 'author_text', 'reveal_plan', 'pinned', 'tags'],
+    cards: ['kind', 'title', 'reader_text', 'author_text', 'reveal_plan', 'data', 'pinned', 'tags'],
     characters: ['name', 'role', 'card', 'state', 'relations', 'pinned', 'tags'],
     foreshadows: [
       'title',
@@ -603,6 +604,8 @@ export interface CardInput {
   readerText?: string
   authorText?: string
   revealPlan?: string
+  /** 结构化数据：对象数组渲染成表格（AI 表格化 CRUD） */
+  data?: Record<string, unknown>
   pinned?: boolean
   tags?: string[]
 }
@@ -615,7 +618,7 @@ export function saveCard(input: CardInput & { id?: string }): Card | null {
     const old = getCard(input.id)
     if (!old) return null
     db.prepare(
-      `UPDATE cards SET kind = ?, title = ?, reader_text = ?, author_text = ?, reveal_plan = ?, pinned = ?, tags = ?, updated_at = ?
+      `UPDATE cards SET kind = ?, title = ?, reader_text = ?, author_text = ?, reveal_plan = ?, data = ?, pinned = ?, tags = ?, updated_at = ?
        WHERE id = ?`
     ).run(
       input.kind ?? old.kind,
@@ -623,6 +626,7 @@ export function saveCard(input: CardInput & { id?: string }): Card | null {
       input.readerText ?? old.readerText,
       input.authorText ?? old.authorText,
       input.revealPlan ?? old.revealPlan,
+      JSON.stringify(input.data ?? old.data),
       (input.pinned ?? old.pinned) ? 1 : 0,
       JSON.stringify(input.tags ?? old.tags),
       now,
@@ -632,8 +636,8 @@ export function saveCard(input: CardInput & { id?: string }): Card | null {
   }
   const id = randomUUID()
   db.prepare(
-    `INSERT INTO cards (id, book_id, line_id, kind, title, reader_text, author_text, reveal_plan, pinned, tags, created_at, updated_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO cards (id, book_id, line_id, kind, title, reader_text, author_text, reveal_plan, data, pinned, tags, created_at, updated_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
     line.bookId,
@@ -643,6 +647,7 @@ export function saveCard(input: CardInput & { id?: string }): Card | null {
     input.readerText ?? '',
     input.authorText ?? '',
     input.revealPlan ?? '',
+    JSON.stringify(input.data ?? {}),
     input.pinned ? 1 : 0,
     JSON.stringify(input.tags ?? []),
     now,

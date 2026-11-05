@@ -77,6 +77,7 @@ CREATE TABLE IF NOT EXISTS cards (
   reader_text TEXT DEFAULT '',
   author_text TEXT DEFAULT '',
   reveal_plan TEXT DEFAULT '',
+  data TEXT DEFAULT '{}',
   pinned INTEGER DEFAULT 0,
   tags TEXT DEFAULT '',
   created_at INTEGER NOT NULL,
@@ -190,9 +191,11 @@ export function getDb(): DatabaseSync {
 
 /** 列迁移：老库补新列（幂等） */
 function migrate(d: DatabaseSync): void {
-  const cols = new Set(
-    (d.prepare("PRAGMA table_info('books')").all() as { name: string }[]).map((c) => c.name)
-  )
+  const tableCols = (table: string) =>
+    new Set(
+      (d.prepare(`PRAGMA table_info('${table}')`).all() as { name: string }[]).map((c) => c.name)
+    )
+  const cols = tableCols('books')
   if (!cols.has('positive_words'))
     d.exec("ALTER TABLE books ADD COLUMN positive_words TEXT DEFAULT '[]'")
   if (!cols.has('negative_words'))
@@ -206,6 +209,8 @@ function migrate(d: DatabaseSync): void {
       "UPDATE books SET sample_sources = json_array(style_sample_source) WHERE style_sample_source IS NOT NULL AND style_sample_source != ''"
     )
   }
+  // 设定卡结构化数据（对象数组渲染成表格）
+  if (!tableCols('cards').has('data')) d.exec("ALTER TABLE cards ADD COLUMN data TEXT DEFAULT '{}'")
 }
 
 /** 灾难恢复快照（删书/删线前调用，D4） */

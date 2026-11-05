@@ -174,6 +174,11 @@ export function toolDefs(): ToolDef[] {
           readerText: { type: 'string', description: '读者已知层：读者此刻能看到的设定' },
           authorText: { type: 'string', description: '作者真相层：只有你知道的底细' },
           revealPlan: { type: 'string', description: '计划在哪一章/how 揭示真相层' },
+          data: {
+            type: 'object',
+            description:
+              '结构化数据：键名=表名，值为对象数组即渲染成表格。如 {"成员":[{"姓名":"老船工","立场":"摇摆"}]}。表内行级增删改=读旧 data 改数组后整键写回'
+          },
           pinned: { type: 'boolean', description: 'true=钉选（每章上下文必带）' }
         },
         required: ['title']
@@ -191,7 +196,8 @@ export function toolDefs(): ToolDef[] {
           card: { type: 'object', description: '自由结构人设卡' },
           state: {
             type: 'object',
-            description: '活状态：{location?,body?,mood?,items?,knows?,goal?}',
+            description:
+              '活状态。七要素字段收字符串：{location?,body?,mood?,items?,knows?,goal?}；也可加任意自定义键（对象/数组皆可，设定页递归渲染）',
             properties: {
               location: { type: 'string' },
               body: { type: 'string', description: '身体状态（伤病等）' },
@@ -226,6 +232,8 @@ export function toolDefs(): ToolDef[] {
           name: { type: 'string', description: '人物名兜底（没有 id 时按名匹配当前线）' },
           patch: {
             type: 'object',
+            description:
+              '只传要改的键，其余保留。七要素（location/body/mood/items/knows/goal）收字符串；自定义键可放对象/数组（设定页递归渲染，整键替换语义——复杂键先 list_characters 读旧值改完再写）',
             properties: {
               location: { type: 'string' },
               body: { type: 'string' },

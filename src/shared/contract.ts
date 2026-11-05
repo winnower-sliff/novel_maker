@@ -120,6 +120,8 @@ export const CardInputSchema = z.object({
   readerText: z.string().optional(),
   authorText: z.string().optional(),
   revealPlan: z.string().optional(),
+  /** 结构化数据（对象数组渲染成表格，供 AI 表格化 CRUD） */
+  data: z.record(z.string(), z.unknown()).optional(),
   pinned: z.boolean().optional(),
   tags: z.array(z.string()).optional()
 })
@@ -130,7 +132,17 @@ export const CharacterInputSchema = z.object({
   name: z.string().min(1),
   role: z.string().optional(),
   card: z.record(z.string(), z.unknown()).optional(),
-  state: z.record(z.string(), z.string()).optional(),
+  /** 七要素沿用字符串；额外键放任意 JSON（嵌套对象/表格，设定页递归渲染） */
+  state: z
+    .looseObject({
+      location: z.string().optional(),
+      body: z.string().optional(),
+      mood: z.string().optional(),
+      items: z.string().optional(),
+      knows: z.string().optional(),
+      goal: z.string().optional()
+    })
+    .optional(),
   relations: z.array(z.object({ to: z.string(), label: z.string() })).optional(),
   pinned: z.boolean().optional(),
   tags: z.array(z.string()).optional()

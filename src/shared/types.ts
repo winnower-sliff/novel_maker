@@ -249,6 +249,8 @@ export interface Card {
   /** 作者真相层：含未揭示设定与计划揭示章 */
   authorText: string
   revealPlan: string
+  /** 结构化数据：对象数组渲染成表格（势力的成员表、物品的造价表等） */
+  data: Record<string, unknown>
   /** 钉选=每次写作必进上下文（B7） */
   pinned: boolean
   tags: string[]
@@ -256,7 +258,7 @@ export interface Card {
   updatedAt: number
 }
 
-/** 人物活状态（B8 七要素，agent 每章收尾自动更新） */
+/** 人物活状态（B8 七要素，agent 每章收尾自动更新）；额外键放任意 JSON（表格/嵌套） */
 export interface CharacterState {
   location?: string
   body?: string
@@ -264,6 +266,7 @@ export interface CharacterState {
   items?: string
   knows?: string
   goal?: string
+  [key: string]: unknown
 }
 
 export interface CharacterRelation {
