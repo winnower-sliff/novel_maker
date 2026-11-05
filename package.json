@@ -1,55 +1,26 @@
 {
   "name": "novel-maker",
-  "version": "2.2.0",
-  "description": "GLM 驱动的长篇小说自动创作工具",
+  "version": "3.0.0-alpha.0",
+  "description": "手机小说工坊（v2 重构中）：Tailscale + 手机 APP + 导演式 agent",
   "type": "module",
-  "main": "out/main/index.js",
   "license": "MIT",
+  "private": true,
   "scripts": {
-    "dev": "electron-vite dev",
-    "build": "electron-vite build",
-    "preview": "electron-vite preview",
-    "typecheck": "tsc --noEmit -p tsconfig.node.json && tsc --noEmit -p tsconfig.json && tsc --noEmit -p mobile/tsconfig.json",
-    "test": "vitest run",
-    "lint": "biome check src mobile",
-    "lint:fix": "biome check --write src mobile",
-    "mobile:build": "vite build --config mobile/vite.config.ts",
-    "mobile:bundle": "node scripts/pack-mobile.mjs",
-    "apk": "node scripts/build-apk.mjs",
-    "dist": "electron-vite build && electron-builder --win"
+    "lint": "biome check src",
+    "lint:fix": "biome check --write src",
+    "test": "vitest run"
   },
-  "build": "electron-vite build && node scripts/check-tailwind-classes.mjs out/renderer/assets",
   "dependencies": {
     "@capacitor/core": "^8.5.2",
     "@capacitor/keyboard": "^8.0.6",
-    "@capacitor/local-notifications": "^8.3.1",
     "@capacitor/status-bar": "^8.0.3",
     "@huggingface/transformers": "^4.3.0",
-    "@tanstack/react-query": "^5.104.0",
-    "@xyflow/react": "^12.11.6",
-    "diff": "^9.0.0",
-    "docx": "^9.7.1",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0",
-    "react-markdown": "^10.1.0",
-    "remark-gfm": "^4.0.1",
-    "zod": "^4.6.5",
-    "zustand": "^5.0.15"
+    "zod": "^4.6.5"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
-    "@tailwindcss/vite": "^4.3.3",
-    "@types/diff": "^7.0.2",
     "@types/node": "^24.13.4",
-    "@types/react": "^19.3.0",
-    "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^5.2.0",
-    "electron": "^44.3.0",
-    "electron-builder": "^26.15.3",
-    "electron-vite": "^5.0.0",
-    "tailwindcss": "^4.3.3",
     "typescript": "^7.0.2",
-    "vite": "^7.3.6",
     "vitest": "^5.0.5"
   }
 }

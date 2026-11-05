@@ -1,5 +1,13 @@
 # novel_maker 项目须知
 
+> **⚠️ v2 完全重构进行中（2026-11 起，分支 feat/v2-rebuild）**
+> 本文件主体仍是 v1 知识，仅「踩坑记录」与底座相关部分在 v2 期间仍有参考价值。
+> v1 完整代码见 git tag `archive/v1`。
+> v2 需求单一事实源：`docs/v2/REQUIREMENTS.md` + 盘问共识（52 项 + 草案融合 24 项，见 v2 需求记录）。
+> v2 核心决策：无 Electron 桌面端（独立 Node 托盘进程）/ 手机唯一入口 / 统一 OpenAI 协议 /
+> 分叉树数据模型（不分卷、无状态机、无真删除）/ 导演循环（现状卡→走向卡片→两级大纲→流式正文→纪要卡）/
+> 无通知、无导出、无尺度字段、写完停手。M1 起本文件将被全面重写。
+
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）
 - `npm run typecheck` 三套 tsconfig（node=主进程/preload，根=renderer，mobile）类型检查
