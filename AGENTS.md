@@ -104,6 +104,21 @@
 >   冒烟脚本必须设 negativeWords=['忽然'] 触发 autoFix 轮，否则队列错位）
 > - 坑：chooseDirection 返回的是 runAgentChapterJob 完成后的终态 Job；loop.ts 的 `let book: Book` 显式标注
 >   （闭包内窄化丢失）；stub 一次性给完整 tool_calls chunk（llmOpenai 按 index 累积兼容）
+>
+> **M7 智能体页重构（2026-11 用户决策：聚合条+全对话化+串流根修）**：
+> - **统一原则**：一切生成内容（正文/改章/设定…）不进聊天流式——agent 一律调工具产出，聊天流只有
+>   对话气泡+工具卡+成品卡；过程进度走聚合条。入书卡是正文唯一正式出场（payload.draftText 可展开）
+> - 事件三通道：`job:activity`（工具卡实时推，agentSay 落库+emit 同步）、`job:progress`（正文/改章
+>   字数进度，progressSaver）、`job:delta` 改三参 (jobId,text,**total**)——chat 白话流式带累计长度，
+>   前端失配时 job:get 拉 payload.answer 兑底（服务端唯一真相源，根治串流/重复/错乱）
+> - streamingSaver 已拆：chatSaver（白话+payload.answer）/progressSaver（正文+payload.draftText）
+> - **全对话化**：InputBar 删全部快捷钮；free 模式三意图工具 propose_chapter{directionHint?}/
+>   request_review{chapterId?}/request_audit（actions 注入：startChapter fire-and-forget 排队/
+>   genReview/genAudit 转文本回聊天流）；startWrite(bookId,hint?) 倾向贯穿到 genDirections
+> - 前端 Write.tsx：StatusHead 一行胶囊（点开全卡）；AgentTicker 聚合条（活动流+进度行+▼步数列表+
+>   chat 流式光标+取消）；正文流式渲染整体移除
+> - 冒烟回归四套全绿（m6 18/m2 23/m4 18/m5 14）——M7 未加新断言（activity/progress 事件层，
+>   真机验收覆盖）
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）
