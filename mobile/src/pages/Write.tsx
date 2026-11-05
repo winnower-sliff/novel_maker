@@ -40,6 +40,34 @@ export default function Write() {
   const jobs = flow?.jobs ?? []
   const active = flow?.active ?? null
 
+  // 乐观消息：点发送立刻上墙（半透明+转圈），服务器确认落库后撤掉由真实消息顶上
+  const [pending, setPending] = useState<Array<{ id: string; text: string; jobId: string | null; at: number; failed?: boolean }>>([])
+  const sendPending = async (text: string, chooseJobId: string | null, replaceId?: string) => {
+    if (replaceId) setPending((l) => l.filter((p) => p.id !== replaceId))
+    const id = `pend-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    setPending((l) => [...l, { id, text, jobId: chooseJobId, at: Date.now() }])
+    try {
+      if (chooseJobId) await window.api.job.chooseDirection(chooseJobId, { source: 'free', text })
+      else await window.api.job.startChat(bookId, text)
+      // 等 messages 拉取完成再撤气泡，避免真实行还没上墙就闪空
+      await qc.invalidateQueries({ queryKey: qk.messages(bookId) })
+      await qc.invalidateQueries({ queryKey: qk.jobs(bookId) })
+      setPending((l) => l.filter((p) => p.id !== id))
+    } catch {
+      setPending((l) => l.map((p) => (p.id === id ? { ...p, failed: true } : p)))
+    }
+  }
+  // 对账：服务端 userMsg 比请求回执先到（SSE 触头的 invalidate）也撤掉气泡（容忍 30s 时钟偏移）
+  useEffect(() => {
+    setPending((list) => {
+      const rows = (messages ?? []).filter((m) => m.role === 'user')
+      const next = list.filter(
+        (p) => p.failed || !rows.some((m) => m.content === p.text && m.createdAt >= p.at - 30000)
+      )
+      return next.length === list.length ? list : next
+    })
+  }, [messages])
+
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: qk.jobs(bookId) })
     void qc.invalidateQueries({ queryKey: qk.messages(bookId) })
@@ -86,13 +114,42 @@ export default function Write() {
             refreshAll={refreshAll}
           />
         ))}
+        {pending.map((p) => (
+          <div key={p.id} className="flex justify-end px-4 py-1.5">
+            <div className="max-w-[85%] text-right">
+              <div
+                className={`rounded-2xl rounded-tr-sm px-3.5 py-2 text-sm leading-relaxed text-white ${
+                  p.failed ? 'bg-stone-400' : 'bg-orange-600 opacity-65'
+                }`}
+              >
+                {p.text}
+              </div>
+              <div className="mt-0.5 pr-1 text-[10px] text-stone-400">
+                {p.failed ? (
+                  <button
+                    type="button"
+                    className="text-red-500"
+                    onClick={() => void sendPending(p.text, p.jobId, p.id)}
+                  >
+                    发送失败 · 点按重发
+                  </button>
+                ) : (
+                  <span className="inline-flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-orange-300" />
+                    发送中…
+                  </span>
+                )}
+              </div>
+            </div>
+          </div>
+        ))}
         {active && (active.state === 'running' || active.state === 'queued') && (
           <AgentTicker job={active} refresh={refresh} />
         )}
         <div className="h-3" />
       </div>
 
-      <InputBar bookId={bookId} active={active} refresh={refreshAll} />
+      <InputBar bookId={bookId} active={active} refresh={refreshAll} onSend={sendPending} />
     </div>
   )
 }
@@ -782,11 +839,13 @@ function stickToBottom(): boolean {
 function InputBar({
   bookId,
   active,
-  refresh
+  refresh,
+  onSend
 }: {
   bookId: string
   active: Job | null
   refresh: () => void
+  onSend: (text: string, chooseJobId: string | null) => Promise<void>
 }) {
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
@@ -797,18 +856,14 @@ function InputBar({
 
   const send = async () => {
     const t = text.trim()
-    if (!t) return
+    if (!t || busy) return
     setText('')
     setBusy(true)
     try {
-      if (choosingDirection && active) {
-        await window.api.job.chooseDirection(active.id, { source: 'free', text: t })
-      } else {
-        await window.api.job.startChat(bookId, t)
-      }
-      refresh()
+      await onSend(t, choosingDirection && active ? active.id : null)
     } finally {
       setBusy(false)
+      refresh()
     }
   }
 
