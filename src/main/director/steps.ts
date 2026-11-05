@@ -470,7 +470,7 @@ function normalizeReport(raw: AgentReport, kind: AgentReport['kind']): AgentRepo
     score: typeof raw.score === 'number' ? raw.score : 0,
     findings: Array.isArray(raw.findings)
       ? raw.findings
-          .filter((f) => f && f.dimension)
+          .filter((f) => f?.dimension)
           .map((f) => ({
             dimension: f.dimension,
             level: f.level === 'bad' || f.level === 'warn' ? f.level : 'good',

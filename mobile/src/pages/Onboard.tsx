@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useUiStore } from '@mobile/lib/uiStore'
+import { useKeyboardInset } from '@mobile/lib/useKeyboardInset'
 
 /** 导演引导回复（契约 onboard:start/answer 的 ret 形态） */
 interface OnboardReply {
@@ -28,6 +29,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
   const [busy, setBusy] = useState(true)
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
+  const kbInset = useKeyboardInset()
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -126,13 +128,17 @@ export default function Onboard({ bookId }: { bookId: string }) {
         </div>
       )}
 
-      <div className="flex gap-2 px-4 pb-safe pt-2">
+      <div
+        className="flex gap-2 px-4 pb-safe pt-2"
+        style={kbInset ? { paddingBottom: kbInset } : undefined}
+      >
         <input
           className="flex-1 rounded-xl border border-orange-200 bg-white px-4 py-3 text-[15px] focus:border-orange-500 focus:outline-none"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter') void answer(input)
+            if (e.key === 'Enter' && !e.nativeEvent.isComposing && e.keyCode !== 229)
+              void answer(input)
           }}
           placeholder="或直接输入你的想法…"
         />

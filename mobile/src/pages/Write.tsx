@@ -5,6 +5,7 @@ import ReportCard from '../components/ReportCard'
 import QuickActionsBar from '../components/QuickActionsBar'
 import { qk, useBook, useJobFlow, useMessages, useStatusCard } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
+import { useKeyboardInset } from '../lib/useKeyboardInset'
 
 const KIND_LABEL: Record<string, string> = {
   steady: '顺势',
@@ -912,6 +913,7 @@ function InputBar({
   const [text, setText] = useState('')
   const [busy, setBusy] = useState(false)
   const [queued, setQueued] = useState(false)
+  const kbInset = useKeyboardInset()
   const lastChapter = detail?.chapters[detail.chapters.length - 1] ?? null
   const choosingDirection =
     !!active && active.state === 'waiting_user' && active.step === 'outline'
@@ -939,7 +941,10 @@ function InputBar({
   }
 
   return (
-    <div className="border-t border-orange-100 bg-[#fbf6ec] px-3 pt-2 pb-safe">
+    <div
+      className="border-t border-orange-100 bg-[#fbf6ec] px-3 pt-2 pb-safe"
+      style={kbInset ? { paddingBottom: kbInset } : undefined}
+    >
       <div className="flex gap-2">
         <button
           type="button"
@@ -1013,7 +1018,7 @@ function InputBar({
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey) {
+            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
               e.preventDefault()
               void send()
             }

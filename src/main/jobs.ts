@@ -1,6 +1,4 @@
 import type {
-  AgentReport,
-  Chapter,
   ChapterOutline,
   ChatMessageRow,
   DirectionCard,
@@ -9,7 +7,6 @@ import type {
   Scene
 } from '../shared/types.js'
 import { emitJob, emitJobDelta } from './broadcast.js'
-import { buildStatusCard } from './director/context.js'
 import {
   autoFixDraft,
   compactMemories,
