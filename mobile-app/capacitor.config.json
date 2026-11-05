@@ -9,7 +9,7 @@
   },
   "plugins": {
     "Keyboard": {
-      "resize": "native"
+      "resize": "none"
     }
   },
   "server": {
