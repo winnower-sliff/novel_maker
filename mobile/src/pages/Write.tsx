@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useEffect, useRef, useState } from 'react'
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { ChatMessageRow, Job } from '@shared/types'
 import ReportCard from '../components/ReportCard'
 import QuickActionsBar from '../components/QuickActionsBar'
@@ -68,28 +68,40 @@ export default function Write() {
     })
   }, [messages])
 
-  const refresh = () => {
+  const refresh = useCallback(() => {
     void qc.invalidateQueries({ queryKey: qk.jobs(bookId) })
     void qc.invalidateQueries({ queryKey: qk.messages(bookId) })
-  }
-  const refreshAll = () => {
+  }, [qc, bookId])
+  const refreshAll = useCallback(() => {
     refresh()
     void qc.invalidateQueries({ queryKey: qk.book(bookId) })
     void qc.invalidateQueries({ queryKey: qk.statusCard(bookId) })
-  }
+  }, [qc, bookId, refresh])
 
-  const jobsById = new Map(jobs.map((j) => [j.id, j]))
-  const chaptersById = new Map((detail?.chapters ?? []).map((c) => [c.id, c]))
+  const jobsById = useMemo(() => new Map(jobs.map((j) => [j.id, j])), [jobs])
+  const chaptersById = useMemo(
+    () => new Map((detail?.chapters ?? []).map((c) => [c.id, c])),
+    [detail?.chapters]
+  )
 
   const listRef = useRef<HTMLDivElement>(null)
+  const contentRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
-  const msgCount = messages?.length ?? 0
+  // 流式期间内容高度不断变化：观察内容盒，只要用户仍贴底就跟随滚底
   useEffect(() => {
-    if (stickRef.current) {
-      const el = listRef.current
-      if (el) el.scrollTop = el.scrollHeight
+    const el = contentRef.current
+    if (!el) return
+    const stick = () => {
+      if (stickRef.current) {
+        const list = listRef.current
+        if (list) list.scrollTop = list.scrollHeight
+      }
     }
-  }, [msgCount])
+    stick()
+    const ro = new ResizeObserver(stick)
+    ro.observe(el)
+    return () => ro.disconnect()
+  }, [])
 
   return (
     <div className="flex h-full flex-col">
@@ -103,49 +115,51 @@ export default function Write() {
         }}
       >
         <StatusHead bookId={bookId} />
-        {(messages ?? []).map((m) => (
-          <MessageRow
-            key={m.id}
-            msg={m}
-            jobsById={jobsById}
-            chaptersById={chaptersById}
-            active={active}
-            refresh={refresh}
-            refreshAll={refreshAll}
-          />
-        ))}
-        {pending.map((p) => (
-          <div key={p.id} className="flex justify-end px-4 py-1.5">
-            <div className="max-w-[85%] text-right">
-              <div
-                className={`rounded-2xl rounded-tr-sm px-3.5 py-2 text-sm leading-relaxed text-white ${
-                  p.failed ? 'bg-stone-400' : 'bg-orange-600 opacity-65'
-                }`}
-              >
-                {p.text}
-              </div>
-              <div className="mt-0.5 pr-1 text-[10px] text-stone-400">
-                {p.failed ? (
-                  <button
-                    type="button"
-                    className="text-red-500"
-                    onClick={() => void sendPending(p.text, p.jobId, p.id)}
-                  >
-                    发送失败 · 点按重发
-                  </button>
-                ) : (
-                  <span className="inline-flex items-center gap-1">
-                    <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-orange-300" />
-                    发送中…
-                  </span>
-                )}
+        <div ref={contentRef}>
+          {(messages ?? []).map((m) => (
+            <MessageRow
+              key={m.id}
+              msg={m}
+              jobsById={jobsById}
+              chaptersById={chaptersById}
+              active={active}
+              refresh={refresh}
+              refreshAll={refreshAll}
+            />
+          ))}
+          {pending.map((p) => (
+            <div key={p.id} className="flex justify-end px-4 py-1.5">
+              <div className="max-w-[85%] text-right">
+                <div
+                  className={`rounded-2xl rounded-tr-sm px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap text-white ${
+                    p.failed ? 'bg-stone-400' : 'bg-orange-600 opacity-65'
+                  }`}
+                >
+                  {p.text}
+                </div>
+                <div className="mt-0.5 pr-1 text-[10px] text-stone-400">
+                  {p.failed ? (
+                    <button
+                      type="button"
+                      className="text-red-500"
+                      onClick={() => void sendPending(p.text, p.jobId, p.id)}
+                    >
+                      发送失败 · 点按重发
+                    </button>
+                  ) : (
+                    <span className="inline-flex items-center gap-1">
+                      <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-orange-300" />
+                      发送中…
+                    </span>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
-        ))}
-        {active && (active.state === 'running' || active.state === 'queued') && (
-          <AgentTicker job={active} refresh={refresh} />
-        )}
+          ))}
+          {active && (active.state === 'running' || active.state === 'queued') && (
+            <AgentTicker job={active} refresh={refresh} />
+          )}
+        </div>
         <div className="h-3" />
       </div>
 
@@ -210,7 +224,7 @@ function StatusHead({ bookId }: { bookId: string }) {
 
 // ── 消息分派 ────────────────────────────────────────────────────────────────
 
-function MessageRow({
+const MessageRow = memo(function MessageRow({
   msg,
   jobsById,
   chaptersById,
@@ -228,7 +242,7 @@ function MessageRow({
   if (msg.role === 'user') {
     return (
       <div className="flex justify-end px-4 py-1.5">
-        <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-orange-600 px-3.5 py-2 text-sm leading-relaxed text-white">
+        <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-orange-600 px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap text-white">
           {msg.content}
         </div>
       </div>
@@ -265,7 +279,7 @@ function MessageRow({
       </div>
     </div>
   )
-}
+})
 
 // ── 节点卡（按 job step 分派） ──────────────────────────────────────────────
 
