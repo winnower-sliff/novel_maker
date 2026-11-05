@@ -22,6 +22,7 @@ import type {
   StoryLine
 } from '../shared/types.js'
 import { getDb, snapshotDb } from './db.js'
+import { parseSampleSections } from './sampleParse.js'
 
 /** 行→对象映射（snake_case 列 ↔ camelCase 字段） */
 
@@ -35,6 +36,7 @@ function rowToBook(r: Record<string, unknown>): Book {
     styleSample: (r.style_sample as string) ?? '',
     styleNotes: (r.style_notes as string) ?? '',
     styleSampleSource: (r.style_sample_source as string) ?? '',
+    sampleSources: JSON.parse((r.sample_sources as string) || '[]') as string[],
     targetWords: (r.target_words as number) ?? 2000,
     redlines: JSON.parse((r.redlines as string) || '[]') as string[],
     positiveWords: JSON.parse((r.positive_words as string) || '[]') as string[],
@@ -221,6 +223,7 @@ export interface BookPatch {
   styleSample?: string
   styleNotes?: string
   styleSampleSource?: string
+  sampleSources?: string[]
   targetWords?: number
   redlines?: string[]
   positiveWords?: string[]
@@ -242,6 +245,7 @@ export function updateBook(id: string, patch: BookPatch): Book | null {
   if (patch.styleSample !== undefined) push('style_sample', patch.styleSample)
   if (patch.styleNotes !== undefined) push('style_notes', patch.styleNotes)
   if (patch.styleSampleSource !== undefined) push('style_sample_source', patch.styleSampleSource)
+  if (patch.sampleSources !== undefined) push('sample_sources', JSON.stringify(patch.sampleSources))
   if (patch.targetWords !== undefined) push('target_words', patch.targetWords)
   if (patch.redlines !== undefined) push('redlines', JSON.stringify(patch.redlines))
   if (patch.positiveWords !== undefined) push('positive_words', JSON.stringify(patch.positiveWords))
@@ -973,7 +977,7 @@ function rowToSample(r: Record<string, unknown>): SampleInfo {
   }
 }
 
-/** 同名范文已存在时覆盖更新（重复导入幂等） */
+/** 同名范文已存在时覆盖更新（重复导入幂等）；导入即结构化切节（章+资料段） */
 export function saveSample(name: string, content: string): SampleInfo {
   const db = getDb()
   const clean = content.replace(/\r\n/g, '\n')
@@ -981,32 +985,106 @@ export function saveSample(name: string, content: string): SampleInfo {
   const existing = db.prepare('SELECT id FROM samples WHERE name = ?').get(name) as
     | { id: string }
     | undefined
+  const id = existing?.id ?? randomUUID()
   if (existing) {
     db.prepare('UPDATE samples SET chars = ?, content = ? WHERE id = ?').run(
       chars,
       clean,
       existing.id
     )
-    const r = db.prepare('SELECT * FROM samples WHERE id = ?').get(existing.id) as Record<
-      string,
-      unknown
-    >
-    return rowToSample(r)
+    db.prepare('DELETE FROM sample_sections WHERE sample_id = ?').run(existing.id)
+  } else {
+    db.prepare(
+      'INSERT INTO samples (id, name, chars, content, created_at) VALUES (?, ?, ?, ?, ?)'
+    ).run(id, name, chars, clean, Date.now())
   }
-  const id = randomUUID()
-  db.prepare(
-    'INSERT INTO samples (id, name, chars, content, created_at) VALUES (?, ?, ?, ?, ?)'
-  ).run(id, name, chars, clean, Date.now())
-  return { id, name, chars, preview: clean.slice(0, 120), createdAt: Date.now() }
+  writeSampleSections(id, clean)
+  const r = db.prepare('SELECT * FROM samples WHERE id = ?').get(id) as Record<string, unknown>
+  return rowToSample(r)
+}
+
+/** 结构化切节入库（章+资料大段），供 read_sample 直达检索 */
+function writeSampleSections(sampleId: string, content: string): number {
+  const sections = parseSampleSections(sampleId, content)
+  const db = getDb()
+  const ins = db.prepare(
+    'INSERT INTO sample_sections (id, sample_id, kind, label, start, end, chars) VALUES (?, ?, ?, ?, ?, ?, ?)'
+  )
+  db.exec('BEGIN')
+  try {
+    for (const s of sections) ins.run(s.id, s.sampleId, s.kind, s.label, s.start, s.end, s.chars)
+    db.exec('COMMIT')
+  } catch (e) {
+    db.exec('ROLLBACK')
+    throw e
+  }
+  return sections.length
+}
+
+/** 幂等懒解析：老库范文首次访问时补切节 */
+export function ensureSampleParsed(sampleId: string): void {
+  const db = getDb()
+  const has = db
+    .prepare('SELECT COUNT(*) n FROM sample_sections WHERE sample_id = ?')
+    .get(sampleId) as { n: number }
+  if ((has?.n ?? 0) > 0) return
+  const r = db.prepare('SELECT content FROM samples WHERE id = ?').get(sampleId) as
+    | { content: string }
+    | undefined
+  if (!r?.content) return
+  writeSampleSections(sampleId, r.content)
+}
+
+export interface SampleSectionRow {
+  kind: 'chapter' | 'section'
+  label: string
+  start: number
+  end: number
+  chars: number
+}
+
+/** 某范文的全部节（先保证已解析） */
+export function listSampleSections(sampleId: string): SampleSectionRow[] {
+  ensureSampleParsed(sampleId)
+  return getDb()
+    .prepare(
+      'SELECT kind, label, start, end, chars FROM sample_sections WHERE sample_id = ? ORDER BY start'
+    )
+    .all(sampleId) as unknown as SampleSectionRow[]
+}
+
+/** 关键词搜节：label 命中优先；否则全文定位含关键词的最近节 */
+export function searchSampleSections(
+  sampleId: string,
+  content: string,
+  q: string
+): { section: SampleSectionRow | null; offset: number; snippet: string } {
+  const sections = listSampleSections(sampleId)
+  const byLabel = sections.find((s) => s.label.includes(q))
+  if (byLabel) return { section: byLabel, offset: byLabel.start, snippet: '' }
+  const idx = content.indexOf(q)
+  if (idx >= 0) {
+    const sec = [...sections].reverse().find((s) => s.start <= idx && idx < s.end) ?? null
+    const snippet = content.slice(Math.max(0, idx - 60), idx + q.length + 120)
+    return { section: sec, offset: sec ? sec.start : Math.max(0, idx - 200), snippet }
+  }
+  return { section: null, offset: -1, snippet: '' }
 }
 
 export function listSamples(): SampleInfo[] {
-  return (
-    getDb().prepare('SELECT * FROM samples ORDER BY created_at DESC').all() as Record<
-      string,
-      unknown
-    >[]
-  ).map(rowToSample)
+  const db = getDb()
+  const rows = db.prepare('SELECT * FROM samples ORDER BY created_at DESC').all() as Record<
+    string,
+    unknown
+  >[]
+  const cnt = db.prepare(
+    "SELECT COUNT(*) n FROM sample_sections WHERE sample_id = ? AND kind = 'chapter'"
+  )
+  return rows.map((r) => {
+    ensureSampleParsed(r.id as string)
+    const n = cnt.get(r.id as string) as { n: number }
+    return { ...rowToSample(r), chapterCount: (n?.n ?? 0) as number }
+  })
 }
 
 export function getSample(
@@ -1026,8 +1104,22 @@ export function getSample(
 
 export function deleteSample(id: string): boolean {
   const db = getDb()
-  // 解绑引用此范文的书，避免悬空
+  // 从各书的绑定数组中移除（书量小，读改写简单可靠）
+  const books = db
+    .prepare("SELECT id, sample_sources FROM books WHERE sample_sources LIKE '%' || ? || '%'")
+    .all(id) as { id: string; sample_sources: string }[]
+  const upd = db.prepare('UPDATE books SET sample_sources = ? WHERE id = ?')
+  for (const b of books) {
+    try {
+      const arr = JSON.parse(b.sample_sources || '[]') as string[]
+      const next = arr.filter((x) => x !== id)
+      if (next.length !== arr.length) upd.run(JSON.stringify(next), b.id)
+    } catch {
+      upd.run('[]', b.id)
+    }
+  }
   db.prepare("UPDATE books SET style_sample_source = '' WHERE style_sample_source = ?").run(id)
+  db.prepare('DELETE FROM sample_sections WHERE sample_id = ?').run(id)
   return db.prepare('DELETE FROM samples WHERE id = ?').run(id).changes > 0
 }
 

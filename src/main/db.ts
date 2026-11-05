@@ -155,6 +155,16 @@ CREATE TABLE IF NOT EXISTS samples (
   created_at INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS sample_sections (
+  id TEXT PRIMARY KEY,
+  sample_id TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  label TEXT NOT NULL,
+  start INTEGER NOT NULL,
+  end INTEGER NOT NULL,
+  chars INTEGER NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_chapters_line ON chapters(line_id, order_no);
 CREATE INDEX IF NOT EXISTS idx_versions_chapter ON chapter_versions(chapter_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_cards_line ON cards(line_id, kind);
@@ -163,6 +173,7 @@ CREATE INDEX IF NOT EXISTS idx_foreshadows_line ON foreshadows(line_id, status);
 CREATE INDEX IF NOT EXISTS idx_memories_line ON memories(line_id, from_order);
 CREATE INDEX IF NOT EXISTS idx_messages_book ON messages(book_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_jobs_book ON jobs(book_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_sections_sample ON sample_sections(sample_id, start);
 `
 
 export function getDb(): DatabaseSync {
@@ -188,6 +199,13 @@ function migrate(d: DatabaseSync): void {
     d.exec("ALTER TABLE books ADD COLUMN negative_words TEXT DEFAULT '[]'")
   if (!cols.has('style_sample_source'))
     d.exec("ALTER TABLE books ADD COLUMN style_sample_source TEXT DEFAULT ''")
+  if (!cols.has('sample_sources')) {
+    d.exec("ALTER TABLE books ADD COLUMN sample_sources TEXT DEFAULT '[]'")
+    // 旧单值绑定搬进新数组（《新书》→少年阿宾 这类存量）
+    d.exec(
+      "UPDATE books SET sample_sources = json_array(style_sample_source) WHERE style_sample_source IS NOT NULL AND style_sample_source != ''"
+    )
+  }
 }
 
 /** 灾难恢复快照（删书/删线前调用，D4） */

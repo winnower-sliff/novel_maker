@@ -9,6 +9,7 @@ import type {
 } from '../../shared/types.js'
 import { snapshotDb } from '../db.js'
 import { buildWriteContext } from '../director/context.js'
+import { chapterNoOfLabel } from '../sampleParse.js'
 import * as store from '../store.js'
 
 /**
@@ -132,7 +133,7 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'read_sample',
       description:
-        '节选阅读范文（像翻参考书）：默认从开头取 4000 字，传 offsetPct 按百分比跳转翻页。返回带「第 X-Y 字/共 N 字」位置标注。模仿句式节奏用，不要抄内容。',
+        '节选阅读范文（像翻参考书），三种读法：①chapter 章号直达（读第 5 章原文）②query 关键词检索（自动定位含该词的章/资料段，如「登船」「风俗店」）③offsetPct 百分比翻页。模仿句式节奏用，不要抄内容。',
       input_schema: {
         type: 'object',
         properties: {
@@ -141,6 +142,8 @@ export function toolDefs(): ToolDef[] {
             description: '范文 id（来自 list_samples，可省略=本书绑定的范文）'
           },
           name: { type: 'string', description: '范文全名兜底（没有 id 时按名匹配）' },
+          chapter: { type: 'number', description: '章号直达（如 5=读第 5 章）' },
+          query: { type: 'string', description: '关键词检索，定位含该词的章或资料段' },
           offsetPct: { type: 'number', description: '起始位置百分比 0-100（默认 0=开头）' },
           maxChars: { type: 'number', description: '本次取多少字（默认 4000）' }
         }
@@ -487,8 +490,9 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const book = ctxBook(ctx)
       const all = store.listSamples()
       const rows = all.map((s) => {
-        const bound = book.styleSampleSource === s.id ? ' ★本书绑定' : ''
-        return `${s.name}（${s.chars}字, id=${s.id}）${bound}`
+        const bound = book.sampleSources.includes(s.id) ? ' ★本书绑定' : ''
+        const chapters = s.chapterCount ? `，${s.chapterCount} 章` : ''
+        return `${s.name}（${s.chars}字${chapters}, id=${s.id}）${bound}`
       })
       return {
         ok: true,
@@ -504,7 +508,7 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
           (typeof input.sampleId === 'string' && s.id === input.sampleId) ||
           (typeof input.name === 'string' && s.name.includes(input.name))
       )
-      const chosen = target ?? all.find((s) => s.id === book.styleSampleSource)
+      const chosen = target ?? all.find((s) => book.sampleSources.includes(s.id))
       if (!chosen)
         return {
           ok: false,
@@ -514,16 +518,48 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const full = store.getSample(chosen.id)
       if (!full) return { ok: false, summary: '范文读取失败', data: `范文 ${chosen.name} 读取失败` }
       const total = full.content.length
-      const pct =
-        typeof input.offsetPct === 'number' ? Math.max(0, Math.min(99, input.offsetPct)) : 0
       const maxChars =
         typeof input.maxChars === 'number' ? Math.max(500, Math.min(8000, input.maxChars)) : 4000
-      const start = Math.floor((total * pct) / 100)
+      // 三种定位：章号直达 / 关键词搜节 / 百分比翻页
+      let start = 0
+      let loc = ''
+      if (typeof input.chapter === 'number') {
+        const secs = store.listSampleSections(chosen.id).filter((s) => s.kind === 'chapter')
+        const sec = secs.find((s) => chapterNoOfLabel(s.label) === input.chapter)
+        if (!sec)
+          return {
+            ok: false,
+            summary: `《${chosen.name}》没有第 ${input.chapter} 章`,
+            data: `没找到第 ${input.chapter} 章。该书共 ${secs.length} 章：${secs
+              .slice(0, 30)
+              .map((s) => s.label)
+              .join('；')}${secs.length > 30 ? '…' : ''}`
+          }
+        start = sec.start
+        loc = `【范文《${chosen.name}》· ${sec.label}】`
+      } else if (typeof input.query === 'string' && input.query.trim()) {
+        const hit = store.searchSampleSections(chosen.id, full.content, input.query.trim())
+        if (hit.offset < 0)
+          return {
+            ok: false,
+            summary: `《${chosen.name}》里没有「${input.query}」`,
+            data: `没搜到「${input.query}」。可用 list_samples 换一本，或用 offsetPct 翻页。`
+          }
+        start = hit.offset
+        loc = hit.snippet
+          ? `【范文《${chosen.name}》· 「${input.query}」命中片段：…${hit.snippet}…】`
+          : `【范文《${chosen.name}》· ${hit.section?.label ?? ''}（含「${input.query}」）】`
+      } else {
+        const pct =
+          typeof input.offsetPct === 'number' ? Math.max(0, Math.min(99, input.offsetPct)) : 0
+        start = Math.floor((total * pct) / 100)
+        loc = `【范文《${chosen.name}》第 ${start + 1} 字起 / 共 ${total} 字（${pct}% 处）】`
+      }
       const end = Math.min(total, start + maxChars)
-      const pos = `【范文《${full.name}》第 ${start + 1}-${end} 字 / 共 ${total} 字（${pct}% 处）】`
+      const pos = loc || `【范文《${chosen.name}》第 ${start + 1}-${end} 字 / 共 ${total} 字】`
       return {
         ok: true,
-        summary: `读《${full.name}》${start + 1}-${end} 字（${pct}% 处）`,
+        summary: `读《${chosen.name}》${start + 1}-${end} 字`,
         data: `${pos}${N}${full.content.slice(start, end)}`
       }
     }

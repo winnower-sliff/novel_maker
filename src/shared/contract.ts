@@ -258,8 +258,10 @@ export const invokeContract = {
   'sample:listDir': { args: z.tuple([]), ret: ret<SampleFileInfo[]>() },
   'sample:import': { args: z.tuple([SampleImportSchema]), ret: ret<SampleInfo>() },
   'sample:list': { args: z.tuple([]), ret: ret<SampleInfo[]>() },
-  'sample:attach': { args: z.tuple([z.string(), z.string()]), ret: ret<Book>() },
-  'sample:detach': { args: z.tuple([z.string()]), ret: ret<Book>() },
+  'sample:attach': {
+    args: z.tuple([z.string(), z.array(z.string())]),
+    ret: ret<Book>()
+  },
   'sample:delete': { args: z.tuple([z.string()]), ret: ret<boolean>() }
 }
 
@@ -413,8 +415,8 @@ export interface Api {
     listDir: InvokeFn<'sample:listDir'>
     import: InvokeFn<'sample:import'>
     list: InvokeFn<'sample:list'>
+    /** 整组设置某书的绑定范文（传空数组=全部解绑），旧 sample:detach 已并入 */
     attach: InvokeFn<'sample:attach'>
-    detach: InvokeFn<'sample:detach'>
     delete: InvokeFn<'sample:delete'>
   }
 }

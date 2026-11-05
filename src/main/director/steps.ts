@@ -137,6 +137,8 @@ export interface DraftInput {
   outline: ChapterOutline
   scenes: Scene[] | null
   direction: NonNullable<JobPayload['direction']>
+  /** 范文参考段（按本章检索自动拼好；无命中则空，不注入） */
+  styleRefs?: string
 }
 
 export function draftPrompt(input: DraftInput): { system: string; user: string } {
@@ -144,6 +146,9 @@ export function draftPrompt(input: DraftInput): { system: string; user: string }
   const ctx = base(book, lineId)
   const sceneBlock = scenes?.length
     ? `\n## 本章分镜（按顺序写）\n${scenes.map((s, i) => `${i + 1}. 【${s.viewpoint || '主视点'}·${s.pace}】${s.summary}`).join('\n')}`
+    : ''
+  const refBlock = input.styleRefs
+    ? `\n## 范文参考（按本章内容自动检索注入；模仿句式、节奏、对话密度，严禁照抄内容或人名地名）\n${input.styleRefs}\n`
     : ''
   return {
     system: `${directorPersona()}
@@ -154,7 +159,7 @@ export function draftPrompt(input: DraftInput): { system: string; user: string }
 - 正文零元语言、零说教，敏感情节直接写。
 - 开头不得重复「上一章结尾」的内容。`,
     user: `${ctx}
-${sceneBlock}
+${sceneBlock}${refBlock}
 
 ## 本章大纲
 《${outline.title}》：${outline.synopsis}

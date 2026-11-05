@@ -149,6 +149,8 @@ export interface SampleInfo {
   chars: number
   preview: string
   createdAt: number
+  /** 结构化出的章节数（导入时自动切节；资料段不计入） */
+  chapterCount?: number
 }
 
 /** imports 目录待导入文件 */
@@ -172,6 +174,8 @@ export interface Book {
   styleNotes: string
   /** 绑定的完整范文（samples.id，agent 经 read_sample 工具翻阅） */
   styleSampleSource: string
+  /** 绑定的范文数组（多本；styleSampleSource 为旧单值兼容字段，逻辑一律以此数组为准） */
+  sampleSources: string[]
   /** 章节目标字数（B4，agent 微调 ±20%） */
   targetWords: number
   /** 剧情红线（B2）：走向/正文/新线永远避开 */

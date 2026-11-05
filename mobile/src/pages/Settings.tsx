@@ -174,11 +174,11 @@ function SampleLib() {
     }
   }
 
-  const doAttach = async (bookId: string, sampleId: string) => {
+  const doToggle = async (bookId: string, sampleId: string, nextIds: string[]) => {
     if (!bookId) return
-    setBusy(sampleId)
+    setBusy(sampleId + bookId)
     try {
-      await window.api.sample.attach(bookId, sampleId)
+      await window.api.sample.attach(bookId, nextIds)
       refresh()
     } catch (e) {
       setMsg(`绑定失败：${e instanceof Error ? e.message : String(e)}`)
@@ -206,7 +206,7 @@ function SampleLib() {
       {samples && samples.length > 0 ? (
         <div className="space-y-3">
           {samples.map((s) => {
-            const bound = books?.find((b) => b.styleSampleSource === s.id)
+            const boundCount = (books ?? []).filter((b) => b.sampleSources?.includes(s.id)).length
             return (
               <div key={s.id} className="rounded-xl bg-orange-50 p-3">
                 <div className="flex items-center justify-between">
@@ -214,48 +214,47 @@ function SampleLib() {
                     <div className="truncate text-sm text-stone-700">{s.name}</div>
                     <div className="mt-0.5 text-[11px] text-stone-400">
                       {s.chars.toLocaleString()} 字
-                      {bound ? ` · 已绑定《${bound.title}》` : ' · 未绑定'}
+                      {s.chapterCount ? ` · ${s.chapterCount} 章` : ''}
+                      {boundCount ? ` · 已绑定 ${boundCount} 本书` : ''}
                     </div>
                   </div>
-                  {bound ? (
-                    <button
-                      type="button"
-                      disabled={busy === s.id}
-                      className="shrink-0 rounded-lg border border-orange-200 px-2.5 py-1.5 text-[11px] text-stone-500 disabled:opacity-50"
-                      onClick={async () => {
-                        setBusy(s.id)
-                        try {
-                          await window.api.sample.detach(bound.id)
-                          refresh()
-                        } finally {
-                          setBusy('')
-                        }
-                      }}
-                    >
-                      解绑
+                  {confirmDel === s.id ? null : (
+                    <button type="button" className="shrink-0 text-[11px] text-stone-400" onClick={() => setConfirmDel(s.id)}>
+                      删除
                     </button>
-                  ) : (
-                    confirmDel === s.id ? null : (
-                      <select
-                        className="shrink-0 rounded-lg border border-orange-200 bg-white px-2 py-1.5 text-[11px] text-stone-500"
-                        value=""
-                        disabled={busy === s.id}
-                        onChange={(e) => {
-                          if (e.target.value) doAttach(e.target.value, s.id)
-                        }}
-                      >
-                        <option value="">绑定到书…</option>
-                        {(books ?? [])
-                          .filter((b) => !b.archived)
-                          .map((b) => (
-                            <option key={b.id} value={b.id}>
-                              {b.title}
-                            </option>
-                          ))}
-                      </select>
-                    )
                   )}
                 </div>
+                {(books ?? []).filter((b) => !b.archived).length > 0 && confirmDel !== s.id && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {(books ?? [])
+                      .filter((b) => !b.archived)
+                      .map((b) => {
+                        const on = b.sampleSources?.includes(s.id) ?? false
+                        return (
+                          <button
+                            key={b.id}
+                            type="button"
+                            disabled={busy === s.id + b.id}
+                            className={
+                              on
+                                ? 'rounded-full bg-orange-600 px-2.5 py-1 text-[11px] text-white disabled:opacity-50'
+                                : 'rounded-full border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500 disabled:opacity-50'
+                            }
+                            onClick={() =>
+                              doToggle(
+                                b.id,
+                                s.id,
+                                on ? (b.sampleSources ?? []).filter((x) => x !== s.id) : [...(b.sampleSources ?? []), s.id]
+                              )
+                            }
+                          >
+                            {on ? '✓ ' : ''}
+                            {b.title}
+                          </button>
+                        )
+                      })}
+                  </div>
+                )}
                 {confirmDel === s.id ? (
                   <div className="mt-2 flex items-center gap-2">
                     <span className="flex-1 text-[11px] text-red-600">删除范文？绑定的书会自动解绑</span>
@@ -275,15 +274,7 @@ function SampleLib() {
                       取消
                     </button>
                   </div>
-                ) : (
-                  <button
-                    type="button"
-                    className="mt-2 text-[11px] text-stone-400"
-                    onClick={() => setConfirmDel(s.id)}
-                  >
-                    删除
-                  </button>
-                )}
+                ) : null}
               </div>
             )
           })}

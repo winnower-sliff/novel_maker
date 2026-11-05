@@ -6,7 +6,7 @@ import type {
   Scene,
   ToolDef
 } from '../../shared/types.js'
-import { callRaw } from '../director/callJson.js'
+import { callJson, callRaw } from '../director/callJson.js'
 import { bookBasics, directorPersona, redlineBlock, wordListBlock } from '../director/prompts.js'
 import { autoFixDraft, genDraft, genRevise, selfCheck } from '../director/steps.js'
 import { lintChapter, stripHtmlComments } from '../lint.js'
@@ -187,14 +187,89 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
 
 /** agent 系统提示（每轮重建，红线/正负词/文风随库内最新值注入） */
 function sampleBlock(book: Book): string {
-  if (!book.styleSampleSource) return ''
-  const s = store.getSample(book.styleSampleSource)
-  if (!s) return ''
+  const bounds = book.sampleSources
+    .map((id) => store.getSample(id))
+    .filter((s): s is NonNullable<typeof s> => Boolean(s))
+  if (!bounds.length) return ''
+  const list = bounds
+    .map((s) => {
+      const secs = store.listSampleSections(s.id)
+      const chN = secs.filter((x) => x.kind === 'chapter').length
+      return `- 《${s.name}》（全文 ${s.chars} 字${chN ? `，${chN} 章` : ''}）`
+    })
+    .join('\n')
   return `
 
 ## 绑定范文
-- 本书绑定范文《${s.name}》（全文 ${s.chars} 字），用 read_sample 节选翻阅（默认开头 4000 字，offsetPct 翻页）。
-- 用途：模仿它的句式/节奏/叙事腔调——绝不抄内容、不搬人物情节。动笔前先翻一段找语感。`
+${list}
+- read_sample 支持三种读法：chapter 章号直达（如第 3 章）、query 关键词检索（如「登船」「林岸」）、offsetPct 百分比翻页。
+- 用途：模仿句式/节奏/叙事腔调——绝不抄内容、不搬人物情节。动笔前按本章要素检索一段找语感（write_chapter_draft 也会自动检索注入范文参考段）。`
+}
+
+/**
+ * 范文参考段检索（用户决策：不固定截开头，动笔前按本章内容主动检索注入；
+ * 检索词由 LLM 决定——按本章的场景/动作/意象/情绪自选，而非程序硬提人名）。
+ * 一次轻量 LLM 调用出词 → 逐本搜节取片段；每本最多 2 段、总预算约 2400 字。
+ * 出词失败或全 miss 返回 ''（不注入，不阻断写章）。
+ */
+export async function genStyleRefs(
+  book: Book,
+  outline: { title: string; synopsis: string; beats: string[] }
+): Promise<string> {
+  if (!book.sampleSources.length) return ''
+  const samples = book.sampleSources
+    .map((id) => store.getSample(id))
+    .filter((s): s is NonNullable<typeof s> => Boolean(s))
+  if (!samples.length) return ''
+  const listTxt = samples.map((s) => `《${s.name}》`).join('、')
+  let queries: Array<{ sample: string; q: string }> = []
+  try {
+    const res = await callJson<{ queries?: Array<{ sample?: string; q?: string }> }>({
+      slot: 'utility',
+      system: '你是范文检索助手，只输出 JSON。',
+      user: `你将为小说写作挑选范文参考段的检索词。
+
+## 绑定范文
+${samples.map((s, i) => `${i + 1}. 《${s.name}》`).join('\n')}
+
+## 本章信息
+标题：${outline.title}
+梗概：${outline.synopsis}
+拍点：${outline.beats.join('；')}
+
+## 任务
+针对每一本范文，给出 1-3 个用于在其全文中检索参考段的**关键词**。
+- 词要来自本章的场景/动作/意象/情绪/桥段类型（如「夜袭」「审讯」「重逢」「暴雨中的对峙」），不要用本书人名（范文是另一部作品，人名大概率不存在）。
+- 想模仿哪类写法（打斗节奏/对话密度/环境烘托），就检索那类桥段。
+
+输出 JSON：{"queries":[{"sample":"范文名","q":"关键词"}]}，总数不超过 ${Math.min(6, samples.length * 3)} 个。`,
+      jsonHint: '{"queries":[{"sample":"范文名","q":"关键词"}]}'
+    })
+    queries = (res.queries ?? [])
+      .filter((x) => x.sample && x.q)
+      .map((x) => ({ sample: x.sample ?? '', q: x.q ?? '' }))
+  } catch {
+    return '' // 出词失败静默跳过
+  }
+  const BUDGET = 2400
+  const parts: string[] = []
+  let used = 0
+  for (const s of samples) {
+    const words = queries
+      .filter((x) => x.sample.includes(s.name) || s.name.includes(x.sample))
+      .map((x) => x.q)
+    let hits = 0
+    for (const q of words) {
+      if (hits >= 2 || used >= BUDGET) break
+      const hit = store.searchSampleSections(s.id, s.content, q)
+      if (hit.offset < 0) continue
+      const seg = s.content.slice(hit.offset, hit.offset + 1200)
+      parts.push(`◆ 《${s.name}》（检索词「${q}」）\n${seg}`)
+      used += seg.length
+      hits++
+    }
+  }
+  return parts.join('\n\n')
 }
 
 function agentSystem(book: Book, mode: 'chapter' | 'free'): string {
@@ -203,7 +278,7 @@ function agentSystem(book: Book, mode: 'chapter' | 'free'): string {
       ? `
 
 ## 写章任务纪律（当前处于写章流程，作者已选定走向）
-1. 先 get_write_context 拿上下文（钉选设定/伏笔/人物现状/近章），再动笔。${book.styleSampleSource ? '动笔前先 read_sample 翻一段范文找语感。' : ''}
+1. 先 get_write_context 拿上下文（钉选设定/伏笔/人物现状/近章），再动笔。${book.sampleSources.length ? '动笔前可用 read_sample 按本章要素检索一段范文找语感（draft 时系统也会自动检索注入）。' : ''}
 2. write_chapter_draft 一次成型；报告有问题而你判断可修→再 draft 一次；系统已自动修过一轮仍 major 的字数/接缝问题，若你判断无法两全→commit 前在 finish 里说明，或与作者商量（作者接受瑕疵）。
 3. commit_chapter 后立即做沉淀：新设定 save_card、人物动向 patch_character_state、伏笔三态 save_foreshadow。这是纪律，不许跳过。
 4. 全部做完 finish 收尾（汇报+建议下一章走向）。`
@@ -353,16 +428,19 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
         const line = store.activeLine(b)
         if (!line) return { ok: false, summary: '没有激活线', data: '当前书没有激活线' }
         const direction = (opts.task.match(/走向[：:]\s*(.+)/)?.[1] ?? opts.task).slice(0, 200)
+        const outline = {
+          title: String(input.title ?? '未命名'),
+          synopsis: String(input.synopsis ?? ''),
+          beats: (input.beats as string[]) ?? ['']
+        }
+        const styleRefs = await genStyleRefs(b, outline)
         const input2 = {
           book: b,
           lineId: line.id,
-          outline: {
-            title: String(input.title ?? '未命名'),
-            synopsis: String(input.synopsis ?? ''),
-            beats: (input.beats as string[]) ?? ['']
-          },
+          outline,
           scenes: (input.scenes as Scene[] | undefined) ?? null,
-          direction: { source: 'free' as const, text: direction }
+          direction: { source: 'free' as const, text: direction },
+          styleRefs: styleRefs || undefined
         }
         let draft = await genDraft(input2, progressSaver('draft'))
         let report = selfCheck(b, line.id, draft, tailOf(line.id))
