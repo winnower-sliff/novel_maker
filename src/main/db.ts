@@ -26,6 +26,8 @@ CREATE TABLE IF NOT EXISTS books (
   style_notes TEXT DEFAULT '',
   target_words INTEGER DEFAULT 2000,
   redlines TEXT DEFAULT '[]',
+  positive_words TEXT DEFAULT '[]',
+  negative_words TEXT DEFAULT '[]',
   active_line_id TEXT DEFAULT '',
   archived INTEGER DEFAULT 0,
   created_at INTEGER NOT NULL,
@@ -163,7 +165,19 @@ export function getDb(): DatabaseSync {
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
   db.exec(SCHEMA)
+  migrate(db)
   return db
+}
+
+/** 列迁移：老库补新列（幂等） */
+function migrate(d: DatabaseSync): void {
+  const cols = new Set(
+    (d.prepare("PRAGMA table_info('books')").all() as { name: string }[]).map((c) => c.name)
+  )
+  if (!cols.has('positive_words'))
+    d.exec("ALTER TABLE books ADD COLUMN positive_words TEXT DEFAULT '[]'")
+  if (!cols.has('negative_words'))
+    d.exec("ALTER TABLE books ADD COLUMN negative_words TEXT DEFAULT '[]'")
 }
 
 /** 灾难恢复快照（删书/删线前调用，D4） */

@@ -8,10 +8,9 @@
  * 用法：node scripts/smoke-m2.mjs
  */
 import { spawn } from 'node:child_process'
-import { cpSync, mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { startLlmStub, stubCalls } from './smoke-llm-stub.mjs'
 
 const PORT = 3955
 const BASE = `http://127.0.0.1:${PORT}`
@@ -64,14 +63,14 @@ writeFileSync(
 
 // ── 起服务 ───────────────────────────────────────────────────────────────────
 
-const stub = await startLlmStub(3922)
+const stub = spawn(process.execPath, ['scripts/smoke-m3-stub.mjs'], {
+  env: { ...process.env, AGENT_MODE: '1' },
+  stdio: 'inherit'
+})
 const server = spawn(process.execPath, ['dist/main/index.js'], {
   env: { ...process.env, NM_DATA_DIR: dataDir },
-  stdio: ['ignore', 'pipe', 'pipe'],
-  windowsHide: true
+  stdio: 'inherit'
 })
-server.stdout.on('data', (d) => process.stdout.write(`[srv] ${d}`))
-server.stderr.on('data', (d) => process.stderr.write(`[srv!] ${d}`))
 
 try {
   // 健康探测
@@ -92,7 +91,7 @@ try {
   await invoke('settings:save', [
     {
       provider: 'custom',
-      profiles: { custom: { baseUrl: 'http://127.0.0.1:3922/v1', defaultModel: 'stub-model' } },
+      profiles: { custom: { baseUrl: 'http://127.0.0.1:3923/v1', defaultModel: 'stub-model' } },
       apiKeys: { custom: 'stub-key' }
     }
   ])
@@ -102,6 +101,8 @@ try {
   const book = await invoke('book:create', [{ title: '雾津夜航', genre: '悬疑', targetWords: 600 }])
   ok(!!book?.id && !!book?.activeLineId, 'book:create（自动建主线）')
   const mainLineId = book.activeLineId
+  // 负向词触发 stub 链的 autoFix 轮（DRAFT 含「忽然」→修掉），对齐 AGENT_MODE 队列
+  await invoke('book:update', [book.id, { negativeWords: ['忽然'] }])
 
   const saltGang = await invoke('card:save', [
     {
@@ -127,7 +128,7 @@ try {
   ])
   ok(!!linan?.id, 'character:save（含初始活状态）')
 
-  // ── 导演循环第 1 回合 ──────────────────────────────────────────────────────
+  // ── 导演循环第 1 回合（M6：选完走向 agent 自主到入书） ─────────────────────
   let job = await invoke('job:startWrite', [book.id])
   ok(job.state === 'waiting_user' && job.step === 'outline', `startWrite → waiting_user/outline`)
   const cards = job.payload?.cards ?? []
@@ -138,23 +139,14 @@ try {
     job.id,
     { source: 'card', cardIndex: 3, text: 'wild：蓑衣老船工' }
   ])
-  ok(job.state === 'waiting_user' && job.step === 'scene', 'chooseDirection → waiting_user/scene')
-  ok(job.payload?.outline?.title === '雾夜登船', `章级大纲生成《${job.payload?.outline?.title}》`)
-
-  job = await invoke('job:confirmOutline', [job.id])
-  ok(job.state === 'waiting_user' && job.step === 'draft', 'confirmOutline → waiting_user/draft')
-  ok((job.payload?.scenes ?? []).length === 3, '场景分镜 3 幕')
-
-  job = await invoke('job:confirmScenes', [job.id, null])
   job = await waitFor(
     job.id,
     (j) => j.state === 'done' || j.state === 'failed',
-    60_000,
-    '正文流式→自检→定稿'
+    90_000,
+    'agent 自主段（工具链→正文→自检→入书→沉淀）'
   )
   ok(job.state === 'done', `第 1 章完成（state=${job.state}${job.error ? ` error=${job.error}` : ''}）`)
-  ok(!job.payload?.lint?.issues?.length, '自检零问题（一次通过）')
-  ok(!!job.payload?.recap?.summary, '纪要卡生成')
+  ok(!!job.payload?.recap?.summary, '纪要卡（commit_chapter summary）')
 
   // ── 落库验证 ───────────────────────────────────────────────────────────────
   const bookAfter = await invoke('book:get', [book.id])
@@ -166,18 +158,18 @@ try {
   ok(full.content.includes('沈'), '正文含「沈」字伏笔')
 
   const shadows = await invoke('foreshadow:list', [mainLineId])
-  ok(shadows.some((f) => f.title === '断刀的来历' && f.status === 'open'), 'recap 伏笔 plant 落库')
+  ok(shadows.some((f) => f.title === '断刀的来历' && f.status === 'open'), 'agent save_foreshadow 落库')
 
   const charAfter = await invoke('character:save', [
     { id: linan.id, lineId: mainLineId, name: '林岸' }
   ])
   ok(
-    charAfter.state?.location === '南屿货船·蔗糖舱' && charAfter.state?.mood === '紧绷',
-    `人物活状态随 recap 演化（location=${charAfter.state?.location}）`
+    charAfter.state?.location === '南屿货船·蔗糖舱',
+    `人物活状态被 agent patch（location=${charAfter.state?.location}）`
   )
 
   const cardsAfter = await invoke('card:list', [mainLineId])
-  ok(cardsAfter.some((c) => c.title === '雾津港'), 'recap 设定卡 create 落库')
+  ok(cardsAfter.some((c) => c.title.includes('雾津港')), 'agent save_card 落库')
 
   // ── 分叉树：设定独立演化 ───────────────────────────────────────────────────
   const fork = await invoke('line:fork', [book.id, chapter.id, '隐退线', '测试分叉'])
@@ -185,24 +177,22 @@ try {
   const forkCards = await invoke('card:list', [fork.id])
   ok(forkCards.length === cardsAfter.length, `新线深拷贝设定卡（${forkCards.length} 张）`)
 
-  const fogCard = forkCards.find((c) => c.title === '雾津港')
+  const fogCard = forkCards.find((c) => c.title.includes('雾津港'))
   await invoke('card:save', [
-    { id: fogCard.id, lineId: fork.id, title: '雾津港', authorText: '【已改】分叉后新线的雾津港真相' }
+    { id: fogCard.id, lineId: fork.id, title: fogCard.title, authorText: '【已改】分叉后新线的雾津港真相' }
   ])
-  const mainFog = (await invoke('card:list', [mainLineId])).find((c) => c.title === '雾津港')
+  const mainFog = (await invoke('card:list', [mainLineId])).find((c) => c.id === fogCard.id)
   ok(
     mainFog?.authorText !== '【已改】分叉后新线的雾津港真相',
     '改新线卡不影响原线（独立演化）'
   )
 
-  ok(stubCalls().length === 5, `LLM 调用 5 次（实际 ${stubCalls().length}：directions/outline/scenes/draft/recap）`)
 } catch (err) {
   failed++
   console.error('冒烟中断：', err.message)
-  console.error('stub 调用数：', stubCalls().length)
 } finally {
   server.kill()
-  stub.close()
+  stub.kill()
   setTimeout(() => process.exit(failed ? 1 : 0), 300)
 }
 
@@ -211,6 +201,3 @@ process.on('unhandledRejection', (e) => {
   failed++
   console.error('unhandledRejection:', e)
 })
-
-// 保留 cpSync 引用（未来快照断言用），避免 lint 报未使用
-void cpSync

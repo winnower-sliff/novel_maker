@@ -15,6 +15,7 @@ const DRAFT = [
 
 // SKIP_ONBOARD=1 时跳过前 4 个 onboard 响应（已开书续写场景）
 // CHAT_FIRST=1 时把两个 chat 响应挪到写作循环之前（M5 冒烟：先对话后写作）
+// AGENT_MODE=1 时改用 M6 agent 队列（directions + tool_calls 链 + chat agent）
 const CHAT_REPLIES = [
   // M5：chat（智能体页自由对话，纯文本）
   '断刀的「沈」字我埋的时候就留了三层：字面是铸刀匠的落款，往上追是二十年前盐帮清洗雾津港的旧案，再往上和林岸父亲的死直接相关。现在才第 2 章，别急着揭——让老船工先察觉这把刀，下一章他会主动试探林岸。',
@@ -236,6 +237,109 @@ const QUEUE = process.env.CHAT_FIRST
   ? [...CHAT_REPLIES, ...MAIN_QUEUE]
   : [...MAIN_QUEUE, ...CHAT_REPLIES]
 
+// ── M6 agent 队列（AGENT_MODE=1）：directions → tool_calls 链 → chat×3 → revise/review/diagnose ──
+// 元素为 string=纯文本 delta；{tool_calls:[{name,arguments}]}=工具调用响应
+// CHAT_IN_QUEUE=0 时去掉 chat 段（m4 场景：写章后直接 revise/review/diagnose）
+const DRAFT_FIXED = DRAFT.replace(/忽然/g, '')
+const DIRECTIONS_JSON = QUEUE_RAW[4]
+const CHAT_TAIL = [
+  { tool_calls: [{ name: 'list_chapters', arguments: {} }] },
+  '目前只有第 1 章。断刀「沈」字的伏笔刚埋下，建议下一章让老船工主动试探林岸，把悬赏的紧迫感顶上来。',
+  '可以。蔗糖舱的印记可以并成一条线：那批糖是七号泊位连夜装的，收货人写的却是个死人名字。'
+]
+const REVISE_TEXT = [
+  '雾津港的雾在半夜最重，重得像浸透了盐水的棉絮压在码头上方。林岸蹲在七号泊位的缆桩后面，断刀贴着肋骨，每一波浪头打上木桩，断口的麻布就往肉里磨一分。他没有动。远处盐帮的灯笼一盏一盏漂过来，光晕被雾泡开，像化开的蛋黄。',
+  '脚步声近了。两个人，踩着木板很沉，是练过桩功的底子。「港务官担保今夜没有外船。」其中一个说。「担保？」另一个嗤了一声，「上个月担保过的人，现在就沉在泊位底下。」话音落进雾里，林岸数着他们的步点，把呼吸压到最缓。',
+  '一条湿鼻子的狗从雾里钻出来，几乎碰到他的手背。码头另一头骤然传来铁器砸落的脆响，狗掉头狂吠，两盏灯笼立刻奔了过去。林岸贴着船舷摸上只放了一半的跳板，蜷进舱底蔗糖筐的夹层。起锚的绞盘声碾过头顶时，他摸到刀柄内侧那道被磨掉一半的「沈」字。',
+  '船离岸很远之后，舱口透进一线光。蓑衣老船工提着灯下来，在蔗糖筐前站定，慢悠悠地开口：「小子，盐帮悬赏你的画像，今早已经送到了南屿。」林岸的手在暗处扣紧了刀柄——老船工的脚步，从下舱那一刻起就没有迟疑过。'
+].join('\n\n')
+const REVIEW_JSON = JSON.stringify({
+  verdict: '悬念铺设扎实，逃亡段落的紧迫感立得住；结尾老船工的亮相是全章最好的钩子。',
+  findings: [
+    { dimension: '张力', level: 'good', quote: '湿鼻子几乎碰到林岸的手背', comment: '用触觉替代视觉写危机。' },
+    { dimension: '对话', level: 'warn', quote: '「担保过的人，现在就沉在泊位底下。」', comment: '信息给得太直白。' }
+  ],
+  suggestions: ['下一章让老船工先开口试探'],
+  score: 82
+})
+const DIAGNOSE_JSON = JSON.stringify({
+  verdict: '林岸的行动动机链完整：断刀→父亲之死→逃离雾津港。建议下一章给他一个主动选择。',
+  findings: [{ dimension: '主动性', level: 'warn', quote: '盐帮悬赏你的画像', comment: '主角连续被动应对。' }],
+  suggestions: ['下一章走向卡优先考虑主角主动试探的方向'],
+  score: 0
+})
+const AGENT_QUEUE = [
+  DIRECTIONS_JSON,
+  { tool_calls: [{ name: 'get_write_context', arguments: {} }] },
+  {
+    tool_calls: [
+      {
+        name: 'write_chapter_draft',
+        arguments: {
+          title: '雾夜登船',
+          synopsis:
+            '林岸在七号泊位藏身半夜，靠码头异响引开盐帮巡逻，趁潮水转向藏进货船蔗糖筐夹层登船离港；船离岸后蓑衣老船工下舱点破悬赏。',
+          beats: ['缆桩藏身躲巡逻', '异响引开，摸上货船', '蔗糖筐里发现「沈」字', '老船工点破悬赏']
+        }
+      }
+    ]
+  },
+  DRAFT, // write_chapter_draft 拦截内 genDraft 的响应（含负向词「忽然」→触发 lint major）
+  DRAFT_FIXED, // autoFixDraft 的响应（负向词已去）
+  {
+    tool_calls: [
+      {
+        name: 'commit_chapter',
+        arguments: {
+          summary:
+            '林岸雾夜藏身七号泊位，借码头异响引开盐帮巡逻，藏进蔗糖筐随船离港；老船工下舱点破悬赏画像已送南屿。',
+          quickActions: [{ label: '补老船工视角', instruction: '结尾加一小段老船工视角。' }]
+        }
+      }
+    ]
+  },
+  {
+    tool_calls: [
+      {
+        name: 'patch_character_state',
+        arguments: { name: '林岸', patch: { location: '南屿货船·蔗糖舱', mood: '紧绷' } }
+      }
+    ]
+  },
+  {
+    tool_calls: [
+      {
+        name: 'save_foreshadow',
+        arguments: { title: '断刀的来历', detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。' }
+      }
+    ]
+  },
+  {
+    tool_calls: [
+      {
+        name: 'save_card',
+        arguments: {
+          kind: 'geography',
+          title: '雾津港七号泊位',
+          readerText: '常年大雾的深水泊位，夜里潮水定时辰。',
+          authorText: '七号泊位专走南屿的私货船。'
+        }
+      }
+    ]
+  },
+  { tool_calls: [{ name: 'finish', arguments: { message: '第 1 章已入书，人物状态已更新。建议下一章写船上试探。' } }] },
+  // chat（free agent）：一轮工具 + 两轮纯文本（CHAT_IN_QUEUE=0 时跳过，供 m4 直接 revise）
+  ...(process.env.CHAT_IN_QUEUE === '0' ? [] : CHAT_TAIL),
+  // revise（独立 job kind=revise，genRevise 吃纯文本）
+  REVISE_TEXT,
+  // review（七维章审读）
+  REVIEW_JSON,
+  // diagnose（问导演）
+  DIAGNOSE_JSON
+]
+let callSeq = 0
+const FINAL_QUEUE = process.env.AGENT_MODE ? AGENT_QUEUE : QUEUE
+
 
 let served = 0
 const server = createServer((req, res) => {
@@ -253,9 +357,38 @@ const server = createServer((req, res) => {
   req.on('data', (c) => (body += c))
   req.on('end', () => {
     served += 1
-    console.log(`[stub] call #${served} (剩余 ${QUEUE.length})`)
-    const text = QUEUE.length ? QUEUE.shift() : '{}'
+    const item = FINAL_QUEUE.length ? FINAL_QUEUE.shift() : '{}'
+    const text = typeof item === 'string' ? item : ''
+    console.log(
+      `[stub] call #${served} (剩余 ${FINAL_QUEUE.length}) ${typeof item === 'object' ? `tool_calls→${item.tool_calls.map((t) => t.name).join(',')}` : 'text'}`
+    )
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+    if (typeof item === 'object' && item.tool_calls) {
+      // 工具调用响应：一次性给完整 tool_calls（llmOpenai 按 index 累积）
+      callSeq += 1
+      const fn = item.tool_calls.map((t, i) => ({
+        index: i,
+        id: `call_${callSeq}_${i}`,
+        type: 'function',
+        function: { name: t.name, arguments: JSON.stringify(t.arguments ?? {}) }
+      }))
+      res.write(
+        `data: ${JSON.stringify({
+          model: 'stub-model',
+          choices: [{ delta: { role: 'assistant', tool_calls: fn } }]
+        })}\n\n`
+      )
+      res.write(
+        `data: ${JSON.stringify({
+          model: 'stub-model',
+          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 100, completion_tokens: 300 }
+        })}\n\n`
+      )
+      res.write('data: [DONE]\n\n')
+      res.end()
+      return
+    }
     const chunkSize = 40
     for (let i = 0; i < text.length; i += chunkSize) {
       res.write(

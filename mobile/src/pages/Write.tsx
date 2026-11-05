@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import type { ChapterOutline, ChatMessageRow, Job, Scene } from '@shared/types'
+import type { ChatMessageRow, Job } from '@shared/types'
 import ReportCard from '../components/ReportCard'
 import QuickActionsBar from '../components/QuickActionsBar'
 import { qk, useBook, useJobFlow, useMessages, useStatusCard } from '../lib/queries'
@@ -20,12 +20,9 @@ const KIND_COLOR: Record<string, string> = {
   wild: 'bg-amber-100 text-orange-800'
 }
 
-/** 节点消息 step → 对应 waiting 时 job.step（后端状态机：waiting 在「下一步」上） */
+/** 节点消息 step → 对应 waiting 时 job.step（M6：只有走向卡需要作者确认） */
 const WAIT_STEP_FOR: Record<string, string> = {
-  cards: 'outline',
-  outline: 'scene',
-  scenes: 'draft',
-  selfcheck: 'selfcheck'
+  cards: 'outline'
 }
 
 function hhmm(ts: number): string {
@@ -171,6 +168,9 @@ function MessageRow({
   }
 
   const meta = msg.meta ?? {}
+  if (meta.kind === 'tool') {
+    return <ToolCard msg={msg} />
+  }
   if (meta.kind === 'job' && typeof meta.jobId === 'string') {
     const job = jobsById.get(meta.jobId)
     if (job) {
@@ -231,27 +231,6 @@ function JobCard({
           ? `本章走向：${job.payload.direction.text}`
           : `本章走向备选 ${job.payload.cards?.length ?? 0} 张`}
       </StaticBubble>
-    )
-  }
-  if (step === 'outline') {
-    return interactive ? (
-      <OutlineInteractive job={job} refresh={refresh} />
-    ) : (
-      <OutlineStatic job={job} />
-    )
-  }
-  if (step === 'scenes') {
-    return interactive ? (
-      <ScenesInteractive job={job} refresh={refresh} />
-    ) : (
-      <ScenesStatic job={job} />
-    )
-  }
-  if (step === 'selfcheck') {
-    return interactive ? (
-      <SelfcheckInteractive job={job} refresh={refresh} />
-    ) : (
-      <StaticBubble>自检发现问题 · {job.payload.autoFixed ? '自动修过一轮' : '已处理'}</StaticBubble>
     )
   }
   if (step === 'chapter') return <ChapterDoneCard job={job} chaptersById={chaptersById} refresh={refreshAll} />
@@ -405,230 +384,61 @@ function CardsInteractive({ job, refresh }: { job: Job; refresh: () => void }) {
   )
 }
 
-// ── 大纲（交互/静态） ───────────────────────────────────────────────────────
+// ── 工具卡（agent 每次工具调用的工作日志，折叠小卡） ─────────────────────────
 
-function OutlineInteractive({ job, refresh }: { job: Job; refresh: () => void }) {
-  const outline: ChapterOutline = job.payload.outline ?? { title: '', synopsis: '', beats: [] }
-  const [title, setTitle] = useState(outline.title)
-  const [synopsis, setSynopsis] = useState(outline.synopsis)
-  const [beats, setBeats] = useState<string[]>(outline.beats)
-  const [busy, setBusy] = useState(false)
-
-  return (
-    <div className="px-4 py-2">
-      <div className="mb-2 text-xs text-stone-500">章级大纲——可改，确认后拆分镜</div>
-      <div className="rounded-2xl border border-orange-100 bg-white p-3.5">
-        <input
-          className="mb-2 w-full rounded-lg border border-orange-100 px-2.5 py-2 text-sm font-semibold outline-none focus:border-orange-700"
-          value={title}
-          onChange={(e) => setTitle(e.target.value)}
-        />
-        <textarea
-          className="mb-2 min-h-24 w-full resize-none rounded-lg border border-orange-100 px-2.5 py-2 text-xs leading-relaxed outline-none focus:border-orange-700"
-          value={synopsis}
-          onChange={(e) => setSynopsis(e.target.value)}
-        />
-        <div className="space-y-1.5">
-          {beats.map((b, i) => (
-            <div key={i} className="flex items-center gap-2">
-              <span className="w-4 shrink-0 text-center text-[11px] text-stone-400">{i + 1}</span>
-              <input
-                className="min-w-0 flex-1 rounded-lg border border-orange-100 px-2 py-1.5 text-xs outline-none focus:border-orange-700"
-                value={b}
-                onChange={(e) => setBeats(beats.map((x, j) => (j === i ? e.target.value : x)))}
-              />
-              <button
-                type="button"
-                className="shrink-0 rounded-full p-1 text-stone-400 hover:text-red-600"
-                onClick={() => setBeats(beats.filter((_, j) => j !== i))}
-              >
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                  <path d="M18 6L6 18M6 6l12 12" strokeLinecap="round" />
-                </svg>
-              </button>
-            </div>
-          ))}
-          <button
-            type="button"
-            className="w-full rounded-lg border border-dashed border-orange-100 py-1.5 text-[11px] text-stone-500"
-            onClick={() => setBeats([...beats, ''])}
-          >
-            + 加一拍
-          </button>
-        </div>
-      </div>
-      <button
-        type="button"
-        disabled={busy || !title.trim()}
-        className="mt-3 w-full rounded-2xl bg-orange-600 py-3 text-sm font-semibold disabled:opacity-50"
-        onClick={async () => {
-          setBusy(true)
-          try {
-            await window.api.job.confirmOutline(job.id, {
-              title,
-              synopsis,
-              beats: beats.filter((b) => b.trim())
-            })
-            refresh()
-          } finally {
-            setBusy(false)
-          }
-        }}
-      >
-        {busy ? '提交…' : '就这样，出分镜'}
-      </button>
-    </div>
-  )
+const TOOL_LABEL: Record<string, string> = {
+  get_book_config: '看书配置',
+  list_chapters: '翻章节',
+  read_chapter: '读章',
+  list_cards: '翻设定',
+  get_card: '看设定',
+  list_characters: '翻人物',
+  list_foreshadows: '翻伏笔',
+  get_write_context: '备上下文',
+  search_project: '检索',
+  save_card: '存设定卡',
+  save_character: '存人物',
+  patch_character_state: '更新人物状态',
+  save_foreshadow: '记伏笔',
+  update_book_config: '改书配置',
+  fork_line: '开新线',
+  switch_line: '切线',
+  delete_card: '删设定卡',
+  delete_character: '删人物',
+  delete_foreshadow: '删伏笔',
+  delete_last_chapter: '删末章',
+  write_chapter_draft: '写正文草稿',
+  commit_chapter: '定稿入书',
+  revise_chapter: '改章',
+  finish: '收工'
 }
 
-function OutlineStatic({ job }: { job: Job }) {
-  const o = job.payload.outline
-  if (!o) return null
+function ToolCard({ msg }: { msg: ChatMessageRow }) {
+  const meta = msg.meta ?? {}
+  const [open, setOpen] = useState(false)
+  const ok = meta.ok !== false
+  const tool = typeof meta.tool === 'string' ? meta.tool : '工具'
+  const summary = typeof meta.summary === 'string' ? meta.summary : ''
   return (
-    <div className="px-4 py-2">
-      <div className="rounded-2xl border border-orange-100 bg-orange-50 p-3.5">
-        <div className="text-sm font-semibold">《{o.title}》</div>
-        <div className="mt-1 line-clamp-3 text-xs leading-relaxed text-stone-500">{o.synopsis}</div>
-        {o.beats.length > 0 && (
-          <div className="mt-1.5 text-[11px] text-stone-400">{o.beats.length} 拍</div>
+    <div className="px-4 py-1">
+      <button
+        type="button"
+        className={`w-full rounded-xl border px-3 py-2 text-left ${ok ? 'border-orange-100 bg-white/70' : 'border-red-200 bg-red-50'}`}
+        onClick={() => setOpen(!open)}
+      >
+        <div className="flex items-center gap-2">
+          <span className={`text-[10px] ${ok ? 'text-orange-500' : 'text-red-500'}`}>{ok ? '✓' : '✗'}</span>
+          <span className="shrink-0 text-[11px] text-stone-400">{TOOL_LABEL[tool] ?? tool}</span>
+          <span className={`min-w-0 flex-1 truncate text-xs ${ok ? 'text-stone-600' : 'text-red-600'}`}>
+            {summary}
+          </span>
+          <span className="shrink-0 text-[10px] text-stone-300">{open ? '▲' : '▼'}</span>
+        </div>
+        {open && (
+          <div className="mt-2 max-h-48 overflow-y-auto no-scrollbar rounded-lg bg-orange-50 p-2 text-[11px] leading-relaxed whitespace-pre-wrap text-stone-500">
+            {msg.content || '（无详情）'}
+          </div>
         )}
-      </div>
-    </div>
-  )
-}
-
-// ── 分镜（交互/静态） ───────────────────────────────────────────────────────
-
-function ScenesInteractive({ job, refresh }: { job: Job; refresh: () => void }) {
-  const scenes: Scene[] = job.payload.scenes ?? []
-  const [list, setList] = useState<Scene[]>(scenes)
-  const [busy, setBusy] = useState(false)
-
-  const go = async (final: Scene[] | null) => {
-    setBusy(true)
-    try {
-      await window.api.job.confirmScenes(job.id, final)
-      refresh()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="px-4 py-2">
-      <div className="mb-2 text-xs text-stone-500">场景分镜——每一幕的镜头感，可微调</div>
-      <div className="space-y-2">
-        {list.map((s, i) => (
-          <div key={s.id} className="rounded-xl border border-orange-100 bg-white p-3">
-            <div className="mb-1.5 flex items-center gap-2">
-              <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-stone-500">
-                幕 {i + 1}
-              </span>
-              <span className="text-[11px] text-stone-400">
-                {s.viewpoint} · {s.pace}
-              </span>
-            </div>
-            <textarea
-              className="min-h-14 w-full resize-none rounded-lg px-1 py-1 text-xs leading-relaxed outline-none"
-              value={s.summary}
-              onChange={(e) => setList(list.map((x, j) => (j === i ? { ...x, summary: e.target.value } : x)))}
-            />
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        disabled={busy}
-        className="mt-3 w-full rounded-2xl bg-orange-600 py-3 text-sm font-semibold disabled:opacity-50"
-        onClick={() => go(list)}
-      >
-        {busy ? '提交…' : '开写正文'}
-      </button>
-      <button
-        type="button"
-        disabled={busy}
-        className="mt-2 w-full rounded-xl py-2 text-xs text-stone-500 disabled:opacity-50"
-        onClick={() => go(null)}
-      >
-        跳过分镜，直接开写
-      </button>
-    </div>
-  )
-}
-
-function ScenesStatic({ job }: { job: Job }) {
-  const scenes = job.payload.scenes
-  return (
-    <div className="px-4 py-2">
-      <div className="rounded-2xl border border-orange-100 bg-orange-50 p-3.5">
-        <div className="text-xs font-semibold text-stone-600">
-          {scenes ? `${scenes.length} 幕分镜` : '跳过分镜直接开写'}
-        </div>
-        {scenes?.map((s, i) => (
-          <div key={s.id} className="mt-1 line-clamp-1 text-[11px] text-stone-500">
-            {i + 1}. {s.summary}
-          </div>
-        ))}
-      </div>
-    </div>
-  )
-}
-
-// ── 自检（交互） ────────────────────────────────────────────────────────────
-
-function SelfcheckInteractive({ job, refresh }: { job: Job; refresh: () => void }) {
-  const lint = job.payload.lint
-  const autoFixed = job.payload.autoFixed
-  const [busy, setBusy] = useState(false)
-
-  const act = async (fn: () => Promise<unknown>) => {
-    setBusy(true)
-    try {
-      await fn()
-      refresh()
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  return (
-    <div className="px-4 py-2">
-      <div className="mb-2 text-xs font-semibold text-orange-700">
-        {autoFixed ? '自动修了一轮，还有这些问题——你来定夺' : '自检发现这些问题'}
-      </div>
-      <div className="space-y-2">
-        {lint?.issues.map((iss, i) => (
-          <div key={i} className="rounded-xl border border-orange-100 bg-white p-3">
-            <div className="mb-1 flex items-center gap-2">
-              <span
-                className={
-                  'rounded-full px-2 py-0.5 text-[11px] ' +
-                  (iss.level === 'major' ? 'bg-red-100 text-red-600' : 'bg-orange-100 text-stone-500')
-                }
-              >
-                {iss.rule}
-              </span>
-            </div>
-            {iss.quote && <div className="mb-1 truncate text-[11px] text-stone-500">「{iss.quote}」</div>}
-            <div className="text-xs leading-relaxed text-stone-500">{iss.advice}</div>
-          </div>
-        ))}
-      </div>
-      <button
-        type="button"
-        disabled={busy}
-        className="mt-3 w-full rounded-2xl bg-orange-600 py-3 text-sm font-semibold disabled:opacity-50"
-        onClick={() => act(() => window.api.job.retry(job.id))}
-      >
-        再修一轮
-      </button>
-      <button
-        type="button"
-        disabled={busy}
-        className="mt-2 w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500 disabled:opacity-50"
-        onClick={() => act(() => window.api.job.acceptFlaws(job.id))}
-      >
-        接受瑕疵，直接入书
       </button>
     </div>
   )
@@ -774,15 +584,14 @@ function RecapCard({ recap }: { recap: NonNullable<Job['payload']['recap']> }) {
 
 const RUN_LABEL: Record<string, string> = {
   proposal: '导演正在构思走向…',
-  outline: '正在展开章级大纲…',
-  scene: '正在拆分场景分镜…',
+  agent: '导演自主工作中（查资料·写正文·自检·沉淀）…',
   selfcheck: '自检中…',
   finalize: '落章收尾中…'
 }
 
 function StreamingBar({ job, refresh }: { job: Job; refresh: () => void }) {
   const streaming =
-    (job.kind === 'write' && job.step === 'draft') ||
+    (job.kind === 'write' && job.step === 'agent') ||
     job.kind === 'revise' ||
     job.kind === 'chat'
   const [text, setText] = useState('')
@@ -822,7 +631,7 @@ function StreamingBar({ job, refresh }: { job: Job; refresh: () => void }) {
   }
 
   const label =
-    job.kind === 'write' ? '正文生成中' : job.kind === 'revise' ? '改章中' : '导演正在回话'
+    job.kind === 'write' ? '导演工作中（工具调用见上方小卡）' : job.kind === 'revise' ? '改章中' : '导演正在回话'
 
   return (
     <div id="write-stream-box" className="px-4 py-2">
@@ -854,10 +663,12 @@ function StreamingBar({ job, refresh }: { job: Job; refresh: () => void }) {
             onClick={(e) => e.stopPropagation()}
           >
             <div className="mb-1 text-sm font-medium text-red-600">
-              {job.kind === 'write' ? '取消将作废本章' : '取消将作废本次改章（原章不受影响）'}
+              {job.kind === 'write' ? '取消将中断本次写作' : '取消将作废本次改章（原章不受影响）'}
             </div>
             {job.kind === 'write' && (
-              <div className="mb-4 text-xs text-stone-500">已生成内容不会保留，需要重头再来。</div>
+              <div className="mb-4 text-xs text-stone-500">
+                未定稿的内容不会入书；已入书的章节不受影响。
+              </div>
             )}
             <div className="flex gap-3">
               <button

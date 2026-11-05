@@ -1,25 +1,14 @@
-import type {
-  ChapterOutline,
-  ChatMessageRow,
-  DirectionCard,
-  Job,
-  JobPayload,
-  Scene
-} from '../shared/types.js'
+import type { ChatMessage, DirectionCard, Job, JobPayload } from '../shared/types.js'
+import { interceptorDefs, runAgentLoop } from './agent/loop.js'
+import { toolDefs } from './agent/tools.js'
 import { emitJob, emitJobDelta } from './broadcast.js'
 import {
-  autoFixDraft,
   compactMemories,
   genAudit,
-  genChat,
   genDiagnose,
   genDirections,
-  genDraft,
-  genOutline,
-  genRecap,
   genReview,
   genRevise,
-  genScenes,
   selfCheck
 } from './director/steps.js'
 import { stripHtmlComments } from './lint.js'
@@ -30,20 +19,13 @@ import {
   failStuckJobs,
   getBook,
   getChapter,
-  getCharacter,
   getJob,
   getLine,
-  insertChapter,
   insertJob,
-  listCharacters,
   listJobs,
   listMessages,
-  patchCharacterStates,
   previousChapter,
   replaceChapterContent,
-  saveCard,
-  saveForeshadow,
-  updateChapterSummary,
   updateJob
 } from './store.js'
 
@@ -214,226 +196,76 @@ export async function chooseDirection(
       direction.source === 'card' ? `选走向：${direction.text}` : `自定义走向：${direction.text}`,
       jobId
     )
-    updateJob(jobId, { state: 'running', watchdogAt: Date.now(), payload: { direction } })
-    const book = getBook(job.bookId)
-    if (!book) throw new Error('书不存在')
-    const outline: ChapterOutline = await genOutline(book, job.lineId, direction)
-    note(jobId, 'outline', `《${outline.title}》章级大纲已出，确认或修改`)
-    return updateJob(jobId, {
-      state: 'waiting_user',
-      step: 'scene',
-      watchdogAt: 0,
-      payload: { outline }
-    })
-  })
-}
-
-export async function confirmOutline(jobId: string, edits?: Partial<ChapterOutline>): Promise<Job> {
-  const job = requireWriteJob(jobId, 'scene')
-  const direction = job.payload.direction
-  const outline = { ...(job.payload.outline as ChapterOutline), ...edits }
-  if (!direction || !outline) throw new Error('任务数据不完整')
-  const edited = Boolean(edits && Object.keys(edits).length > 0)
-  activeJobId = jobId
-  return guarded(jobId, async () => {
-    userMsg(job.bookId, edited ? '确认大纲（有修改）' : '确认大纲', jobId)
     updateJob(jobId, {
       state: 'running',
-      step: 'scene',
+      step: 'agent',
       watchdogAt: Date.now(),
-      payload: { outline }
+      payload: { direction }
     })
-    const book = getBook(job.bookId)
-    if (!book) throw new Error('书不存在')
-    const scenes: Scene[] = await genScenes(book, job.lineId, outline, direction)
-    note(jobId, 'scenes', '本章分镜已出，逐幕确认或直接开写')
-    return updateJob(jobId, {
-      state: 'waiting_user',
-      step: 'draft',
-      watchdogAt: 0,
-      payload: { scenes }
-    })
+    return await runAgentChapterJob(job, direction)
   })
 }
 
-/** scenes=null 表示用户跳过分镜（W3 逃生门），直接开写 */
-export async function confirmScenes(jobId: string, scenes: Scene[] | null): Promise<Job> {
-  const job = requireWriteJob(jobId, 'draft')
-  const direction = job.payload.direction
-  const outline = job.payload.outline
-  if (!direction || !outline) throw new Error('任务数据不完整')
-  const finalScenes = scenes ?? job.payload.scenes ?? null
-  activeJobId = jobId
-  return guarded(jobId, async () => {
-    userMsg(job.bookId, scenes ? '按分镜开写正文' : '跳过分镜，直接开写', jobId)
-    updateJob(jobId, {
-      state: 'running',
-      step: 'draft',
-      watchdogAt: Date.now(),
-      payload: { scenes: finalScenes }
-    })
-    const book = getBook(job.bookId)
-    if (!book) throw new Error('书不存在')
-    const draft = await genDraft(
-      { book, lineId: job.lineId, outline, scenes: finalScenes, direction },
-      streamingSaver(jobId)
-    )
-    return await selfcheckPhase(job, book, draft)
-  })
-}
-
-/** 自检→自动修一次→再检（W6）；不过则 waiting_user 给作者选择 */
-async function selfcheckPhase(
+/**
+ * M6 agent 自主段：选完走向后 agent 一路自主（查资料→拟大纲→写正文→自检→入书→沉淀）。
+ * 大纲/分镜不再找作者确认（用户决策：只留走向确认）。
+ */
+async function runAgentChapterJob(
   job: Job,
-  book: NonNullable<ReturnType<typeof getBook>>,
-  draft: string
+  direction: NonNullable<JobPayload['direction']>
 ): Promise<Job | null> {
-  const prev = previousChapter(job.lineId)
-  const report = selfCheck(book, job.lineId, draft, prev?.content?.slice(-400))
-  if (report.pass) {
-    return await finalize(job.id, draft)
-  }
-  if (job.payload.autoFixed) {
-    note(job.id, 'selfcheck', '自动修了一轮仍有问题，你来定夺')
-    return updateJob(job.id, {
-      state: 'waiting_user',
-      step: 'selfcheck',
-      payload: { draftText: draft, lint: report },
-      watchdogAt: 0
-    })
-  }
-  // 自动修一次
-  const outline = job.payload.outline as ChapterOutline
-  const direction = job.payload.direction as NonNullable<JobPayload['direction']>
-  const scenes = job.payload.scenes ?? null
-  const fixed = await autoFixDraft(
-    { book, lineId: job.lineId, outline, scenes, direction },
-    draft,
-    report,
-    streamingSaver(job.id)
-  )
-  const report2 = selfCheck(book, job.lineId, fixed, prev?.content?.slice(-400))
-  if (report2.pass) {
-    return await finalize(job.id, fixed)
-  }
-  return updateJob(job.id, {
-    state: 'waiting_user',
-    step: 'selfcheck',
-    payload: { draftText: fixed, lint: report2, autoFixed: true },
-    watchdogAt: 0
-  })
-}
-
-/** 接受瑕疵（W6 选项之一）：带病入书 */
-export async function acceptFlaws(jobId: string): Promise<Job> {
-  const job = requireWriteJob(jobId, 'selfcheck')
-  if (!job.payload.draftText) throw new Error('没有可入书的草稿')
-  activeJobId = jobId
-  userMsg(job.bookId, '接受瑕疵，直接入书', jobId)
-  return guarded(jobId, () => finalize(jobId, job.payload.draftText as string))
-}
-
-/** 入书+纪要（W4：自检过后写完即入书；变更清单落库） */
-async function finalize(jobId: string, draftOverride?: string): Promise<Job | null> {
-  const job = getJob(jobId)
-  if (!job) throw new Error('任务不存在')
-  const draft = stripHtmlComments(draftOverride ?? (job.payload.draftText as string))
-  if (!draft) throw new Error('草稿为空')
   const book = getBook(job.bookId)
   if (!book) throw new Error('书不存在')
-  updateJob(jobId, { state: 'running', step: 'finalize', watchdogAt: Date.now() })
-
-  const outline = job.payload.outline as ChapterOutline
-  const prev = previousChapter(job.lineId)
-  const chapter = insertChapter({
-    lineId: job.lineId,
-    parentChapterId: prev?.id ?? '',
-    title: outline.title,
-    content: draft,
-    summary: '',
-    meta: {
-      direction: job.payload.direction,
-      outline,
-      scenes: job.payload.scenes ?? null
-    }
-  })
-
-  // 纪要（概要+设定变更），失败不阻断入书（章已在库）
-  let recap: JobPayload['recap']
-  try {
-    recap = await genRecap(book, job.lineId, { ...chapter, content: draft })
-    applyRecap(job, chapter.id, recap)
-    // 摘要写回章节（滚动记忆细记层）
-    updateChapterSummary(chapter.id, recap.summary)
-  } catch (err) {
-    console.warn('[jobs] 纪要生成失败（不影响入书）:', (err as Error)?.message)
-  }
-
-  const done = updateJob(jobId, {
-    state: 'done',
-    step: 'finalize',
-    chapterId: chapter.id,
-    payload: {
-      recap: recap ?? undefined,
-      draftText: draft,
-      draftWordCount: draft.replace(/\s/g, '').length
-    },
-    watchdogAt: 0
-  })
-  note(jobId, 'chapter', `《${chapter.title}》已入书`)
-
-  // 滚动记忆压缩（D2，后台静默）
-  void compactMemories(book, job.lineId, effectiveChapters(job.lineId)).catch(() => {})
-  // 每 8 章自动排一次跨章审计（M4 文风漂移/剧情空转守望）
-  const chaptersNow = effectiveChapters(job.lineId)
-  if (chaptersNow.length > 0 && chaptersNow.length % 8 === 0) {
-    maybeQueueAudit(job.bookId, job.lineId)
-  }
-  return done
-}
-
-/** 应用纪要的设定变更（B5 agent 全权维护；B8 活状态；伏笔台账） */
-function applyRecap(job: Job, chapterId: string, recap: NonNullable<JobPayload['recap']>): void {
-  const statePatches: Array<{ id: string; patch: Record<string, string> }> = []
-  for (const sc of recap.stateChanges) {
-    let charId = sc.characterId && getCharacter(sc.characterId) ? sc.characterId : null
-    if (!charId) {
-      const hit = listCharactersByName(job.lineId, sc.name)
-      if (hit) charId = hit.id
-    }
-    if (charId) statePatches.push({ id: charId, patch: sc.patch as Record<string, string> })
-  }
-  if (statePatches.length) patchCharacterStates(statePatches)
-
-  for (const op of recap.cardOps) {
-    if (op.op === 'create' && op.title) {
-      saveCard({
-        lineId: job.lineId,
-        kind: op.kind ?? 'custom',
-        title: op.title,
-        readerText: op.readerText ?? '',
-        authorText: op.authorText ?? ''
-      })
-    }
-    // update/delete 留给 M4 子代理盘点（M2 先 create）
-  }
-
-  for (const op of recap.foreshadowOps) {
-    saveForeshadow({
-      lineId: job.lineId,
-      title: op.title,
-      detail: op.detail,
-      plantedChapterId: op.op === 'plant' ? chapterId : '',
-      resolvedChapterId: op.op === 'resolve' ? chapterId : '',
-      plannedChapterId: op.op === 'plan' ? chapterId : '',
-      status: op.op === 'resolve' ? 'resolved' : op.op === 'plan' ? 'planned' : 'open'
+  updateJob(job.id, { state: 'running', step: 'agent', watchdogAt: Date.now(), error: '' })
+  const chapterNo = effectiveChapters(job.lineId).length + 1
+  const task = `写第 ${chapterNo} 章。作者选定的走向：${direction.text}（${direction.source === 'card' ? '从走向卡选定' : '作者自定义'}）。按写章任务纪律自主完成全流程。`
+  const say = (content: string, meta?: Record<string, unknown>): void => {
+    appendMessage({
+      bookId: job.bookId,
+      role: 'assistant',
+      content,
+      meta: { jobId: job.id, ...meta }
     })
   }
-}
-
-function listCharactersByName(lineId: string, name: string): { id: string } | null {
-  const hit = listCharacters(lineId).find((c) => c.name === name)
-  return hit ?? null
+  const result = await runAgentLoop({
+    jobId: job.id,
+    bookId: job.bookId,
+    task,
+    history: [],
+    mode: 'chapter',
+    tools: [...toolDefs(), ...interceptorDefs('chapter')],
+    onDelta: streamingSaver(job.id),
+    say,
+    onChapterCommitted: (chapter, extra) => {
+      note(job.id, 'chapter', `《${chapter.title}》已入书`)
+      updateJob(job.id, {
+        chapterId: chapter.id,
+        payload: {
+          draftText: chapter.content,
+          draftWordCount: chapter.wordCount,
+          recap: {
+            summary: extra.summary,
+            stateChanges: [],
+            cardOps: [],
+            foreshadowOps: [],
+            quickActions: extra.quickActions
+          }
+        }
+      })
+      const b2 = getBook(job.bookId)
+      if (b2) {
+        void compactMemories(b2, job.lineId, effectiveChapters(job.lineId)).catch(() => {})
+        const n = effectiveChapters(job.lineId).length
+        if (n > 0 && n % 8 === 0) maybeQueueAudit(job.bookId, job.lineId)
+      }
+    }
+  })
+  return updateJob(job.id, {
+    state: 'done',
+    step: '',
+    payload: { answer: result.text },
+    watchdogAt: 0
+  })
 }
 
 /** 重试当前步骤（W6「再试」/中断恢复 W13） */
@@ -473,64 +305,12 @@ export async function retryJob(jobId: string): Promise<Job> {
   activeJobId = jobId
   return guarded(jobId, async () => {
     updateJob(jobId, { state: 'running', watchdogAt: Date.now(), error: '' })
-    switch (job.step) {
-      case 'proposal':
-      case '':
-        return await runProposal(job)
-      case 'outline': {
-        const direction = job.payload.direction
-        if (direction) {
-          const outline = await genOutline(book, job.lineId, direction)
-          return updateJob(jobId, {
-            state: 'waiting_user',
-            step: 'scene',
-            watchdogAt: 0,
-            payload: { outline }
-          })
-        }
-        return await runProposal(job)
-      }
-      case 'scene': {
-        const direction = job.payload.direction as NonNullable<JobPayload['direction']>
-        const outline = job.payload.outline as ChapterOutline
-        const scenes = await genScenes(book, job.lineId, outline, direction)
-        return updateJob(jobId, {
-          state: 'waiting_user',
-          step: 'draft',
-          watchdogAt: 0,
-          payload: { scenes }
-        })
-      }
-      case 'draft': {
-        const direction = job.payload.direction as NonNullable<JobPayload['direction']>
-        const outline = job.payload.outline as ChapterOutline
-        const scenes = job.payload.scenes ?? null
-        const draft = await genDraft(
-          { book, lineId: job.lineId, outline, scenes, direction },
-          streamingSaver(jobId)
-        )
-        return await selfcheckPhase(job, book, draft)
-      }
-      case 'selfcheck': {
-        // 再试=重新生成正文
-        const direction = job.payload.direction as NonNullable<JobPayload['direction']>
-        const outline = job.payload.outline as ChapterOutline
-        const scenes = job.payload.scenes ?? null
-        const draft = await genDraft(
-          { book, lineId: job.lineId, outline, scenes, direction },
-          streamingSaver(jobId)
-        )
-        return await selfcheckPhase(
-          { ...job, payload: { ...job.payload, autoFixed: false } },
-          book,
-          draft
-        )
-      }
-      case 'finalize':
-        return await finalize(jobId)
-      default:
-        throw new Error(`未知步骤 ${job.step}`)
+    // M6：走向未选→重跑走向卡；走向已选→重跑 agent 自主段
+    const direction = job.payload.direction
+    if (job.step === 'proposal' || job.step === '' || !direction) {
+      return await runProposal(job)
     }
+    return await runAgentChapterJob(job, direction)
   })
 }
 
@@ -706,21 +486,44 @@ async function runChatJob(job: Job): Promise<Job | null> {
   const question = job.payload.question
   if (!book || !question) throw new Error('对话任务缺少参数')
   activeJobId = job.id
-  updateJob(job.id, { state: 'running', step: 'draft', watchdogAt: Date.now(), error: '' })
-  const history = listMessages(job.bookId, { limit: 40 })
-    .filter((m): m is ChatMessageRow => m.meta?.kind === 'chat' && m.content !== question)
+  updateJob(job.id, { state: 'running', step: 'agent', watchdogAt: Date.now(), error: '' })
+  // 对话历史投影：只带文本 chat 消息（user+assistant），工具卡/动作不回灌
+  const history: ChatMessage[] = listMessages(job.bookId, { limit: 40 })
+    .filter((m) => m.meta?.kind === 'chat' && m.content !== question)
     .slice(-12)
-  const answer = await genChat(book, job.lineId, history, question, streamingSaver(job.id))
-  appendMessage({
+    .map((m) => ({ role: m.role, content: m.content }))
+  const result = await runAgentLoop({
+    jobId: job.id,
     bookId: job.bookId,
-    role: 'assistant',
-    content: answer,
-    meta: { kind: 'chat', jobId: job.id }
+    task: question,
+    history,
+    mode: 'free',
+    tools: [...toolDefs(), ...interceptorDefs('free')],
+    onDelta: streamingSaver(job.id),
+    say: (content, meta) =>
+      appendMessage({
+        bookId: job.bookId,
+        role: 'assistant',
+        content,
+        meta: { jobId: job.id, ...meta }
+      })
   })
+  // loop 未落白话时（直接 finish）补一条，保证对话流有回音
+  if (
+    result.text &&
+    !listMessages(job.bookId, { limit: 3 }).some((m) => m.content === result.text)
+  ) {
+    appendMessage({
+      bookId: job.bookId,
+      role: 'assistant',
+      content: result.text,
+      meta: { kind: 'chat', jobId: job.id }
+    })
+  }
   return updateJob(job.id, {
     state: 'done',
     step: '',
-    payload: { answer, draftText: undefined },
+    payload: { answer: result.text },
     watchdogAt: 0
   })
 }

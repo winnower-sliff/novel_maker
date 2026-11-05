@@ -12,7 +12,7 @@ import type {
 import { lintChapter } from '../lint.js'
 import { callJson, callRaw } from './callJson.js'
 import { buildWriteContext } from './context.js'
-import { bookBasics, directorPersona, redlineBlock, styleBlock } from './prompts.js'
+import { bookBasics, directorPersona, redlineBlock, styleBlock, wordListBlock } from './prompts.js'
 
 /**
  * 导演循环各步（W2/W3/W6）：
@@ -24,7 +24,7 @@ const WRITER_SLOT = 'writer' as const
 const DIRECTOR_SLOT = 'director' as const
 
 function base(book: Book, lineId: string): string {
-  return `${bookBasics(book)}${redlineBlock(book)}${styleBlock(book)}\n\n${buildWriteContext(book, lineId)}`
+  return `${bookBasics(book)}${redlineBlock(book)}${wordListBlock(book)}${styleBlock(book)}\n\n${buildWriteContext(book, lineId)}`
 }
 
 // ── proposal：走向卡片（W2/G4 简版——导演直出；两段式候选筛由 M4 子代理接入） ──
@@ -192,7 +192,11 @@ export function selfCheck(
   draft: string,
   prevTail?: string
 ): LintReport {
-  return lintChapter(draft, { prevTail, targetWords: book.targetWords })
+  return lintChapter(draft, {
+    prevTail,
+    targetWords: book.targetWords,
+    bannedWords: book.negativeWords
+  })
 }
 
 /** 自动修正重写（W6 第一道：lint 报告喂回写手重写一次） */

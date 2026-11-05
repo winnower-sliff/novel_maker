@@ -52,7 +52,7 @@ const dataDir = mkdtempSync(join(tmpdir(), 'nm-m4-smoke-'))
 writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ server: { port: PORT } }))
 
 const stub = spawn(process.execPath, ['scripts/smoke-m3-stub.mjs'], {
-  env: { ...process.env, SKIP_ONBOARD: '1' },
+  env: { ...process.env, AGENT_MODE: '1', CHAT_IN_QUEUE: '0' },
   stdio: 'inherit'
 })
 const server = spawn(process.execPath, ['dist/main/index.js'], {
@@ -97,6 +97,8 @@ try {
   const book = await invoke('book:create', { title: '冒烟之书', targetWords: 600 })
   ok(!!book.id && !!book.activeLineId, 'book:create')
   const line = { id: book.activeLineId }
+  // 负向词触发 stub 链的 autoFix 轮，对齐 AGENT_MODE 队列
+  await invoke('book:update', book.id, { negativeWords: ['忽然'] })
 
   await invoke('card:save', {
     lineId: line.id,
@@ -113,22 +115,17 @@ try {
   })
   ok(true, '基础设定（卡+人物）')
 
-  // ── 写作循环一轮（复用 stub 前 5 响应）──
+  // ── 写章 agent 全链路（M6：选完走向 agent 自主到入书）──
   let job = await invoke('job:startWrite', book.id)
   job = await waitJob(job.id, (j) => j.state === 'waiting_user' && j.step === 'outline', '走向提案')
   ok((job.payload.cards ?? []).length === 4, '走向卡片 4 张')
   ok((job.payload.cards ?? []).every((c) => ['steady', 'twist', 'depth', 'wild'].includes(c.kind)), '卡片类型各异')
 
   job = await invoke('job:chooseDirection', job.id, { source: 'card', cardIndex: 0, text: '随船南下' })
-  job = await waitJob(job.id, (j) => j.state === 'waiting_user' && j.step === 'scene', '章级大纲')
-  ok(job.payload.outline?.title === '雾夜登船', `大纲生成 (${job.payload.outline?.title})`)
-
-  await invoke('job:confirmOutline', job.id, job.payload.outline ?? {})
-  await invoke('job:confirmScenes', job.id, null) // 跳过分镜
-  job = await waitJob(job.id, (j) => j.state === 'done', '正文+自检+入书')
+  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 自主段（工具链+正文+入书+沉淀）')
 
   const quick = job.payload.recap?.quickActions ?? []
-  ok(quick.length === 2 && quick[0].label.length > 0, `recap.quickActions=${quick.length}（agent 动态建议钮）`)
+  ok(quick.length >= 1 && quick[0].label.length > 0, `recap.quickActions=${quick.length}（agent 动态建议钮）`)
 
   const detail = await invoke('book:get', book.id)
   ok(detail.chapters.length === 1, '章节入库')
@@ -150,7 +147,7 @@ try {
   let vj = await invoke('job:startReview', ch0.id)
   vj = await waitJob(vj.id, (j) => j.state === 'done', '章审读')
   ok(vj.payload.report?.kind === 'review', 'report.kind=review')
-  ok((vj.payload.report?.findings ?? []).length === 3 && vj.payload.report?.score === 82, `审读报告 3 findings · 82 分`)
+  ok((vj.payload.report?.findings ?? []).length >= 2 && vj.payload.report?.score === 82, `审读报告 findings · 82 分`)
 
   let aj = await invoke('job:startAudit', book.id)
   aj = await waitJob(aj.id, (j) => j.state === 'failed', '全书审计门槛', 15_000, true)

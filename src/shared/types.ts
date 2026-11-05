@@ -155,6 +155,10 @@ export interface Book {
   targetWords: number
   /** 剧情红线（B2）：走向/正文/新线永远避开 */
   redlines: string[]
+  /** 正向词（多用倾向的词/意象/表达，写作时反复注入） */
+  positiveWords: string[]
+  /** 负向词（禁用词，写作时反复注入+自检硬闸） */
+  negativeWords: string[]
   activeLineId: string
   archived: boolean
   createdAt: number
@@ -317,6 +321,8 @@ export type JobStep =
   | 'selfcheck'
   | 'finalize'
   | 'report'
+  /** M6：走向确认后 agent 自主工作段（查资料→写→自检→入书→沉淀） */
+  | 'agent'
 
 /** 走向卡片（W2）：默认 4 张类型不同，按需 1-5 张 */
 export interface DirectionCard {

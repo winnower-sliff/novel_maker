@@ -35,6 +35,8 @@ function rowToBook(r: Record<string, unknown>): Book {
     styleNotes: (r.style_notes as string) ?? '',
     targetWords: (r.target_words as number) ?? 2000,
     redlines: JSON.parse((r.redlines as string) || '[]') as string[],
+    positiveWords: JSON.parse((r.positive_words as string) || '[]') as string[],
+    negativeWords: JSON.parse((r.negative_words as string) || '[]') as string[],
     activeLineId: (r.active_line_id as string) ?? '',
     archived: Boolean(r.archived),
     createdAt: r.created_at as number,
@@ -218,6 +220,8 @@ export interface BookPatch {
   styleNotes?: string
   targetWords?: number
   redlines?: string[]
+  positiveWords?: string[]
+  negativeWords?: string[]
   archived?: boolean
 }
 
@@ -236,6 +240,8 @@ export function updateBook(id: string, patch: BookPatch): Book | null {
   if (patch.styleNotes !== undefined) push('style_notes', patch.styleNotes)
   if (patch.targetWords !== undefined) push('target_words', patch.targetWords)
   if (patch.redlines !== undefined) push('redlines', JSON.stringify(patch.redlines))
+  if (patch.positiveWords !== undefined) push('positive_words', JSON.stringify(patch.positiveWords))
+  if (patch.negativeWords !== undefined) push('negative_words', JSON.stringify(patch.negativeWords))
   if (patch.archived !== undefined) push('archived', patch.archived ? 1 : 0)
   if (!set.length) return getBook(id)
   push('updated_at', Date.now())
@@ -545,6 +551,19 @@ export function updateChapterSummary(chapterId: string, summary: string): void {
     .run(summary, Date.now(), chapterId)
 }
 
+/**
+ * 删章（agent 写作回退用）：只允许删本线最后一章，保持 order_no 稠密。
+ */
+export function deleteLastChapter(lineId: string): Chapter | null {
+  const db = getDb()
+  const chapters = listChapters(lineId)
+  const last = chapters[chapters.length - 1]
+  if (!last) return null
+  db.prepare('DELETE FROM chapter_versions WHERE chapter_id = ?').run(last.id)
+  db.prepare('DELETE FROM chapters WHERE id = ?').run(last.id)
+  return last
+}
+
 // ── cards / characters / foreshadows（挂 line，各线独立） ─────────────────────
 
 export function listCards(lineId: string, opts?: { kind?: CardKind; q?: string }): Card[] {
@@ -789,6 +808,11 @@ export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foresh
     now
   )
   return getForeshadow(id)
+}
+
+export function deleteForeshadow(id: string): boolean {
+  const r = getDb().prepare('DELETE FROM foreshadows WHERE id = ?').run(id)
+  return r.changes > 0
 }
 
 // ── memories（滚动分层远端压缩层） ───────────────────────────────────────────

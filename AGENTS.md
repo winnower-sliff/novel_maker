@@ -83,6 +83,27 @@
 > - 冒烟：`npm run build && node scripts/smoke-m5.mjs`（13 断言：chat 双向落库/节点消息序列 cards→outline→scenes→chapter/
 >   动作消息文案/chat 多轮）；stub 支持 CHAT_FIRST=1（chat 响应前置于写作循环）
 > - M5 其余（构建链/更新源/部署）见上文 M5 段落（commit 3cece5c 起）
+>
+> **M6 全面 agent 化（2026-11 用户决策：写作循环改自由 agent+全 CRUD 权限+透明工具卡+只留走向确认）**：
+> - 废除大纲/分镜确认与自检等待：runProposal（走向卡）→chooseDirection→**agent 自主段一路到入书**
+>   （查资料→write_chapter_draft→自检（major 自动修一轮）→commit_chapter→沉淀工具→finish）；
+>   contract 删 job:confirmOutline/confirmScenes/acceptFlaws 三通道
+> - `src/main/agent/tools.ts`：20 个 CRUD 工具（读 9/写 7/删 4，删除类内部先 snapshotDb 自动快照；
+>   patch_character_state 支持 characterId 或 name 兜底——模型常给名字）
+> - `src/main/agent/loop.ts`：runAgentLoop（maxTurns 30，callRaw params 传 messages/tools/responseFormat:text；
+>   assistant blocks 手工重建（ChatResult 无 blocks）+tool_result 回灌；拦截工具 write_chapter_draft/
+>   commit_chapter/revise_chapter/finish 内联实现；每轮 agentSystem 重建注入 bookBasics+redlineBlock+
+>   wordListBlock 防长程遗忘）；工具卡=messages 行 meta={kind:'tool',jobId,tool,summary,ok}（content 截 2000 字给作者，全文 30000 给 LLM）
+> - **正负词机制（用户需求）**：books.positive_words/negative_words 两列（migrate() 幂等加列）；
+>   lintChapter bannedWords=书级负向词→major（自检硬闸）；正向词仅提示不硬塞
+> - 前端 Write.tsx：删大纲/分镜/自检交互组件；ToolCard 折叠卡（TOOL_LABEL 中文名+展开详情，ok=false 红色）；
+>   WAIT_STEP_FOR 只剩 cards↔outline；StreamingBar streaming=write step 'agent'/revise/chat
+> - genRecap/applyRecap 旧链拆除（agent 实时沉淀取代）；revise/review/audit/diagnose 保留独立 job
+> - 冒烟四套全绿：smoke-m6（agent 全链路 18 断言含负向词自动修+工具卡序列+chat 带工具）；m2/m4/m5 已迁 AGENT_MODE 队列
+>   （**stub 队列顺序敏感**：AGENT_MODE=1 队列=directions→agent 链→chat×3（CHAT_IN_QUEUE=0 跳过）→revise→review→diagnose；
+>   冒烟脚本必须设 negativeWords=['忽然'] 触发 autoFix 轮，否则队列错位）
+> - 坑：chooseDirection 返回的是 runAgentChapterJob 完成后的终态 Job；loop.ts 的 `let book: Book` 显式标注
+>   （闭包内窄化丢失）；stub 一次性给完整 tool_calls chunk（llmOpenai 按 index 累积兼容）
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）

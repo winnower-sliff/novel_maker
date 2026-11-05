@@ -59,10 +59,25 @@ function findDuplicateParagraphs(text: string): string[][] {
 
 export function lintChapter(
   text: string,
-  opts?: { prevTail?: string; targetWords?: number }
+  opts?: { prevTail?: string; targetWords?: number; bannedWords?: string[] }
 ): LintReport {
   const issues: LintIssue[] = []
   const head = text.slice(0, 400)
+
+  // 书级负向词硬闸（M6：出现即 major）
+  for (const word of opts?.bannedWords ?? []) {
+    const w = word.trim()
+    if (w.length < 2) continue
+    const idx = text.indexOf(w)
+    if (idx >= 0) {
+      issues.push({
+        rule: '负向词',
+        level: 'major',
+        quote: clipQuote(text.slice(Math.max(0, idx - 15), idx + w.length + 15)),
+        advice: `「${w}」是本书禁用词，替换为其他表达`
+      })
+    }
+  }
 
   if (opts?.prevTail) {
     const overlap = seamOverlap(head, opts.prevTail.slice(-400))

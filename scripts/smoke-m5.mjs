@@ -52,7 +52,7 @@ const dataDir = mkdtempSync(join(tmpdir(), 'nm-m5-smoke-'))
 writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ server: { port: PORT } }))
 
 const stub = spawn(process.execPath, ['scripts/smoke-m3-stub.mjs'], {
-  env: { ...process.env, SKIP_ONBOARD: '1', CHAT_FIRST: '1' },
+  env: { ...process.env, AGENT_MODE: '1' },
   stdio: 'inherit'
 })
 const server = spawn(process.execPath, ['dist/main/index.js'], {
@@ -94,6 +94,8 @@ try {
   ok(true, '模型配置 → stub')
 
   const book = await invoke('book:create', { title: '冒烟之书', targetWords: 600 })
+  // 负向词触发 stub 链的 autoFix 轮，对齐 AGENT_MODE 队列
+  await invoke('book:update', book.id, { negativeWords: ['忽然'] })
   await invoke('card:save', {
     lineId: book.activeLineId,
     kind: 'geography',
@@ -109,48 +111,44 @@ try {
   })
   ok(true, '建书+基础设定')
 
-  // ── 自由对话（chat 第 1 轮）──
-  let cj = await invoke('job:startChat', book.id, '断刀上的「沈」字伏笔你是怎么设计的？')
-  ok(cj.kind === 'chat' && cj.state !== 'failed', 'startChat 落队列')
-  cj = await waitJob(cj.id, (j) => j.state === 'done', 'chat 第 1 轮')
-  ok((cj.payload.answer ?? '').includes('沈'), `chat 回答非空（${(cj.payload.answer ?? '').slice(0, 24)}…）`)
-
-  let msgs = await invoke('message:list', book.id)
-  const chatUser = msgs.find((m) => m.role === 'user' && m.content.includes('沈'))
-  const chatBot = msgs.find((m) => m.role === 'assistant' && m.meta?.kind === 'chat')
-  ok(!!chatUser && chatUser.meta?.kind === 'chat', 'chat 用户发言落库（meta.kind=chat）')
-  ok(!!chatBot && chatBot.content === cj.payload.answer, 'chat 导演回答落库')
-
-  // ── 写作循环一轮（节点消息序列）──
+  // ── 写章 agent 全链路（M6：选完走向 agent 自主到入书；节点消息序列）──
   let job = await invoke('job:startWrite', book.id)
   job = await waitJob(job.id, (j) => j.state === 'waiting_user' && j.step === 'outline', '走向提案')
   job = await invoke('job:chooseDirection', job.id, { source: 'card', cardIndex: 0, text: '随船南下' })
-  job = await waitJob(job.id, (j) => j.state === 'waiting_user' && j.step === 'scene', '章级大纲')
-  await invoke('job:confirmOutline', job.id, job.payload.outline ?? {})
-  await invoke('job:confirmScenes', job.id, null)
-  job = await waitJob(job.id, (j) => j.state === 'done', '正文+自检+入书')
-  ok(job.payload.recap != null, '写作循环完成')
+  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 自主段（工具链+正文+入书+沉淀）')
+  ok(job.payload.recap != null, '写作 job done + recap')
 
-  msgs = await invoke('message:list', book.id)
+  let msgs = await invoke('message:list', book.id)
   const steps = msgs
     .filter((m) => m.meta?.kind === 'job')
     .map((m) => m.meta.step)
-  ok(steps.join(',') === 'cards,outline,scenes,chapter', `节点消息序列（${steps.join(',')}）`)
+  ok(steps.join(',') === 'cards,chapter', `节点消息序列（${steps.join(',')}）`)
   const chapterMsg = msgs.find((m) => m.meta?.kind === 'job' && m.meta.step === 'chapter')
   ok((chapterMsg?.content ?? '').includes('已入书'), `入书节点文案（${chapterMsg?.content}）`)
   const actions = msgs
     .filter((m) => m.role === 'user' && m.meta?.kind === 'action')
     .map((m) => m.content)
   ok(
-    actions.length === 4 &&
+    actions.length === 2 &&
       actions[0].includes('第 1 章') &&
-      actions[1].includes('随船南下') &&
-      actions[2].includes('大纲') &&
-      actions[3].includes('分镜'),
-    `动作消息 4 条（${actions.join(' / ')}）`
+      actions[1].includes('随船南下'),
+    `动作消息 2 条（${actions.join(' / ')}）`
   )
 
-  // ── chat 第 2 轮：history 应含第 1 轮的用户发言+回答（meta.kind=chat）──
+  // ── chat 两轮（free agent：第 1 轮带工具调用，第 2 轮纯文本）──
+  let cj = await invoke('job:startChat', book.id, '断刀上的「沈」字伏笔你是怎么设计的？')
+  ok(cj.kind === 'chat' && cj.state !== 'failed', 'startChat 落队列')
+  cj = await waitJob(cj.id, (j) => j.state === 'done', 'chat 第 1 轮')
+  ok((cj.payload.answer ?? '').includes('沈'), `chat 回答非空（${(cj.payload.answer ?? '').slice(0, 24)}…）`)
+
+  msgs = await invoke('message:list', book.id)
+  const chatUser = msgs.find((m) => m.role === 'user' && m.content.includes('沈'))
+  const chatBot = msgs.find((m) => m.role === 'assistant' && m.meta?.kind === 'chat')
+  ok(!!chatUser && chatUser.meta?.kind === 'chat', 'chat 用户发言落库（meta.kind=chat）')
+  ok(!!chatBot && chatBot.content === cj.payload.answer, 'chat 导演回答落库')
+  const chatToolMsgs = msgs.filter((m) => m.meta?.kind === 'tool' && m.meta.jobId === cj.id)
+  ok(chatToolMsgs.length >= 1, 'chat agent 用了工具')
+
   let c2 = await invoke('job:startChat', book.id, '下一章能不能从老船工的视角切入？')
   c2 = await waitJob(c2.id, (j) => j.state === 'done', 'chat 第 2 轮')
   ok((c2.payload.answer ?? '').length > 10, 'chat 第 2 轮回答非空')

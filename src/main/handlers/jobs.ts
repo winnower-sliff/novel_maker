@@ -1,9 +1,6 @@
 import {
-  acceptFlaws,
   cancelJob,
   chooseDirection,
-  confirmOutline,
-  confirmScenes,
   getJobById,
   listJobsFor,
   retryJob,
@@ -16,7 +13,7 @@ import {
 } from '../jobs.js'
 import type { HandlerTable } from './types.js'
 
-/** 写作任务流水线（导演循环）：全部操作落 jobs 表，进度经 job:update/job:delta 事件推送 */
+/** 写作任务（M6 全面 agent 化）：走向卡确认后 agent 自主段一路到入书；全部操作落 jobs 表，进度经 job:update/job:delta 事件推送 */
 
 type Domain = Pick<
   HandlerTable,
@@ -27,9 +24,6 @@ type Domain = Pick<
   | 'job:startChat'
   | 'job:startDiagnose'
   | 'job:chooseDirection'
-  | 'job:confirmOutline'
-  | 'job:confirmScenes'
-  | 'job:acceptFlaws'
   | 'job:retry'
   | 'job:cancel'
   | 'job:get'
@@ -45,9 +39,6 @@ export const jobHandlers: Domain = {
   'job:startChat': (_ctx, [bookId, text]) => startChat(bookId, text),
   'job:startDiagnose': (_ctx, [bookId, question]) => startDiagnose(bookId, question),
   'job:chooseDirection': (_ctx, [jobId, direction]) => chooseDirection(jobId, direction),
-  'job:confirmOutline': (_ctx, [jobId, edits]) => confirmOutline(jobId, edits),
-  'job:confirmScenes': (_ctx, [jobId, scenes]) => confirmScenes(jobId, scenes),
-  'job:acceptFlaws': (_ctx, [jobId]) => acceptFlaws(jobId),
   'job:retry': (_ctx, [jobId]) => retryJob(jobId),
   'job:cancel': (_ctx, [jobId]) => cancelJob(jobId),
   'job:get': (_ctx, [jobId]) => getJobById(jobId),

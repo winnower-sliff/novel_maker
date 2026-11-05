@@ -33,6 +33,26 @@ export function redlineBlock(book: Book): string {
     .join('\n')}`
 }
 
+/** 正向词/负向词（M6）：每次写作重新注入，防长程遗忘 */
+export function wordListBlock(book: Book): string {
+  const parts: string[] = []
+  if (book.negativeWords.length) {
+    parts.push(
+      `## 负向词（禁用，正文中一个都不许出现，自检硬闸）\n${book.negativeWords
+        .map((w) => `- ${w}`)
+        .join('\n')}`
+    )
+  }
+  if (book.positiveWords.length) {
+    parts.push(
+      `## 正向词（多用倾向：贴合剧情时优先选用的词/意象/表达，不必每章硬塞）\n${book.positiveWords
+        .map((w) => `- ${w}`)
+        .join('\n')}`
+    )
+  }
+  return parts.length ? `\n${parts.join('\n')}` : ''
+}
+
 export function styleBlock(book: Book): string {
   const parts: string[] = []
   if (book.styleName) parts.push(`文风：${book.styleName}`)

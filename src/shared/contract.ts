@@ -103,6 +103,8 @@ export const BookPatchSchema = z.object({
   styleNotes: z.string().optional(),
   targetWords: z.number().int().positive().optional(),
   redlines: z.array(z.string()).optional(),
+  positiveWords: z.array(z.string()).optional(),
+  negativeWords: z.array(z.string()).optional(),
   archived: z.boolean().optional()
 })
 
@@ -148,19 +150,6 @@ export const DirectionChoiceSchema = z.object({
   source: z.enum(['card', 'free']),
   cardIndex: z.number().int().optional(),
   text: z.string().min(1)
-})
-
-export const SceneSchema = z.object({
-  id: z.string(),
-  summary: z.string(),
-  viewpoint: z.string(),
-  pace: z.string()
-})
-
-export const ChapterOutlinePatchSchema = z.object({
-  title: z.string().optional(),
-  synopsis: z.string().optional(),
-  beats: z.array(z.string()).optional()
 })
 
 // ── invoke 契约 ──────────────────────────────────────────────────────────────
@@ -243,15 +232,6 @@ export const invokeContract = {
   'job:startDiagnose': { args: z.tuple([z.string(), z.string()]), ret: ret<Job>() },
   'job:startChat': { args: z.tuple([z.string(), z.string()]), ret: ret<Job>() },
   'job:chooseDirection': { args: z.tuple([z.string(), DirectionChoiceSchema]), ret: ret<Job>() },
-  'job:confirmOutline': {
-    args: z.tuple([z.string(), ChapterOutlinePatchSchema.optional()]),
-    ret: ret<Job>()
-  },
-  'job:confirmScenes': {
-    args: z.tuple([z.string(), z.array(SceneSchema).nullable()]),
-    ret: ret<Job>()
-  },
-  'job:acceptFlaws': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:retry': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:cancel': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:get': { args: z.tuple([z.string()]), ret: ret<Job | null>() },
@@ -395,9 +375,6 @@ export interface Api {
     startDiagnose: InvokeFn<'job:startDiagnose'>
     startChat: InvokeFn<'job:startChat'>
     chooseDirection: InvokeFn<'job:chooseDirection'>
-    confirmOutline: InvokeFn<'job:confirmOutline'>
-    confirmScenes: InvokeFn<'job:confirmScenes'>
-    acceptFlaws: InvokeFn<'job:acceptFlaws'>
     retry: InvokeFn<'job:retry'>
     cancel: InvokeFn<'job:cancel'>
     get: InvokeFn<'job:get'>
