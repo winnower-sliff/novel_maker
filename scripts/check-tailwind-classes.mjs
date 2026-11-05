@@ -16,15 +16,15 @@ if (!dir) {
 }
 
 // 类名为 CSS 内转义字面量（如 sm\:p-6）；每项 [类, 守护的扫描源]
+// v2：唯一 UI 源 = mobile/src（vite root 扫描）；src/ 为主进程无 CSS
 const COMMON = [
-  ['rounded-none', 'src/wizard（OverlayCard 手机全屏）'],
-  ['sm\\:p-6', 'src/wizard（OverlayCard 桌面弹窗）'],
-  ['bg-black\\/60', 'src/wizard（OverlayCard 遮罩）'],
-  ['rounded-md', 'renderer/ui + src/wizard（OverlayCard 等）']
+  ['rounded-t-2xl', 'mobile/pages（Write/Lines 底部弹层）'],
+  ['grid-cols-2', 'mobile/pages/Settings（用量统计）'],
+  ['line-clamp-2', 'mobile/pages/Write+Cards（摘要截断）']
 ]
 const MOBILE_ONLY = [
-  ['px-3\\.5', 'mobile/ui（Button）'],
-  ['active\\:bg-zinc-900', 'mobile/pages/Codex（Row）']
+  ['bg-amber-900\\/60', 'mobile/pages（kind 徽标/伏笔标签）'],
+  ['active\\:bg-emerald-700', 'mobile/pages/Write（主按钮按压态）']
 ]
 
 async function collectCss(d) {

@@ -51,7 +51,10 @@ function load(): StoredConfig {
     const raw = JSON.parse(readFileSync(file(), 'utf-8')) as Partial<StoredConfig>
     const d = defaults()
     const rawPort = raw.server?.port
-    const port = typeof rawPort === 'number' && Number.isInteger(rawPort) && rawPort > 0 ? rawPort : d.server.port
+    const port =
+      typeof rawPort === 'number' && Number.isInteger(rawPort) && rawPort > 0
+        ? rawPort
+        : d.server.port
     return {
       server: { port },
       provider: isProviderId(raw.provider) ? raw.provider : d.provider,

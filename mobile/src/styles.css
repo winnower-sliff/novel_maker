@@ -1,0 +1,34 @@
+@import 'tailwindcss';
+
+/* v2 手机端：深色为主基调（夜间写作场景），阅读器另有 sepia/light 主题经 readerStore 切换 */
+:root {
+  color-scheme: dark;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  @apply bg-zinc-950 text-zinc-100 antialiased;
+  overscroll-behavior-y: none;
+}
+
+/* 安全区（刘海/手势条） */
+.pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+.pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+/* 隐藏滚动条但保留滚动 */
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}

@@ -10,21 +10,34 @@
     "dev": "tsx watch src/main/index.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main/index.js",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
-    "lint": "biome check src",
-    "lint:fix": "biome check --write src",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p mobile/tsconfig.json --noEmit",
+    "lint": "biome check src mobile/src",
+    "lint:fix": "biome check --write src mobile/src",
     "test": "vitest run",
     "deploy": "node scripts/deploy.mjs"
   },
   "dependencies": {
+    "@capacitor/core": "^7.4.4",
+    "@capacitor/preferences": "^7.0.4",
+    "@capacitor/status-bar": "^7.0.6",
+    "@tanstack/react-query": "^5.90.2",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
     "systray": "^1.0.5",
-    "zod": "^4.6.5"
+    "zod": "^4.6.5",
+    "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.5.14",
+    "@tailwindcss/vite": "^4.1.16",
     "@types/node": "^24.13.4",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^5.1.2",
+    "tailwindcss": "^4.1.16",
     "tsx": "^4.20.0",
     "typescript": "^7.0.2",
+    "vite": "^7.3.0",
     "vitest": "^5.0.5"
   }
 }

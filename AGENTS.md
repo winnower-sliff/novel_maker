@@ -38,6 +38,20 @@
 > - **finalize 坑（已修）**：自检一次通过路径必须把 draft 显式传给 finalize（payload.draftText 该路径未落库）
 > - 冒烟：`npm run build && node scripts/smoke-m2.mjs`（队列式 LLM stub 冒烟全链路+分叉独立演化断言，
 >   scripts/smoke-llm-stub.mjs 可复用）；handlers 分域 Pick<HandlerTable,...> 标注，book:update 走 store.updateBook
+>
+> **M3 已完成（手机端全部页面 + Playwright 端到端联调全绿）**：
+> - mobile/（独立 vite 应用）：Connect/Shelf/Onboard(四阶段)/BookWorkspace(写作·阅读·设定·线四子页)/Write(状态机：
+>   现状卡→走向卡→大纲→分镜(可跳)→流式正文→自检→纪要卡)/Read(目录/正文/字号/主题/进度)/Cards(卡·人物·伏笔+钉选)/
+>   Lines(分叉/切线/删除)/Settings(连接/模型/用量/APP 更新)；bridge=buildApi over fetch+SSE
+> - **联调修的 2 个真 UI bug**：①installBridge 只在启动时调，首启未连接→连接后 window.api 永远缺失
+>   （修：App.tsx conn 就绪 effect 补装，幂等）②useActiveJob 只返回非终态 job，done 状态永远被 find 过滤，
+>   纪要卡（RecapView）永不显示（修：useJobFlow 返回 {active,lastDone}，lastDone=服务端首个 done）
+> - 联调设施：scripts/smoke-m3-stub.mjs（3923，SKIP_ONBOARD=1 跳过前 4 个 onboard 响应用于已开书续写；
+>   队列耗尽返回 {}，恰好暴露 autoFix 吃响应/genRecap 容错路径）+ vite preview + Playwright MCP 驱动
+> - 联调路径：Connect→开新书→4 轮引导→进书→走向卡→大纲→跳过分镜→流式→一次过自检→纪要卡(人物动向/伏笔/
+>  设定沉淀)→目录 2 章→正文/字号/主题→设定页(活状态 location/mood 随 recap 演化)→分叉复仇线(1 章,分叉点后
+>  章节不进新线)→Settings(用量 byPurpose director 13/writer 3) 全部断言通过
+> - 已知 UI 待改（M4）：onboard title 阶段确认正则不认书名文本（真实模型给书名按钮会卡，临时靠「第一个/第二个」）
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）
