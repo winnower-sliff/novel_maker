@@ -1,5 +1,6 @@
-import type { ChatMessage, ChatParams, ChatResult, ToolDef, UsageInfo } from '../shared/types'
-import { LlmError, normalizeBase } from './llm'
+import type { ChatParams } from '../shared/contract.js'
+import type { ChatMessage, ChatResult, ToolDef, UsageInfo } from '../shared/types.js'
+import { LlmError, normalizeBase } from './llm.js'
 
 /** OpenAI 兼容消息（tool 角色 + tool_calls 展开） */
 type OpenAiMessage =
@@ -228,7 +229,7 @@ export async function chatStreamOpenai(
 
   const usage = emptyUsage()
   let text = ''
-  let model = params.model
+  let model = params.model ?? ''
   let stopReason: string | null = null
   const toolUses: Array<{
     id: string

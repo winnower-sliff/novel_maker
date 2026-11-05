@@ -1,48 +1,35 @@
 import { randomBytes } from 'node:crypto'
 import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
-import {
-  createServer,
-  request as httpRequest,
-  type IncomingMessage,
-  type Server,
-  type ServerResponse
-} from 'node:http'
-import { connect } from 'node:net'
+import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { extname, join, normalize, resolve } from 'node:path'
-import { app } from 'electron'
-import { invokeContract } from '../shared/contract'
-import type { ExportFormat } from '../shared/types'
-import type { EventSink } from './eventSink'
-import { buildExport } from './export'
-import { sharedHandlers } from './handlers'
-import { addSession, hasSession, removeSession } from './serverSessions'
-import { setServerStatus } from './serverState'
-import { loadServerConfig, verifyPassword } from './settings'
+import QRCode from 'qrcode'
+import { invokeContract } from '../shared/contract.js'
+import { loadServerConfig, verifyPassword } from './config.js'
+import type { EventSink } from './eventSink.js'
+import { appVersion, sharedHandlers } from './handlers/index.js'
+import { dataDir } from './paths.js'
+import { addSession, hasSession, removeSession } from './serverSessions.js'
+import { getServerStatus, setServerStatus } from './serverState.js'
 
-const MAX_BODY = 64 * 1024 * 1024
+/**
+ * v2 HTTP 服务：手机 APK 唯一入口（无浏览器/WebSocket）。
+ * - 鉴权：x-nm-token header / ?token= query（APK WebView 跨站 cookie 不可用）；
+ *   未设密码时仅 loopback 放行（首次引导前本机可测试）。
+ * - /api/invoke/:channel（JSON-RPC）+ /api/events（SSE）+ /api/mobile/auth（密码换 token）。
+ */
+
+const MAX_BODY = 16 * 1024 * 1024
 const LOGIN_WINDOW_MS = 5 * 60 * 1000
 const LOGIN_MAX_ATTEMPTS = 10
-// 会话永久有效（改密码时全作废），cookie Max-Age 给 10 年
-const COOKIE_MAX_AGE_S = 315360000
-const SESSION_COOKIE = 'nm_session'
 
 const MIME: Record<string, string> = {
-  '.html': 'text/html; charset=utf-8',
-  '.js': 'text/javascript; charset=utf-8',
-  '.mjs': 'text/javascript; charset=utf-8',
-  '.css': 'text/css; charset=utf-8',
   '.json': 'application/json; charset=utf-8',
-  '.svg': 'image/svg+xml',
   '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.ico': 'image/x-icon',
-  '.webp': 'image/webp',
-  '.woff': 'font/woff',
-  '.woff2': 'font/woff2',
-  '.map': 'application/json; charset=utf-8'
+  '.js': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.apk': 'application/vnd.android.package-archive'
 }
 
 const loginAttempts = new Map<string, { count: number; resetAt: number }>()
@@ -52,38 +39,46 @@ let activePort = 0
 const sseClients = new Map<number, ServerResponse>()
 let sseSeq = 0
 
+// ── 局域网地址选择（物理网卡优先，虚拟网卡靠后） ─────────────────────────────
+
 function addressScore(ip: string): number {
   if (/^192\.168\./.test(ip)) return 0
   if (/^10\./.test(ip)) return 1
   if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2
   if (/^169\.254\./.test(ip)) return 90
-  // 100.64.0.0/10 为运营商级 NAT，常见于 Tailscale 等虚拟网卡，手机通常不可达
-  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)) return 80
+  // 100.64.0.0/10 运营商级 NAT（Tailscale 等）：手机走 Tailscale 时可达，给中高分
+  if (/^100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\./.test(ip)) return 3
   return 50
 }
 
-/** 物理网卡（Wi-Fi/以太网）优先，虚拟网卡（VMware/Hyper-V/Tailscale 等）靠后。 */
 function interfaceScore(name: string): number {
-  if (
-    /vmware|virtualbox|vethernet|hyper-v|tailscale|zerotier|loopback|tun\b|tap\b|wsl/i.test(name)
-  ) {
+  if (/vmware|virtualbox|vethernet|hyper-v|zerotier|loopback|tun\b|tap\b|wsl/i.test(name)) {
     return 20
   }
+  // Tailscale 网卡名通常就是 Tailscale：主场景（手机经 Tailscale 访问）下不应过度降权
+  if (/tailscale/i.test(name)) return 2
   if (/wi-?fi|wlan|wireless|ethernet|以太网|无线/i.test(name)) return 0
   return 5
 }
 
-function lanAddress(): string | null {
-  const candidates: Array<{ ip: string; score: number }> = []
+/** 返回全部候选地址（按优先级排序）：主地址用物理网卡，Tailscale 地址单独提供 */
+export function lanAddresses(): { primary: string | null; tailscale: string | null } {
+  const candidates: Array<{ ip: string; score: number; name: string }> = []
+  let tailscale: string | null = null
   for (const [name, list] of Object.entries(networkInterfaces())) {
     for (const ni of list ?? []) {
       if (ni.family === 'IPv4' && !ni.internal) {
-        candidates.push({ ip: ni.address, score: interfaceScore(name) + addressScore(ni.address) })
+        candidates.push({
+          ip: ni.address,
+          score: interfaceScore(name) + addressScore(ni.address),
+          name
+        })
+        if (/tailscale/i.test(name)) tailscale = ni.address
       }
     }
   }
   candidates.sort((a, b) => a.score - b.score)
-  return candidates[0]?.ip ?? null
+  return { primary: candidates[0]?.ip ?? null, tailscale }
 }
 
 function isLoopback(req: IncomingMessage): boolean {
@@ -91,31 +86,7 @@ function isLoopback(req: IncomingMessage): boolean {
   return addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1'
 }
 
-function parseCookies(req: IncomingMessage): Record<string, string> {
-  const out: Record<string, string> = {}
-  const header = req.headers.cookie
-  if (!header) return out
-  for (const part of header.split(';')) {
-    const idx = part.indexOf('=')
-    if (idx < 0) continue
-    const key = part.slice(0, idx).trim()
-    try {
-      out[key] = decodeURIComponent(part.slice(idx + 1).trim())
-    } catch {
-      out[key] = part.slice(idx + 1).trim()
-    }
-  }
-  return out
-}
-
-function isAuthed(req: IncomingMessage): boolean {
-  const config = loadServerConfig()
-  if (!config.passwordHash) return isLoopback(req)
-  // APK WebView 源与服务器跨站，SameSite cookie 不可用，移动端改用 token header/query
-  const token = parseCookies(req)[SESSION_COOKIE] ?? reqToken(req)
-  if (!token) return false
-  return hasSession(token)
-}
+// ── 鉴权 ─────────────────────────────────────────────────────────────────────
 
 function reqToken(req: IncomingMessage): string | null {
   const header = req.headers['x-nm-token']
@@ -124,27 +95,15 @@ function reqToken(req: IncomingMessage): string | null {
   return query ?? null
 }
 
-function mobileRoot(): string {
-  return join(app.getPath('userData'), 'mobile')
+function isAuthed(req: IncomingMessage): boolean {
+  const config = loadServerConfig()
+  if (!config.passwordHash) return isLoopback(req)
+  const token = reqToken(req)
+  if (!token) return false
+  return hasSession(token)
 }
 
-interface MobileManifest {
-  version: string
-  buildAt: string
-  apk?: { version: string; path: string; size: number; notes?: string[] }
-  files: Array<{ path: string; hash: string; size: number }>
-}
-
-function readMobileManifest(): MobileManifest | null {
-  try {
-    const raw = readFileSync(join(mobileRoot(), 'manifest.json'), 'utf-8')
-    const parsed = JSON.parse(raw) as MobileManifest
-    if (!parsed?.version || !Array.isArray(parsed.files)) return null
-    return parsed
-  } catch {
-    return null
-  }
-}
+// ── 响应工具 ─────────────────────────────────────────────────────────────────
 
 function corsHeaders(req: IncomingMessage): Record<string, string> {
   const origin = req.headers.origin
@@ -198,130 +157,7 @@ async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   }
 }
 
-function loginPage(error?: string): string {
-  return `<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Novel Maker · 登录</title>
-<style>
-  * { box-sizing: border-box; }
-  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
-    background: #09090b; color: #e4e4e7; font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif; }
-  form { width: min(360px, 88vw); background: #18181b; border: 1px solid #27272a; border-radius: 12px; padding: 28px 24px; }
-  h1 { margin: 0 0 6px; font-size: 18px; }
-  p { margin: 0 0 18px; font-size: 13px; color: #a1a1aa; line-height: 1.6; }
-  input { width: 100%; padding: 10px 12px; border-radius: 8px; border: 1px solid #3f3f46; background: #09090b;
-    color: #e4e4e7; font-size: 16px; }
-  button { width: 100%; margin-top: 14px; padding: 10px; border: 0; border-radius: 8px; background: #d97706;
-    color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
-  .err { margin-top: 12px; font-size: 12px; color: #f87171; }
-</style>
-</head>
-<body>
-<form method="post" action="/api/login">
-  <h1>Novel Maker</h1>
-  <p>请输入桌面端「设置 · 手机访问」中配置的访问密码。</p>
-  <input type="password" name="password" placeholder="访问密码" autofocus required />
-  <button type="submit">进入</button>
-  ${error ? `<div class="err">${error}</div>` : ''}
-</form>
-</body>
-</html>`
-}
-
-function serveLogin(res: ServerResponse, error?: string, status = 200): void {
-  res.writeHead(status, {
-    'content-type': 'text/html; charset=utf-8',
-    'cache-control': 'no-store',
-    'content-security-policy':
-      "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'"
-  })
-  res.end(loginPage(error))
-}
-
-function rendererDir(): string {
-  return join(__dirname, '../renderer')
-}
-
-function safeResolve(root: string, pathname: string): string | null {
-  const rel = normalize(pathname).replace(/^([/\\])+/, '')
-  const full = resolve(root, rel)
-  return full.startsWith(resolve(root)) ? full : null
-}
-
-function serveStatic(res: ServerResponse, pathname: string): boolean {
-  const root = rendererDir()
-  let target = safeResolve(root, pathname === '/' ? 'index.html' : pathname)
-  if (!target) return false
-  if (!existsSync(target) || statSync(target).isDirectory()) {
-    const index = join(root, 'index.html')
-    if (!existsSync(index)) return false
-    target = index
-  }
-  const type = MIME[extname(target).toLowerCase()] ?? 'application/octet-stream'
-  res.writeHead(200, { 'content-type': type, 'x-content-type-options': 'nosniff' })
-  createReadStream(target).pipe(res)
-  return true
-}
-
-function proxyDev(req: IncomingMessage, res: ServerResponse, target: string): void {
-  const u = new URL(target)
-  const proxyReq = httpRequest(
-    {
-      hostname: u.hostname,
-      port: u.port || 80,
-      path: req.url,
-      method: req.method,
-      headers: { ...req.headers, host: u.host }
-    },
-    (proxyRes) => {
-      res.writeHead(proxyRes.statusCode ?? 502, proxyRes.headers)
-      proxyRes.pipe(res)
-    }
-  )
-  proxyReq.on('error', () => {
-    if (!res.headersSent) res.writeHead(502, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('开发服务器不可用，请确认 electron-vite dev 正在运行')
-  })
-  req.pipe(proxyReq)
-}
-
-async function handleLogin(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  const ip = req.socket.remoteAddress ?? 'unknown'
-  const now = Date.now()
-  const record = loginAttempts.get(ip)
-  if (record && record.resetAt > now && record.count >= LOGIN_MAX_ATTEMPTS) {
-    serveLogin(res, '尝试次数过多，请稍后再试', 429)
-    return
-  }
-  const raw = await readRawBody(req, 4096)
-  const params = new URLSearchParams(raw)
-  const password = params.get('password') ?? ''
-  const config = loadServerConfig()
-  if (!config.passwordHash) {
-    serveLogin(res, '服务器尚未设置访问密码，请在桌面端设置后再试', 403)
-    return
-  }
-  if (!verifyPassword(password, config.passwordSalt, config.passwordHash)) {
-    const next =
-      record && record.resetAt > now
-        ? { count: record.count + 1, resetAt: record.resetAt }
-        : { count: 1, resetAt: now + LOGIN_WINDOW_MS }
-    loginAttempts.set(ip, next)
-    serveLogin(res, '密码错误', 401)
-    return
-  }
-  loginAttempts.delete(ip)
-  const token = randomBytes(32).toString('hex')
-  addSession(token)
-  res.writeHead(302, {
-    location: '/',
-    'set-cookie': `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${COOKIE_MAX_AGE_S}`
-  })
-  res.end()
-}
+// ── SSE ──────────────────────────────────────────────────────────────────────
 
 function handleEvents(req: IncomingMessage, res: ServerResponse): void {
   if (!isAuthed(req)) {
@@ -365,6 +201,8 @@ const webSink: EventSink = {
   isClosed: (): boolean => false
 }
 
+// ── 业务端点 ─────────────────────────────────────────────────────────────────
+
 async function handleInvoke(
   req: IncomingMessage,
   res: ServerResponse,
@@ -390,7 +228,7 @@ async function handleInvoke(
       return
     }
     const handler = sharedHandlers[channel as keyof typeof sharedHandlers]
-    // handler 契约：第二参是契约元组（ArgsOf<C>），由调用方解构，不能 spread
+    // handler 契约：第二参是契约元组（ArgsOf<C>），调用方解构，不能 spread（v1 坑 23）
     const result = await Promise.resolve(
       (handler as (ctx: { sink: EventSink }, a: unknown[]) => unknown)(
         { sink: webSink },
@@ -398,33 +236,6 @@ async function handleInvoke(
       )
     )
     json(res, 200, { result }, req)
-  } catch (err) {
-    json(res, 400, { error: (err as Error)?.message ?? String(err) }, req)
-  }
-}
-
-async function handleExport(req: IncomingMessage, res: ServerResponse): Promise<void> {
-  if (!isAuthed(req)) {
-    json(res, 401, { error: '未登录' }, req)
-    return
-  }
-  try {
-    const opts = (await readJsonBody(req)) as {
-      projectId: string
-      format: ExportFormat
-      scope: 'all' | 'single'
-      outlineId?: string
-    }
-    const built = await buildExport(opts)
-    const encoded = encodeURIComponent(built.filename)
-    res.writeHead(200, {
-      'content-type': built.mime,
-      'content-length': built.data.length,
-      'x-words': String(built.words),
-      'content-disposition': `attachment; filename="${encoded}"; filename*=UTF-8''${encoded}`,
-      ...corsHeaders(req)
-    })
-    res.end(built.data)
   } catch (err) {
     json(res, 400, { error: (err as Error)?.message ?? String(err) }, req)
   }
@@ -438,11 +249,18 @@ async function handleMobileAuth(req: IncomingMessage, res: ServerResponse): Prom
     json(res, 429, { error: '尝试次数过多，请稍后再试' }, req)
     return
   }
-  const body = (await readJsonBody(req)) as { password?: string } | null
+  const body = (await readJsonBody(req)) as { password?: string; label?: string } | null
   const password = typeof body?.password === 'string' ? body.password : ''
   const config = loadServerConfig()
   if (!config.passwordHash) {
-    json(res, 403, { error: '服务器尚未设置访问密码，请在桌面端设置后再试' }, req)
+    if (!isLoopback(req)) {
+      json(res, 403, { error: '服务器尚未设置访问密码，请在电脑托盘完成首次设置' }, req)
+      return
+    }
+    // 本机未设密码时直接签发引导 token
+    const token = randomBytes(32).toString('hex')
+    addSession(token, '引导')
+    json(res, 200, { token }, req)
     return
   }
   if (!verifyPassword(password, config.passwordSalt, config.passwordHash)) {
@@ -456,11 +274,52 @@ async function handleMobileAuth(req: IncomingMessage, res: ServerResponse): Prom
   }
   loginAttempts.delete(ip)
   const token = randomBytes(32).toString('hex')
-  addSession(token)
+  addSession(token, typeof body?.label === 'string' ? body.label : undefined)
   json(res, 200, { token }, req)
 }
 
-async function handleMobileVersion(req: IncomingMessage, res: ServerResponse): Promise<void> {
+// ── 二维码（连接引导，无敏感信息，不鉴权） ──────────────────────────────────
+
+async function handleQr(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
+  const { primary, tailscale } = lanAddresses()
+  const hostParam = url.searchParams.get('host')
+  const host = hostParam || tailscale || primary || '127.0.0.1'
+  const port = activePort || loadServerConfig().port
+  const token = url.searchParams.get('token') // 可选：带上即为免密连接码
+  const payload = token
+    ? `nm://connect?host=${host}:${port}&token=${token}`
+    : `nm://connect?host=${host}:${port}`
+  const buf = await QRCode.toBuffer(payload, { width: 480, margin: 2 })
+  res.writeHead(200, {
+    'content-type': 'image/png',
+    'cache-control': 'no-store',
+    'x-nm-host': `${host}:${port}`,
+    ...corsHeaders(req)
+  })
+  res.end(buf)
+}
+
+// ── mobile 部署产物（M5 APK 自更新用，先保留骨架） ───────────────────────────
+
+interface MobileManifest {
+  version: string
+  buildAt: string
+  apk?: { version: string; path: string; size: number; notes?: string[] }
+  files: Array<{ path: string; hash: string; size: number }>
+}
+
+function readMobileManifest(): MobileManifest | null {
+  try {
+    const raw = readFileSync(join(dataDir(), 'mobile', 'manifest.json'), 'utf-8')
+    const parsed = JSON.parse(raw) as MobileManifest
+    if (!parsed?.version || !Array.isArray(parsed.files)) return null
+    return parsed
+  } catch {
+    return null
+  }
+}
+
+function handleMobileVersion(req: IncomingMessage, res: ServerResponse): void {
   if (!isAuthed(req)) {
     json(res, 401, { error: '未登录' }, req)
     return
@@ -473,32 +332,33 @@ async function handleMobileVersion(req: IncomingMessage, res: ServerResponse): P
   json(res, 200, manifest, req)
 }
 
-function handleMobileFile(req: IncomingMessage, res: ServerResponse, url: URL): void {
+function handleApkDownload(req: IncomingMessage, res: ServerResponse): void {
   if (!isAuthed(req)) {
     json(res, 401, { error: '未登录' }, req)
     return
   }
   const manifest = readMobileManifest()
-  const rel = url.searchParams.get('path') ?? ''
-  const entry = manifest?.files.find((f) => f.path === rel)
-  if (!manifest || !entry) {
-    json(res, 404, { error: '文件不存在' }, req)
+  const apk = manifest?.apk
+  if (!manifest || !apk) {
+    json(res, 404, { error: '暂无 APK 产物' }, req)
     return
   }
-  const full = join(mobileRoot(), 'files', normalize(entry.path))
-  if (!full.startsWith(resolve(join(mobileRoot(), 'files'))) || !existsSync(full)) {
-    json(res, 404, { error: '文件不存在' }, req)
+  const root = resolve(join(dataDir(), 'mobile'))
+  const full = resolve(root, normalize(apk.path.replace(/^([/\\])+/, '')))
+  if (!full.startsWith(root) || !existsSync(full)) {
+    json(res, 404, { error: 'APK 文件不存在' }, req)
     return
   }
   res.writeHead(200, {
-    'content-type': MIME[extname(full).toLowerCase()] ?? 'application/octet-stream',
+    'content-type': MIME['.apk']!,
     'content-length': statSync(full).size,
-    etag: `"${entry.hash}"`,
     'x-content-type-options': 'nosniff',
     ...corsHeaders(req)
   })
   createReadStream(full).pipe(res)
 }
+
+// ── 路由 ─────────────────────────────────────────────────────────────────────
 
 async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): Promise<void> {
   const path = url.pathname
@@ -507,149 +367,86 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     res.end()
     return
   }
-  if (path === '/api/login' && req.method === 'POST') return handleLogin(req, res)
-  if (path === '/api/logout' && req.method === 'POST') {
-    const token = parseCookies(req)[SESSION_COOKIE]
-    if (token) removeSession(token)
-    res.writeHead(302, {
-      location: '/login',
-      'set-cookie': `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`
-    })
-    res.end()
+  if (path === '/api/health') {
+    json(res, 200, { ok: true, version: appVersion(), authenticated: isAuthed(req) }, req)
     return
   }
-  if (path === '/api/session') {
-    json(res, 200, { authenticated: isAuthed(req) })
-    return
-  }
-  if (path === '/api/events' && req.method === 'GET') return handleEvents(req, res)
-  if (path === '/api/export' && req.method === 'POST') return handleExport(req, res)
   if (path === '/api/mobile/auth' && req.method === 'POST') return handleMobileAuth(req, res)
+  if (path === '/api/events' && req.method === 'GET') return handleEvents(req, res)
+  if (path === '/api/qr.png' && req.method === 'GET') return handleQr(req, res, url)
   if (path === '/api/mobile/version' && req.method === 'GET') return handleMobileVersion(req, res)
-  if (path === '/api/mobile/file' && req.method === 'GET') return handleMobileFile(req, res, url)
+  if (path === '/api/mobile/apk' && req.method === 'GET') return handleApkDownload(req, res)
   if (path.startsWith('/api/invoke/') && req.method === 'POST') {
     return handleInvoke(req, res, decodeURIComponent(path.slice('/api/invoke/'.length)))
   }
-  json(res, 404, { error: '接口不存在' })
+  if (path === '/api/logout' && req.method === 'POST') {
+    const token = reqToken(req)
+    if (token) removeSession(token)
+    json(res, 200, { ok: true }, req)
+    return
+  }
+  json(res, 404, { error: '接口不存在' }, req)
 }
 
 function handleRequest(req: IncomingMessage, res: ServerResponse): void {
   void (async () => {
     const url = new URL(req.url ?? '/', `http://${req.headers.host ?? 'localhost'}`)
-    const pathname = url.pathname
-    if (pathname.startsWith('/api/')) return handleApi(req, res, url)
-
-    if (req.method === 'GET') {
-      if (pathname === '/login') return serveLogin(res)
-      if (!isAuthed(req) && pathname === '/') {
-        res.writeHead(302, { location: '/login' })
-        res.end()
-        return
-      }
-      if (!isAuthed(req) && extname(pathname) === '') {
-        res.writeHead(302, { location: '/login' })
-        res.end()
-        return
-      }
-      const devTarget = process.env.ELECTRON_RENDERER_URL
-      if (devTarget) return proxyDev(req, res, devTarget)
-      if (serveStatic(res, pathname)) return
-      res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
-      res.end('未找到资源')
-      return
-    }
-    res.writeHead(405, { 'content-type': 'text/plain; charset=utf-8' })
-    res.end('Method Not Allowed')
+    if (url.pathname.startsWith('/api/')) return handleApi(req, res, url)
+    res.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' })
+    res.end('Not Found（v2 无浏览器界面，请使用手机 APP）')
   })().catch((err) => {
     if (!res.headersSent) res.writeHead(500, { 'content-type': 'text/plain; charset=utf-8' })
     res.end((err as Error)?.message ?? '服务器内部错误')
   })
 }
 
-function handleUpgrade(
-  req: IncomingMessage,
-  socket: import('node:net').Socket,
-  head: Buffer
-): void {
-  const devTarget = process.env.ELECTRON_RENDERER_URL
-  if (!devTarget) {
-    socket.destroy()
-    return
-  }
-  const target = new URL(devTarget)
-  const upstream = connect(Number(target.port) || 80, target.hostname, () => {
-    const headers = { ...req.headers, host: target.host }
-    const headerLines = Object.entries(headers)
-      .filter(([, v]) => v !== undefined)
-      .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : v}`)
-      .join('\r\n')
-    upstream.write(`${req.method} ${req.url} HTTP/1.1\r\n${headerLines}\r\n\r\n`)
-    if (head.length > 0) upstream.write(head)
-    upstream.pipe(socket)
-    socket.pipe(upstream)
-  })
-  upstream.on('error', () => socket.destroy())
-  socket.on('error', () => upstream.destroy())
-}
+// ── 生命周期 ─────────────────────────────────────────────────────────────────
 
 export async function startServer(): Promise<void> {
   if (server) return
   const config = loadServerConfig()
-  const lanIp = lanAddress()
-  if (!config.enabled) {
-    setServerStatus({
-      enabled: false,
-      running: false,
-      port: config.port,
-      url: null,
-      lanReachable: !!lanIp,
-      hasPassword: !!config.passwordHash,
-      clients: 0,
-      error: null
-    })
-    return
-  }
+  const { primary, tailscale } = lanAddresses()
 
   const tryListen = (port: number, remaining: number): Promise<number> =>
-    new Promise((resolve, reject) => {
+    new Promise((resolveP, reject) => {
       const s = createServer(handleRequest)
-      s.on('upgrade', handleUpgrade)
       s.once('error', (err: NodeJS.ErrnoException) => {
         s.removeAllListeners()
         if (err.code === 'EADDRINUSE' && remaining > 0) {
-          resolve(tryListen(port + 1, remaining - 1))
+          resolveP(tryListen(port + 1, remaining - 1))
         } else {
           reject(err)
         }
       })
       s.listen(port, '0.0.0.0', () => {
         server = s
-        resolve(port)
+        resolveP(port)
       })
     })
 
   try {
     activePort = await tryListen(config.port, 10)
+    const displayIp = tailscale ?? primary
     setServerStatus({
-      enabled: true,
       running: true,
       port: activePort,
-      url: lanIp ? `http://${lanIp}:${activePort}` : `http://localhost:${activePort}`,
-      lanReachable: !!lanIp,
+      url: displayIp ? `http://${displayIp}:${activePort}` : `http://localhost:${activePort}`,
+      lanReachable: !!primary || !!tailscale,
       hasPassword: !!config.passwordHash,
       clients: sseClients.size,
+      version: appVersion(),
       error: null
     })
   } catch (err) {
     activePort = 0
     setServerStatus({
-      enabled: true,
       running: false,
       port: config.port,
       url: null,
-      lanReachable: !!lanIp,
+      lanReachable: !!primary || !!tailscale,
       hasPassword: !!config.passwordHash,
       clients: 0,
+      version: appVersion(),
       error: (err as Error)?.message ?? String(err)
     })
   }
@@ -662,16 +459,12 @@ export async function stopServer(): Promise<void> {
   server = null
   activePort = 0
   if (!current) return
-  await new Promise<void>((resolve) => {
-    current.close(() => resolve())
-    // 强制关闭 keep-alive 连接，避免重启时被空闲连接阻塞
+  await new Promise<void>((resolveP) => {
+    current.close(() => resolveP())
+    // 强制关闭 keep-alive 连接，避免重启时被空闲连接阻塞（v1 坑）
     current.closeAllConnections?.()
   })
-  setServerStatus({
-    running: false,
-    url: null,
-    clients: 0
-  })
+  setServerStatus({ running: false, url: null, clients: 0 })
 }
 
 export async function restartServer(): Promise<void> {

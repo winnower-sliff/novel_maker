@@ -1,24 +1,30 @@
 // LLM 服务商错误分类：纯函数 + 关键词表，主进程发错误事件时附加 hint，
-// 渲染端 invoke 拒绝（无 hint 结构）时用同一函数从 message 反推，两端共用单一匹配表。
-import type { LlmErrorCategory, LlmErrorHint } from './types'
+// 客户端 invoke 拒绝（无 hint 结构）时用同一函数从 message 反推，两端共用单一匹配表。
+import type { LlmErrorCategory, LlmErrorHint } from './types.js'
 
 /** 各分类的友好提示文案（unknown 为空串：原样展示 raw，不画蛇添足） */
 export const LLM_ERROR_FRIENDLY: Record<LlmErrorCategory, string> = {
-  insufficient_balance: '模型服务商账户余额不足，请前往服务商充值，或在设置中切换其他模型服务。',
+  quota: '模型服务商账户余额或配额不足，请前往服务商充值，或在设置中切换其他模型。',
   auth: 'API Key 无效或未授权，请到设置页检查 API Key 是否正确、是否有权限访问该模型。',
-  rate_limit: '请求过于频繁或超出调用配额，请稍等片刻再试。',
+  rate_limited: '请求过于频繁或超出调用配额，请稍等片刻再试。',
   model_not_found: '模型不存在或当前账户无权访问，请检查模型名称，或在设置页重新探测模型列表。',
   context_too_long: '输入内容超出模型的上下文长度限制，请缩短内容，或改用长上下文模型。',
   network: '网络请求失败，请检查本机网络与服务地址（baseUrl）配置；本地模型请确认服务已启动。',
   server_error: '模型服务商服务暂时异常，请稍后重试。',
   content_filter: '内容被服务商安全策略拦截，请调整相关内容表述后重试。',
+  aborted: '生成已被中止。',
   unknown: ''
 }
 
 /** 关键词规则：按序匹配，先命中先归类（具体类别在前，宽泛类别在后） */
 const KEYWORD_RULES: ReadonlyArray<{ category: LlmErrorCategory; pattern: RegExp }> = [
   {
-    category: 'insufficient_balance',
+    category: 'aborted',
+    pattern:
+      /abort(ed)?\s*(by\s*(user|client))?|this\s+operation\s+was\s+aborted|用户(主动)?中止|已中止/i
+  },
+  {
+    category: 'quota',
     pattern:
       /insufficient\s*(balance|quota|credit)|余额不足|欠费|quota\s*(exceeded|has been exceeded)|exceeded\s+your\s+current\s+quota|billing/i
   },
@@ -28,7 +34,7 @@ const KEYWORD_RULES: ReadonlyArray<{ category: LlmErrorCategory; pattern: RegExp
       /invalid[ _-]?(api[ _-]?)?key|incorrect\s+api\s+key|unauthorized|authentication(\s+error)?|鉴权失败|令牌无效|api\s*key/i
   },
   {
-    category: 'rate_limit',
+    category: 'rate_limited',
     pattern: /rate[ _-]?limit|too\s+many\s+requests|throttl|请求过于频繁|触发限流|限流/i
   },
   {
@@ -58,14 +64,14 @@ const KEYWORD_RULES: ReadonlyArray<{ category: LlmErrorCategory; pattern: RegExp
   }
 ]
 
-/** 状态码兜底映射（关键词未命中时使用；llm.ts 错误带 status，渲染端兜底路径通常无） */
+/** 状态码兜底映射（关键词未命中时使用；llm.ts 错误带 status，客户端兜底路径通常无） */
 function categoryFromStatus(status: number | undefined): LlmErrorCategory | null {
   if (status === undefined) return null
   if (status === 401 || status === 403) return 'auth'
-  if (status === 402) return 'insufficient_balance'
+  if (status === 402) return 'quota'
   if (status === 404) return 'model_not_found'
   if (status === 408) return 'network'
-  if (status === 429) return 'rate_limit'
+  if (status === 429) return 'rate_limited'
   if (status >= 500) return 'server_error'
   return null
 }
@@ -74,7 +80,7 @@ function categoryFromStatus(status: number | undefined): LlmErrorCategory | null
  * 把 LLM 错误归类为可操作的友好提示。
  * 关键词优先（服务商经常用 429/500 返回余额不足等业务错误，语义比状态码更准），
  * 状态码兜底，都未命中落 unknown（friendly 为空串，UI 原样展示 raw）。
- * status 缺省时（补拉/渲染端反推路径）从 message 前缀解析：
+ * status 缺省时（补拉/客户端反推路径）从 message 前缀解析：
  * 主进程 LlmError 拼接为 `[<status>] ...`，无 JSON body 时原文为 `HTTP <status>`。
  */
 export function classifyLlmError(message: string, status?: number): LlmErrorHint {

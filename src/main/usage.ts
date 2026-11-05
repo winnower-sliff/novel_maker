@@ -1,17 +1,18 @@
 import { appendFileSync, existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { app } from 'electron'
-import type { GroupStats, UsageRecord, UsageStats, WindowStats } from '../shared/types'
+import type { GroupStats, UsageRecord, UsageStats, WindowStats } from '../shared/types.js'
+import { dataDir, ensureDataDir } from './paths.js'
 
 const WINDOW_MS = 5 * 60 * 60 * 1000
 const MAX_RECORDS = 20000
 const DAY_SLOTS = 14
 
 function usageFile(): string {
-  return join(app.getPath('userData'), 'usage_log.jsonl')
+  return join(dataDir(), 'usage_log.jsonl')
 }
 
 export function appendUsage(record: UsageRecord): void {
+  ensureDataDir()
   appendFileSync(usageFile(), `${JSON.stringify(record)}\n`, 'utf-8')
 }
 
@@ -58,24 +59,25 @@ export function computeStats(now = Date.now()): UsageStats {
     const map = new Map<string, GroupStats>()
     for (const r of records) {
       const key = keyOf(r)
-      const g = map.get(key) ?? { key, requests: 0, inputTokens: 0, outputTokens: 0 }
-      g.requests += 1
-      g.inputTokens += r.inputTokens
-      g.outputTokens += r.outputTokens
-      map.set(key, g)
+      const prev = map.get(key) ?? {
+        key,
+        requests: 0,
+        inputTokens: 0,
+        outputTokens: 0,
+        cacheReadTokens: 0,
+        cacheCreationTokens: 0
+      }
+      prev.requests += 1
+      prev.inputTokens += r.inputTokens
+      prev.outputTokens += r.outputTokens
+      prev.cacheReadTokens += r.cacheReadTokens
+      prev.cacheCreationTokens += r.cacheCreationTokens
+      map.set(key, prev)
     }
     return [...map.values()].sort((a, b) => b.requests - a.requests)
   }
 
-  const byDayMap = new Map<string, GroupStats>(
-    group(all, (r) => dayKey(r.ts)).map((g) => [g.key, g])
-  )
-  const byDay: GroupStats[] = []
-  for (let i = DAY_SLOTS - 1; i >= 0; i--) {
-    const key = dayKey(now - i * 24 * 60 * 60 * 1000)
-    byDay.push(byDayMap.get(key) ?? { key, requests: 0, inputTokens: 0, outputTokens: 0 })
-  }
-
+  const byDay = group(inWindow, (r) => dayKey(r.ts)).slice(0, DAY_SLOTS)
   return {
     window5h: { windowStart: winStart, ...sum(inWindow) },
     totals: sum(all),

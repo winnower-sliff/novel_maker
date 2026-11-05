@@ -7,6 +7,18 @@
 > v2 核心决策：无 Electron 桌面端（独立 Node 托盘进程）/ 手机唯一入口 / 统一 OpenAI 协议 /
 > 分叉树数据模型（不分卷、无状态机、无真删除）/ 导演循环（现状卡→走向卡片→两级大纲→流式正文→纪要卡）/
 > 无通知、无导出、无尺度字段、写完停手。M1 起本文件将被全面重写。
+>
+> **M1 已完成（server 解耦+托盘）**：纯 Node 底座 = src/main/{index,server,serverState,serverSessions,
+> eventSink,llm,llmOpenai,usage,config,paths,runs,connect,autostart,tray,handlers/}。要点：
+> - 命令：`npm run dev`（tsx watch）/ `build`（tsc→dist）/ `deploy`（build+杀旧+detached 拉新+健康探测）/ `typecheck` / `lint`
+> - 数据目录：`%APPDATA%/novel-maker-v2`（与 v1 userData 隔离！v1 settings 含 safeStorage 密文，混读必炸）；`NM_DATA_DIR` 覆盖
+> - invoke 约定：POST /api/invoke/:channel，body=`{"args":[元组]}`（元组整体传 handler，不 spread——坑 23 仍适用）
+> - 鉴权：x-nm-token header / ?token=；密码→token 走 POST /api/mobile/auth；未设密码时仅 loopback 放行并签发引导 token
+> - NodeNext 要求相对 import 带 `.js` 扩展名（tsc 直出 ESM，无 bundler）
+> - systray 1.0.5 坑：CJS 老包（TS2.8 编译 exports.default 间接赋值，cjs-module-lexer 不识别），
+>   ESM default import 拿到的是 module.exports 对象，构造函数在 `.default` 上；TS7/NodeNext 也无法把 default 当类用
+>   ——tray.ts 手写窄接口 + 运行时解包，勿改回 `import SysTray from 'systray'` 直接 new
+> - handlers 目录 import 必须写 `./handlers/index.js`（NodeNext 不支持目录导入）
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）
