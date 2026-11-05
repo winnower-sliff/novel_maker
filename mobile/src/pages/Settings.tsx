@@ -5,6 +5,7 @@ import type { ProviderId } from '@shared/providers'
 import { useConnStore } from '../lib/conn'
 import { checkUpdate, downloadUpdate, installUpdate } from '../lib/apkUpdater'
 import { useUiStore } from '../lib/uiStore'
+import { SampleReader } from '../components/SampleReader'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   glm: '智谱 GLM',
@@ -137,6 +138,7 @@ function SampleLib() {
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
+  const [reading, setReading] = useState<SampleInfo | null>(null)
 
   const { data: samples } = useQuery({
     queryKey: ['samples'],
@@ -210,14 +212,21 @@ function SampleLib() {
             return (
               <div key={s.id} className="rounded-xl bg-orange-50 p-3">
                 <div className="flex items-center justify-between">
-                  <div className="min-w-0">
-                    <div className="truncate text-sm text-stone-700">{s.name}</div>
+                  <button
+                    type="button"
+                    className="min-w-0 text-left"
+                    onClick={() => setReading(s)}
+                  >
+                    <div className="truncate text-sm text-stone-700 underline decoration-orange-300 decoration-dotted underline-offset-4">
+                      {s.name}
+                    </div>
                     <div className="mt-0.5 text-[11px] text-stone-400">
                       {s.chars.toLocaleString()} 字
                       {s.chapterCount ? ` · ${s.chapterCount} 章` : ''}
                       {boundCount ? ` · 已绑定 ${boundCount} 本书` : ''}
+                      {' · 点看'}
                     </div>
-                  </div>
+                  </button>
                   {confirmDel === s.id ? null : (
                     <button type="button" className="shrink-0 text-[11px] text-stone-400" onClick={() => setConfirmDel(s.id)}>
                       删除
@@ -312,6 +321,13 @@ function SampleLib() {
       </div>
 
       {msg && <div className="mt-2 text-xs text-orange-600">{msg}</div>}
+
+      {reading && (
+        <SampleReader
+          sample={{ id: reading.id, name: reading.name, chars: reading.chars }}
+          onClose={() => setReading(null)}
+        />
+      )}
     </div>
   )
 }

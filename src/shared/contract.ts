@@ -15,6 +15,9 @@ import type {
   ModelProbeResult,
   SampleFileInfo,
   SampleInfo,
+  SampleSearchHit,
+  SampleSectionView,
+  SampleText,
   ServerStatus,
   SettingsView,
   StatusCard,
@@ -274,7 +277,17 @@ export const invokeContract = {
     args: z.tuple([z.string(), z.array(z.string())]),
     ret: ret<Book>()
   },
-  'sample:delete': { args: z.tuple([z.string()]), ret: ret<boolean>() }
+  'sample:delete': { args: z.tuple([z.string()]), ret: ret<boolean>() },
+  // 阅读层：目录/正文窗口/关键词命中
+  'sample:sections': { args: z.tuple([z.string()]), ret: ret<SampleSectionView[]>() },
+  'sample:readText': {
+    args: z.tuple([z.string(), z.number(), z.number()]),
+    ret: ret<SampleText>()
+  },
+  'sample:search': {
+    args: z.tuple([z.string(), z.string()]),
+    ret: ret<SampleSearchHit[]>()
+  }
 }
 
 export type InvokeChannels = keyof typeof invokeContract & string
@@ -430,6 +443,12 @@ export interface Api {
     /** 整组设置某书的绑定范文（传空数组=全部解绑），旧 sample:detach 已并入 */
     attach: InvokeFn<'sample:attach'>
     delete: InvokeFn<'sample:delete'>
+    /** 阅读层目录（自动懒解析结构节） */
+    sections: InvokeFn<'sample:sections'>
+    /** 按全文偏移取正文窗口 */
+    readText: InvokeFn<'sample:readText'>
+    /** 关键词全文命中（标签优先，正文位置次之） */
+    search: InvokeFn<'sample:search'>
   }
 }
 

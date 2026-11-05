@@ -161,6 +161,29 @@ export interface SampleFileInfo {
   preview: string
 }
 
+/** 范文结构节（阅读目录条目；start/end 为全文偏移，供 sample:readText 取正文） */
+export interface SampleSectionView {
+  kind: 'chapter' | 'section'
+  label: string
+  start: number
+  end: number
+  chars: number
+}
+
+/** 关键词全文命中（index 为全文偏移，snippet 为上下文摘句） */
+export interface SampleSearchHit {
+  label: string
+  index: number
+  snippet: string
+}
+
+/** sample:readText 取到的正文窗口 */
+export interface SampleText {
+  from: number
+  chars: number
+  text: string
+}
+
 // ── 领域模型：分叉树（DECISIONS.md D1-D6 / B6-B8 / W9 / W12） ────────────────
 
 export interface Book {
