@@ -241,6 +241,7 @@ export const invokeContract = {
   'job:startReview': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:startAudit': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:startDiagnose': { args: z.tuple([z.string(), z.string()]), ret: ret<Job>() },
+  'job:startChat': { args: z.tuple([z.string(), z.string()]), ret: ret<Job>() },
   'job:chooseDirection': { args: z.tuple([z.string(), DirectionChoiceSchema]), ret: ret<Job>() },
   'job:confirmOutline': {
     args: z.tuple([z.string(), ChapterOutlinePatchSchema.optional()]),
@@ -392,6 +393,7 @@ export interface Api {
     startReview: InvokeFn<'job:startReview'>
     startAudit: InvokeFn<'job:startAudit'>
     startDiagnose: InvokeFn<'job:startDiagnose'>
+    startChat: InvokeFn<'job:startChat'>
     chooseDirection: InvokeFn<'job:chooseDirection'>
     confirmOutline: InvokeFn<'job:confirmOutline'>
     confirmScenes: InvokeFn<'job:confirmScenes'>

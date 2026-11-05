@@ -68,6 +68,21 @@
 >   stub（smoke-m3-stub.mjs）尾部已加 revise/review/audit/diagnose 四响应
 > - 坑：invoke 响应是 `{result}` 包装（客户端 body.result）；settings:save 切 provider 必须带顶层 `provider` 字段；
 >   confirmOutline edits 不可传 null（省略或传对象）；spawn 管道 stdio 在 Windows process.exit 时 libuv 断言崩溃（用 inherit）
+>
+> **M5 智能体页（对话流吞掉写作流，用户验收期需求）**：
+> - 手机端写作页 = 聊天时间轴（messages 表单一事实源）：user 动作=右气泡（meta.kind=action）/导演白话=左气泡（meta.kind=chat）/
+>   节点卡=meta.kind=job+step（前端拉 job list 建 jobId→job 映射取 payload 渲染走向卡/大纲编辑/分镜/入书卡/报告/失败/取消）
+> - 后端 jobs.ts 在状态机各转换点落节点消息（note/userMsg 辅助）；新 job kind='chat'（job:startChat [bookId,text]，
+>   genChat 自由交流模式 50-300 字+不执行写作动作，history 取 meta.kind=chat 的最近 12 条——**用户发言也是 kind=chat**，
+>   曾 bug：startChat 的 userMsg 默认 action 导致导演看不到用户说过的话）
+> - 可交互判定：消息 jobId===active.id && active.state=waiting_user && WAIT_STEP_FOR[step]===active.step
+>   （cards↔outline / outline↔scene / scenes↔draft / selfcheck↔selfcheck——waiting 挂在「下一步」上）
+> - genChat 走 callRaw(params.messages/responseFormat 覆盖)；StreamingBar 恢复时从 payload.draftText 续显（streamingSaver 3s 落盘）
+> - 底部输入栏：写下一章（busy 时排队提示）/审读上一章/全书审计/改这章(跳 read)+输入框（走向选择阶段=chooseDirection free，
+>   否则 startChat；running 不禁用）
+> - 冒烟：`npm run build && node scripts/smoke-m5.mjs`（13 断言：chat 双向落库/节点消息序列 cards→outline→scenes→chapter/
+>   动作消息文案/chat 多轮）；stub 支持 CHAT_FIRST=1（chat 响应前置于写作循环）
+> - M5 其余（构建链/更新源/部署）见上文 M5 段落（commit 3cece5c 起）
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）

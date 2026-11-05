@@ -423,6 +423,46 @@ verdict 里给出你的回答（300 字内，直接了当，可分点）。findi
   return normalizeReport(report, 'diagnose')
 }
 
+// ── 自由对话（M5 智能体页：跟导演聊，不执行写操作） ─────────────────────────
+
+export async function genChat(
+  book: Book,
+  lineId: string,
+  history: Array<{ role: 'user' | 'assistant'; content: string }>,
+  question: string,
+  onDelta?: (t: string) => void
+): Promise<string> {
+  const ctx = base(book, lineId)
+  const msgs = [
+    ...history.map((m) => ({ role: m.role, content: m.content })),
+    {
+      role: 'user' as const,
+      content: `${ctx}
+
+## 作者说
+${question}`
+    }
+  ]
+  const result = await callRaw(
+    {
+      slot: 'director',
+      system: `${directorPersona()}
+
+当前是自由交流模式：作者在跟你聊天——问剧情、讨论走向、要建议、闲聊都行。纪律：
+- 口语化、直接了当，通常 50-300 字，不用敬语开场（「好的」「当然可以」都省了）
+- 观点要落在本书的具体人物/伏笔/章节上，不空谈写作理论
+- 你不能在这里执行写作动作；作者想让干什么（写下一章/改章/开新线/审读）时，简短回应他的意图并告诉他点界面上的对应操作`,
+      // user 仅为满足签名；实际请求体由 params.messages 整体覆盖（见 callRaw）
+      user: ctx,
+      jsonHint: '',
+      params: { messages: msgs, responseFormat: 'text' },
+      maxTokens: 2000
+    },
+    onDelta
+  )
+  return result.text
+}
+
 function normalizeReport(raw: AgentReport, kind: AgentReport['kind']): AgentReport {
   return {
     kind,

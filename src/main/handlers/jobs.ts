@@ -8,6 +8,7 @@ import {
   listJobsFor,
   retryJob,
   startAudit,
+  startChat,
   startDiagnose,
   startReview,
   startRevise,
@@ -23,6 +24,7 @@ type Domain = Pick<
   | 'job:startRevise'
   | 'job:startReview'
   | 'job:startAudit'
+  | 'job:startChat'
   | 'job:startDiagnose'
   | 'job:chooseDirection'
   | 'job:confirmOutline'
@@ -40,6 +42,7 @@ export const jobHandlers: Domain = {
     startRevise(chapterId, instruction, segment),
   'job:startReview': (_ctx, [chapterId]) => startReview(chapterId),
   'job:startAudit': (_ctx, [bookId]) => startAudit(bookId),
+  'job:startChat': (_ctx, [bookId, text]) => startChat(bookId, text),
   'job:startDiagnose': (_ctx, [bookId, question]) => startDiagnose(bookId, question),
   'job:chooseDirection': (_ctx, [jobId, direction]) => chooseDirection(jobId, direction),
   'job:confirmOutline': (_ctx, [jobId, edits]) => confirmOutline(jobId, edits),

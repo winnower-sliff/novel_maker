@@ -298,7 +298,15 @@ export interface ChatMessageRow {
 // ── 任务流水线（W10/W12/W14） ────────────────────────────────────────────────
 
 /** revise=改章（快捷钮/自由指令）；review/audit=子代理审读；diagnose=手动诊断问答 */
-export type JobKind = 'write' | 'onboard' | 'rewrite' | 'revise' | 'review' | 'audit' | 'diagnose'
+export type JobKind =
+  | 'write'
+  | 'onboard'
+  | 'rewrite'
+  | 'revise'
+  | 'review'
+  | 'audit'
+  | 'diagnose'
+  | 'chat'
 export type JobState = 'queued' | 'running' | 'waiting_user' | 'done' | 'failed' | 'cancelled'
 /** 写章五步：提案→章级大纲→分镜→正文→自检收尾（W3/W6）；revise 复用 draft/selfcheck/finalize */
 export type JobStep =
@@ -384,6 +392,8 @@ export interface JobPayload {
   reviewChapterId?: string
   /** diagnose 启动参数 */
   question?: string
+  /** chat 任务的完整回复 */
+  answer?: string
   /** review/audit/diagnose 产物（结构化报告） */
   report?: AgentReport
 }

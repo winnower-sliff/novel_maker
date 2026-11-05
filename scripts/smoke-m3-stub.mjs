@@ -14,7 +14,14 @@ const DRAFT = [
 ].join('\n\n')
 
 // SKIP_ONBOARD=1 时跳过前 4 个 onboard 响应（已开书续写场景）
-const QUEUE = ([
+// CHAT_FIRST=1 时把两个 chat 响应挪到写作循环之前（M5 冒烟：先对话后写作）
+const CHAT_REPLIES = [
+  // M5：chat（智能体页自由对话，纯文本）
+  '断刀的「沈」字我埋的时候就留了三层：字面是铸刀匠的落款，往上追是二十年前盐帮清洗雾津港的旧案，再往上和林岸父亲的死直接相关。现在才第 2 章，别急着揭——让老船工先察觉这把刀，下一章他会主动试探林岸。',
+  // M5：chat 第二轮
+  '可以。你说的「船上还有第三个人」可以和蔗糖舱的印记并成一条线：那批糖是七号泊位连夜装的，收货人写的却是个死人名字。下一章走向卡里我会给一个「查收货人」的纵深选项。'
+]
+const QUEUE_RAW = ([
   // onboard 1：premise 选择题
   // onboard 1：premise 选择题
   JSON.stringify({
@@ -223,7 +230,12 @@ const QUEUE = ([
     suggestions: ['下一章走向卡优先考虑主角主动试探的方向'],
     score: 0
   })
-]).slice(process.env.SKIP_ONBOARD ? 4 : 0)
+])
+const MAIN_QUEUE = QUEUE_RAW.slice(process.env.SKIP_ONBOARD ? 4 : 0)
+const QUEUE = process.env.CHAT_FIRST
+  ? [...CHAT_REPLIES, ...MAIN_QUEUE]
+  : [...MAIN_QUEUE, ...CHAT_REPLIES]
+
 
 let served = 0
 const server = createServer((req, res) => {

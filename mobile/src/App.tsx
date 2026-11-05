@@ -27,6 +27,7 @@ export default function App() {
     if (!conn || !window.api) return
     return window.api.job.onUpdate((_jobId, job) => {
       void qc.invalidateQueries({ queryKey: qk.jobs(job.bookId) })
+      void qc.invalidateQueries({ queryKey: qk.messages(job.bookId) })
       if (job.state === 'done') {
         void qc.invalidateQueries({ queryKey: qk.book(job.bookId) })
         void qc.invalidateQueries({ queryKey: qk.statusCard(job.bookId) })

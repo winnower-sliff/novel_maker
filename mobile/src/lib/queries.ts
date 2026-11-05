@@ -1,5 +1,15 @@
 import { useQuery } from '@tanstack/react-query'
-import type { Book, Card, Chapter, Character, Foreshadow, Job, StatusCard, StoryLine } from '@shared/types'
+import type {
+  Book,
+  Card,
+  Chapter,
+  Character,
+  ChatMessageRow,
+  Foreshadow,
+  Job,
+  StatusCard,
+  StoryLine
+} from '@shared/types'
 
 /**
  * 数据层：全部经 window.api（bridge 装配的契约客户端，多参展开形态）。
@@ -80,11 +90,11 @@ export function useForeshadows(lineId: string | null) {
   })
 }
 
-/** 该书 job 流：active=最近未终态（含 revise/review 等子任务，恢复用）；lastDone=最近完成的写作任务（纪要卡回看） */
+/** 该书 job 流：active=最近未终态（含 revise/review 等子任务，恢复用）；lastDone=最近完成的写作任务（纪要卡回看）；jobs=全量（聊天流 jobId→job 映射用） */
 export function useJobFlow(bookId: string | null) {
   return useQuery({
     queryKey: qk.jobs(bookId ?? ''),
-    queryFn: async (): Promise<{ active: Job | null; lastDone: Job | null }> => {
+    queryFn: async (): Promise<{ active: Job | null; lastDone: Job | null; jobs: Job[] }> => {
       const jobs = await window.api.job.list(bookId as string)
       return {
         active:
@@ -92,11 +102,22 @@ export function useJobFlow(bookId: string | null) {
             (j) => j.state !== 'done' && j.state !== 'failed' && j.state !== 'cancelled'
           ) ?? null,
         // listJobs 按 created_at DESC，首个 done 的写作任务即最近完成的一章
-        lastDone: jobs.find((j) => j.kind === 'write' && j.state === 'done') ?? null
+        lastDone: jobs.find((j) => j.kind === 'write' && j.state === 'done') ?? null,
+        jobs
       }
     },
     enabled: !!bookId,
     refetchInterval: 15_000 // SSE 断连时的兜底轮询
+  })
+}
+
+/** 书内消息时间轴（智能体页单一事实源：动作/节点卡/对话全在此） */
+export function useMessages(bookId: string | null) {
+  return useQuery({
+    queryKey: qk.messages(bookId ?? ''),
+    queryFn: async (): Promise<ChatMessageRow[]> => window.api.message.list(bookId as string),
+    enabled: !!bookId,
+    refetchInterval: 20_000 // SSE 断连兜底
   })
 }
 

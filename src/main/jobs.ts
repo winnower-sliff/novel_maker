@@ -2,16 +2,19 @@ import type {
   AgentReport,
   Chapter,
   ChapterOutline,
+  ChatMessageRow,
   DirectionCard,
   Job,
   JobPayload,
   Scene
 } from '../shared/types.js'
 import { emitJob, emitJobDelta } from './broadcast.js'
+import { buildStatusCard } from './director/context.js'
 import {
   autoFixDraft,
   compactMemories,
   genAudit,
+  genChat,
   genDiagnose,
   genDirections,
   genDraft,
@@ -25,6 +28,7 @@ import {
 import { stripHtmlComments } from './lint.js'
 import {
   activeLine,
+  appendMessage,
   effectiveChapters,
   failStuckJobs,
   getBook,
@@ -36,6 +40,7 @@ import {
   insertJob,
   listCharacters,
   listJobs,
+  listMessages,
   patchCharacterStates,
   previousChapter,
   replaceChapterContent,
@@ -57,6 +62,35 @@ import {
 
 let activeJobId: string | null = null
 
+// ── 对话流节点消息（M5 智能体页：写作循环各阶段以消息形式进入对话流） ────────
+
+/** 落一条导演侧节点消息：meta 指向 job+step，正文数据前端从 job payload 取 */
+function note(jobId: string, step: string, content = ''): void {
+  const job = getJob(jobId)
+  if (!job) return
+  appendMessage({
+    bookId: job.bookId,
+    role: 'assistant',
+    content,
+    meta: { kind: 'job', jobId, step }
+  })
+}
+
+/** 落一条作者消息（动作/聊天发言），content 即作者可见文本 */
+function userMsg(
+  bookId: string,
+  content: string,
+  jobId?: string,
+  kind: 'action' | 'chat' = 'action'
+): void {
+  appendMessage({
+    bookId,
+    role: 'user',
+    content,
+    meta: jobId ? { kind, jobId } : { kind }
+  })
+}
+
 function busy(): boolean {
   if (!activeJobId) return false
   const j = getJob(activeJobId)
@@ -76,7 +110,8 @@ async function pump(): Promise<void> {
     revise: runReviseJob,
     review: runReviewJob,
     audit: runAuditJob,
-    diagnose: runDiagnoseJob
+    diagnose: runDiagnoseJob,
+    chat: runChatJob
   }
   const run = runners[next.kind]
   if (!run) return
@@ -95,7 +130,10 @@ async function guarded(jobId: string, fn: () => Promise<Job | null>): Promise<Jo
       state: 'failed',
       error: String((err as Error)?.message ?? err)
     })
-    if (failed) emitJob(failed)
+    if (failed) {
+      note(jobId, 'failed', `卡住了：${failed.error}`)
+      emitJob(failed)
+    }
     return failed as Job
   } finally {
     activeJobId = null
@@ -142,6 +180,7 @@ async function runProposal(job: Job): Promise<Job | null> {
   activeJobId = job.id
   updateJob(job.id, { state: 'running', step: 'proposal', watchdogAt: Date.now(), error: '' })
   const cards: DirectionCard[] = await genDirections(book, job.lineId)
+  note(job.id, 'cards', '本章走向备选已出，等你选一个方向')
   return updateJob(job.id, {
     state: 'waiting_user',
     step: 'outline',
@@ -161,6 +200,7 @@ export async function startWrite(bookId: string): Promise<Job> {
     return insertJob({ bookId, lineId: line.id, kind: 'write' })
   }
   const job = insertJob({ bookId, lineId: line.id, kind: 'write' })
+  userMsg(bookId, `写第 ${effectiveChapters(line.id).length + 1} 章`)
   activeJobId = job.id
   return guarded(job.id, () => runProposal(job))
 }
@@ -172,10 +212,16 @@ export async function chooseDirection(
   const job = requireWriteJob(jobId, 'outline')
   activeJobId = jobId
   return guarded(jobId, async () => {
+    userMsg(
+      job.bookId,
+      direction.source === 'card' ? `选走向：${direction.text}` : `自定义走向：${direction.text}`,
+      jobId
+    )
     updateJob(jobId, { state: 'running', watchdogAt: Date.now(), payload: { direction } })
     const book = getBook(job.bookId)
     if (!book) throw new Error('书不存在')
     const outline: ChapterOutline = await genOutline(book, job.lineId, direction)
+    note(jobId, 'outline', `《${outline.title}》章级大纲已出，确认或修改`)
     return updateJob(jobId, {
       state: 'waiting_user',
       step: 'scene',
@@ -190,8 +236,10 @@ export async function confirmOutline(jobId: string, edits?: Partial<ChapterOutli
   const direction = job.payload.direction
   const outline = { ...(job.payload.outline as ChapterOutline), ...edits }
   if (!direction || !outline) throw new Error('任务数据不完整')
+  const edited = Boolean(edits && Object.keys(edits).length > 0)
   activeJobId = jobId
   return guarded(jobId, async () => {
+    userMsg(job.bookId, edited ? '确认大纲（有修改）' : '确认大纲', jobId)
     updateJob(jobId, {
       state: 'running',
       step: 'scene',
@@ -201,6 +249,7 @@ export async function confirmOutline(jobId: string, edits?: Partial<ChapterOutli
     const book = getBook(job.bookId)
     if (!book) throw new Error('书不存在')
     const scenes: Scene[] = await genScenes(book, job.lineId, outline, direction)
+    note(jobId, 'scenes', '本章分镜已出，逐幕确认或直接开写')
     return updateJob(jobId, {
       state: 'waiting_user',
       step: 'draft',
@@ -219,6 +268,7 @@ export async function confirmScenes(jobId: string, scenes: Scene[] | null): Prom
   const finalScenes = scenes ?? job.payload.scenes ?? null
   activeJobId = jobId
   return guarded(jobId, async () => {
+    userMsg(job.bookId, scenes ? '按分镜开写正文' : '跳过分镜，直接开写', jobId)
     updateJob(jobId, {
       state: 'running',
       step: 'draft',
@@ -247,6 +297,7 @@ async function selfcheckPhase(
     return await finalize(job.id, draft)
   }
   if (job.payload.autoFixed) {
+    note(job.id, 'selfcheck', '自动修了一轮仍有问题，你来定夺')
     return updateJob(job.id, {
       state: 'waiting_user',
       step: 'selfcheck',
@@ -281,6 +332,7 @@ export async function acceptFlaws(jobId: string): Promise<Job> {
   const job = requireWriteJob(jobId, 'selfcheck')
   if (!job.payload.draftText) throw new Error('没有可入书的草稿')
   activeJobId = jobId
+  userMsg(job.bookId, '接受瑕疵，直接入书', jobId)
   return guarded(jobId, () => finalize(jobId, job.payload.draftText as string))
 }
 
@@ -331,6 +383,7 @@ async function finalize(jobId: string, draftOverride?: string): Promise<Job | nu
     },
     watchdogAt: 0
   })
+  note(jobId, 'chapter', `《${chapter.title}》已入书`)
 
   // 滚动记忆压缩（D2，后台静默）
   void compactMemories(book, job.lineId, effectiveChapters(job.lineId)).catch(() => {})
@@ -394,7 +447,8 @@ export async function retryJob(jobId: string): Promise<Job> {
     job.kind !== 'revise' &&
     job.kind !== 'review' &&
     job.kind !== 'audit' &&
-    job.kind !== 'diagnose'
+    job.kind !== 'diagnose' &&
+    job.kind !== 'chat'
   )
     throw new Error('该任务不支持重试')
   if (job.state !== 'failed' && job.state !== 'cancelled')
@@ -408,7 +462,8 @@ export async function retryJob(jobId: string): Promise<Job> {
       revise: runReviseJob,
       review: runReviewJob,
       audit: runAuditJob,
-      diagnose: runDiagnoseJob
+      diagnose: runDiagnoseJob,
+      chat: runChatJob
     }
     const run = runners[job.kind]
     if (!run) throw new Error('该任务不支持重试')
@@ -502,6 +557,13 @@ export async function startRevise(
       revise: { chapterId, instruction: instruction.trim(), segment: segment?.trim() || undefined }
     }
   })
+  userMsg(
+    line.bookId,
+    segment
+      ? `选段改《${chapter.title}》：${instruction.trim()}`
+      : `改《${chapter.title}》：${instruction.trim()}`,
+    job.id
+  )
   return enqueueOrRun(job, () => runReviseJob(job))
 }
 
@@ -534,6 +596,7 @@ async function runReviseJob(job: Job): Promise<Job | null> {
   )
   const clean = stripHtmlComments(draft)
   replaceChapterContent(revise.chapterId, clean, `改章：${revise.instruction.slice(0, 80)}`)
+  note(job.id, 'revised', `《${chapter.title}》已按指令改好`)
   return updateJob(job.id, {
     state: 'done',
     step: 'finalize',
@@ -555,6 +618,7 @@ export async function startReview(chapterId: string): Promise<Job> {
     kind: 'review',
     payload: { reviewChapterId: chapterId }
   })
+  userMsg(line.bookId, `审读《${chapter.title}》`, job.id)
   return enqueueOrRun(job, () => runReviewJob(job))
 }
 
@@ -572,6 +636,7 @@ async function runReviewJob(job: Job): Promise<Job | null> {
     chapterId: chapter.id
   })
   const report = await genReview(book, job.lineId, chapter)
+  note(job.id, 'report', `《${chapter.title}》审读报告已出`)
   return updateJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
 }
 
@@ -581,6 +646,7 @@ export async function startAudit(bookId: string): Promise<Job> {
   const line = activeLine(book)
   if (!line) throw new Error('书没有激活线')
   const job = insertJob({ bookId, lineId: line.id, kind: 'audit' })
+  userMsg(bookId, '跑一次全书审计')
   return enqueueOrRun(job, () => runAuditJob(job))
 }
 
@@ -598,6 +664,7 @@ async function runAuditJob(job: Job): Promise<Job | null> {
   }))
   const latestTwo = chapters.slice(-2)
   const report = await genAudit(book, job.lineId, recent, latestTwo)
+  note(job.id, 'report', '全书审计报告已出')
   return updateJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
 }
 
@@ -608,6 +675,7 @@ export async function startDiagnose(bookId: string, question: string): Promise<J
   const line = activeLine(book)
   if (!line) throw new Error('书没有激活线')
   const job = insertJob({ bookId, lineId: line.id, kind: 'diagnose', payload: { question } })
+  userMsg(bookId, question.trim(), job.id)
   return enqueueOrRun(job, () => runDiagnoseJob(job))
 }
 
@@ -618,7 +686,46 @@ async function runDiagnoseJob(job: Job): Promise<Job | null> {
   activeJobId = job.id
   updateJob(job.id, { state: 'running', step: 'report', watchdogAt: Date.now(), error: '' })
   const report = await genDiagnose(book, job.lineId, question)
+  note(job.id, 'report', '导演诊断已出')
   return updateJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
+}
+
+// ── 自由对话（M5 智能体页：跟导演聊剧情/问问题/出主意；进串行队列不抢写作） ──
+
+export async function startChat(bookId: string, text: string): Promise<Job> {
+  const book = getBook(bookId)
+  if (!book) throw new Error('书不存在')
+  const line = activeLine(book)
+  if (!line) throw new Error('书没有激活线')
+  const t = text.trim()
+  if (!t) throw new Error('消息不能为空')
+  const job = insertJob({ bookId, lineId: line.id, kind: 'chat', payload: { question: t } })
+  userMsg(bookId, t, job.id, 'chat')
+  return enqueueOrRun(job, () => runChatJob(job))
+}
+
+async function runChatJob(job: Job): Promise<Job | null> {
+  const book = getBook(job.bookId)
+  const question = job.payload.question
+  if (!book || !question) throw new Error('对话任务缺少参数')
+  activeJobId = job.id
+  updateJob(job.id, { state: 'running', step: 'draft', watchdogAt: Date.now(), error: '' })
+  const history = listMessages(job.bookId, { limit: 40 })
+    .filter((m): m is ChatMessageRow => m.meta?.kind === 'chat' && m.content !== question)
+    .slice(-12)
+  const answer = await genChat(book, job.lineId, history, question, streamingSaver(job.id))
+  appendMessage({
+    bookId: job.bookId,
+    role: 'assistant',
+    content: answer,
+    meta: { kind: 'chat', jobId: job.id }
+  })
+  return updateJob(job.id, {
+    state: 'done',
+    step: '',
+    payload: { answer, draftText: undefined },
+    watchdogAt: 0
+  })
 }
 
 /** 空闲立即跑（guarded），忙则排队（pump 自动衔接） */
@@ -648,6 +755,7 @@ export function cancelJob(jobId: string): Job {
   if (job.state === 'done') throw new Error('任务已完成，无法取消')
   const cancelled = updateJob(jobId, { state: 'cancelled', watchdogAt: 0 })
   if (cancelled) emitJob(cancelled)
+  note(jobId, 'cancelled', '已按你的要求取消')
   if (activeJobId === jobId) activeJobId = null
   void pump().catch(() => {})
   return cancelled as Job
