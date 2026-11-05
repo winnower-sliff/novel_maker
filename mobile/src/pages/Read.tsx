@@ -7,9 +7,8 @@ import { applySystemBars, type Appearance } from '../lib/systemBars'
 import { useUiStore } from '../lib/uiStore'
 
 const THEME_BG: Record<Appearance, string> = {
-  dark: 'bg-zinc-950 text-zinc-200',
   sepia: 'bg-[#f4ecd8] text-[#433422]',
-  light: 'bg-white text-zinc-800'
+  light: 'bg-white text-stone-800'
 }
 
 /** 段落切分：空行分段；段内换行保留 */
@@ -27,7 +26,7 @@ export default function Read() {
   const [chapterId, setChapterId] = useState<string | null>(null)
   const [chapter, setChapter] = useState<Chapter | null>(null)
   const [fontSize, setFontSize] = useState(17)
-  const [theme, setTheme] = useState<Appearance>('dark')
+  const [theme, setTheme] = useState<Appearance>('sepia')
   const [showSettings, setShowSettings] = useState(false)
   const [listOpen, setListOpen] = useState(true)
   const [segmentMode, setSegmentMode] = useState(false)
@@ -80,7 +79,7 @@ export default function Read() {
     applySystemBars(theme)
   }, [theme])
 
-  if (!book) return <div className="py-20 text-center text-sm text-zinc-600">加载中…</div>
+  if (!book) return <div className="py-20 text-center text-sm text-stone-400">加载中…</div>
 
   // 目录视图：本线章节 + 分叉标记
   if (listOpen || !chapter) {
@@ -88,15 +87,15 @@ export default function Read() {
     const chapters = (data?.chapters ?? []).filter((c) => c.lineId === activeLineId)
     return (
       <div className="px-4 py-4">
-        <div className="mb-3 text-sm font-semibold text-zinc-300">
-          目录 <span className="ml-1 text-xs font-normal text-zinc-600">{lineNames.get(activeLineId)}</span>
+        <div className="mb-3 text-sm font-semibold text-stone-600">
+          目录 <span className="ml-1 text-xs font-normal text-stone-400">{lineNames.get(activeLineId)}</span>
         </div>
         <div className="space-y-1.5">
           {chapters.map((c) => (
             <button
               key={c.id}
               type="button"
-              className="flex w-full items-baseline gap-3 rounded-xl bg-zinc-900/60 px-4 py-3 text-left active:bg-zinc-800"
+              className="flex w-full items-baseline gap-3 rounded-xl bg-white px-4 py-3 text-left active:bg-orange-100"
               onClick={() => {
                 setChapterId(c.id)
                 setListOpen(false)
@@ -104,13 +103,13 @@ export default function Read() {
                 boxRef.current?.scrollTo({ top: 0 })
               }}
             >
-              <span className="w-8 shrink-0 text-xs text-zinc-600">{c.orderNo}</span>
+              <span className="w-8 shrink-0 text-xs text-stone-400">{c.orderNo}</span>
               <span className="min-w-0 flex-1 truncate text-sm">{c.title}</span>
-              <span className="shrink-0 text-[11px] text-zinc-600">{c.wordCount} 字</span>
+              <span className="shrink-0 text-[11px] text-stone-400">{c.wordCount} 字</span>
             </button>
           ))}
           {chapters.length === 0 && (
-            <div className="py-16 text-center text-sm text-zinc-600">还没写章节</div>
+            <div className="py-16 text-center text-sm text-stone-400">还没写章节</div>
           )}
         </div>
       </div>
@@ -164,7 +163,7 @@ export default function Read() {
       </div>
 
       {showSettings && (
-        <div className="mx-4 mb-2 rounded-xl border border-black/10 bg-black/5 p-3 dark:border-zinc-700 dark:bg-zinc-900">
+        <div className="mx-4 mb-2 rounded-xl border border-orange-200 bg-orange-50 p-3">
           <div className="mb-2 flex items-center gap-3">
             <span className="text-xs opacity-60">字号</span>
             {[15, 17, 19, 21].map((s) => (
@@ -173,7 +172,7 @@ export default function Read() {
                 type="button"
                 className={
                   'rounded-lg px-2.5 py-1 text-xs ' +
-                  (fontSize === s ? 'bg-orange-600 text-white' : 'bg-black/10 dark:bg-zinc-800')
+                  (fontSize === s ? 'bg-orange-600 text-white' : 'bg-orange-100')
                 }
                 onClick={() => {
                   setFontSize(s)
@@ -186,20 +185,20 @@ export default function Read() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs opacity-60">主题</span>
-            {(['dark', 'sepia', 'light'] as Appearance[]).map((t) => (
+            {(['sepia', 'light'] as Appearance[]).map((t) => (
               <button
                 key={t}
                 type="button"
                 className={
                   'rounded-lg px-2.5 py-1 text-xs ' +
-                  (theme === t ? 'bg-orange-600 text-white' : 'bg-black/10 dark:bg-zinc-800')
+                  (theme === t ? 'bg-orange-600 text-white' : 'bg-orange-100')
                 }
                 onClick={() => {
                   setTheme(t)
                   persist({ theme: t })
                 }}
               >
-                {t === 'dark' ? '夜间' : t === 'sepia' ? '护眼' : '日间'}
+                {t === 'sepia' ? '护眼' : '日间'}
               </button>
             ))}
           </div>
@@ -236,7 +235,7 @@ export default function Read() {
             <span className="text-xs opacity-60">点选要改的段落</span>
             <button
               type="button"
-              className="rounded-lg border border-black/10 px-3 py-1.5 text-xs dark:border-zinc-700"
+              className="rounded-lg border border-orange-200 px-3 py-1.5 text-xs"
               onClick={() => setSegmentMode(false)}
             >
               退出选段
@@ -252,8 +251,8 @@ export default function Read() {
             className={
               'flex-1 rounded-xl border py-2.5 text-xs ' +
               (segmentMode
-                ? 'border-orange-600 font-medium text-orange-400'
-                : 'border-black/10 opacity-70 dark:border-zinc-700')
+                ? 'border-orange-600 font-medium text-orange-600'
+                : 'border-orange-200 opacity-70')
             }
             onClick={() => setSegmentMode((v) => !v)}
           >
@@ -261,7 +260,7 @@ export default function Read() {
           </button>
           <button
             type="button"
-            className="flex-1 rounded-xl border border-black/10 py-2.5 text-xs opacity-70 dark:border-zinc-700"
+            className="flex-1 rounded-xl border border-orange-200 py-2.5 text-xs opacity-70"
             onClick={async () => {
               setShowVersions(true)
               setViewingVersion(null)
@@ -277,7 +276,7 @@ export default function Read() {
         <div className="mt-10 mb-4 flex gap-3">
           <button
             type="button"
-            className="flex-1 rounded-xl border border-black/10 py-2.5 text-sm opacity-70 dark:border-zinc-700"
+            className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm opacity-70"
             onClick={prev}
           >
             上一章
@@ -296,15 +295,15 @@ export default function Read() {
       {segTarget && (
         <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setSegTarget(null)}>
           <div
-            className="max-h-[70vh] w-full overflow-y-auto rounded-t-2xl border-t border-zinc-800 bg-zinc-900 p-5 pb-safe"
+            className="max-h-[70vh] w-full overflow-y-auto rounded-t-2xl border-t border-orange-100 bg-white p-5 pb-safe"
             onClick={(e) => e.stopPropagation()}
           >
-            <div className="mb-2 text-xs text-zinc-500">选中段落：</div>
-            <div className="mb-3 line-clamp-3 rounded-lg bg-zinc-800/60 p-2.5 text-xs leading-relaxed text-zinc-400">
+            <div className="mb-2 text-xs text-stone-500">选中段落：</div>
+            <div className="mb-3 line-clamp-3 rounded-lg bg-orange-100 p-2.5 text-xs leading-relaxed text-stone-500">
               {segTarget}
             </div>
             <textarea
-              className="mb-3 min-h-20 w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
+              className="mb-3 min-h-20 w-full resize-none rounded-xl border border-orange-100 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-700"
               placeholder="这一段要怎么改？"
               value={segText}
               onChange={(e) => setSegText(e.target.value)}
@@ -312,7 +311,7 @@ export default function Read() {
             <div className="flex gap-3">
               <button
                 type="button"
-                className="flex-1 rounded-xl border border-zinc-700 py-2.5 text-sm text-zinc-400"
+                className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500"
                 onClick={() => setSegTarget(null)}
               >
                 取消
@@ -341,30 +340,30 @@ export default function Read() {
       {showVersions && (
         <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setShowVersions(false)}>
           <div
-            className="max-h-[75vh] w-full overflow-y-auto rounded-t-2xl border-t border-zinc-800 bg-zinc-900 p-5 pb-safe"
+            className="max-h-[75vh] w-full overflow-y-auto rounded-t-2xl border-t border-orange-100 bg-white p-5 pb-safe"
             onClick={(e) => e.stopPropagation()}
           >
             {viewingVersion ? (
               <>
                 <button
                   type="button"
-                  className="mb-3 text-xs text-orange-400"
+                  className="mb-3 text-xs text-orange-600"
                   onClick={() => setViewingVersion(null)}
                 >
                   ← 返回版本列表
                 </button>
-                <div className="mb-2 text-xs text-zinc-500">
+                <div className="mb-2 text-xs text-stone-500">
                   {viewingVersion.reason} · {viewingVersion.wordCount} 字
                 </div>
-                <div className="whitespace-pre-wrap text-sm leading-7 text-zinc-300">
+                <div className="whitespace-pre-wrap text-sm leading-7 text-stone-600">
                   {viewingVersion.content}
                 </div>
               </>
             ) : (
               <>
-                <div className="mb-3 text-sm font-semibold text-zinc-200">历史版本（新→旧）</div>
+                <div className="mb-3 text-sm font-semibold text-stone-700">历史版本（新→旧）</div>
                 {(versions ?? []).length === 0 && (
-                  <div className="py-8 text-center text-xs text-zinc-600">
+                  <div className="py-8 text-center text-xs text-stone-400">
                     {versions ? '这章还没改过' : '加载中…'}
                   </div>
                 )}
@@ -373,11 +372,11 @@ export default function Read() {
                     <button
                       key={v.id}
                       type="button"
-                      className="w-full rounded-xl bg-zinc-800/60 p-3 text-left active:bg-zinc-800"
+                      className="w-full rounded-xl bg-orange-100 p-3 text-left active:bg-orange-100"
                       onClick={() => setViewingVersion(v)}
                     >
-                      <div className="text-xs text-zinc-300">{v.reason}</div>
-                      <div className="mt-1 text-[11px] text-zinc-600">
+                      <div className="text-xs text-stone-600">{v.reason}</div>
+                      <div className="mt-1 text-[11px] text-stone-400">
                         {v.wordCount} 字 · {new Date(v.createdAt).toLocaleString('zh-CN')}
                       </div>
                     </button>

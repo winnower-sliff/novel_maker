@@ -1,8 +1,8 @@
 @import 'tailwindcss';
 
-/* v2 手机端：深色为主基调（夜间写作场景），阅读器另有 sepia/light 主题经 readerStore 切换 */
+/* v2 手机端：番茄式橙黄暖色主题；阅读器另有 sepia/light 纸感切换 */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 html,
@@ -12,7 +12,7 @@ body,
 }
 
 body {
-  @apply bg-zinc-950 text-zinc-100 antialiased;
+  @apply bg-[#fbf6ec] text-stone-800 antialiased;
   overscroll-behavior-y: none;
 }
 

@@ -30,7 +30,7 @@ export default function Shelf() {
         <h1 className="pt-3 text-2xl font-bold">书架</h1>
         <button
           type="button"
-          className="pt-3 text-2xl text-zinc-400"
+          className="pt-3 text-2xl text-stone-500"
           onClick={() => setTab('settings')}
         >
           ⚙️
@@ -38,9 +38,9 @@ export default function Shelf() {
       </header>
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-safe">
-        {isLoading && <p className="mt-10 text-center text-zinc-500">加载中…</p>}
+        {isLoading && <p className="mt-10 text-center text-stone-500">加载中…</p>}
         {!isLoading && active.length === 0 && (
-          <div className="mt-24 text-center text-zinc-500">
+          <div className="mt-24 text-center text-stone-500">
             <div className="text-5xl">✍️</div>
             <p className="mt-4">还没有书</p>
             <p className="mt-1 text-sm">点下面按钮，跟导演聊出你的第一本书</p>
@@ -51,11 +51,11 @@ export default function Shelf() {
             <button
               key={b.id}
               type="button"
-              className="w-full rounded-2xl border border-zinc-800 bg-zinc-900 p-4 text-left active:bg-zinc-800"
+              className="w-full rounded-2xl border border-orange-100 bg-white p-4 text-left active:bg-orange-100"
               onClick={() => openBook(b.id)}
             >
               <div className="text-lg font-semibold">{b.title || '未命名'}</div>
-              <div className="mt-1 line-clamp-1 text-sm text-zinc-400">{b.intro || '尚未完成开书引导'}</div>
+              <div className="mt-1 line-clamp-1 text-sm text-stone-500">{b.intro || '尚未完成开书引导'}</div>
             </button>
           ))}
         </div>

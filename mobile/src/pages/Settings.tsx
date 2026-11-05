@@ -37,7 +37,7 @@ export default function Settings() {
         <div className="text-base font-semibold">设置</div>
         <button
           type="button"
-          className="rounded-lg px-3 py-1.5 text-xs text-zinc-500"
+          className="rounded-lg px-3 py-1.5 text-xs text-stone-500"
           onClick={() => setTab('shelf')}
         >
           返回书架
@@ -47,25 +47,25 @@ export default function Settings() {
       {/* 连接 */}
       <Section title="连接">
         <div className="flex items-center justify-between">
-          <span className="min-w-0 flex-1 truncate text-sm text-zinc-300">{conn?.baseUrl ?? '-'}</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-stone-600">{conn?.baseUrl ?? '-'}</span>
           <span
             className={
               'ml-3 shrink-0 rounded-full px-2 py-0.5 text-[11px] ' +
-              (server?.running ? 'bg-orange-900/60 text-orange-300' : 'bg-red-900/60 text-red-300')
+              (server?.running ? 'bg-orange-900/60 text-orange-700' : 'bg-red-100 text-red-600')
             }
           >
             {server?.running ? '已连接' : '未连接'}
           </span>
         </div>
         {server && (
-          <div className="mt-2 text-xs text-zinc-600">
+          <div className="mt-2 text-xs text-stone-400">
             服务版本 {server.version} · 已运行 {Math.floor(server.uptimeS / 3600)}h
             {Math.floor((server.uptimeS % 3600) / 60)}m
           </div>
         )}
         <button
           type="button"
-          className="mt-3 w-full rounded-xl border border-zinc-800 py-2.5 text-sm text-zinc-400"
+          className="mt-3 w-full rounded-xl border border-orange-100 py-2.5 text-sm text-stone-500"
           onClick={() => {
             setConn(null)
             queryClient.clear()
@@ -99,7 +99,7 @@ export default function Settings() {
             {stats.byPurpose.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {stats.byPurpose.map((g) => (
-                  <span key={g.key} className="rounded-full bg-zinc-800 px-2.5 py-1 text-[11px] text-zinc-400">
+                  <span key={g.key} className="rounded-full bg-orange-100 px-2.5 py-1 text-[11px] text-stone-500">
                     {g.key} {g.requests}
                   </span>
                 ))}
@@ -112,7 +112,7 @@ export default function Settings() {
       {/* APP 更新 */}
       <Section title="APP">
         <UpdateRow />
-        <div className="mt-2 text-xs text-zinc-600">当前版本 {APP_VERSION}</div>
+        <div className="mt-2 text-xs text-stone-400">当前版本 {APP_VERSION}</div>
       </Section>
     </div>
   )
@@ -120,8 +120,8 @@ export default function Settings() {
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <div className="mb-5 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-4">
-      <div className="mb-3 text-xs font-semibold text-zinc-500">{title}</div>
+    <div className="mb-5 rounded-2xl border border-orange-100 bg-white p-4">
+      <div className="mb-3 text-xs font-semibold text-stone-500">{title}</div>
       {children}
     </div>
   )
@@ -129,9 +129,9 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 function Stat({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-xl bg-zinc-800/50 p-3">
-      <div className="text-[11px] text-zinc-600">{label}</div>
-      <div className="mt-0.5 text-sm text-zinc-200">{value}</div>
+    <div className="rounded-xl bg-orange-50 p-3">
+      <div className="text-[11px] text-stone-400">{label}</div>
+      <div className="mt-0.5 text-sm text-stone-700">{value}</div>
     </div>
   )
 }
@@ -160,7 +160,7 @@ function ModelForm() {
     retry: false
   })
 
-  if (!view) return <div className="py-4 text-center text-xs text-zinc-600">加载中…</div>
+  if (!view) return <div className="py-4 text-center text-xs text-stone-400">加载中…</div>
 
   const profile = view.profiles[view.provider]
   const currentModel = model || profile.defaultModel
@@ -241,7 +241,7 @@ function ModelForm() {
             type="button"
             className={
               'flex-1 rounded-lg py-2 text-xs ' +
-              (view.provider === p ? 'bg-orange-600 text-white' : 'bg-zinc-800 text-zinc-400')
+              (view.provider === p ? 'bg-orange-600 text-white' : 'bg-orange-100 text-stone-500')
             }
             onClick={async () => {
               await window.api.settings.save({ provider: p })
@@ -257,9 +257,9 @@ function ModelForm() {
 
       {view.provider === 'custom' && (
         <label className="mb-3 block">
-          <span className="mb-1 block text-[11px] text-zinc-600">API 地址（OpenAI 兼容）</span>
+          <span className="mb-1 block text-[11px] text-stone-400">API 地址（OpenAI 兼容）</span>
           <input
-            className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
+            className="w-full rounded-xl border border-orange-100 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-700"
             placeholder="https://…/v1"
             value={currentBase}
             onChange={(e) => setBaseUrl(e.target.value)}
@@ -268,12 +268,12 @@ function ModelForm() {
       )}
 
       <label className="mb-3 block">
-        <span className="mb-1 block text-[11px] text-zinc-600">
+        <span className="mb-1 block text-[11px] text-stone-400">
           API Key {view.apiKeyMasked ? `（已配置 ${view.apiKeyMasked}）` : '（未配置）'}
         </span>
         <input
           type="password"
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
+          className="w-full rounded-xl border border-orange-100 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-700"
           placeholder="sk-…"
           value={apiKey}
           onChange={(e) => setApiKey(e.target.value)}
@@ -282,11 +282,11 @@ function ModelForm() {
 
       <div className="mb-4">
         <div className="mb-1.5 flex items-center justify-between">
-          <span className="text-[11px] text-zinc-600">模型</span>
+          <span className="text-[11px] text-stone-400">模型</span>
           <button
             type="button"
             disabled={probing || busy}
-            className="rounded-lg px-2 py-1 text-[11px] text-orange-400 disabled:opacity-50"
+            className="rounded-lg px-2 py-1 text-[11px] text-orange-600 disabled:opacity-50"
             onClick={refresh}
           >
             {probing || busy ? '获取中…' : '刷新列表'}
@@ -300,7 +300,7 @@ function ModelForm() {
                 type="button"
                 className={
                   'rounded-full px-3 py-1.5 text-xs ' +
-                  (currentModel === m ? 'bg-orange-600 text-white' : 'bg-zinc-800 text-zinc-400')
+                  (currentModel === m ? 'bg-orange-600 text-white' : 'bg-orange-100 text-stone-500')
                 }
                 onClick={() => pickModel(m)}
               >
@@ -309,19 +309,19 @@ function ModelForm() {
             ))}
           </div>
         ) : (
-          <div className="text-xs text-zinc-600">
+          <div className="text-xs text-stone-400">
             填好 API Key{view.provider === 'custom' ? '与 API 地址' : ''}后点「刷新列表」自动获取可选模型
           </div>
         )}
         {probeResult && modelList.length > 0 && (
-          <div className="mt-1.5 text-[11px] text-zinc-600">
+          <div className="mt-1.5 text-[11px] text-stone-400">
             {probeResult.source === 'endpoint' ? '在线模型列表' : '内置清单（未连上端点，填 Key 后刷新验证）'}
           </div>
         )}
         {view.provider === 'custom' && (
           <div className="mt-2 flex gap-1.5">
             <input
-              className="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs outline-none focus:border-orange-700"
+              className="min-w-0 flex-1 rounded-xl border border-orange-100 bg-white px-3 py-2 text-xs outline-none focus:border-orange-700"
               placeholder="列表没有？手填模型名"
               value={manual}
               onChange={(e) => setManual(e.target.value)}
@@ -329,7 +329,7 @@ function ModelForm() {
             <button
               type="button"
               disabled={!manual.trim()}
-              className="shrink-0 rounded-xl bg-zinc-800 px-3 text-xs text-zinc-300 disabled:opacity-50"
+              className="shrink-0 rounded-xl bg-orange-100 px-3 text-xs text-stone-600 disabled:opacity-50"
               onClick={() => {
                 if (manual.trim()) {
                   pickModel(manual.trim())
@@ -343,7 +343,7 @@ function ModelForm() {
         )}
       </div>
 
-      {msg && <div className="mb-3 text-xs text-orange-400">{msg}</div>}
+      {msg && <div className="mb-3 text-xs text-orange-600">{msg}</div>}
 
       <button
         type="button"
@@ -402,7 +402,7 @@ function UpdateRow() {
       {state === 'idle' || state === 'latest' || state === 'error' ? (
         <button
           type="button"
-          className="w-full rounded-xl border border-zinc-800 py-2.5 text-sm text-zinc-300"
+          className="w-full rounded-xl border border-orange-100 py-2.5 text-sm text-stone-600"
           onClick={check}
         >
           检查更新
@@ -416,7 +416,7 @@ function UpdateRow() {
           {note}
         </button>
       ) : state === 'downloading' ? (
-        <button type="button" disabled className="w-full rounded-xl border border-zinc-800 py-2.5 text-sm text-zinc-500">
+        <button type="button" disabled className="w-full rounded-xl border border-orange-100 py-2.5 text-sm text-stone-500">
           {note}
         </button>
       ) : (
@@ -428,7 +428,7 @@ function UpdateRow() {
           {note}
         </button>
       )}
-      {state === 'error' && <div className="mt-2 text-xs text-red-400">{note}</div>}
+      {state === 'error' && <div className="mt-2 text-xs text-red-600">{note}</div>}
     </div>
   )
 }

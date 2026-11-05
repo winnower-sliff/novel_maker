@@ -85,9 +85,9 @@ export default function Onboard({ bookId }: { bookId: string }) {
   }
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-zinc-950">
-      <header className="flex items-center justify-between border-b border-zinc-800 px-4 pb-2 pt-safe">
-        <button type="button" className="pt-2 text-sm text-zinc-400" onClick={finishOnboard}>
+    <div className="absolute inset-0 z-30 flex flex-col bg-white">
+      <header className="flex items-center justify-between border-b border-orange-100 px-4 pb-2 pt-safe">
+        <button type="button" className="pt-2 text-sm text-stone-500" onClick={finishOnboard}>
           稍后再说
         </button>
         <div className="pt-2 text-sm font-medium text-orange-500">{stageLabel[stage] ?? stage}</div>
@@ -97,7 +97,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
       <div className="no-scrollbar flex-1 space-y-4 overflow-y-auto px-4 py-4">
         {turns.map((t, i) =>
           t.role === 'director' ? (
-            <div key={i} className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tl-sm bg-zinc-800 px-4 py-3 text-[15px] leading-relaxed">
+            <div key={i} className="max-w-[85%] whitespace-pre-wrap rounded-2xl rounded-tl-sm bg-orange-100 px-4 py-3 text-[15px] leading-relaxed">
               {t.text}
             </div>
           ) : (
@@ -106,7 +106,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
             </div>
           )
         )}
-        {busy && <div className="text-sm text-zinc-500">导演思考中…</div>}
+        {busy && <div className="text-sm text-stone-500">导演思考中…</div>}
         <div ref={bottomRef} />
       </div>
 
@@ -118,7 +118,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
               type="button"
               disabled={busy}
               onClick={() => void answer(opt)}
-              className="shrink-0 rounded-full border border-orange-600/60 px-4 py-2 text-sm text-orange-400 active:bg-orange-700 active:text-white"
+              className="shrink-0 rounded-full border border-orange-600/60 px-4 py-2 text-sm text-orange-600 active:bg-orange-700 active:text-white"
             >
               {opt}
             </button>
@@ -128,7 +128,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
 
       <div className="flex gap-2 px-4 pb-safe pt-2">
         <input
-          className="flex-1 rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-[15px] focus:border-orange-500 focus:outline-none"
+          className="flex-1 rounded-xl border border-orange-200 bg-white px-4 py-3 text-[15px] focus:border-orange-500 focus:outline-none"
           value={input}
           onChange={(e) => setInput(e.target.value)}
           onKeyDown={(e) => {

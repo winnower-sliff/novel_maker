@@ -30,16 +30,16 @@ export default function Connect() {
       <div className="text-center">
         <div className="text-5xl">📖</div>
         <h1 className="mt-3 text-2xl font-bold">小说工坊</h1>
-        <p className="mt-1 text-sm text-zinc-400">连接家里电脑上的写作服务器</p>
+        <p className="mt-1 text-sm text-stone-500">连接家里电脑上的写作服务器</p>
       </div>
 
       <div className="space-y-2">
-        <label className="text-sm text-zinc-400" htmlFor="addr">
+        <label className="text-sm text-stone-500" htmlFor="addr">
           服务器地址
         </label>
         <input
           id="addr"
-          className="w-full rounded-xl border border-zinc-700 bg-zinc-900 px-4 py-3 text-base focus:border-orange-500 focus:outline-none"
+          className="w-full rounded-xl border border-orange-200 bg-white px-4 py-3 text-base focus:border-orange-500 focus:outline-none"
           value={baseUrl}
           onChange={(e) => setBaseUrl(e.target.value)}
           placeholder="http://100.x.x.x:3910"
@@ -47,13 +47,13 @@ export default function Connect() {
           autoCapitalize="off"
           spellCheck={false}
         />
-        <p className="text-xs text-zinc-500">
+        <p className="text-xs text-stone-500">
           电脑托盘状态行会显示地址；Tailscale 网络内直接可达。
         </p>
       </div>
 
       {error && (
-        <div className="rounded-xl border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-300">
+        <div className="rounded-xl border border-red-900 bg-red-950/50 px-4 py-3 text-sm text-red-600">
           {error}
         </div>
       )}

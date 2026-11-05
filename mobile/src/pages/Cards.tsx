@@ -21,7 +21,7 @@ export default function Cards() {
 
   return (
     <div className="px-4 py-4">
-      <div className="mb-4 flex rounded-xl bg-zinc-900 p-1">
+      <div className="mb-4 flex rounded-xl bg-white p-1">
         {(
           [
             ['cards', '设定卡'],
@@ -33,7 +33,7 @@ export default function Cards() {
             key={k}
             type="button"
             className={
-              'flex-1 rounded-lg py-2 text-xs ' + (seg === k ? 'bg-zinc-700 text-zinc-100' : 'text-zinc-500')
+              'flex-1 rounded-lg py-2 text-xs ' + (seg === k ? 'bg-orange-600 text-white' : 'text-stone-500')
             }
             onClick={() => setSeg(k)}
           >
@@ -42,7 +42,7 @@ export default function Cards() {
         ))}
       </div>
       {!lineId ? (
-        <div className="py-16 text-center text-sm text-zinc-600">加载中…</div>
+        <div className="py-16 text-center text-sm text-stone-400">加载中…</div>
       ) : seg === 'cards' ? (
         <CardsList lineId={lineId} />
       ) : seg === 'characters' ? (
@@ -68,21 +68,21 @@ function CardsList({ lineId }: { lineId: string }) {
   const rest = filtered.filter((c) => !c.pinned)
 
   const item = (c: Card) => (
-    <div key={c.id} className="rounded-xl border border-zinc-800 bg-zinc-900/60">
+    <div key={c.id} className="rounded-xl border border-orange-100 bg-white">
       <button
         type="button"
         className="flex w-full items-center gap-2 px-3 py-3 text-left"
         onClick={() => setExpanded(expanded === c.id ? null : c.id)}
       >
-        <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-500">
+        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-stone-500">
           {KIND_LABEL[(c.kind ?? 'custom') as CardKind]}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm">{c.title}</span>
-        {c.pinned && <span className="text-[11px] text-orange-400">已钉选</span>}
+        {c.pinned && <span className="text-[11px] text-orange-600">已钉选</span>}
         <span
           role="button"
           tabIndex={0}
-          className="rounded-full p-1.5 text-zinc-600"
+          className="rounded-full p-1.5 text-stone-400"
           onClick={async (e) => {
             e.stopPropagation()
             await toggleCardPin(c)
@@ -101,23 +101,23 @@ function CardsList({ lineId }: { lineId: string }) {
         </span>
       </button>
       {expanded === c.id && (
-        <div className="border-t border-zinc-800/70 px-4 py-3">
+        <div className="border-t border-orange-100/70 px-4 py-3">
           {c.readerText && (
             <div className="mb-2">
-              <div className="mb-1 text-[11px] text-zinc-600">读者已知</div>
-              <div className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-400">{c.readerText}</div>
+              <div className="mb-1 text-[11px] text-stone-400">读者已知</div>
+              <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-500">{c.readerText}</div>
             </div>
           )}
           {c.authorText && (
             <div className="mb-2">
-              <div className="mb-1 text-[11px] text-zinc-600">作者真相</div>
-              <div className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-500">{c.authorText}</div>
+              <div className="mb-1 text-[11px] text-stone-400">作者真相</div>
+              <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-500">{c.authorText}</div>
             </div>
           )}
           {c.revealPlan && (
             <div>
-              <div className="mb-1 text-[11px] text-zinc-600">揭示计划</div>
-              <div className="text-xs leading-relaxed text-zinc-500">{c.revealPlan}</div>
+              <div className="mb-1 text-[11px] text-stone-400">揭示计划</div>
+              <div className="text-xs leading-relaxed text-stone-500">{c.revealPlan}</div>
             </div>
           )}
         </div>
@@ -134,7 +134,7 @@ function CardsList({ lineId }: { lineId: string }) {
             type="button"
             className={
               'shrink-0 rounded-full px-3 py-1 text-xs ' +
-              (kind === k ? 'bg-orange-600 text-white' : 'bg-zinc-900 text-zinc-500')
+              (kind === k ? 'bg-orange-600 text-white' : 'bg-white text-stone-500')
             }
             onClick={() => setKind(k)}
           >
@@ -144,17 +144,17 @@ function CardsList({ lineId }: { lineId: string }) {
       </div>
       {pinned.length > 0 && (
         <>
-          <div className="mb-2 text-[11px] text-zinc-600">钉选（每次写作必带）</div>
+          <div className="mb-2 text-[11px] text-stone-400">钉选（每次写作必带）</div>
           <div className="mb-4 space-y-1.5">{pinned.map(item)}</div>
         </>
       )}
       {rest.length > 0 && (
         <>
-          <div className="mb-2 text-[11px] text-zinc-600">其余（按相关度自动带）</div>
+          <div className="mb-2 text-[11px] text-stone-400">其余（按相关度自动带）</div>
           <div className="space-y-1.5">{rest.map(item)}</div>
         </>
       )}
-      {filtered.length === 0 && <div className="py-16 text-center text-sm text-zinc-600">还没有设定卡</div>}
+      {filtered.length === 0 && <div className="py-16 text-center text-sm text-stone-400">还没有设定卡</div>}
     </div>
   )
 }
@@ -163,20 +163,20 @@ function CharactersList({ lineId }: { lineId: string }) {
   const { data: characters = [], refetch } = useCharacters(lineId)
   const [expanded, setExpanded] = useState<string | null>(null)
 
-  if (characters.length === 0) return <div className="py-16 text-center text-sm text-zinc-600">还没有人物</div>
+  if (characters.length === 0) return <div className="py-16 text-center text-sm text-stone-400">还没有人物</div>
 
   return (
     <div className="space-y-1.5">
       {characters.map((ch) => (
-        <div key={ch.id} className="rounded-xl border border-zinc-800 bg-zinc-900/60">
+        <div key={ch.id} className="rounded-xl border border-orange-100 bg-white">
           <button
             type="button"
             className="flex w-full items-center gap-2 px-3 py-3 text-left"
             onClick={() => setExpanded(expanded === ch.id ? null : ch.id)}
           >
             <span className="min-w-0 flex-1 truncate text-sm font-medium">{ch.name}</span>
-            {ch.role && <span className="truncate text-xs text-zinc-600">{ch.role}</span>}
-            {ch.pinned && <span className="text-[11px] text-orange-400">已钉选</span>}
+            {ch.role && <span className="truncate text-xs text-stone-400">{ch.role}</span>}
+            {ch.pinned && <span className="text-[11px] text-orange-600">已钉选</span>}
           </button>
           {expanded === ch.id && <CharacterDetail ch={ch} onPin={() => refetch()} />}
         </div>
@@ -189,22 +189,22 @@ function CharacterDetail({ ch, onPin }: { ch: Character; onPin: () => void }) {
   const state = (ch.state ?? {}) as Record<string, string>
   const keys = Object.keys(state)
   return (
-    <div className="border-t border-zinc-800/70 px-4 py-3">
+    <div className="border-t border-orange-100/70 px-4 py-3">
       {keys.length > 0 && (
         <div className="mb-3 grid grid-cols-2 gap-2">
           {keys.map((k) => (
-            <div key={k} className="rounded-lg bg-zinc-800/50 p-2">
-              <div className="text-[11px] text-zinc-600">{k}</div>
-              <div className="text-xs text-zinc-300">{state[k] ?? ''}</div>
+            <div key={k} className="rounded-lg bg-orange-50 p-2">
+              <div className="text-[11px] text-stone-400">{k}</div>
+              <div className="text-xs text-stone-600">{state[k] ?? ''}</div>
             </div>
           ))}
         </div>
       )}
       {ch.relations && ch.relations.length > 0 && (
         <div className="mb-3">
-          <div className="mb-1 text-[11px] text-zinc-600">关系</div>
+          <div className="mb-1 text-[11px] text-stone-400">关系</div>
           {ch.relations.map((r, i) => (
-            <div key={i} className="text-xs text-zinc-400">
+            <div key={i} className="text-xs text-stone-500">
               {ch.name} —{r.label}— {r.to}
             </div>
           ))}
@@ -212,8 +212,8 @@ function CharacterDetail({ ch, onPin }: { ch: Character; onPin: () => void }) {
       )}
       {ch.card && Object.keys(ch.card).length > 0 && (
         <div className="mb-3">
-          <div className="mb-1 text-[11px] text-zinc-600">人设</div>
-          <div className="whitespace-pre-wrap text-xs leading-relaxed text-zinc-500">
+          <div className="mb-1 text-[11px] text-stone-400">人设</div>
+          <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-500">
             {Object.entries(ch.card)
               .map(([k, v]) => `${k}：${typeof v === 'string' ? v : JSON.stringify(v)}`)
               .join('\n')}
@@ -222,7 +222,7 @@ function CharacterDetail({ ch, onPin }: { ch: Character; onPin: () => void }) {
       )}
       <button
         type="button"
-        className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400"
+        className="rounded-lg border border-orange-100 px-3 py-1.5 text-xs text-stone-500"
         onClick={async () => {
           await window.api.character.save({ id: ch.id, lineId: ch.lineId, name: ch.name, pinned: !ch.pinned })
           onPin()
@@ -244,24 +244,24 @@ function ForeshadowsList({ lineId }: { lineId: string }) {
   const row = (f: Foreshadow, dim: boolean) => (
     <div
       key={f.id}
-      className={'rounded-xl border border-zinc-800 bg-zinc-900/60 px-3 py-3 ' + (dim ? 'opacity-50' : '')}
+      className={'rounded-xl border border-orange-100 bg-white px-3 py-3 ' + (dim ? 'opacity-50' : '')}
     >
       <div className="flex items-center gap-2">
         <span
           className={
             'rounded-full px-2 py-0.5 text-[11px] ' +
             (f.status === 'resolved'
-              ? 'bg-zinc-800 text-zinc-500'
+              ? 'bg-orange-100 text-stone-500'
               : f.status === 'planned'
-                ? 'bg-orange-800/70 text-orange-200'
-                : 'bg-orange-950/70 text-orange-300')
+                ? 'bg-amber-200/90 text-orange-800'
+                : 'bg-orange-100 text-orange-700')
           }
         >
           {f.status === 'resolved' ? '已回收' : f.status === 'planned' ? '已计划' : '埋设中'}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm">{f.title}</span>
       </div>
-      {f.detail && <div className="mt-1.5 line-clamp-2 text-xs text-zinc-500">{f.detail}</div>}
+      {f.detail && <div className="mt-1.5 line-clamp-2 text-xs text-stone-500">{f.detail}</div>}
     </div>
   )
 
@@ -280,7 +280,7 @@ function ForeshadowsList({ lineId }: { lineId: string }) {
             key={label}
             type="button"
             className={
-              'rounded-full px-3 py-1 text-xs ' + (status === k ? 'bg-orange-600 text-white' : 'bg-zinc-900 text-zinc-500')
+              'rounded-full px-3 py-1 text-xs ' + (status === k ? 'bg-orange-600 text-white' : 'bg-white text-stone-500')
             }
             onClick={() => setStatus(k)}
           >
@@ -291,11 +291,11 @@ function ForeshadowsList({ lineId }: { lineId: string }) {
       {open.length > 0 && <div className="space-y-1.5">{open.map((f) => row(f, false))}</div>}
       {resolved.length > 0 && (
         <>
-          <div className="mb-2 mt-4 text-[11px] text-zinc-600">已回收</div>
+          <div className="mb-2 mt-4 text-[11px] text-stone-400">已回收</div>
           <div className="space-y-1.5">{resolved.map((f) => row(f, true))}</div>
         </>
       )}
-      {foreshadows.length === 0 && <div className="py-16 text-center text-sm text-zinc-600">没有伏笔</div>}
+      {foreshadows.length === 0 && <div className="py-16 text-center text-sm text-stone-400">没有伏笔</div>}
     </div>
   )
 }

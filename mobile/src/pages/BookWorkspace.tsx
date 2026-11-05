@@ -25,11 +25,11 @@ export default function BookWorkspace() {
   const activeLine = data?.lines.find((l) => l.id === book?.activeLineId)
 
   return (
-    <div className="fixed inset-0 z-20 flex flex-col bg-zinc-950">
-      <header className="pt-safe flex items-center gap-2 border-b border-zinc-800 px-4 pb-3">
+    <div className="fixed inset-0 z-20 flex flex-col bg-[#fbf6ec]">
+      <header className="pt-safe flex items-center gap-2 border-b border-orange-100 px-4 pb-3">
         <button
           type="button"
-          className="-ml-1 rounded-full p-2 text-zinc-400 hover:bg-zinc-800 hover:text-zinc-100"
+          className="-ml-1 rounded-full p-2 text-stone-500 hover:bg-orange-100 hover:text-stone-800"
           onClick={() => {
             queryClient.invalidateQueries({ queryKey: qk.books })
             closeBook()
@@ -42,10 +42,10 @@ export default function BookWorkspace() {
         <div className="min-w-0 flex-1">
           <div className="truncate text-base font-semibold">{book?.title ?? '…'}</div>
           {activeLine && activeLine.name !== '主线' && (
-            <div className="truncate text-xs text-orange-400/90">{activeLine.name}</div>
+            <div className="truncate text-xs text-orange-600">{activeLine.name}</div>
           )}
         </div>
-        <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-xs text-zinc-400">
+        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs text-stone-500">
           {data?.chapters.length ?? 0} 章
         </span>
       </header>
@@ -57,14 +57,14 @@ export default function BookWorkspace() {
         {bookSub === 'lines' && <Lines />}
       </main>
 
-      <nav className="pb-safe grid grid-cols-4 border-t border-zinc-800">
+      <nav className="pb-safe grid grid-cols-4 border-t border-orange-100">
         {SUBS.map((s) => (
           <button
             key={s.key}
             type="button"
             className={
               'flex flex-col items-center gap-0.5 py-2 text-xs ' +
-              (bookSub === s.key ? 'text-orange-400' : 'text-zinc-500')
+              (bookSub === s.key ? 'text-orange-600' : 'text-stone-500')
             }
             onClick={() => setBookSub(s.key)}
           >
