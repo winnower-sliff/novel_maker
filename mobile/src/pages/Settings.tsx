@@ -145,29 +145,48 @@ function ModelForm() {
   const [apiKey, setApiKey] = useState('')
   const [model, setModel] = useState('')
   const [baseUrl, setBaseUrl] = useState('')
+  const [manual, setManual] = useState('')
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
+
+  const { data: probeResult, isFetching: probing, refetch } = useQuery({
+    queryKey: ['models', view?.provider],
+    enabled: !!view,
+    queryFn: () => {
+      if (!view) throw new Error('settings 未加载')
+      return window.api.models.probe({ provider: view.provider })
+    },
+    staleTime: 60_000,
+    retry: false
+  })
 
   if (!view) return <div className="py-4 text-center text-xs text-zinc-600">加载中…</div>
 
   const profile = view.profiles[view.provider]
   const currentModel = model || profile.defaultModel
   const currentBase = baseUrl || profile.baseUrl
+  const rawList = probeResult?.models ?? []
+  const modelList =
+    currentModel && !rawList.includes(currentModel) ? [currentModel, ...rawList] : rawList
+
+  const persist = async (nextModel: string) => {
+    await window.api.settings.save({
+      provider: view.provider,
+      profiles: {
+        ...view.profiles,
+        [view.provider]: { ...profile, baseUrl: currentBase, defaultModel: nextModel }
+      },
+      ...(apiKey.trim() ? { apiKeys: { [view.provider]: apiKey.trim() } } : {})
+    })
+    if (apiKey.trim()) setApiKey('')
+    queryClient.invalidateQueries({ queryKey: ['settings'] })
+  }
 
   const save = async () => {
     setBusy(true)
     setMsg('')
     try {
-      await window.api.settings.save({
-        provider: view.provider,
-        profiles: {
-          ...view.profiles,
-          [view.provider]: { ...profile, baseUrl: currentBase, defaultModel: currentModel }
-        },
-        ...(apiKey.trim() ? { apiKeys: { [view.provider]: apiKey.trim() } } : {})
-      })
-      setApiKey('')
-      queryClient.invalidateQueries({ queryKey: ['settings'] })
+      await persist(currentModel)
       setMsg('已保存')
     } catch (e) {
       setMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`)
@@ -176,14 +195,38 @@ function ModelForm() {
     }
   }
 
-  const probe = async () => {
+  const pickModel = async (m: string) => {
+    setModel(m)
+    setMsg('')
+    try {
+      await persist(m)
+      setMsg('已保存')
+    } catch (e) {
+      setMsg(`保存失败：${e instanceof Error ? e.message : String(e)}`)
+    }
+  }
+
+  // 刷新列表 = 隐性连接测试：先把新填的 Key/地址保存（probe 才能用上），再拉列表
+  const refresh = async () => {
     setBusy(true)
     setMsg('')
     try {
-      const r = await window.api.models.probe({ provider: view.provider })
-      setMsg(r.source === 'endpoint' ? `在线探测到 ${r.models.length} 个模型` : '端点不可达，显示内置清单')
-    } catch (e) {
-      setMsg(`探测失败：${e instanceof Error ? e.message : String(e)}`)
+      if (apiKey.trim() || baseUrl) {
+        await window.api.settings.save({
+          provider: view.provider,
+          profiles: {
+            ...view.profiles,
+            [view.provider]: { ...profile, baseUrl: currentBase }
+          },
+          ...(apiKey.trim() ? { apiKeys: { [view.provider]: apiKey.trim() } } : {})
+        })
+        setApiKey('')
+        queryClient.invalidateQueries({ queryKey: ['settings'] })
+      }
+      const r = await refetch()
+      const list = r.data?.models ?? []
+      if (list.length === 0) setMsg('没拉到模型列表：检查 Key 与地址')
+      else if (!model && !profile.defaultModel) await pickModel(list[0] ?? '')
     } finally {
       setBusy(false)
     }
@@ -237,35 +280,79 @@ function ModelForm() {
         />
       </label>
 
-      <label className="mb-4 block">
-        <span className="mb-1 block text-[11px] text-zinc-600">模型名</span>
-        <input
-          className="w-full rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2.5 text-sm outline-none focus:border-orange-700"
-          value={currentModel}
-          onChange={(e) => setModel(e.target.value)}
-        />
-      </label>
+      <div className="mb-4">
+        <div className="mb-1.5 flex items-center justify-between">
+          <span className="text-[11px] text-zinc-600">模型</span>
+          <button
+            type="button"
+            disabled={probing || busy}
+            className="rounded-lg px-2 py-1 text-[11px] text-orange-400 disabled:opacity-50"
+            onClick={refresh}
+          >
+            {probing || busy ? '获取中…' : '刷新列表'}
+          </button>
+        </div>
+        {modelList.length > 0 ? (
+          <div className="flex flex-wrap gap-1.5">
+            {modelList.map((m) => (
+              <button
+                key={m}
+                type="button"
+                className={
+                  'rounded-full px-3 py-1.5 text-xs ' +
+                  (currentModel === m ? 'bg-orange-600 text-white' : 'bg-zinc-800 text-zinc-400')
+                }
+                onClick={() => pickModel(m)}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+        ) : (
+          <div className="text-xs text-zinc-600">
+            填好 API Key{view.provider === 'custom' ? '与 API 地址' : ''}后点「刷新列表」自动获取可选模型
+          </div>
+        )}
+        {probeResult && modelList.length > 0 && (
+          <div className="mt-1.5 text-[11px] text-zinc-600">
+            {probeResult.source === 'endpoint' ? '在线模型列表' : '内置清单（未连上端点，填 Key 后刷新验证）'}
+          </div>
+        )}
+        {view.provider === 'custom' && (
+          <div className="mt-2 flex gap-1.5">
+            <input
+              className="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-950 px-3 py-2 text-xs outline-none focus:border-orange-700"
+              placeholder="列表没有？手填模型名"
+              value={manual}
+              onChange={(e) => setManual(e.target.value)}
+            />
+            <button
+              type="button"
+              disabled={!manual.trim()}
+              className="shrink-0 rounded-xl bg-zinc-800 px-3 text-xs text-zinc-300 disabled:opacity-50"
+              onClick={() => {
+                if (manual.trim()) {
+                  pickModel(manual.trim())
+                  setManual('')
+                }
+              }}
+            >
+              用这个
+            </button>
+          </div>
+        )}
+      </div>
 
       {msg && <div className="mb-3 text-xs text-orange-400">{msg}</div>}
 
-      <div className="flex gap-2">
-        <button
-          type="button"
-          disabled={busy}
-          className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium disabled:opacity-50"
-          onClick={save}
-        >
-          {busy ? '…' : '保存'}
-        </button>
-        <button
-          type="button"
-          disabled={busy}
-          className="flex-1 rounded-xl border border-zinc-700 py-2.5 text-sm text-zinc-400 disabled:opacity-50"
-          onClick={probe}
-        >
-          测试连接
-        </button>
-      </div>
+      <button
+        type="button"
+        disabled={busy}
+        className="w-full rounded-xl bg-orange-600 py-2.5 text-sm font-medium disabled:opacity-50"
+        onClick={save}
+      >
+        {busy ? '…' : '保存'}
+      </button>
     </div>
   )
 }
