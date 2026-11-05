@@ -80,7 +80,7 @@ export function useForeshadows(lineId: string | null) {
   })
 }
 
-/** 该书 job 流：active=最近未终态（恢复用）；lastDone=最近一次完成（纪要卡回看） */
+/** 该书 job 流：active=最近未终态（含 revise/review 等子任务，恢复用）；lastDone=最近完成的写作任务（纪要卡回看） */
 export function useJobFlow(bookId: string | null) {
   return useQuery({
     queryKey: qk.jobs(bookId ?? ''),
@@ -91,11 +91,28 @@ export function useJobFlow(bookId: string | null) {
           jobs.find(
             (j) => j.state !== 'done' && j.state !== 'failed' && j.state !== 'cancelled'
           ) ?? null,
-        // listJobs 按 created_at DESC，首个 done 即最近完成
-        lastDone: jobs.find((j) => j.state === 'done') ?? null
+        // listJobs 按 created_at DESC，首个 done 的写作任务即最近完成的一章
+        lastDone: jobs.find((j) => j.kind === 'write' && j.state === 'done') ?? null
       }
     },
     enabled: !!bookId,
     refetchInterval: 15_000 // SSE 断连时的兜底轮询
+  })
+}
+
+/** 最近完成的审读/审计/诊断报告（新→旧） */
+export function useReports(bookId: string | null) {
+  return useQuery({
+    queryKey: [...qk.jobs(bookId ?? ''), 'reports'],
+    queryFn: async (): Promise<Job[]> => {
+      const jobs = await window.api.job.list(bookId as string)
+      return jobs.filter(
+        (j) =>
+          (j.kind === 'review' || j.kind === 'audit' || j.kind === 'diagnose') &&
+          j.state === 'done' &&
+          j.payload.report
+      )
+    },
+    enabled: !!bookId
   })
 }

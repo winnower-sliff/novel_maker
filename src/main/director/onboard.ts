@@ -133,12 +133,18 @@ export async function onboardAnswer(bookId: string, answer: string): Promise<Onb
   const stage = (last.meta?.stage as OnboardStage) ?? 'premise'
   const lastDraft = (last.meta?.draft ?? null) as OnboardReply['draft']
 
-  // 待确认草案 + 作者说「就这么定/书名N」 → 入库推进
+  // 待确认草案 + 作者说「就这么定/书名N/直接点书名文本」 → 入库推进
+  const answerTrim = answer.trim()
+  const titleHit =
+    lastDraft && 'titles' in lastDraft
+      ? lastDraft.titles.findIndex((t) => t.title === answerTrim || answerTrim.includes(t.title))
+      : -1
   if (
     lastDraft &&
-    /^(就这么定|确认|定 了|第一个|第二个|第三个|书名[123一二三])/u.test(answer.trim())
+    (/^(就这么定|确认|定 了|第一个|第二个|第三个|书名[123一二三])/u.test(answerTrim) ||
+      titleHit >= 0)
   ) {
-    return await confirmDraft(book, stage, lastDraft, answer)
+    return await confirmDraft(book, stage, lastDraft, answerTrim)
   }
 
   const reply = await ask(book, stage, answer)
@@ -185,11 +191,15 @@ async function confirmDraft(
     return reply
   }
   if (stage === 'title' && 'titles' in draft) {
-    const idx = /第二个|2|二|书名2|书名二/u.test(answer)
-      ? 1
-      : /第三个|3|三|书名3|书名三/u.test(answer)
-        ? 2
-        : 0
+    const idx = (() => {
+      const byName = draft.titles.findIndex((t) => answer.includes(t.title))
+      if (byName >= 0) return byName
+      return /第二个|2|二|书名2|书名二/u.test(answer)
+        ? 1
+        : /第三个|3|三|书名3|书名三/u.test(answer)
+          ? 2
+          : 0
+    })()
     const picked = draft.titles[idx] ?? draft.titles[0]
     if (!picked) throw new Error('书名草案为空')
     updateBook(bookId, {

@@ -297,10 +297,18 @@ export interface ChatMessageRow {
 
 // ── 任务流水线（W10/W12/W14） ────────────────────────────────────────────────
 
-export type JobKind = 'write' | 'onboard' | 'rewrite'
+/** revise=改章（快捷钮/自由指令）；review/audit=子代理审读；diagnose=手动诊断问答 */
+export type JobKind = 'write' | 'onboard' | 'rewrite' | 'revise' | 'review' | 'audit' | 'diagnose'
 export type JobState = 'queued' | 'running' | 'waiting_user' | 'done' | 'failed' | 'cancelled'
-/** 写章五步：提案→章级大纲→分镜→正文→自检收尾（W3/W6） */
-export type JobStep = 'proposal' | 'outline' | 'scene' | 'draft' | 'selfcheck' | 'finalize'
+/** 写章五步：提案→章级大纲→分镜→正文→自检收尾（W3/W6）；revise 复用 draft/selfcheck/finalize */
+export type JobStep =
+  | 'proposal'
+  | 'outline'
+  | 'scene'
+  | 'draft'
+  | 'selfcheck'
+  | 'finalize'
+  | 'report'
 
 /** 走向卡片（W2）：默认 4 张类型不同，按需 1-5 张 */
 export interface DirectionCard {
@@ -347,6 +355,8 @@ export interface ChapterRecap {
     foreshadowId?: string
     atOrder?: number
   }>
+  /** agent 动态建议钮（2-3 个，随章情境变化；M4 用户决策） */
+  quickActions?: Array<{ label: string; instruction: string }>
 }
 
 export interface JobPayload {
@@ -368,6 +378,32 @@ export interface JobPayload {
   recap?: ChapterRecap
   /** 流式正文关联的 requestId（SSE 补拉用） */
   draftRequestId?: string
+  /** revise 启动参数（queued 重跑依据） */
+  revise?: { chapterId: string; instruction: string; segment?: string }
+  /** review/audit 启动参数 */
+  reviewChapterId?: string
+  /** diagnose 启动参数 */
+  question?: string
+  /** review/audit/diagnose 产物（结构化报告） */
+  report?: AgentReport
+}
+
+/** 子代理审读报告（review 七维 / audit 漂移+空转+连续性 / diagnose 问答） */
+export interface AgentReport {
+  kind: 'review' | 'audit' | 'diagnose'
+  /** 总评（diagnose=回答正文） */
+  verdict: string
+  /** 分维度发现（review 七维：张力/文风/节奏/逻辑/对话/感官/钩子） */
+  findings: Array<{
+    dimension: string
+    level: 'good' | 'warn' | 'bad'
+    quote: string
+    comment: string
+  }>
+  /** 修复建议（可选动作清单） */
+  suggestions: string[]
+  /** 总体评级 1-5（diagnose 恒 0） */
+  score: number
 }
 
 export interface Job {
@@ -401,6 +437,35 @@ export interface LintReport {
   wordCount: number
   targetWords: number | null
 }
+
+/** 改章固定快捷钮（章末常驻；agent 动态建议钮在 ChapterRecap.quickActions） */
+export const QUICK_ACTIONS: Array<{ label: string; instruction: string }> = [
+  {
+    label: '更狠',
+    instruction:
+      '把整章的情绪浓度和冲突烈度再加狠一档：对抗更尖锐、代价更具体、句子更短促有力。保持情节走向不变。'
+  },
+  {
+    label: '更柔',
+    instruction:
+      '把整章写得更柔软克制：放慢节奏、增加留白与细节感受、削弱直给的冲突，情绪藏在动作和景物里。保持情节走向不变。'
+  },
+  {
+    label: '加长',
+    instruction:
+      '扩写本章至约原字数的 1.5 倍：把交代过快的段落展开成完整场景（对话、动作、感官细节），不注水不复述。'
+  },
+  {
+    label: '缩短',
+    instruction:
+      '精简本章至约原字数的 0.7 倍：砍掉冗余交代与重复渲染，保留全部情节推进与关键画面，节奏更紧。'
+  },
+  {
+    label: '重写',
+    instruction:
+      '推翻本章的写法，用另一种完全不同的处理方式重写（换切入视角、换场景调度、换叙事顺序），情节事实与结局不变。'
+  }
+]
 
 // ── 现状卡（W1，纯数据组装零模型成本） ──────────────────────────────────────
 

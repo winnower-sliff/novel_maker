@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Chapter } from '@shared/types'
+import type { Chapter, ChapterVersion } from '@shared/types'
+import QuickActionsBar from '../components/QuickActionsBar'
 import { useBook } from '../lib/queries'
 import { loadJson, saveJson } from '../lib/persist'
 import { applySystemBars, type Appearance } from '../lib/systemBars'
@@ -11,8 +12,17 @@ const THEME_BG: Record<Appearance, string> = {
   light: 'bg-white text-zinc-800'
 }
 
+/** 段落切分：空行分段；段内换行保留 */
+function splitParagraphs(content: string): string[] {
+  return content
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter(Boolean)
+}
+
 export default function Read() {
   const openBookId = useUiStore((s) => s.openBookId) ?? ''
+  const setBookSub = useUiStore((s) => s.setBookSub)
   const { data } = useBook(openBookId)
   const [chapterId, setChapterId] = useState<string | null>(null)
   const [chapter, setChapter] = useState<Chapter | null>(null)
@@ -20,6 +30,12 @@ export default function Read() {
   const [theme, setTheme] = useState<Appearance>('dark')
   const [showSettings, setShowSettings] = useState(false)
   const [listOpen, setListOpen] = useState(true)
+  const [segmentMode, setSegmentMode] = useState(false)
+  const [segTarget, setSegTarget] = useState<string | null>(null)
+  const [segText, setSegText] = useState('')
+  const [showVersions, setShowVersions] = useState(false)
+  const [versions, setVersions] = useState<ChapterVersion[] | null>(null)
+  const [viewingVersion, setViewingVersion] = useState<ChapterVersion | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
 
   const book = data?.book
@@ -192,9 +208,72 @@ export default function Read() {
 
       <div ref={boxRef} className="px-6 pb-16">
         <h1 className="mb-6 pt-4 text-center text-lg font-semibold">{chapter.title}</h1>
-        <div className="whitespace-pre-wrap leading-8" style={{ fontSize }}>
-          {chapter.content}
+        <div className="leading-8" style={{ fontSize }}>
+          {splitParagraphs(chapter.content).map((p, i) =>
+            segmentMode ? (
+              <button
+                key={i}
+                type="button"
+                className="mb-4 w-full rounded-lg px-2 py-1 text-left ring-1 ring-transparent active:ring-emerald-500/60"
+                onClick={() => {
+                  setSegTarget(p)
+                  setSegText('')
+                }}
+              >
+                {p}
+              </button>
+            ) : (
+              <p key={i} className="mb-4 whitespace-pre-wrap">
+                {p}
+              </p>
+            )
+          )}
         </div>
+
+        {/* 选段修改模式下的底部提示条 */}
+        {segmentMode && (
+          <div className="sticky bottom-0 -mx-6 mb-4 flex items-center justify-between bg-inherit px-6 py-3">
+            <span className="text-xs opacity-60">点选要改的段落</span>
+            <button
+              type="button"
+              className="rounded-lg border border-black/10 px-3 py-1.5 text-xs dark:border-zinc-700"
+              onClick={() => setSegmentMode(false)}
+            >
+              退出选段
+            </button>
+          </div>
+        )}
+
+        <QuickActionsBar chapterId={chapter.id} refresh={() => setBookSub('write')} />
+
+        <div className="mt-3 flex gap-3">
+          <button
+            type="button"
+            className={
+              'flex-1 rounded-xl border py-2.5 text-xs ' +
+              (segmentMode
+                ? 'border-emerald-600 font-medium text-emerald-400'
+                : 'border-black/10 opacity-70 dark:border-zinc-700')
+            }
+            onClick={() => setSegmentMode((v) => !v)}
+          >
+            选段修改
+          </button>
+          <button
+            type="button"
+            className="flex-1 rounded-xl border border-black/10 py-2.5 text-xs opacity-70 dark:border-zinc-700"
+            onClick={async () => {
+              setShowVersions(true)
+              setViewingVersion(null)
+              setVersions(null)
+              const vs = await window.api.chapter.versions(chapter.id)
+              setVersions(vs)
+            }}
+          >
+            历史版本
+          </button>
+        </div>
+
         <div className="mt-10 mb-4 flex gap-3">
           <button
             type="button"
@@ -212,6 +291,103 @@ export default function Read() {
           </button>
         </div>
       </div>
+
+      {/* 选段修改弹层 */}
+      {segTarget && (
+        <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setSegTarget(null)}>
+          <div
+            className="max-h-[70vh] w-full overflow-y-auto rounded-t-2xl border-t border-zinc-800 bg-zinc-900 p-5 pb-safe"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-2 text-xs text-zinc-500">选中段落：</div>
+            <div className="mb-3 line-clamp-3 rounded-lg bg-zinc-800/60 p-2.5 text-xs leading-relaxed text-zinc-400">
+              {segTarget}
+            </div>
+            <textarea
+              className="mb-3 min-h-20 w-full resize-none rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2.5 text-sm outline-none focus:border-emerald-700"
+              placeholder="这一段要怎么改？"
+              value={segText}
+              onChange={(e) => setSegText(e.target.value)}
+            />
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="flex-1 rounded-xl border border-zinc-700 py-2.5 text-sm text-zinc-400"
+                onClick={() => setSegTarget(null)}
+              >
+                取消
+              </button>
+              <button
+                type="button"
+                disabled={!segText.trim()}
+                className="flex-1 rounded-xl bg-emerald-600 py-2.5 text-sm font-medium disabled:opacity-40"
+                onClick={async () => {
+                  const target = segTarget
+                  const instruction = segText.trim()
+                  setSegTarget(null)
+                  setSegmentMode(false)
+                  await window.api.job.startRevise(chapter.id, instruction, target)
+                  setBookSub('write')
+                }}
+              >
+                改这段
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 版本回看弹层 */}
+      {showVersions && (
+        <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setShowVersions(false)}>
+          <div
+            className="max-h-[75vh] w-full overflow-y-auto rounded-t-2xl border-t border-zinc-800 bg-zinc-900 p-5 pb-safe"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {viewingVersion ? (
+              <>
+                <button
+                  type="button"
+                  className="mb-3 text-xs text-emerald-400"
+                  onClick={() => setViewingVersion(null)}
+                >
+                  ← 返回版本列表
+                </button>
+                <div className="mb-2 text-xs text-zinc-500">
+                  {viewingVersion.reason} · {viewingVersion.wordCount} 字
+                </div>
+                <div className="whitespace-pre-wrap text-sm leading-7 text-zinc-300">
+                  {viewingVersion.content}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="mb-3 text-sm font-semibold text-zinc-200">历史版本（新→旧）</div>
+                {(versions ?? []).length === 0 && (
+                  <div className="py-8 text-center text-xs text-zinc-600">
+                    {versions ? '这章还没改过' : '加载中…'}
+                  </div>
+                )}
+                <div className="space-y-2">
+                  {(versions ?? []).map((v) => (
+                    <button
+                      key={v.id}
+                      type="button"
+                      className="w-full rounded-xl bg-zinc-800/60 p-3 text-left active:bg-zinc-800"
+                      onClick={() => setViewingVersion(v)}
+                    >
+                      <div className="text-xs text-zinc-300">{v.reason}</div>
+                      <div className="mt-1 text-[11px] text-zinc-600">
+                        {v.wordCount} 字 · {new Date(v.createdAt).toLocaleString('zh-CN')}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   )
 }

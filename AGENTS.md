@@ -52,6 +52,22 @@
 >  设定沉淀)→目录 2 章→正文/字号/主题→设定页(活状态 location/mood 随 recap 演化)→分叉复仇线(1 章,分叉点后
 >  章节不进新线)→Settings(用量 byPurpose director 13/writer 3) 全部断言通过
 > - 已知 UI 待改（M4）：onboard title 阶段确认正则不认书名文本（真实模型给书名按钮会卡，临时靠「第一个/第二个」）
+>
+> **M4 已完成（打磨：改章/子代理报告/动态快捷钮/onboard 正则，API 级 19 断言全绿 + M2 回归绿）**：
+> - 主进程：JobKind 扩 revise/review/audit/diagnose（pump 按 kind 分发 runners 表，queued 任务统一 guarded 包装）；
+>   `job:startRevise [chapterId,instruction,segment?]`（流式改章→lint 展示不入闸（targetWords=0）→replaceChapterContent
+>   旧版自动进 versions）；`job:startReview/startAudit/startDiagnose`→AgentReport{verdict,findings,suggestions,score}；
+>   审计门槛：章数<2 快速失败不烧模型；finalize 后有效章数 %8===0 自动排后台审计（maybeQueueAudit 去重）；
+>   streamingSaver：流式 delta 每 3s 落 payload.draftText（断网/杀 APP 恢复显示）；recap 新增 quickActions
+>   （agent 每章动态建议钮，genRecap 顺带产出零额外调用）；onboard 确认正则兼容书名文本（findIndex byName includes）
+> - 手机端：Write.tsx 顶层按 kind 分流（SubJobView=revise 流式/改章完成 lint 简报/ReportDoneView 报告卡）；
+>   IdleView 加体检台（审读上一章/全书审计/问导演+最新报告展示）；components/{QuickActionsBar,ReportCard} 共享；
+>   Read.tsx 章末改章条+选段修改模式（段落化渲染点选→startRevise 带 segment）+历史版本回看（只读弹层）；
+>   queries.ts useJobFlow.lastDone 限定 write kind（防 review 抢占纪要卡）+useReports
+> - 冒烟：`npm run build && node scripts/smoke-m4.mjs`（19 断言：快捷钮/改章版本/审读报告/审计门槛/诊断）；
+>   stub（smoke-m3-stub.mjs）尾部已加 revise/review/audit/diagnose 四响应
+> - 坑：invoke 响应是 `{result}` 包装（客户端 body.result）；settings:save 切 provider 必须带顶层 `provider` 字段；
+>   confirmOutline edits 不可传 null（省略或传对象）；spawn 管道 stdio 在 Windows process.exit 时 libuv 断言崩溃（用 inherit）
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）

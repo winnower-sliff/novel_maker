@@ -1,7 +1,9 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
 import type { ChapterOutline, Job, Scene } from '@shared/types'
-import { qk, useBook, useJobFlow, useStatusCard } from '../lib/queries'
+import ReportCard from '../components/ReportCard'
+import QuickActionsBar from '../components/QuickActionsBar'
+import { qk, useBook, useJobFlow, useReports, useStatusCard } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 
 const KIND_LABEL: Record<string, string> = {
@@ -73,6 +75,10 @@ export default function Write() {
 
   const running = job.state === 'queued' || job.state === 'running'
 
+  if (job.kind !== 'write') {
+    return <SubJobView job={job} bookId={openBookId} refresh={refresh} />
+  }
+
   if (running && job.step === 'proposal') return <Spinner label="导演正在构思走向…" />
   if (running && job.step === 'outline') return <Spinner label="正在展开章级大纲…" />
   if (running && job.step === 'scene') return <Spinner label="正在拆分场景分镜…" />
@@ -98,6 +104,182 @@ export default function Write() {
   return <Spinner label="处理中…" />
 }
 
+// ── 非 write 任务：改章/审读/审计/诊断 ────────────────────────────────────────
+
+function SubJobView({ job, bookId, refresh }: { job: Job; bookId: string; refresh: () => void }) {
+  const running = job.state === 'queued' || job.state === 'running'
+  if (running && job.kind === 'revise') return <ReviseStreaming job={job} refresh={refresh} />
+  if (running && job.kind === 'review') return <Spinner label="审稿编辑正在读这一章…" />
+  if (running && job.kind === 'audit') return <Spinner label="正在审计最近的章节…" />
+  if (running && job.kind === 'diagnose') return <Spinner label="导演正在翻查卷宗…" />
+  if (job.state === 'done' && job.kind === 'revise') {
+    return <ReviseDoneView job={job} bookId={bookId} refresh={refresh} />
+  }
+  if (job.state === 'done' && job.payload.report) {
+    return <ReportDoneView job={job} bookId={bookId} refresh={refresh} />
+  }
+  return <Spinner label="处理中…" />
+}
+
+function ReviseStreaming({ job, refresh }: { job: Job; refresh: () => void }) {
+  const [text, setText] = useState('')
+  const [cancelConfirm, setCancelConfirm] = useState(false)
+  const boxRef = useRef<HTMLDivElement>(null)
+  const instruction = job.payload.revise?.instruction ?? ''
+
+  useEffect(() => {
+    setText('')
+    const off = window.api.job.onDelta((jobId, chunk) => {
+      if (jobId === job.id) setText((t) => t + chunk)
+    })
+    return off
+  }, [job.id])
+
+  useEffect(() => {
+    boxRef.current?.scrollTo({ top: boxRef.current.scrollHeight })
+  }, [text])
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex items-center justify-between px-4 py-3">
+        <div className="flex items-center gap-2 text-sm text-emerald-400">
+          <span className="h-2 w-2 animate-pulse rounded-full bg-emerald-400" />
+          改章中
+        </div>
+        <button
+          type="button"
+          className="rounded-lg border border-zinc-800 px-3 py-1.5 text-xs text-zinc-400"
+          onClick={() => setCancelConfirm(true)}
+        >
+          取消
+        </button>
+      </div>
+      {instruction && (
+        <div className="px-4 pb-2 text-xs text-zinc-500">指令：{instruction}</div>
+      )}
+      <div ref={boxRef} className="min-h-0 flex-1 overflow-y-auto px-5 pb-6 no-scrollbar">
+        <div className="whitespace-pre-wrap text-[15px] leading-8 text-zinc-200">
+          {text || '导演提笔中…'}
+          <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-emerald-400 align-middle" />
+        </div>
+      </div>
+      {cancelConfirm && (
+        <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setCancelConfirm(false)}>
+          <div
+            className="w-full rounded-t-2xl border-t border-zinc-800 bg-zinc-900 p-5 pb-safe"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="mb-4 text-sm text-zinc-300">取消将作废本次改章（原章不受影响），继续？</div>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="flex-1 rounded-xl border border-zinc-700 py-2.5 text-sm text-zinc-400"
+                onClick={() => setCancelConfirm(false)}
+              >
+                继续改
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-xl bg-rose-600 py-2.5 text-sm font-medium"
+                onClick={async () => {
+                  setCancelConfirm(false)
+                  await window.api.job.cancel(job.id)
+                  refresh()
+                }}
+              >
+                作废
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+function ReviseDoneView({ job, bookId, refresh }: { job: Job; bookId: string; refresh: () => void }) {
+  const setBookSub = useUiStore((s) => s.setBookSub)
+  const [busy, setBusy] = useState(false)
+  const lint = job.payload.lint
+  const issues = lint?.issues ?? []
+
+  return (
+    <div className="px-4 py-5">
+      <div className="mb-4 rounded-2xl border border-emerald-900/50 bg-emerald-950/20 p-4">
+        <div className="text-sm font-semibold text-emerald-300">✓ 改章完成（已生成新版本）</div>
+        <div className="mt-1 text-xs text-zinc-400">
+          {job.payload.draftWordCount ? `${job.payload.draftWordCount} 字 · ` : ''}
+          自检 {issues.length === 0 ? '零问题' : `${issues.length} 条提示（仅展示，不拦截）`}
+        </div>
+      </div>
+      {issues.length > 0 && (
+        <div className="mb-4 space-y-2">
+          {issues.map((iss, i) => (
+            <div key={i} className="rounded-xl border border-zinc-800 bg-zinc-900/60 p-3">
+              <span className="rounded-full bg-zinc-800 px-2 py-0.5 text-[11px] text-zinc-400">
+                {iss.rule}
+              </span>
+              <div className="mt-1 text-xs leading-relaxed text-zinc-400">{iss.advice}</div>
+            </div>
+          ))}
+        </div>
+      )}
+      <button
+        type="button"
+        className="w-full rounded-2xl border border-zinc-700 py-3 text-sm text-zinc-200"
+        onClick={() => setBookSub('read')}
+      >
+        去读读这章
+      </button>
+      <button
+        type="button"
+        disabled={busy}
+        className="mt-3 w-full rounded-2xl bg-emerald-600 py-3.5 text-sm font-semibold disabled:opacity-50"
+        onClick={async () => {
+          setBusy(true)
+          try {
+            await window.api.job.startWrite(bookId)
+            refresh()
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        {busy ? '提交…' : '继续写下一章'}
+      </button>
+    </div>
+  )
+}
+
+function ReportDoneView({ job, bookId, refresh }: { job: Job; bookId: string; refresh: () => void }) {
+  const report = job.payload.report
+  const [busy, setBusy] = useState(false)
+  if (!report) return <Spinner label="处理中…" />
+  return (
+    <div className="px-4 py-5">
+      <ReportCard report={report} />
+      <button
+        type="button"
+        disabled={busy}
+        className="mt-5 w-full rounded-2xl bg-emerald-600 py-3.5 text-sm font-semibold disabled:opacity-50"
+        onClick={async () => {
+          setBusy(true)
+          try {
+            await window.api.job.startWrite(bookId)
+            refresh()
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        {busy ? '提交…' : '继续写'}
+      </button>
+    </div>
+  )
+}
+
+// ── 章末快捷钮（共享组件 QuickActionsBar，见 components/） ───────────────────
+
 // ── 空闲：现状卡 + 开写 ─────────────────────────────────────────────────────
 
 function IdleView({
@@ -111,17 +293,24 @@ function IdleView({
 }) {
   const { data: card } = useStatusCard(bookId)
   const { data: detail } = useBook(bookId)
+  const { data: reports } = useReports(bookId)
   const [busy, setBusy] = useState(false)
+  const [question, setQuestion] = useState('')
 
-  const start = async () => {
+  const lastChapter = detail?.chapters[detail.chapters.length - 1] ?? null
+  const latestReport = reports?.[0]?.payload.report ?? null
+
+  const run = async (fn: () => Promise<unknown>) => {
     setBusy(true)
     try {
-      await window.api.job.startWrite(bookId)
+      await fn()
       refresh()
     } finally {
       setBusy(false)
     }
   }
+
+  const start = () => run(() => window.api.job.startWrite(bookId))
 
   return (
     <div className="px-4 py-5">
@@ -176,6 +365,62 @@ function IdleView({
           <RecapCard recap={lastDone.payload.recap} />
         </div>
       )}
+
+      {(lastDone || lastChapter) && (
+        <QuickActionsBar
+          chapterId={lastDone?.chapterId ?? lastChapter?.id ?? null}
+          quickActions={lastDone?.payload.recap?.quickActions}
+          refresh={refresh}
+        />
+      )}
+
+      {latestReport && (
+        <div className="mt-4">
+          <ReportCard report={latestReport} />
+        </div>
+      )}
+
+      <div className="mt-4 rounded-2xl border border-zinc-800 bg-zinc-900/40 p-4">
+        <div className="mb-3 text-xs font-semibold text-zinc-500">体检台</div>
+        <div className="flex gap-2">
+          <button
+            type="button"
+            disabled={busy || !lastChapter}
+            className="flex-1 rounded-xl border border-zinc-700 py-2.5 text-xs text-zinc-300 disabled:opacity-40"
+            onClick={() => lastChapter && run(() => window.api.job.startReview(lastChapter.id))}
+          >
+            审读上一章
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            className="flex-1 rounded-xl border border-zinc-700 py-2.5 text-xs text-zinc-300 disabled:opacity-40"
+            onClick={() => run(() => window.api.job.startAudit(bookId))}
+          >
+            全书审计
+          </button>
+        </div>
+        <div className="mt-3 flex gap-2">
+          <input
+            className="min-w-0 flex-1 rounded-xl border border-zinc-800 bg-zinc-900 px-3 py-2 text-xs outline-none focus:border-emerald-700"
+            placeholder="问导演：剧情哪里不对劲？人物立得住吗？"
+            value={question}
+            onChange={(e) => setQuestion(e.target.value)}
+          />
+          <button
+            type="button"
+            disabled={busy || !question.trim()}
+            className="rounded-xl bg-zinc-800 px-4 text-xs text-sky-300 disabled:opacity-40"
+            onClick={() => {
+              const q = question.trim()
+              setQuestion('')
+              run(() => window.api.job.startDiagnose(bookId, q))
+            }}
+          >
+            问
+          </button>
+        </div>
+      </div>
 
       <button
         type="button"

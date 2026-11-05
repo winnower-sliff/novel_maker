@@ -1,4 +1,5 @@
 import type {
+  AgentReport,
   Book,
   Chapter,
   ChapterOutline,
@@ -251,8 +252,9 @@ ${chapter.content.slice(0, 12000)}
 1. summary：本章内容摘要（100-200 字，供滚动记忆使用，只记读者可见的事实）。
 2. stateChanges：本章结束时人物的活状态变化（只列有变化的人；location/body/mood/items/knows/goal 中只填变化的项）。
 3. cardOps：本章是否引入/更新了值得入库的设定卡（新地点/势力/物品/规则等；没有则空数组）。
-4. foreshadowOps：本章的伏笔操作（plant=埋新伏笔/plan=计划回收/resolve=已回收；没有则空数组）。`,
-    jsonHint: `{"summary":"...","stateChanges":[{"characterId":"若不知道id则填名字","name":"...","patch":{"location":"...","mood":"..."}}],"cardOps":[{"op":"create|update","kind":"geography|faction|history|power|item|custom","title":"...","readerText":"读者已知","authorText":"作者真相"}],"foreshadowOps":[{"op":"plant|plan|resolve","title":"...","detail":"..."}]}`,
+4. foreshadowOps：本章的伏笔操作（plant=埋新伏笔/plan=计划回收/resolve=已回收；没有则空数组）。
+5. quickActions：2-3 个本章专属的修改建议按钮（给作者一键发出改章指令用）。label 是 4-8 字按钮文案（如「补反派视角」「伏笔埋深」），instruction 是完整的改章指令（作者点击后直接发给写手执行，要具体可执行）。建议要贴合本章情境——打斗章可想动作/视角，情感章可想对手戏/留白，埋伏笔的章可想收紧或加厚。没有值得建议的就空数组。`,
+    jsonHint: `{"summary":"...","stateChanges":[{"characterId":"若不知道id则填名字","name":"...","patch":{"location":"...","mood":"..."}}],"cardOps":[{"op":"create|update","kind":"geography|faction|history|power|item|custom","title":"...","readerText":"读者已知","authorText":"作者真相"}],"foreshadowOps":[{"op":"plant|plan|resolve","title":"...","detail":"..."}],"quickActions":[{"label":"补反派视角","instruction":"补写一段反派视角的插叙..."}]}`,
     maxTokens: 2500
   })
   if (!recap?.summary) throw new Error('模型未产出有效纪要')
@@ -260,7 +262,8 @@ ${chapter.content.slice(0, 12000)}
     summary: recap.summary,
     stateChanges: Array.isArray(recap.stateChanges) ? recap.stateChanges : [],
     cardOps: Array.isArray(recap.cardOps) ? recap.cardOps : [],
-    foreshadowOps: Array.isArray(recap.foreshadowOps) ? recap.foreshadowOps : []
+    foreshadowOps: Array.isArray(recap.foreshadowOps) ? recap.foreshadowOps : [],
+    quickActions: Array.isArray(recap.quickActions) ? recap.quickActions : []
   }
 }
 
@@ -288,4 +291,153 @@ export async function compactMemories(
     maxTokens: 2000
   })
   if (res.summary) saveMemory({ lineId, fromOrder: from, toOrder: to, content: res.summary })
+}
+
+// ── revise：改章（章末快捷钮/自由指令；M4） ──────────────────────────────────
+
+export interface ReviseInput {
+  book: Book
+  lineId: string
+  chapter: Chapter
+  instruction: string
+  /** 局部改：引述要改的那一段原文 */
+  segment?: string
+}
+
+export async function genRevise(input: ReviseInput, onDelta: (t: string) => void): Promise<string> {
+  const { book, lineId, chapter, instruction, segment } = input
+  const ctx = base(book, lineId)
+  const segBlock = segment
+    ? `\n## 局部修改目标段\n只改下面这一段（可整段替换），其余部分原样保留输出：\n${segment}`
+    : ''
+  const res = await callRaw(
+    {
+      slot: WRITER_SLOT,
+      system: directorPersona(),
+      user: `${ctx}
+
+## 任务
+第${chapter.orderNo}章《${chapter.title}》当前正文：
+${chapter.content}
+
+## 作者的修改指令
+${instruction}${segBlock}
+
+现在输出修改后的本章完整正文（未被要求改动的部分保持原文，不要输出任何解释）。`,
+      maxTokens: Math.max(Math.ceil(chapter.content.length * 2), 4096),
+      jsonHint: '',
+      params: { responseFormat: 'text' }
+    },
+    onDelta
+  )
+  const text = res.text.trim()
+  if (!text) throw new Error('模型返回空正文')
+  return text
+}
+
+// ── 子代理审读（M4：review 七维 / audit 漂移+空转+连续性 / diagnose 问答） ────
+
+const REVIEWER_PERSONA = `你是独立的审稿编辑（与写手隔离视角），只读不写。纪律：
+- 每条发现必须附原文引文（quote，20 字以内），无引文不收录。
+- 好的维度也要给 good 评语，七维全评，不许空着。
+- 不复述剧情，只给编辑判断。`
+
+export async function genReview(
+  book: Book,
+  lineId: string,
+  chapter: Chapter
+): Promise<AgentReport> {
+  const ctx = base(book, lineId)
+  const report = await callJson<AgentReport>({
+    slot: 'reviewer',
+    system: REVIEWER_PERSONA,
+    user: `${ctx}
+
+## 任务
+审读第${chapter.orderNo}章《${chapter.title}》正文：
+${chapter.content.slice(0, 14000)}
+
+按七个维度评审：张力 / 文风 / 节奏 / 逻辑 / 对话 / 感官 / 钩子（章末留人程度）。
+每维一条 finding：level（good=达标/warn=可改进/bad=有问题）、quote（原文引文）、comment（具体判断，不复述剧情）。
+verdict 是 100 字内总评。score 是 1-5 总分。suggestions 给 0-3 条可执行的修改建议。`,
+    jsonHint: `{"verdict":"...","score":4,"findings":[{"dimension":"张力","level":"warn","quote":"...","comment":"..."}],"suggestions":["..."]}`,
+    maxTokens: 3000
+  })
+  if (!report?.verdict) throw new Error('模型未产出有效审读报告')
+  return normalizeReport(report, 'review')
+}
+
+export async function genAudit(
+  book: Book,
+  lineId: string,
+  recent: Array<{ orderNo: number; title: string; summary: string }>,
+  latestTwo: Chapter[]
+): Promise<AgentReport> {
+  const ctx = base(book, lineId)
+  const report = await callJson<AgentReport>({
+    slot: 'reviewer',
+    system: REVIEWER_PERSONA,
+    user: `${ctx}
+
+## 任务
+对本书最近章节做跨章审计（三个固定维度+自由补充）：
+1. 文风漂移：最近文风是否偏离开书定的文风（对照上文文风设定），是否趋同平淡。
+2. 剧情空转：最近几章是否有实质推进（人物目标/关系/信息量/伏笔任一前进才算），连续 2 章无推进要标 bad。
+3. 连续性：时间线/地点/人物状态/已知信息是否有前后矛盾。
+
+## 最近章节摘要
+${recent.map((c) => `第${c.orderNo}章《${c.title}》：${c.summary}`).join('\n')}
+
+## 最近两章全文
+${latestTwo.map((c) => `第${c.orderNo}章《${c.title}》：\n${c.content.slice(0, 6000)}`).join('\n\n')}
+
+findings 每维一条（dimension 用「文风漂移/剧情空转/连续性」），verdict 100 字内总结健康状况，score 1-5，suggestions 给可执行修正方向。`,
+    jsonHint: `{"verdict":"...","score":4,"findings":[{"dimension":"文风漂移","level":"good","quote":"...","comment":"..."}],"suggestions":["..."]}`,
+    maxTokens: 3000
+  })
+  if (!report?.verdict) throw new Error('模型未产出有效审计报告')
+  return normalizeReport(report, 'audit')
+}
+
+export async function genDiagnose(
+  book: Book,
+  lineId: string,
+  question: string
+): Promise<AgentReport> {
+  const ctx = base(book, lineId)
+  const report = await callJson<AgentReport>({
+    slot: 'director',
+    system: `${directorPersona()}
+
+当前是诊断模式：作者在向你提问（关于剧情、人物、伏笔、下一步走向、如果开新线会怎样等）。基于全书上下文如实回答，判断要落在具体章节数据上。answer写在 verdict 字段。`,
+    user: `${ctx}
+
+## 作者的问题
+${question}
+
+verdict 里给出你的回答（300 字内，直接了当，可分点）。findings 里列出支撑你判断的证据（dimension=依据类型如「伏笔」「人物状态」，quote 引章节摘要或原文，comment 说明）。suggestions 给 0-3 条可选的下一步动作。score 填 0。`,
+    jsonHint: `{"verdict":"...","score":0,"findings":[{"dimension":"伏笔","level":"warn","quote":"...","comment":"..."}],"suggestions":["..."]}`,
+    maxTokens: 3000
+  })
+  if (!report?.verdict) throw new Error('模型未产出有效诊断')
+  return normalizeReport(report, 'diagnose')
+}
+
+function normalizeReport(raw: AgentReport, kind: AgentReport['kind']): AgentReport {
+  return {
+    kind,
+    verdict: raw.verdict,
+    score: typeof raw.score === 'number' ? raw.score : 0,
+    findings: Array.isArray(raw.findings)
+      ? raw.findings
+          .filter((f) => f && f.dimension)
+          .map((f) => ({
+            dimension: f.dimension,
+            level: f.level === 'bad' || f.level === 'warn' ? f.level : 'good',
+            quote: f.quote ?? '',
+            comment: f.comment ?? ''
+          }))
+      : [],
+    suggestions: Array.isArray(raw.suggestions) ? raw.suggestions.filter(Boolean) : []
+  }
 }

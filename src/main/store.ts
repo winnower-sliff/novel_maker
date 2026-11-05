@@ -860,13 +860,18 @@ export function listMessages(
 
 // ── jobs（任务流水线 W12；执行编排在 jobs.ts） ───────────────────────────────
 
-export function insertJob(input: { bookId: string; lineId: string; kind: JobKind }): Job {
+export function insertJob(input: {
+  bookId: string
+  lineId: string
+  kind: JobKind
+  payload?: Partial<JobPayload>
+}): Job {
   const db = getDb()
   const id = randomUUID()
   const now = Date.now()
   db.prepare(
-    `INSERT INTO jobs (id, book_id, line_id, kind, state, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?)`
-  ).run(id, input.bookId, input.lineId, input.kind, now, now)
+    `INSERT INTO jobs (id, book_id, line_id, kind, state, payload, created_at, updated_at) VALUES (?, ?, ?, ?, 'queued', ?, ?, ?)`
+  ).run(id, input.bookId, input.lineId, input.kind, JSON.stringify(input.payload ?? {}), now, now)
   return getJob(id) as Job
 }
 

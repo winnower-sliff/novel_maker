@@ -234,6 +234,13 @@ export const invokeContract = {
 
   // ── 写作任务流水线（W10/W12） ─────────────────────────────────────────────
   'job:startWrite': { args: z.tuple([z.string()]), ret: ret<Job>() },
+  'job:startRevise': {
+    args: z.tuple([z.string(), z.string(), z.string().optional()]),
+    ret: ret<Job>()
+  },
+  'job:startReview': { args: z.tuple([z.string()]), ret: ret<Job>() },
+  'job:startAudit': { args: z.tuple([z.string()]), ret: ret<Job>() },
+  'job:startDiagnose': { args: z.tuple([z.string(), z.string()]), ret: ret<Job>() },
   'job:chooseDirection': { args: z.tuple([z.string(), DirectionChoiceSchema]), ret: ret<Job>() },
   'job:confirmOutline': {
     args: z.tuple([z.string(), ChapterOutlinePatchSchema.optional()]),
@@ -381,6 +388,10 @@ export interface Api {
   }
   job: {
     startWrite: InvokeFn<'job:startWrite'>
+    startRevise: InvokeFn<'job:startRevise'>
+    startReview: InvokeFn<'job:startReview'>
+    startAudit: InvokeFn<'job:startAudit'>
+    startDiagnose: InvokeFn<'job:startDiagnose'>
     chooseDirection: InvokeFn<'job:chooseDirection'>
     confirmOutline: InvokeFn<'job:confirmOutline'>
     confirmScenes: InvokeFn<'job:confirmScenes'>
