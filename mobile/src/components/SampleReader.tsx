@@ -36,6 +36,15 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
   const [q, setQ] = useState('')
   const [hits, setHits] = useState<SampleSearchHit[] | null>(null)
 
+  // 打开期间锁住底层页面滚动（防滚动穿透划回设定页）
+  useEffect(() => {
+    const old = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = old
+    }
+  }, [])
+
   useEffect(() => {
     let dead = false
     window.api.sample
@@ -116,7 +125,7 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
   const secTitle = view && view.secIdx >= 0 && sections ? sections[view.secIdx]?.label : undefined
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-[#fbf6ec]">
+    <div className="fixed inset-0 z-50 flex flex-col bg-[#fbf6ec]">
       {/* 头部 */}
       <header className="flex items-center justify-between border-b border-orange-100 bg-white px-4 pb-2 pt-safe">
         <button type="button" className="pt-2 text-sm text-stone-500" onClick={onClose}>
@@ -153,7 +162,7 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
               </span>
             </div>
           </div>
-          <div className="no-scrollbar flex-1 overflow-y-auto px-5 py-5">
+          <div className="no-scrollbar flex-1 overflow-y-auto overscroll-contain px-5 py-5">
             {secTitle ? (
               <h1 className="mb-4 border-l-4 border-orange-400 pl-3 text-[17px] font-bold leading-snug text-stone-800">
                 {secTitle}
@@ -236,7 +245,7 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
               搜
             </button>
           </div>
-          <div className="no-scrollbar flex-1 overflow-y-auto px-4 pb-4">
+          <div className="no-scrollbar flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
             {hits ? (
               <div className="space-y-2">
                 {hits.map((h, i) => (

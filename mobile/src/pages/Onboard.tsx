@@ -28,6 +28,15 @@ export default function Onboard({ bookId }: { bookId: string }) {
   const [options, setOptions] = useState<string[]>([])
   const [stage, setStage] = useState<string>('premise')
   const [busy, setBusy] = useState(true)
+
+  // 打开期间锁住底层页面滚动（防滚动穿透）
+  useEffect(() => {
+    const old = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+    return () => {
+      document.body.style.overflow = old
+    }
+  }, [])
   const [input, setInput] = useState('')
   const bottomRef = useRef<HTMLDivElement>(null)
   const kbInset = useKeyboardInset()
@@ -88,7 +97,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
   }
 
   return (
-    <div className="absolute inset-0 z-30 flex flex-col bg-white">
+    <div className="fixed inset-0 z-30 flex flex-col bg-white">
       <header className="flex items-center justify-between border-b border-orange-100 px-4 pb-2 pt-safe">
         <button type="button" className="pt-2 text-sm text-stone-500" onClick={finishOnboard}>
           稍后再说
@@ -97,7 +106,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
         <div className="w-16" />
       </header>
 
-      <div className="no-scrollbar flex-1 space-y-4 overflow-y-auto px-4 py-4">
+      <div className="no-scrollbar flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4">
         {turns.map((t, i) =>
           t.role === 'director' ? (
             <div key={i} className="max-w-[85%] rounded-2xl rounded-tl-sm bg-orange-100 px-4 py-3 text-[15px] leading-relaxed">
