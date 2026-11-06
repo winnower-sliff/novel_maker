@@ -1,4 +1,4 @@
-import { mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { dataDir } from './paths.js'
@@ -213,13 +213,14 @@ function migrate(d: DatabaseSync): void {
   if (!tableCols('cards').has('data')) d.exec("ALTER TABLE cards ADD COLUMN data TEXT DEFAULT '{}'")
 }
 
-/** 灾难恢复快照（删书/删线前调用，D4） */
+/** 灾难恢复快照（删书/删线前调用，D4）。VACUUM INTO 不覆盖已存在文件——文件名带时分秒，同秒冲突加序号 */
 export function snapshotDb(tag: string): string {
   const d = getDb()
-  const file = join(
-    dataDir(),
-    `backup-${tag}-${new Date().toISOString().slice(0, 10).replace(/-/g, '')}.db`
-  )
+  const now = new Date()
+  const p = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`
+  let file = join(dataDir(), `backup-${tag}-${stamp}.db`)
+  for (let i = 2; existsSync(file); i++) file = join(dataDir(), `backup-${tag}-${stamp}-${i}.db`)
   d.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`)
   return file
 }
