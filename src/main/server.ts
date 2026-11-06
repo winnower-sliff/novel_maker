@@ -209,7 +209,7 @@ async function handleInvoke(
 interface MobileManifest {
   version: string
   buildAt: string
-  apk?: { version: string; path: string; size: number; notes?: string[] }
+  apk?: { version: string; versionCode?: number; path: string; size: number; notes?: string[] }
   files: Array<{ path: string; hash: string; size: number }>
 }
 

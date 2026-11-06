@@ -18,6 +18,15 @@ export default defineConfig({
     target: 'es2022'
   },
   define: {
-    __APP_VERSION__: JSON.stringify(new Date().toISOString().slice(0, 16).replace(/[-:T]/g, ''))
+    // 版本标签：优先取 build-apk.mjs 注入的 NM_APK_VERSION（与 APK versionName 同源同时钟）；
+    // 裸 vite build 场景回退本地时钟（UTC 会比 APK 标签早 8 小时，曾被当成「没更新成功」）
+    __APP_VERSION__: JSON.stringify(
+      process.env.NM_APK_VERSION ??
+        (() => {
+          const d = new Date()
+          const p2 = (n: number) => String(n).padStart(2, '0')
+          return `${d.getFullYear()}${p2(d.getMonth() + 1)}${p2(d.getDate())}${p2(d.getHours())}${p2(d.getMinutes())}`
+        })()
+    )
   }
 })

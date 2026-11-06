@@ -38,7 +38,7 @@ export interface InstallResult {
 interface MobileManifest {
   version: string | null
   buildAt: string | null
-  apk?: { version: string; path: string; size: number; notes?: string[] }
+  apk?: { version: string; versionCode?: number; path: string; size: number; notes?: string[] }
 }
 
 export type UpdateCheck =
@@ -46,16 +46,22 @@ export type UpdateCheck =
   | { state: 'found'; version: string; url: string; size: number }
   | { state: 'error'; error: string }
 
-/** 对比服务端 manifest 与本地 APP 版本；APK 产物缺在时视为最新 */
+/** 对比服务端 manifest 与本地 APP 版本：versionCode 数值判新（单调递增），versionName 仅作展示 */
 export async function checkUpdate(): Promise<UpdateCheck> {
   const base = useConnStore.getState().conn?.baseUrl
   if (!base) return { state: 'error', error: '未连接服务器' }
+  const plugin = apkUpdater()
+  if (!plugin) return { state: 'latest' } // 纯浏览器无 APK 自更新概念
   try {
-    const r = await fetch(`${base}/api/mobile/version`)
+    const [r, cur] = await Promise.all([fetch(`${base}/api/mobile/version`), plugin.getVersion()])
     const m = (await r.json()) as MobileManifest
     if (!m.apk) return { state: 'latest' }
-    const current = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''
-    if (m.apk.version === current) return { state: 'latest' }
+    // manifest 缺 versionCode（旧部署链）时回退标签不等比较，宁多提示不漏更新
+    const isNewer =
+      m.apk.versionCode != null
+        ? m.apk.versionCode > cur.versionCode
+        : m.apk.version !== cur.version
+    if (!isNewer) return { state: 'latest' }
     return { state: 'found', version: m.apk.version, url: `${base}/api/mobile/apk`, size: m.apk.size }
   } catch (e) {
     return { state: 'error', error: e instanceof Error ? e.message : String(e) }

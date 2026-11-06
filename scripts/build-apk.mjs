@@ -33,6 +33,8 @@ try {
   )
   // 必须以仓库根为 cwd 跑并显式指 config：Tailwind v4 扫描 base 跟随 cwd，
   // 在 mobile/ 下跑会漏扫 src/wizard（向导类全缺→弹窗白框样式失效）
+  // 版本标签经 env 注入 web bundle：同一构建同一字符串，杜绝「APK 本地钟 vs bundle UTC 钟」不一致
+  process.env.NM_APK_VERSION = versionName
   sh('npx vite build --config mobile/vite.config.ts', root)
   // 哨兵校验：@source 路径错配/cwd 漂移会让整源类静默缺失（白框教训），构建期拦截
   sh('node scripts/check-tailwind-classes.mjs dist-mobile/assets --mobile', root)
