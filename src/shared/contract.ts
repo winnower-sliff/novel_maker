@@ -58,6 +58,8 @@ export const ChatParamsSchema = z.object({
   maxTokens: z.number().optional(),
   temperature: z.number().optional(),
   tools: z.custom<ToolDef[]>((v) => Array.isArray(v)).optional(),
+  /** 思考模式：默认 disabled（混合推理模型的思考 token 计入 max_tokens，会吃掉正文预算）；仅 chat 白话链路显式开启 */
+  thinking: z.enum(['enabled', 'disabled']).optional(),
   /** 结构化输出（GLM/DeepSeek/OpenAI 兼容端点通用） */
   responseFormat: z.enum(['text', 'json_object']).optional(),
   /** 测试直连：跳过路由，直接用 provider+model+apiKey（API Key 明文仅本参数一次，不落库） */

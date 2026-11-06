@@ -137,25 +137,59 @@ ${sceneBlock}${refBlock}
   }
 }
 
+/**
+ * 分段续写：单次输出装不下长章（网关普遍 cap 4096 token，中文 6000 字≈9000+ token）。
+ * 每段收尾 stopReason==='max_tokens'（被截断）才续写下一段，≤3 段拼成整章。
+ */
+async function writeSegments(
+  base: { system: string; user: string; targetWords: number; signal?: AbortSignal },
+  onDelta: (text: string) => void
+): Promise<string> {
+  const segMax = Math.min(8192, Math.max(4096, Math.ceil(base.targetWords * 0.9)))
+  let full = ''
+  for (let seg = 0; seg < 3; seg++) {
+    const user =
+      seg === 0
+        ? base.user
+        : `${base.user}
+
+## 续写要求（已写 ${full.length} 字，目标 ${base.targetWords} 字）
+上文在输出长度限制处被截断。从断点处无缝续写完剩余部分：直接接正文，不要重复已写内容、不要重起开头。
+（若已写内容已把本章拍点写完，只输出「（完）」三个字即算收尾。）
+
+## 已写尾部（衔接参考，禁止重复）
+…${full.slice(-1200)}`
+    const res = await callRaw(
+      {
+        slot: WRITER_SLOT,
+        system: base.system,
+        user,
+        maxTokens: segMax,
+        jsonHint: '',
+        signal: base.signal,
+        params: { responseFormat: 'text' }
+      },
+      onDelta
+    )
+    const piece = res.text.trim()
+    if (!piece) {
+      if (seg === 0) throw new Error('模型返回空正文')
+      break
+    }
+    if (piece === '（完）') break
+    full = full ? `${full}\n\n${piece}` : piece
+    if (res.stopReason !== 'max_tokens') break
+  }
+  return full
+}
+
 export async function genDraft(
   input: DraftInput,
   onDelta: (text: string) => void,
   signal?: AbortSignal
 ): Promise<string> {
   const { system, user } = draftPrompt(input)
-  const res = await callRaw(
-    {
-      slot: WRITER_SLOT,
-      system,
-      user,
-      maxTokens: Math.ceil((input.book.targetWords * 1.7) / 1) || 4096,
-      jsonHint: '',
-      signal,
-      params: { responseFormat: 'text' }
-    },
-    onDelta
-  )
-  const text = res.text.trim()
+  const text = await writeSegments({ system, user, targetWords: input.book.targetWords, signal }, onDelta)
   if (!text) throw new Error('模型返回空正文')
   return text
 }
@@ -187,9 +221,8 @@ export async function autoFixDraft(
   const issues = report.issues
     .map((i) => `- [${i.rule}] ${i.quote ? `「${i.quote}」` : ''}${i.advice}`)
     .join('\n')
-  const res = await callRaw(
+  const text = await writeSegments(
     {
-      slot: WRITER_SLOT,
       system,
       user: `${user}
 
@@ -199,14 +232,11 @@ ${issues}
 
 原稿：
 ${draft}`,
-      maxTokens: Math.ceil((input.book.targetWords * 1.7) / 1) || 4096,
-      jsonHint: '',
-      signal,
-      params: { responseFormat: 'text' }
+      targetWords: input.book.targetWords,
+      signal
     },
     onDelta
   )
-  const text = res.text.trim()
   if (!text) throw new Error('自动修正返回空正文')
   return text
 }

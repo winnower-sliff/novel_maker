@@ -76,6 +76,8 @@ export interface LoopOpts {
   onDelta?: (t: string) => void
   /** 思考链流式（chat 折叠区；正文/改章不接） */
   onThinking?: (t: string) => void
+  /** 思考模式：默认 disabled（思考 token 计入 max_tokens 吃工具循环预算）；仅 chat 链路开 */
+  thinking?: 'enabled' | 'disabled'
   /** 生成进度（正文/改章字数计数，聚合条显示；正文不进聊天流） */
   onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
   /** 落一条 assistant 消息（agent 白话/工具卡） */
@@ -487,7 +489,8 @@ ${rows}
           responseFormat: 'text',
           maxTokens: 4000
         },
-        onThinking: opts.onThinking
+        onThinking: opts.onThinking,
+        thinking: opts.thinking
       },
       opts.onDelta
     )

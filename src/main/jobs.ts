@@ -582,6 +582,8 @@ async function runChatJob(job: Job): Promise<Job | null> {
     tools: [...toolDefs(), ...interceptorDefs('free')],
     onDelta: chatSaver(job.id),
     onThinking: thinkSaver(job.id),
+    // chat 白话链路开思考（思考折叠区 UI）；写章/改章链路保持默认 disabled
+    thinking: 'enabled',
     say: agentSay(job.id, job.bookId),
     // 意图动作（对话驱动开章/审读/审计）：避免 loop→jobs 循环依赖，经 actions 注入
     actions: {

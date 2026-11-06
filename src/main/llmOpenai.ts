@@ -215,6 +215,9 @@ export async function chatStreamOpenai(
   }
   if (params.temperature !== undefined) body.temperature = params.temperature
   if (params.responseFormat) body.response_format = { type: params.responseFormat }
+  // 默认显式关思考：混合推理模型（DeepSeek V4/GLM）思考默认开且计入 max_tokens，
+  // 会吃掉大半输出预算导致正文只剩几百字（坑 14 同款教训）；仅 chat 白话链路显式开
+  body.thinking = { type: params.thinking === 'enabled' ? 'enabled' : 'disabled' }
 
   const res = await fetchSse(url, openaiHeaders(auth.apiKey), body, signal)
 

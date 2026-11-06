@@ -96,6 +96,8 @@ export interface CallOptions {
   signal?: AbortSignal
   /** 思考链流式回调（网关 reasoning 字段/<think> 标签剥出） */
   onThinking?: (text: string) => void
+  /** 思考模式（默认 disabled：混合推理模型思考 token 计入 max_tokens 会吃正文预算） */
+  thinking?: 'enabled' | 'disabled'
 }
 
 /** 单次流式原始调用（含网络级重试+记账） */
@@ -121,6 +123,7 @@ export async function callRaw(
           messages: [{ role: 'user', content: opts.user }],
           maxTokens: opts.maxTokens,
           temperature: opts.temperature,
+          thinking: opts.thinking,
           responseFormat: 'json_object',
           ...opts.params
         },
