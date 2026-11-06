@@ -219,7 +219,7 @@ function sampleBlock(book: Book): string {
 
 ## 绑定范文
 ${list}
-- read_sample 支持三种读法：chapter 章号直达（如第 3 章）、query 关键词检索（如「登船」「林岸」）、offsetPct 百分比翻页。
+- read_sample 支持四种读法：toc 看目录（卷名/章节名清单，找不到位置时先用它）、chapter 章号直达（如第 3 章）、query 关键词检索（如「登船」「林岸」）、offsetPct 百分比翻页。
 - 用途：模仿句式/节奏/叙事腔调——绝不抄内容、不搬人物情节。动笔前按本章要素检索一段找语感（write_chapter_draft 也会自动检索注入范文参考段）。`
 }
 

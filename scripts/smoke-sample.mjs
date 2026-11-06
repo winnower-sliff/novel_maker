@@ -81,6 +81,17 @@ try {
   const b2 = (await invoke('book:get', b.id)).book
   ok('多绑定数组写入', Array.isArray(b2.sampleSources) && b2.sampleSources.length === 1)
 
+  // read_sample toc 读法：进程内直调工具（无 LLM），看目录是否列出卷名/章节名
+  process.env.NM_DATA_DIR = DATA
+  const { execTool } = await import('../dist/main/agent/tools.js')
+  const tocRes = execTool('read_sample', { toc: true }, { bookId: b.id })
+  ok(
+    `read_sample toc 出目录（${tocRes.summary}）`,
+    tocRes.ok && tocRes.data.includes('第一章 夜港') && tocRes.data.includes('第三章 旧账') && tocRes.summary.includes('3 章')
+  )
+  const noToc = execTool('read_sample', { chapter: 2 }, { bookId: b.id })
+  ok('chapter 直达仍正常', noToc.ok && noToc.data.includes('第二章 渡海'))
+
   // read_sample chapter 直达：经 agent 工具走不通（无 LLM），这里验证 store 层经 message 不可行——改验证 searchSampleSections 间接产物：
   // 通过 read_sample 的底层 searchSampleSections 由工具暴露，冒烟直接调工具链需 LLM；此处验证 attach 后 list_samples 的 ★ 逻辑（跳过）
   // ——检索直达留给 stub 冒烟/真机。核心断言：切节+多绑+导入链已覆盖。

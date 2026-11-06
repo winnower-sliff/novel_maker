@@ -133,7 +133,7 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'read_sample',
       description:
-        '节选阅读范文（像翻参考书），三种读法：①chapter 章号直达（读第 5 章原文）②query 关键词检索（自动定位含该词的章/资料段，如「登船」「风俗店」）③offsetPct 百分比翻页。模仿句式节奏用，不要抄内容。',
+        '节选阅读范文（像翻参考书），四种读法：⓪toc 看目录（列出全部卷名/章节名+字数，不知道要读的位置时先看它）①chapter 章号直达（读第 5 章原文）②query 关键词检索（自动定位含该词的章/资料段，如「登船」「风俗店」）③offsetPct 百分比翻页。模仿句式节奏用，不要抄内容。',
       input_schema: {
         type: 'object',
         properties: {
@@ -142,6 +142,7 @@ export function toolDefs(): ToolDef[] {
             description: '范文 id（来自 list_samples，可省略=本书绑定的范文）'
           },
           name: { type: 'string', description: '范文全名兜底（没有 id 时按名匹配）' },
+          toc: { type: 'boolean', description: 'true=只看目录（卷名/章节名清单），不读正文' },
           chapter: { type: 'number', description: '章号直达（如 5=读第 5 章）' },
           query: { type: 'string', description: '关键词检索，定位含该词的章或资料段' },
           offsetPct: { type: 'number', description: '起始位置百分比 0-100（默认 0=开头）' },
@@ -526,6 +527,25 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const full = store.getSample(chosen.id)
       if (!full) return { ok: false, summary: '范文读取失败', data: `范文 ${chosen.name} 读取失败` }
       const total = full.content.length
+      // 目录读法：先看卷名/章节名再定位
+      if (input.toc === true) {
+        const secs = store.listSampleSections(chosen.id)
+        if (!secs.length)
+          return {
+            ok: true,
+            summary: `《${chosen.name}》无章节目录`,
+            data: `《${chosen.name}》共 ${total} 字，未解析出章节结构。可用 query 关键词检索或 offsetPct 百分比翻页。`
+          }
+        const chN = secs.filter((s) => s.kind === 'chapter').length
+        const lines = secs
+          .slice(0, 200)
+          .map((s) => `${s.kind === 'chapter' ? '' : '§ '}${s.label}（${s.chars} 字）`)
+        return {
+          ok: true,
+          summary: `《${chosen.name}》目录 ${chN} 章`,
+          data: `《${chosen.name}》目录（${chN} 章，全文 ${total} 字；看完后用 chapter 章号直达对应章）：${N}${lines.join(N)}${secs.length > 200 ? `${N}…（节选前 200 节）` : ''}`
+        }
+      }
       const maxChars =
         typeof input.maxChars === 'number' ? Math.max(500, Math.min(8000, input.maxChars)) : 4000
       // 三种定位：章号直达 / 关键词搜节 / 百分比翻页
