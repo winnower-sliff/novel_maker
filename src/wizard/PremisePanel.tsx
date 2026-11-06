@@ -1,5 +1,5 @@
 import type { Character, OutlineItem, Project, WorldbuildEntry } from '@shared/types'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import type { WizardUi } from './uiTypes'
 
 /** 基本设定页（桌面/移动共用）：项目元表单。
@@ -33,8 +33,36 @@ function seedForm(p: Project): ProjectForm {
   }
 }
 
+/** wizardPlan 中需要展示的 md 字段（智能体 get/save_outline_plan 落库；其余遗留字段不渲染） */
+interface PlanView {
+  draftText?: unknown
+  outlineRules?: unknown
+  volumePlans?: unknown
+}
+
+interface VolumePlanView {
+  idea?: unknown
+  rules?: unknown
+  count?: unknown
+}
+
+function md(v: unknown): string {
+  return typeof v === 'string' ? v.trim() : ''
+}
+
+function parsePlan(raw: string | undefined): PlanView | null {
+  if (!raw) return null
+  try {
+    const obj: unknown = JSON.parse(raw)
+    if (typeof obj !== 'object' || obj === null || Array.isArray(obj)) return null
+    return obj as PlanView
+  } catch {
+    return null
+  }
+}
+
 export function PremisePanel({ ui, projectId, onCreated, onUpdated, seed }: PremisePanelProps) {
-  const { Button, Input, Label, Textarea } = ui
+  const { Badge, Button, Input, Label, Markdown, Textarea } = ui
   const [project, setProject] = useState<Project | null>(null)
   const [form, setForm] = useState<ProjectForm>(EMPTY_FORM)
   const [metaBusy, setMetaBusy] = useState(false)
@@ -145,6 +173,29 @@ export function PremisePanel({ ui, projectId, onCreated, onUpdated, seed }: Prem
 
   const hasContent = existing.wb + existing.char + existing.ol > 0
 
+  const plan = useMemo(() => parsePlan(project?.wizardPlan), [project?.wizardPlan])
+  const draftText = md(plan?.draftText)
+  const outlineRules = md(plan?.outlineRules)
+  const volumes = useMemo(() => {
+    const raw = plan?.volumePlans
+    if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) return []
+    const volKey = (k: string): number => {
+      const n = Number.parseInt(k, 10)
+      return Number.isFinite(n) ? n : Number.MAX_SAFE_INTEGER
+    }
+    return (Object.entries(raw) as [string, VolumePlanView][])
+      .filter(([, v]) => typeof v === 'object' && v !== null)
+      .map(([no, v]) => ({
+        no,
+        count: typeof v.count === 'number' && v.count > 0 ? v.count : 0,
+        idea: md(v.idea),
+        rules: md(v.rules)
+      }))
+      .filter((v) => v.idea || v.rules)
+      .sort((a, b) => volKey(a.no) - volKey(b.no) || a.no.localeCompare(b.no))
+  }, [plan])
+  const hasPlan = !!plan && (!!draftText || !!outlineRules || volumes.length > 0)
+
   return (
     <div className="space-y-3">
       <div className="space-y-2.5 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
@@ -199,6 +250,47 @@ export function PremisePanel({ ui, projectId, onCreated, onUpdated, seed }: Prem
           {metaError && <span className="text-xs text-red-400">{metaError}</span>}
         </div>
       </div>
+
+      {hasPlan && (
+        <div className="space-y-3 rounded-lg border border-zinc-800 bg-zinc-900/50 p-3">
+          <div className="flex items-center gap-2">
+            <span className="text-sm font-medium text-zinc-200">创作方案</span>
+            <Badge tone="amber">智能体维护</Badge>
+          </div>
+          {draftText && (
+            <section className="space-y-1">
+              <div className="text-xs font-medium text-zinc-400">开篇故事草稿</div>
+              <Markdown text={draftText} className="text-sm leading-relaxed text-zinc-300" />
+            </section>
+          )}
+          {outlineRules && (
+            <section className="space-y-1">
+              <div className="text-xs font-medium text-zinc-400">大纲通用规则</div>
+              <Markdown text={outlineRules} className="text-sm leading-relaxed text-zinc-300" />
+            </section>
+          )}
+          {volumes.map((v) => (
+            <section
+              key={v.no}
+              className="space-y-1 border-t border-zinc-800 pt-2.5 first:border-t-0 first:pt-0"
+            >
+              <div className="text-xs font-medium text-zinc-400">
+                第 {v.no} 卷{v.count ? `（约 ${v.count} 章）` : ''}
+              </div>
+              {v.idea && (
+                <Markdown text={v.idea} className="text-sm leading-relaxed text-zinc-300" />
+              )}
+              {v.rules && (
+                <div className="space-y-1">
+                  <div className="text-xs text-zinc-500">本卷节奏规则</div>
+                  <Markdown text={v.rules} className="text-sm leading-relaxed text-zinc-300" />
+                </div>
+              )}
+            </section>
+          ))}
+          <p className="text-xs text-zinc-500">由智能体规划写入，如需调整请到智能体页修改。</p>
+        </div>
+      )}
 
       {projectId && (
         <p className="text-xs text-zinc-500">

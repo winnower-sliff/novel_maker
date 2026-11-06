@@ -20,4 +20,6 @@ export interface WizardUi {
   Input: ComponentType<InputHTMLAttributes<HTMLInputElement>>
   Label: ComponentType<{ className?: string; children?: ReactNode }>
   Textarea: ComponentType<TextareaHTMLAttributes<HTMLTextAreaElement>>
+  /** 只读 md 渲染（桌面带 wikilink hover，移动端降级加粗），用于展示 agent 落库的方案文本 */
+  Markdown: ComponentType<{ text: string; className?: string }>
 }
