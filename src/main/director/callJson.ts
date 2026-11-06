@@ -94,6 +94,8 @@ export interface CallOptions {
   /** 期望的 JSON 形状说明（喂给模型的 schema 提示） */
   jsonHint: string
   signal?: AbortSignal
+  /** 思考链流式回调（网关 reasoning 字段/<think> 标签剥出） */
+  onThinking?: (text: string) => void
 }
 
 /** 单次流式原始调用（含网络级重试+记账） */
@@ -123,7 +125,7 @@ export async function callRaw(
           ...opts.params
         },
         { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
-        (t) => onDelta?.(t),
+        { onDelta: (t) => onDelta?.(t), onThinking: (t) => opts.onThinking?.(t) },
         opts.signal
       )
       appendUsage({

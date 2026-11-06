@@ -151,11 +151,26 @@ function chatSaver(jobId: string): (t: string) => void {
   let lastSave = 0
   return (t: string) => {
     acc += t
-    emitJobDelta(jobId, t, acc.length)
+    emitJobDelta(jobId, 'text', t, acc.length)
     const now = Date.now()
     if (now - lastSave > 3000) {
       lastSave = now
       updateJob(jobId, { payload: { answer: acc } })
+    }
+  }
+}
+
+/** 思考链流式（chat 折叠区）：与 chatSaver 同款节流落盘 payload.thinkingText */
+function thinkSaver(jobId: string): (t: string) => void {
+  let acc = ''
+  let lastSave = 0
+  return (t: string) => {
+    acc += t
+    emitJobDelta(jobId, 'thinking', t, acc.length)
+    const now = Date.now()
+    if (now - lastSave > 3000) {
+      lastSave = now
+      updateJob(jobId, { payload: { thinkingText: acc } })
     }
   }
 }
@@ -566,6 +581,7 @@ async function runChatJob(job: Job): Promise<Job | null> {
     mode: 'free',
     tools: [...toolDefs(), ...interceptorDefs('free')],
     onDelta: chatSaver(job.id),
+    onThinking: thinkSaver(job.id),
     say: agentSay(job.id, job.bookId),
     // 意图动作（对话驱动开章/审读/审计）：避免 loop→jobs 循环依赖，经 actions 注入
     actions: {

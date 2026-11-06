@@ -74,6 +74,8 @@ export interface LoopOpts {
   system?: string
   /** 导演白话流式（chat 气泡预览；正文/改章不走这里——见 onProgress） */
   onDelta?: (t: string) => void
+  /** 思考链流式（chat 折叠区；正文/改章不接） */
+  onThinking?: (t: string) => void
   /** 生成进度（正文/改章字数计数，聚合条显示；正文不进聊天流） */
   onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
   /** 落一条 assistant 消息（agent 白话/工具卡） */
@@ -484,7 +486,8 @@ ${rows}
           tools: opts.tools,
           responseFormat: 'text',
           maxTokens: 4000
-        }
+        },
+        onThinking: opts.onThinking
       },
       opts.onDelta
     )

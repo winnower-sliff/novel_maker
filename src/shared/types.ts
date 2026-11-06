@@ -48,6 +48,8 @@ export interface UsageInfo {
 
 export interface ChatResult {
   text: string
+  /** 思考链全文（网关 reasoning 字段或 <think> 标签剥出） */
+  thinking?: string
   usage: UsageInfo
   model: string
   stopReason: string | null
@@ -435,6 +437,8 @@ export interface JobPayload {
   directionHint?: string
   /** 计划书（计划模式：写章前生成，批准后作为 direction 执行） */
   plan?: string
+  /** chat 思考链流式落盘（thinkingSaver 3s 落，供断线恢复/兜底显示） */
+  thinkingText?: string
   /** 用户选择（卡片序号或自由输入） */
   direction?: { source: 'card' | 'free'; cardIndex?: number; text: string }
   /** outline 产物 */

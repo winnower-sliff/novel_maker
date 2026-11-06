@@ -16,14 +16,14 @@ export function normalizeBase(baseUrl: string): string {
   return baseUrl.replace(/\/+$/, '')
 }
 
-/** 唯一 LLM 入口：统一 OpenAI 兼容流式 */
+/** 唯一 LLM 入口：统一 OpenAI 兼容流式（cbs.onDelta 正文增量；cbs.onThinking 思考增量） */
 export async function chatStream(
   params: ChatParams,
   auth: { apiKey: string; baseUrl: string },
-  onDelta: (text: string) => void,
+  cbs: { onDelta: (text: string) => void; onThinking?: (text: string) => void },
   signal?: AbortSignal
 ): Promise<ChatResult> {
-  return chatStreamOpenai(params, auth, onDelta, signal)
+  return chatStreamOpenai(params, auth, cbs, signal)
 }
 
 async function listModelIds(

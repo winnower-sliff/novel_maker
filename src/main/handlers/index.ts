@@ -79,7 +79,7 @@ async function runChat(
   const result = await chatStream(
     { ...params, model: auth.model },
     { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
-    onDelta,
+    { onDelta },
     signal
   )
   appendUsage({

@@ -50,7 +50,13 @@ export function emitJobProgress(jobId: string, p: JobProgress): void {
   globalSink.send('job:progress', jobId, p)
 }
 
-export function emitJobDelta(jobId: string, text: string, total: number): void {
+/** 流式增量（kind=thinking 思考链 / text 正文白话；chunk=增量文本，total=累计长度——服务端唯一真相源） */
+export function emitJobDelta(
+  jobId: string,
+  kind: 'text' | 'thinking',
+  chunk: string,
+  total: number
+): void {
   if (!globalSink || globalSink.isClosed()) return
-  globalSink.send('job:delta', jobId, text, total)
+  globalSink.send('job:delta', jobId, kind, chunk, total)
 }

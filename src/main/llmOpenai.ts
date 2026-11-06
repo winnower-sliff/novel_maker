@@ -100,15 +100,16 @@ class ThinkStripper {
   private inThink = false
   private pending = ''
 
-  /** 喂入增量，返回可安全转发给用户的文本（剥除思考段） */
-  feed(chunk: string): string {
+  /** 喂入增量，返回可安全转发给用户的文本（剥除思考段）；思考段经 onThink 吐出（流式思考 UI 用） */
+  feed(chunk: string, onThink?: (s: string) => void): string {
     this.pending += chunk
     let safe = ''
     for (;;) {
       const tag = this.inThink ? '</think>' : '<think>'
       const idx = this.pending.indexOf(tag)
       if (idx >= 0) {
-        if (!this.inThink) safe += this.pending.slice(0, idx)
+        if (this.inThink) onThink?.(this.pending.slice(0, idx))
+        else safe += this.pending.slice(0, idx)
         this.pending = this.pending.slice(idx + tag.length)
         this.inThink = !this.inThink
         continue
@@ -116,6 +117,10 @@ class ThinkStripper {
       // 尾部可能是不完整标签前缀：暂缓输出，等下一个 chunk 判定
       const hold = tagPrefixLen(this.pending, tag)
       if (!this.inThink) safe += this.pending.slice(0, this.pending.length - hold)
+      else if (onThink) {
+        const think = this.pending.slice(0, this.pending.length - hold)
+        if (think) onThink(think)
+      }
       this.pending = this.pending.slice(this.pending.length - hold)
       break
     }
@@ -191,7 +196,7 @@ function parseErrorBody(raw: string): string | null {
 export async function chatStreamOpenai(
   params: ChatParams,
   auth: { apiKey: string; baseUrl: string },
-  onDelta: (text: string) => void,
+  cbs: { onDelta: (text: string) => void; onThinking?: (text: string) => void },
   signal?: AbortSignal
 ): Promise<ChatResult> {
   const started = Date.now()
@@ -230,6 +235,7 @@ export async function chatStreamOpenai(
 
   const usage = emptyUsage()
   let text = ''
+  let thinking = ''
   let model = params.model ?? ''
   let stopReason: string | null = null
   const toolUses: Array<{
@@ -260,6 +266,9 @@ export async function chatStreamOpenai(
     const delta = choice.delta as
       | {
           content?: string | null
+          /** 兼容网关思考流：GLM/DeepSeek 系把推理放独立字段，正文在 content */
+          reasoning_content?: string | null
+          reasoning?: string | null
           tool_calls?: Array<{
             index?: number
             id?: string
@@ -267,11 +276,19 @@ export async function chatStreamOpenai(
           }>
         }
       | undefined
+    const rc = delta?.reasoning_content ?? delta?.reasoning
+    if (typeof rc === 'string' && rc) {
+      thinking += rc
+      cbs.onThinking?.(rc)
+    }
     if (typeof delta?.content === 'string' && delta.content) {
-      const safe = stripper.feed(delta.content)
+      const safe = stripper.feed(delta.content, (s) => {
+        thinking += s
+        cbs.onThinking?.(s)
+      })
       if (safe) {
         text += safe
-        onDelta(safe)
+        cbs.onDelta(safe)
       }
     }
     if (Array.isArray(delta?.tool_calls)) {
@@ -325,7 +342,7 @@ export async function chatStreamOpenai(
   const tail = stripper.flush()
   if (tail) {
     text += tail
-    onDelta(tail)
+    cbs.onDelta(tail)
   }
   for (const acc of toolAcc.values()) {
     let input: Record<string, unknown> = {}
@@ -353,5 +370,14 @@ export async function chatStreamOpenai(
     })
   }
 
-  return { text, usage, model, stopReason, durationMs: Date.now() - started, headers, toolUses }
+  return {
+    text,
+    thinking,
+    usage,
+    model,
+    stopReason,
+    durationMs: Date.now() - started,
+    headers,
+    toolUses
+  }
 }

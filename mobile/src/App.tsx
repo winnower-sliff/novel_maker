@@ -51,11 +51,33 @@ export default function App() {
     const unProgress = window.api.job.onProgress((jobId, p) => {
       tickerStore(jobId).getState().setProgress(p)
     })
+    // chat 流式：thinking 折叠区 + 正文白话；total 失配时 job.get 兜底（服务端真相源）
+    const unDelta = window.api.job.onDelta((jobId, kind, chunk, total) => {
+      const ts = tickerStore(jobId)
+      if (kind === 'thinking') {
+        const st = ts.getState()
+        if (st.thinking.length !== total - chunk.length) {
+          void window.api.job.get(jobId).then((j) => {
+            const t = j?.payload.thinkingText ?? ''
+            ts.getState().setThinking(t)
+          })
+        } else ts.getState().appendThink(chunk, total)
+      } else {
+        const st = ts.getState()
+        if (st.chatText.length !== total - chunk.length) {
+          void window.api.job.get(jobId).then((j) => {
+            const t = j?.payload.answer ?? ''
+            ts.getState().setChatText(t)
+          })
+        } else ts.getState().appendDelta(chunk, total)
+      }
+    })
     return () => {
       unAppend()
       unUpdate()
       unActivity()
       unProgress()
+      unDelta()
     }
   }, [conn, qc])
 

@@ -1,27 +1,36 @@
 import { useEffect, useState } from 'react'
 import type { Job } from '@shared/types'
 import { tickerStore } from '../../lib/tickerStore'
+import { Markdown } from '../../components/Markdown'
 import { RUN_LABEL, TOOL_LABEL } from './labels'
 
 /**
  * agent 聚合条（时间轴尾部）：干完收一行，过程只报进度。
- * chat 白话不再流式预览（曾长期显示「提笔中…」看不到字）——
- * 回复靠 message:append 实时上墙，这里只报状态行。
+ * chat（导演回话）特例：思考链折叠区 + 正文白话流式渲染——
+ * 正文开始后思考自动折叠（可点开回看）。
  */
 export default function AgentTicker({ job, refresh }: { job: Job; refresh: () => void }) {
   // 聚合条状态在全局 store（App 接线 SSE 写入）：切子页卸载再回来不丢进度
   const useTicker = tickerStore(job.id)
   const acts = useTicker((s) => s.acts)
   const progress = useTicker((s) => s.progress)
+  const chatText = useTicker((s) => s.chatText)
+  const thinking = useTicker((s) => s.thinking)
   const [open, setOpen] = useState(false)
+  const [thinkOpen, setThinkOpen] = useState(true)
   const [cancelConfirm, setCancelConfirm] = useState(false)
+
+  // 正文一旦开始，思考区自动折叠（首次出现时）
+  useEffect(() => {
+    if (chatText) setThinkOpen(false)
+  }, [chatText])
 
   useEffect(() => {
     if (stickToBottom()) {
       const el = document.getElementById('write-stream-box')
       if (el) el.scrollIntoView({ block: 'end' })
     }
-  }, [acts.length, progress?.chars])
+  }, [acts.length, progress?.chars, chatText, thinking])
 
   if (job.state === 'queued') {
     return (
@@ -56,6 +65,34 @@ export default function AgentTicker({ job, refresh }: { job: Job; refresh: () =>
             </span>
           )}
         </button>
+
+        {isChat && (thinking || chatText) && (
+          <div className="mt-2 border-t border-orange-100/70 pt-2">
+            {thinking && (
+              <div>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-1.5 text-left text-[11px] text-stone-400"
+                  onClick={() => setThinkOpen(!thinkOpen)}
+                >
+                  <span className={chatText ? '' : 'animate-pulse'}>{chatText ? '✦ 已思考' : '✦ 思考中…'}</span>
+                  <span className="text-stone-300">{thinkOpen ? '▲' : '▼'}</span>
+                </button>
+                {thinkOpen && (
+                  <div className="mt-1 max-h-36 overflow-y-auto no-scrollbar whitespace-pre-wrap text-xs leading-relaxed text-stone-400">
+                    {thinking}
+                  </div>
+                )}
+              </div>
+            )}
+            {chatText && (
+              <div className="mt-2 text-sm leading-relaxed text-stone-700">
+                <Markdown text={chatText} />
+                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-orange-400 align-middle" />
+              </div>
+            )}
+          </div>
+        )}
 
         {open && !isChat && acts.length > 0 && (
           <div className="mt-2 max-h-48 space-y-1 overflow-y-auto no-scrollbar border-t border-orange-100/70 pt-2">
