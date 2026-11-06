@@ -4,6 +4,15 @@ import type { SampleSearchHit, SampleSectionView } from '@shared/types'
 /** 阅读窗口大小（8k 字一屏，前后翻页步长） */
 const WINDOW = 8000
 
+/** 段落清洗：统一换行符、剔除原文自带的前导/尾随空格缩进（渲染统一用 indent-[2em]，避免双重缩进），空行丢弃 */
+function cleanParas(raw: string): string[] {
+  return raw
+    .replace(/\r\n?/g, '\n')
+    .split('\n')
+    .map((l) => l.replace(/^[ \t　]+/, '').trim())
+    .filter(Boolean)
+}
+
 interface SampleLite {
   id: string
   name: string
@@ -59,7 +68,8 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
   const openSection = (i: number) => {
     const s = sections?.[i]
     if (!s) return
-    void openText(s.label, s.start, i, Math.min(WINDOW, Math.max(WINDOW, s.chars)))
+    // 整章一次取全（readText 单次上限 10000 字），章内不再翻页、不断句
+    void openText(s.label, s.start, i, Math.min(10000, Math.max(200, s.chars)))
   }
 
   const jumpSection = (delta: number) => {
@@ -69,7 +79,11 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
 
   const page = (delta: number) => {
     if (!view) return
-    const from = Math.max(0, Math.min(view.from + delta, sample.chars - 500))
+    // 起点对齐段首：向后翻从窗口最后一段起点起步、向前翻从窗口第一段起点回退——
+    // 有意轻微重叠，绝不在句子中间接续
+    const nl = delta > 0 ? view.text.lastIndexOf('\n') : view.text.indexOf('\n')
+    const anchor = nl >= 0 ? nl + 1 : 0
+    const from = Math.max(0, Math.min(view.from + (delta > 0 ? anchor : anchor - WINDOW), sample.chars - 500))
     void openText(view.label, from, view.secIdx)
   }
 
@@ -98,6 +112,8 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
   const pctJump = (pct: number) => {
     void openText(`全文 ${pct}%`, Math.floor((sample.chars * pct) / 100), -1)
   }
+
+  const secTitle = view && view.secIdx >= 0 && sections ? sections[view.secIdx]?.label : undefined
 
   return (
     <div className="absolute inset-0 z-30 flex flex-col bg-[#fbf6ec]">
@@ -137,14 +153,20 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
               </span>
             </div>
           </div>
-          <div className="no-scrollbar flex-1 overflow-y-auto px-5 py-4">
-            {view.text.split('\n').map((para, i) =>
-              para.trim() ? (
-                <p key={i} className="mb-3 indent-[2em] text-[15.5px] leading-[1.9] text-stone-800">
-                  {para}
-                </p>
-              ) : null
-            )}
+          <div className="no-scrollbar flex-1 overflow-y-auto px-5 py-5">
+            {secTitle ? (
+              <h1 className="mb-4 border-l-4 border-orange-400 pl-3 text-[17px] font-bold leading-snug text-stone-800">
+                {secTitle}
+              </h1>
+            ) : null}
+            {cleanParas(view.text).map((para, i) => (
+              <p
+                key={i}
+                className="mb-2.5 indent-[2em] text-[15.5px] [text-justify:inter-ideograph] leading-[1.95] tracking-[0.01em] text-stone-800"
+              >
+                {para}
+              </p>
+            ))}
           </div>
           <div className="border-t border-orange-100 bg-white pb-safe pt-2">
             <div className="grid grid-cols-3 gap-2 px-4">
