@@ -27,40 +27,7 @@ function base(book: Book, lineId: string): string {
   return `${bookBasics(book)}${redlineBlock(book)}${wordListBlock(book)}${styleBlock(book)}\n\n${buildWriteContext(book, lineId)}`
 }
 
-// ── proposal：走向卡片（W2/G4 简版——导演直出；两段式候选筛由 M4 子代理接入） ──
-
-export async function genDirections(
-  book: Book,
-  lineId: string,
-  hint?: string
-): Promise<DirectionCard[]> {
-  const ctx = base(book, lineId)
-  const cards = await callJson<{ cards: DirectionCard[] }>({
-    slot: DIRECTOR_SLOT,
-    system: directorPersona(),
-    user: `${ctx}
-
-## 任务
-现在请为下一章提出 4 个走向选项。要求：
-1. 四张卡片类型各不相同：steady（稳妥推进）/ twist（冒险转折）/ depth（人物深化）/ wild（野路子）。若剧情强需求可增减至 1-5 张，但类型尽量不重复。
-2. 每张卡片：title（短语）、preview（剧情预告 1-2 句，具体有画面）、structure（结构化标注：回收哪个伏笔/引入什么新元素/推动哪条人物线）、arc（弧线标注，如「开启 3 章追杀弧」「本章闭合某个弧」，无弧线则写「单章」）。
-3. 遵守反模式纪律：选项必有代价、无空选项。
-4. 已到期的伏笔优先安排回收。${hint ? `\n5. 作者提到的方向倾向（作参考，不必拘泥）：${hint.slice(0, 200)}` : ''}`,
-    jsonHint: `{"cards":[{"kind":"steady|twist|depth|wild","title":"...","preview":"...","structure":"...","arc":"..."}]}`,
-    maxTokens: 3000
-  })
-  const valid = (cards.cards ?? []).filter(
-    (c) => c && typeof c.title === 'string' && typeof c.preview === 'string'
-  )
-  if (!valid.length) throw new Error('模型未产出有效走向卡片')
-  return valid.slice(0, 5).map((c) => ({
-    kind: c.kind,
-    title: c.title,
-    preview: c.preview,
-    structure: c.structure ?? '',
-    arc: c.arc ?? '单章'
-  }))
-}
+// ── proposal（走向卡）已废除（用户决策：聊天驱动，agent 自主定走向） ──────────
 
 // ── outline：章级大纲（W3 第一级） ───────────────────────────────────────────
 
@@ -306,7 +273,7 @@ export async function compactMemories(
   if (res.summary) saveMemory({ lineId, fromOrder: from, toOrder: to, content: res.summary })
 }
 
-// ── revise：改章（章末快捷钮/自由指令；M4） ──────────────────────────────────
+// ── revise：改章（局部编辑为主，整章重写为兜底；用户决策：不留旧版） ──────────
 
 export interface ReviseInput {
   book: Book
@@ -317,35 +284,87 @@ export interface ReviseInput {
   segment?: string
 }
 
-export async function genRevise(input: ReviseInput, onDelta: (t: string) => void): Promise<string> {
+/** 模型产出的改稿计划：多处局部替换，或整章重写 */
+export interface RevisePlan {
+  /** 整章重写（推倒重来时才用） */
+  rewrite?: string
+  /** 局部替换：find=原文逐字引文；replace=改后文本（空串=删除该片段） */
+  edits?: Array<{ find: string; replace: string }>
+}
+
+/** 应用改稿计划：返回新全文与统计；edits 全未命中时报 noHit */
+export function applyRevisePlan(
+  content: string,
+  plan: RevisePlan
+): { next: string; applied: number; total: number; mode: 'edits' | 'rewrite' } | { noHit: true } {
+  const rw = plan.rewrite?.trim()
+  if (rw) return { next: rw, applied: 1, total: 1, mode: 'rewrite' }
+  const edits = (plan.edits ?? []).filter(
+    (e) => e && typeof e.find === 'string' && e.find.length > 0
+  )
+  if (!edits.length) return { noHit: true }
+  let next = content
+  let applied = 0
+  for (const e of edits) {
+    if (!next.includes(e.find)) continue
+    next = next.replace(e.find, e.replace ?? '')
+    applied++
+  }
+  if (!applied) return { noHit: true }
+  return { next, applied, total: edits.length, mode: 'edits' }
+}
+
+export async function genRevisePlan(input: ReviseInput): Promise<RevisePlan> {
   const { book, lineId, chapter, instruction, segment } = input
   const ctx = base(book, lineId)
   const segBlock = segment
-    ? `\n## 局部修改目标段\n只改下面这一段（可整段替换），其余部分原样保留输出：\n${segment}`
+    ? `\n## 作者圈定的目标段\n作者只想动下面这一段（改动都落在这里，其余部分不碰）：\n${segment}`
     : ''
-  const res = await callRaw(
-    {
-      slot: WRITER_SLOT,
-      system: directorPersona(),
-      user: `${ctx}
+  return await callJson<RevisePlan>({
+    slot: WRITER_SLOT,
+    system: directorPersona(),
+    user: `${ctx}
 
 ## 任务
-第${chapter.orderNo}章《${chapter.title}》当前正文：
+改第${chapter.orderNo}章《${chapter.title}》。当前正文：
 ${chapter.content}
 
 ## 作者的修改指令
 ${instruction}${segBlock}
 
-现在输出修改后的本章完整正文（未被要求改动的部分保持原文，不要输出任何解释）。`,
-      maxTokens: Math.max(Math.ceil(chapter.content.length * 2), 4096),
-      jsonHint: '',
-      params: { responseFormat: 'text' }
-    },
-    onDelta
-  )
-  const text = res.text.trim()
-  if (!text) throw new Error('模型返回空正文')
-  return text
+## 改稿方式（重要）
+- 默认用**局部替换**（edits）：每处改动给一条 {find, replace}。find=要改的原文**逐字引文**（10 字以上、足以在全文中唯一定位，含标点）；replace=改后的完整文本（空串=删除）。
+- 可以一次给多条 edits（多处修改），按顺序应用。
+- 只有指令要求推倒重写/大结构调整（如换视角、重排全章）才用 rewrite：输出整章新正文。
+- 未被点名的部分一个字都不要动。`,
+    jsonHint:
+      '{"edits":[{"find":"原文精确引文","replace":"改后文本"}]}\n或 {"rewrite":"整章新正文"}',
+    maxTokens: Math.max(Math.ceil(chapter.content.length * 1.6), 4096)
+  })
+}
+
+// ── 计划模式（书级开关：写章前先出计划书，作者过目后才动笔） ──────────────────
+
+export async function genChapterPlan(book: Book, lineId: string, hint: string): Promise<string> {
+  const ctx = base(book, lineId)
+  const res = await callJson<{ plan?: string }>({
+    slot: 'utility',
+    system: directorPersona(),
+    user: `${ctx}
+
+## 任务
+为下一章制定写作计划书（作者开了「先计划」模式：动笔前要先过目）。
+${hint ? `作者给的倾向：${hint}\n` : '作者没有给倾向，综合现状自主定。'}
+计划书 ≤600 字，用 Markdown 小节写清楚：
+- **走向**：本章主线与结尾悬念
+- **设定改动**：要新增/修改哪些设定卡、人物状态（不动就写「无」）
+- **伏笔**：要埋/回收哪些伏笔（没有写「无」）
+- **风险**：连续性/文风上要注意的点`,
+    jsonHint: '{"plan":"# 下一章计划\\n- **走向**：…"}',
+    maxTokens: 1500
+  })
+  if (!res?.plan?.trim()) throw new Error('模型未产出计划')
+  return res.plan.trim()
 }
 
 // ── 子代理审读（M4：review 七维 / audit 漂移+空转+连续性 / diagnose 问答） ────

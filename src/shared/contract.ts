@@ -4,7 +4,6 @@ import type {
   Book,
   Card,
   Chapter,
-  ChapterVersion,
   Character,
   ChatMessage,
   ChatMessageRow,
@@ -110,6 +109,7 @@ export const BookPatchSchema = z.object({
   redlines: z.array(z.string()).optional(),
   positiveWords: z.array(z.string()).optional(),
   negativeWords: z.array(z.string()).optional(),
+  planMode: z.boolean().optional(),
   archived: z.boolean().optional()
 })
 
@@ -161,12 +161,6 @@ export const ForeshadowInputSchema = z.object({
   resolvedChapterId: z.string().optional(),
   status: z.enum(['open', 'planned', 'resolved']).optional(),
   priority: z.number().int().optional()
-})
-
-export const DirectionChoiceSchema = z.object({
-  source: z.enum(['card', 'free']),
-  cardIndex: z.number().int().optional(),
-  text: z.string().min(1)
 })
 
 export const SampleImportSchema = z.object({
@@ -223,7 +217,6 @@ export const invokeContract = {
   'line:activate': { args: z.tuple([z.string(), z.string()]), ret: ret<boolean>() },
   'line:delete': { args: z.tuple([z.string(), z.boolean()]), ret: ret<boolean>() },
   'chapter:get': { args: z.tuple([z.string()]), ret: ret<Chapter | null>() },
-  'chapter:versions': { args: z.tuple([z.string()]), ret: ret<ChapterVersion[]>() },
   'card:list': {
     args: z.tuple([z.string(), CardKindSchema.optional(), z.string().optional()]),
     ret: ret<Card[]>()
@@ -245,6 +238,10 @@ export const invokeContract = {
 
   // ── 写作任务流水线（W10/W12） ─────────────────────────────────────────────
   'job:startWrite': { args: z.tuple([z.string()]), ret: ret<Job>() },
+  'job:approvePlan': {
+    args: z.tuple([z.string(), z.string().optional()]),
+    ret: ret<Job>()
+  },
   'job:startRevise': {
     args: z.tuple([z.string(), z.string(), z.string().optional()]),
     ret: ret<Job>()
@@ -253,7 +250,6 @@ export const invokeContract = {
   'job:startAudit': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:startDiagnose': { args: z.tuple([z.string(), z.string()]), ret: ret<Job>() },
   'job:startChat': { args: z.tuple([z.string(), z.string()]), ret: ret<Job>() },
-  'job:chooseDirection': { args: z.tuple([z.string(), DirectionChoiceSchema]), ret: ret<Job>() },
   'job:retry': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:cancel': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:get': { args: z.tuple([z.string()]), ret: ret<Job | null>() },
@@ -399,7 +395,6 @@ export interface Api {
   }
   chapter: {
     get: InvokeFn<'chapter:get'>
-    versions: InvokeFn<'chapter:versions'>
   }
   card: {
     list: InvokeFn<'card:list'>
@@ -421,12 +416,12 @@ export interface Api {
   }
   job: {
     startWrite: InvokeFn<'job:startWrite'>
+    approvePlan: InvokeFn<'job:approvePlan'>
     startRevise: InvokeFn<'job:startRevise'>
     startReview: InvokeFn<'job:startReview'>
     startAudit: InvokeFn<'job:startAudit'>
     startDiagnose: InvokeFn<'job:startDiagnose'>
     startChat: InvokeFn<'job:startChat'>
-    chooseDirection: InvokeFn<'job:chooseDirection'>
     retry: InvokeFn<'job:retry'>
     cancel: InvokeFn<'job:cancel'>
     get: InvokeFn<'job:get'>

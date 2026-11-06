@@ -39,17 +39,3 @@ export const RUN_LABEL: Record<string, string> = {
   draft: '改章中',
   finalize: '收尾中…'
 }
-
-/** 走向卡类型 */
-export const KIND_LABEL: Record<string, string> = {
-  steady: '顺势',
-  twist: '破局',
-  depth: '纵深',
-  wild: '野路子'
-}
-export const KIND_COLOR: Record<string, string> = {
-  steady: 'bg-orange-100 text-orange-700',
-  twist: 'bg-orange-200/80 text-orange-700',
-  depth: 'bg-amber-200/90 text-orange-800',
-  wild: 'bg-amber-100 text-orange-800'
-}

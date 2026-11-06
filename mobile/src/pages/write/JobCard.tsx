@@ -2,7 +2,7 @@ import type { Job } from '@shared/types'
 import ReportCard from '../../components/ReportCard'
 import { Markdown } from '../../components/Markdown'
 import { ChapterDoneCard, RevisedCard } from './DoneCards'
-import ChoiceCard from './ChoiceCard'
+import PlanCard from './PlanCard'
 
 /**
  * 节点卡（按消息 step 分派）。interactive 判定只看「这是当前活跃 job 且在等作者」，
@@ -23,20 +23,24 @@ export default function JobCard({
   refresh: () => void
   refreshAll: () => void
 }) {
-  const interactive = !!active && active.id === job.id && active.state === 'waiting_user'
-
   if (step === 'cards') {
-    return interactive ? (
-      <ChoiceCard job={job} refresh={refresh} />
-    ) : (
+    // 走向卡已废除（聊天驱动开章）；历史消息走通用展示
+    return (
       <StaticBubble
         text={
           job.payload.direction
             ? `本章走向：${job.payload.direction.text}`
-            : `本章走向备选 ${job.payload.cards?.length ?? 0} 张`
+            : '本章走向备选（旧版流程）'
         }
       />
     )
+  }
+  if (step === 'plan') {
+    // 计划模式：计划书等作者过目（interactive 时可执行/取消，历史消息只读展示）
+    if (active && active.id === job.id && active.state === 'waiting_user' && job.payload.plan) {
+      return <PlanCard job={job} refresh={refresh} />
+    }
+    return <StaticBubble text="本章计划（已处理）" />
   }
   if (step === 'chapter') return <ChapterDoneCard job={job} chaptersById={chaptersById} refresh={refreshAll} />
   if (step === 'revised') return <RevisedCard job={job} />

@@ -8,7 +8,13 @@ import type {
 } from '../../shared/types.js'
 import { callJson, callRaw } from '../director/callJson.js'
 import { bookBasics, directorPersona, redlineBlock, wordListBlock } from '../director/prompts.js'
-import { autoFixDraft, genDraft, genRevise, selfCheck } from '../director/steps.js'
+import {
+  applyRevisePlan,
+  autoFixDraft,
+  genDraft,
+  genRevisePlan,
+  selfCheck
+} from '../director/steps.js'
 import { lintChapter, stripHtmlComments } from '../lint.js'
 import * as store from '../store.js'
 import { execTool, type ToolCtx, type ToolResult, toolDefs } from './tools.js'
@@ -109,7 +115,7 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
     {
       name: 'revise_chapter',
       description:
-        '按指令改已有章（整章或选段）。传章 id+自然语言改稿指令；流式重写后自动替换旧版（旧版进历史版本可回看）。',
+        '按指令改已有章（整章或选段）。默认做局部替换（只动点名处，未点名一字不动），直接替换旧版不留档；只有作者明确要求推倒重写才整章重写。',
       input_schema: {
         type: 'object',
         properties: {
@@ -144,13 +150,13 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
       {
         name: 'propose_chapter',
         description:
-          '作者想写新章时调用：把写章任务排进队列（会先出 4 张走向卡供作者选，确认后 agent 自主完成全章）。当前有任务在跑则自动排队。',
+          '作者想写新章时调用：把写章任务排进队列，agent 据作者倾向（未给则综合现状）自主完成全章。当前有任务在跑则自动排队。',
         input_schema: {
           type: 'object',
           properties: {
             directionHint: {
               type: 'string',
-              description: '可选：作者提到的方向倾向，会带给走向卡生成'
+              description: '可选：作者提到的方向倾向，会作为本章走向依据'
             }
           },
           required: []
@@ -653,25 +659,34 @@ ${rows}
         if (!chapter) return { ok: false, summary: '章节不存在', data: `章节 ${chapterId} 不存在` }
         const instruction = String(input.instruction ?? '')
         const segment = typeof input.segment === 'string' ? input.segment : undefined
-        const rewritten = await genRevise(
-          {
-            book: store.getBook(bookId) ?? book,
-            lineId: chapter.lineId,
-            chapter,
-            instruction,
-            segment
-          },
-          progressSaver('revise')
-        )
-        const clean = stripHtmlComments(rewritten)
+        const plan = await genRevisePlan({
+          book: store.getBook(bookId) ?? book,
+          lineId: chapter.lineId,
+          chapter,
+          instruction,
+          segment
+        })
+        const applied = applyRevisePlan(chapter.content, plan)
+        if ('noHit' in applied) {
+          return {
+            ok: false,
+            summary: '改稿未命中原文',
+            data: '修改定位失败：find 引文在原文中找不到，请重新引用原文逐字片段。'
+          }
+        }
+        const clean = stripHtmlComments(applied.next)
         const report = lintChapter(clean, {
           bannedWords: (store.getBook(bookId) ?? book).negativeWords
         })
-        store.replaceChapterContent(chapterId, clean, `agent 改章：${instruction.slice(0, 80)}`)
+        store.replaceChapterContent(chapterId, clean)
         return {
           ok: true,
           summary: `改好《${chapter.title}》`,
-          data: `《${chapter.title}》已按「${briefOf(instruction)}」改写并替换（旧版进历史版本）。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
+          data: `《${chapter.title}》已按「${briefOf(instruction)}」${
+            applied.mode === 'rewrite'
+              ? '整章重写'
+              : `局部修改 ${applied.applied}/${applied.total} 处`
+          }并替换。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
         }
       }
       case 'spawn_subagent': {

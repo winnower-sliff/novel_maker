@@ -6,7 +6,6 @@ import type {
   CardKind,
   Chapter,
   ChapterMeta,
-  ChapterVersion,
   Character,
   CharacterState,
   ChatMessageRow,
@@ -41,6 +40,7 @@ function rowToBook(r: Record<string, unknown>): Book {
     redlines: JSON.parse((r.redlines as string) || '[]') as string[],
     positiveWords: JSON.parse((r.positive_words as string) || '[]') as string[],
     negativeWords: JSON.parse((r.negative_words as string) || '[]') as string[],
+    planMode: Boolean(r.plan_mode),
     activeLineId: (r.active_line_id as string) ?? '',
     archived: Boolean(r.archived),
     createdAt: r.created_at as number,
@@ -73,17 +73,6 @@ function rowToChapter(r: Record<string, unknown>): Chapter {
     meta: JSON.parse((r.meta as string) || '{}') as ChapterMeta,
     createdAt: r.created_at as number,
     updatedAt: r.updated_at as number
-  }
-}
-
-function rowToVersion(r: Record<string, unknown>): ChapterVersion {
-  return {
-    id: r.id as string,
-    chapterId: r.chapter_id as string,
-    content: r.content as string,
-    reason: (r.reason as string) ?? '',
-    wordCount: (r.word_count as number) ?? 0,
-    createdAt: r.created_at as number
   }
 }
 
@@ -229,6 +218,7 @@ export interface BookPatch {
   redlines?: string[]
   positiveWords?: string[]
   negativeWords?: string[]
+  planMode?: boolean
   archived?: boolean
 }
 
@@ -251,6 +241,7 @@ export function updateBook(id: string, patch: BookPatch): Book | null {
   if (patch.redlines !== undefined) push('redlines', JSON.stringify(patch.redlines))
   if (patch.positiveWords !== undefined) push('positive_words', JSON.stringify(patch.positiveWords))
   if (patch.negativeWords !== undefined) push('negative_words', JSON.stringify(patch.negativeWords))
+  if (patch.planMode !== undefined) push('plan_mode', patch.planMode ? 1 : 0)
   if (patch.archived !== undefined) push('archived', patch.archived ? 1 : 0)
   if (!set.length) return getBook(id)
   push('updated_at', Date.now())
@@ -515,42 +506,18 @@ export function insertChapter(input: {
   return getChapter(id) as Chapter
 }
 
-/** 改章（W8/W9）：旧版进 versions，新版生效；返回新版本号 */
-export function replaceChapterContent(
-  chapterId: string,
-  content: string,
-  reason: string
-): Chapter | null {
+/** 改章：直接替换（用户决策：不留旧版，改了就是改了） */
+export function replaceChapterContent(chapterId: string, content: string): Chapter | null {
   const db = getDb()
   const ch = getChapter(chapterId)
   if (!ch) return null
-  const now = Date.now()
-  db.exec('BEGIN')
-  try {
-    db.prepare(
-      `INSERT INTO chapter_versions (id, chapter_id, content, reason, word_count, created_at)
-       VALUES (?, ?, ?, ?, ?, ?)`
-    ).run(randomUUID(), chapterId, ch.content, reason, ch.wordCount, now)
-    db.prepare('UPDATE chapters SET content = ?, word_count = ?, updated_at = ? WHERE id = ?').run(
-      content,
-      countWords(content),
-      now,
-      chapterId
-    )
-    db.exec('COMMIT')
-  } catch (err) {
-    db.exec('ROLLBACK')
-    throw err
-  }
+  db.prepare('UPDATE chapters SET content = ?, word_count = ?, updated_at = ? WHERE id = ?').run(
+    content,
+    countWords(content),
+    Date.now(),
+    chapterId
+  )
   return getChapter(chapterId)
-}
-
-export function listVersions(chapterId: string): ChapterVersion[] {
-  return (
-    getDb()
-      .prepare('SELECT * FROM chapter_versions WHERE chapter_id = ? ORDER BY created_at DESC')
-      .all(chapterId) as Record<string, unknown>[]
-  ).map(rowToVersion)
 }
 
 /** 纪要摘要写回（滚动记忆细记层） */

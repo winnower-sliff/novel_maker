@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS books (
   redlines TEXT DEFAULT '[]',
   positive_words TEXT DEFAULT '[]',
   negative_words TEXT DEFAULT '[]',
+  plan_mode INTEGER DEFAULT 0,
   active_line_id TEXT DEFAULT '',
   archived INTEGER DEFAULT 0,
   created_at INTEGER NOT NULL,
@@ -200,6 +201,7 @@ function migrate(d: DatabaseSync): void {
     d.exec("ALTER TABLE books ADD COLUMN positive_words TEXT DEFAULT '[]'")
   if (!cols.has('negative_words'))
     d.exec("ALTER TABLE books ADD COLUMN negative_words TEXT DEFAULT '[]'")
+  if (!cols.has('plan_mode')) d.exec('ALTER TABLE books ADD COLUMN plan_mode INTEGER DEFAULT 0')
   if (!cols.has('style_sample_source'))
     d.exec("ALTER TABLE books ADD COLUMN style_sample_source TEXT DEFAULT ''")
   if (!cols.has('sample_sources')) {

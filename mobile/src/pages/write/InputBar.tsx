@@ -3,9 +3,8 @@ import type { Job } from '@shared/types'
 import { useKeyboardInset } from '../../lib/useKeyboardInset'
 
 /**
- * 底部输入栏：恒定只发消息（startChat）。
- * 与选走向彻底解耦——等走向确认时想自定义，用 ChoiceCard 卡内的
- * 「自己写走向」输入框显式提交，杜绝「随便聊天被误判成走向」。
+ * 底部输入栏：恒定只发消息（startChat）——开章也靠对话（如「写下一章，倾向XX」），
+ * 没有任何隐式路由，杜绝「随便聊天被误判成走向」。
  */
 export default function InputBar({
   active,

@@ -207,6 +207,8 @@ export interface Book {
   positiveWords: string[]
   /** 负向词（禁用词，写作时反复注入+自检硬闸） */
   negativeWords: string[]
+  /** 计划模式：写章前先出计划书等作者批准 */
+  planMode: boolean
   activeLineId: string
   archived: boolean
   createdAt: number
@@ -374,6 +376,8 @@ export type JobStep =
   | 'report'
   /** M6：走向确认后 agent 自主工作段（查资料→写→自检→入书→沉淀） */
   | 'agent'
+  /** 计划模式：计划书已出，等作者过目 */
+  | 'plan'
 
 /** 走向卡片（W2）：默认 4 张类型不同，按需 1-5 张 */
 export interface DirectionCard {
@@ -429,6 +433,8 @@ export interface JobPayload {
   cards?: DirectionCard[]
   /** 作者开章时的方向倾向（对话驱动 propose_chapter 带入，走向卡生成参考） */
   directionHint?: string
+  /** 计划书（计划模式：写章前生成，批准后作为 direction 执行） */
+  plan?: string
   /** 用户选择（卡片序号或自由输入） */
   direction?: { source: 'card' | 'free'; cardIndex?: number; text: string }
   /** outline 产物 */
@@ -438,6 +444,8 @@ export interface JobPayload {
   /** draft/selfcheck 产物 */
   draftText?: string
   draftWordCount?: number
+  /** 改章生效方式（局部修改 N 处 / 整章重写） */
+  reviseMode?: string
   /** 自检报告（两轮：初检/自动修后复检） */
   lint?: LintReport
   autoFixed?: boolean

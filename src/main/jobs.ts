@@ -1,4 +1,4 @@
-import type { ChatMessage, DirectionCard, Job, JobPayload } from '../shared/types.js'
+import type { ChatMessage, Job, JobPayload } from '../shared/types.js'
 import { interceptorDefs, runAgentLoop } from './agent/loop.js'
 import { toolDefs } from './agent/tools.js'
 import {
@@ -10,12 +10,13 @@ import {
 } from './broadcast.js'
 import { isQuotaError } from './director/callJson.js'
 import {
+  applyRevisePlan,
   compactMemories,
   genAudit,
+  genChapterPlan,
   genDiagnose,
-  genDirections,
   genReview,
-  genRevise,
+  genRevisePlan,
   selfCheck
 } from './director/steps.js'
 import { stripHtmlComments } from './lint.js'
@@ -98,7 +99,7 @@ async function pump(): Promise<void> {
   const next = listJobs(undefined, 10).find((j) => j.state === 'queued')
   if (!next) return
   const runners: Partial<Record<string, (j: Job) => Promise<Job | null>>> = {
-    write: next.step === '' ? runProposal : undefined,
+    write: runAgentWriteJob,
     revise: runReviseJob,
     review: runReviewJob,
     audit: runAuditJob,
@@ -191,30 +192,44 @@ function agentSay(
   }
 }
 
-function requireWriteJob(jobId: string, step?: string): Job {
-  const job = requireJob(jobId)
-  if (job.kind !== 'write') throw new Error('非写作任务')
-  if (job.state === 'done' || job.state === 'cancelled') throw new Error('任务已结束')
-  if (step && job.step !== step)
-    throw new Error(`当前步骤是 ${job.step || '初始'}，不能执行 ${step} 操作`)
-  return job
-}
-
 // ── 各步执行 ─────────────────────────────────────────────────────────────────
 
-async function runProposal(job: Job): Promise<Job | null> {
+/** 写章直通入口（走向卡已废除，用户决策：聊天驱动，agent 自主定走向）。 */
+async function runAgentWriteJob(job: Job): Promise<Job | null> {
+  const book = getBook(job.bookId)
+  if (book?.planMode) return runPlanJob(job)
+  const direction = job.payload.direction ?? {
+    source: 'free' as const,
+    text: job.payload.directionHint ?? ''
+  }
+  return runAgentChapterJob(job, direction)
+}
+
+// ── 计划模式（书级开关：先出计划书，作者过目后才动笔；等待期可聊） ────────────
+
+async function runPlanJob(job: Job): Promise<Job | null> {
   const book = getBook(job.bookId)
   if (!book) throw new Error('书不存在')
-  activeJobId = job.id
-  updateJob(job.id, { state: 'running', step: 'proposal', watchdogAt: Date.now(), error: '' })
-  const cards: DirectionCard[] = await genDirections(book, job.lineId, job.payload.directionHint)
-  note(job.id, 'cards', '本章走向备选已出，等你选一个方向')
-  return updateJob(job.id, {
-    state: 'waiting_user',
-    step: 'outline',
-    payload: { cards },
-    watchdogAt: 0
-  })
+  updateJob(job.id, { state: 'running', step: 'plan', watchdogAt: Date.now(), error: '' })
+  const plan = await genChapterPlan(book, job.lineId, job.payload.directionHint ?? '')
+  updateJob(job.id, { state: 'waiting_user', step: 'plan', payload: { plan }, watchdogAt: 0 })
+  note(job.id, 'plan', '本章计划已出，等你过目')
+  return getJob(job.id)
+}
+
+/** 作者点「按计划执行」：计划+补充作为走向，进 agent 全流程。 */
+export async function approvePlan(jobId: string, feedback?: string): Promise<Job> {
+  const job = requireJob(jobId)
+  if (job.kind !== 'write' || job.state !== 'waiting_user' || job.step !== 'plan') {
+    throw new Error('当前不在计划确认环节')
+  }
+  const plan = job.payload.plan ?? ''
+  userMsg(job.bookId, '按计划写')
+  const direction = {
+    source: 'free' as const,
+    text: `${plan}${feedback ? `；作者补充：${feedback}` : ''}`
+  }
+  return (await runAgentChapterJob(job, direction)) ?? job
 }
 
 // ── 公开 API（handlers 调用） ────────────────────────────────────────────────
@@ -245,34 +260,12 @@ export async function startWrite(bookId: string, hint?: string): Promise<Job> {
       : `写第 ${effectiveChapters(line.id).length + 1} 章`
   )
   activeJobId = job.id
-  return guarded(job.id, () => runProposal(job))
-}
-
-export async function chooseDirection(
-  jobId: string,
-  direction: { source: 'card' | 'free'; cardIndex?: number; text: string }
-): Promise<Job> {
-  const job = requireWriteJob(jobId, 'outline')
-  activeJobId = jobId
-  return guarded(jobId, async () => {
-    userMsg(
-      job.bookId,
-      direction.source === 'card' ? `选走向：${direction.text}` : `自定义走向：${direction.text}`,
-      jobId
-    )
-    updateJob(jobId, {
-      state: 'running',
-      step: 'agent',
-      watchdogAt: Date.now(),
-      payload: { direction }
-    })
-    return await runAgentChapterJob(job, direction)
-  })
+  return guarded(job.id, () => runAgentWriteJob(job))
 }
 
 /**
- * M6 agent 自主段：选完走向后 agent 一路自主（查资料→拟大纲→写正文→自检→入书→沉淀）。
- * 大纲/分镜不再找作者确认（用户决策：只留走向确认）。
+ * M6+ agent 自主段：写章全流程（查资料→拟大纲→写正文→自检→入书→沉淀）。
+ * 走向卡已废除（用户决策：聊天驱动）——direction 来自聊天意图/作者倾向，agent 自主定具体走向。
  */
 async function runAgentChapterJob(
   job: Job,
@@ -282,7 +275,9 @@ async function runAgentChapterJob(
   if (!book) throw new Error('书不存在')
   updateJob(job.id, { state: 'running', step: 'agent', watchdogAt: Date.now(), error: '' })
   const chapterNo = effectiveChapters(job.lineId).length + 1
-  const task = `写第 ${chapterNo} 章。作者选定的走向：${direction.text}（${direction.source === 'card' ? '从走向卡选定' : '作者自定义'}）。按写章任务纪律自主完成全流程。`
+  const task = direction.text
+    ? `写第 ${chapterNo} 章。作者给出的倾向：${direction.text}。据此定具体走向，按写章任务纪律自主完成全流程。`
+    : `写第 ${chapterNo} 章。作者没有给倾向：综合现状卡、伏笔与前文自主定走向，按写章任务纪律自主完成全流程。`
   const result = await runAgentLoop({
     jobId: job.id,
     bookId: job.bookId,
@@ -361,12 +356,8 @@ export async function retryJob(jobId: string): Promise<Job> {
   activeJobId = jobId
   return guarded(jobId, async () => {
     updateJob(jobId, { state: 'running', watchdogAt: Date.now(), error: '' })
-    // M6：走向未选→重跑走向卡；走向已选→重跑 agent 自主段
-    const direction = job.payload.direction
-    if (job.step === 'proposal' || job.step === '' || !direction) {
-      return await runProposal(job)
-    }
-    return await runAgentChapterJob(job, direction)
+    // 走向卡已废除：一律从 agent 段重跑（倾向从 payload.direction/directionHint 带上；计划模式重出计划）
+    return await runAgentWriteJob(job)
   })
 }
 
@@ -414,26 +405,38 @@ async function runReviseJob(job: Job): Promise<Job | null> {
     error: '',
     chapterId: revise.chapterId
   })
-  const draft = await genRevise(
-    { book, lineId: job.lineId, chapter, instruction: revise.instruction, segment: revise.segment },
-    progressSaver(job.id)
-  )
+  const plan = await genRevisePlan({
+    book,
+    lineId: job.lineId,
+    chapter,
+    instruction: revise.instruction,
+    segment: revise.segment
+  })
+  const applied = applyRevisePlan(chapter.content, plan)
+  if ('noHit' in applied)
+    throw new Error('改稿未命中原文：find 引文在原文中找不到，请重新圈定原文逐字片段')
   // 改章自检只报告不入闸：字数类指令（加长/缩短）天然会偏 targetWords，不参与字数检查；
-  // 结果附在 payload.lint 供 UI 展示，问题大由作者再发指令（旧版本在 chapter_versions 可回退）
+  // 结果附在 payload.lint 供 UI 展示，问题大由作者再发指令
   const prev = previousChapter(job.lineId)
   const report = selfCheck(
     { ...book, targetWords: 0 },
     job.lineId,
-    draft,
+    applied.next,
     prev?.content?.slice(-400)
   )
-  const clean = stripHtmlComments(draft)
-  replaceChapterContent(revise.chapterId, clean, `改章：${revise.instruction.slice(0, 80)}`)
+  const clean = stripHtmlComments(applied.next)
+  replaceChapterContent(revise.chapterId, clean)
   note(job.id, 'revised', `《${chapter.title}》已按指令改好`)
   return updateJob(job.id, {
     state: 'done',
     step: 'finalize',
-    payload: { draftText: clean, draftWordCount: clean.replace(/\s/g, '').length, lint: report },
+    payload: {
+      draftText: clean,
+      draftWordCount: clean.replace(/\s/g, '').length,
+      lint: report,
+      reviseMode:
+        applied.mode === 'rewrite' ? '整章重写' : `局部修改 ${applied.applied}/${applied.total} 处`
+    },
     watchdogAt: 0
   })
 }
@@ -548,10 +551,17 @@ async function runChatJob(job: Job): Promise<Job | null> {
     .filter((m) => m.meta?.kind === 'chat' && m.content !== question)
     .slice(-12)
     .map((m) => ({ role: m.role, content: m.content }))
+  // 计划模式：同书有等待确认的计划时，让导演看得到计划（等待期可聊）
+  const waitingPlan = listJobs(job.bookId, 50).find(
+    (j) => j.id !== job.id && j.kind === 'write' && j.state === 'waiting_user' && j.step === 'plan'
+  )
+  const planBlock = waitingPlan?.payload.plan
+    ? `\n\n〔本章计划（等作者过目中，作者聊的内容可能与此相关）〕\n${waitingPlan.payload.plan}`
+    : ''
   const result = await runAgentLoop({
     jobId: job.id,
     bookId: job.bookId,
-    task: question,
+    task: question + planBlock,
     history,
     mode: 'free',
     tools: [...toolDefs(), ...interceptorDefs('free')],

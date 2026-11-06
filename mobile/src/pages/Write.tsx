@@ -9,8 +9,8 @@ import StatusHead from './write/StatusHead'
 
 /**
  * 写作页=聊天时间轴。组件按域拆在 ./write/：
- * StatusHead 现状胶囊 / MessageRow 消息分派 / JobCard 节点卡（ChoiceCard 选择、
- * DoneCards 成品、ToolCard 工具）/ AgentTicker 聚合条 / InputBar 恒定聊天。
+ * StatusHead 现状胶囊 / MessageRow 消息分派 / JobCard 节点卡（DoneCards 成品、
+ * ToolCard 工具）/ AgentTicker 聚合条 / InputBar 恒定聊天（开章也靠对话）。
  */
 export default function Write() {
   const bookId = useUiStore((s) => s.openBookId) ?? ''

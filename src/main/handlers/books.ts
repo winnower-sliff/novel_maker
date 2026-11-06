@@ -20,7 +20,6 @@ import {
   listForeshadows,
   listLines,
   listMessages,
-  listVersions,
   saveCard,
   saveCharacter,
   saveForeshadow,
@@ -42,7 +41,6 @@ type Domain = Pick<
   | 'line:activate'
   | 'line:delete'
   | 'chapter:get'
-  | 'chapter:versions'
   | 'card:list'
   | 'card:save'
   | 'card:delete'
@@ -100,7 +98,6 @@ export const bookHandlers: Domain = {
     return true
   },
   'chapter:get': (_ctx, [chapterId]) => getChapter(chapterId),
-  'chapter:versions': (_ctx, [chapterId]) => listVersions(chapterId),
   'card:list': (_ctx, [lineId, kind, q]) => listCards(lineId, { kind, q }),
   'card:save': (_ctx, [input]) => {
     const card = saveCard(input)

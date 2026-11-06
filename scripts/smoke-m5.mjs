@@ -111,28 +111,24 @@ try {
   })
   ok(true, '建书+基础设定')
 
-  // ── 写章 agent 全链路（M6：选完走向 agent 自主到入书；节点消息序列）──
+  // ── 写章 agent 全链路（走向卡已废除：startWrite 直通；节点消息序列）──
   let job = await invoke('job:startWrite', book.id)
-  job = await waitJob(job.id, (j) => j.state === 'waiting_user' && j.step === 'outline', '走向提案')
-  job = await invoke('job:chooseDirection', job.id, { source: 'card', cardIndex: 0, text: '随船南下' })
-  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 自主段（工具链+正文+入书+沉淀）')
+  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 全链（工具链+正文+入书+沉淀）', 90_000)
   ok(job.payload.recap != null, '写作 job done + recap')
 
   let msgs = await invoke('message:list', book.id)
   const steps = msgs
     .filter((m) => m.meta?.kind === 'job')
     .map((m) => m.meta.step)
-  ok(steps.join(',') === 'cards,chapter', `节点消息序列（${steps.join(',')}）`)
+  ok(steps.join(',') === 'chapter', `节点消息序列（${steps.join(',')}）`)
   const chapterMsg = msgs.find((m) => m.meta?.kind === 'job' && m.meta.step === 'chapter')
   ok((chapterMsg?.content ?? '').includes('已入书'), `入书节点文案（${chapterMsg?.content}）`)
   const actions = msgs
     .filter((m) => m.role === 'user' && m.meta?.kind === 'action')
     .map((m) => m.content)
   ok(
-    actions.length === 2 &&
-      actions[0].includes('第 1 章') &&
-      actions[1].includes('随船南下'),
-    `动作消息 2 条（${actions.join(' / ')}）`
+    actions.length === 1 && actions[0].includes('第 1 章'),
+    `动作消息 1 条（${actions.join(' / ')}）`
   )
 
   // ── chat 两轮（free agent：第 1 轮带工具调用，第 2 轮纯文本）──

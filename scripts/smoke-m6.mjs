@@ -1,5 +1,5 @@
 /**
- * M6 冒烟（API 级·全面 agent 化）：走向卡→选卡→agent 自主段（工具链+流式正文+自动修+入书+沉淀）
+ * M6 冒烟（API 级·全面 agent 化）：startWrite 直通 agent 自主段（工具链+流式正文+自动修+入书+沉淀）
  * + 负向词硬闸（「忽然」触发 autoFix）+ chat free agent（带工具调用）。
  * 前置：npm run build（dist 最新）。stub 由本脚本 spawn（AGENT_MODE=1，端口 3923）。
  */
@@ -106,14 +106,9 @@ try {
   })
   ok(true, '建书+负向词+人物')
 
-  // ── 写章 agent 全链路 ──
+  // ── 写章 agent 全链路（走向卡已废除：startWrite 直通 agent）──
   let job = await invoke('job:startWrite', book.id)
-  job = await waitJob(job.id, (j) => j.state === 'waiting_user' && j.step === 'outline', '走向提案')
-  ok((job.payload.cards ?? []).length === 4, `走向卡 4 张（实际 ${(job.payload.cards ?? []).length}）`)
-
-  job = await invoke('job:chooseDirection', job.id, { source: 'card', cardIndex: 0, text: '随船南下' })
-  ok(job.step !== 'scene', `选卡后进 agent 自主段（不再等大纲确认，step=${job.step}）`)
-  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 自主写章全链路')
+  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 自主写章全链路', 90_000)
   ok(job.kind === 'write' && job.payload.recap != null, '写章 job done + recap')
 
   // 章节入库 + 负向词已修
@@ -135,9 +130,9 @@ try {
   const draftCard = msgs.find((m) => m.meta?.kind === 'tool' && m.meta.tool === 'write_chapter_draft')
   ok((draftCard?.meta?.summary ?? '').includes('字'), `write_chapter_draft 卡带字数（${draftCard?.meta?.summary}）`)
 
-  // 节点消息：cards → chapter（M6 无 outline/scenes 节点）
+  // 节点消息：chapter（走向卡已废除，无 cards 节点）
   const steps = msgs.filter((m) => m.meta?.kind === 'job').map((m) => m.meta.step)
-  ok(steps.join(',') === 'cards,chapter', `节点消息序列（${steps.join(',')}）`)
+  ok(steps.join(',') === 'chapter', `节点消息序列（${steps.join(',')}）`)
   const chapterMsg = msgs.find((m) => m.meta?.kind === 'job' && m.meta.step === 'chapter')
   ok((chapterMsg?.content ?? '').includes('已入书'), `入书节点（${chapterMsg?.content}）`)
 

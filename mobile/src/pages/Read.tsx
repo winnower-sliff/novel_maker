@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import type { Chapter, ChapterVersion } from '@shared/types'
+import type { Chapter } from '@shared/types'
 import QuickActionsBar from '../components/QuickActionsBar'
 import { useBook } from '../lib/queries'
 import { loadJson, saveJson } from '../lib/persist'
@@ -32,9 +32,6 @@ export default function Read() {
   const [segmentMode, setSegmentMode] = useState(false)
   const [segTarget, setSegTarget] = useState<string | null>(null)
   const [segText, setSegText] = useState('')
-  const [showVersions, setShowVersions] = useState(false)
-  const [versions, setVersions] = useState<ChapterVersion[] | null>(null)
-  const [viewingVersion, setViewingVersion] = useState<ChapterVersion | null>(null)
   const boxRef = useRef<HTMLDivElement>(null)
 
   const book = data?.book
@@ -258,19 +255,6 @@ export default function Read() {
           >
             选段修改
           </button>
-          <button
-            type="button"
-            className="flex-1 rounded-xl border border-orange-200 py-2.5 text-xs opacity-70"
-            onClick={async () => {
-              setShowVersions(true)
-              setViewingVersion(null)
-              setVersions(null)
-              const vs = await window.api.chapter.versions(chapter.id)
-              setVersions(vs)
-            }}
-          >
-            历史版本
-          </button>
         </div>
 
         <div className="mt-10 mb-4 flex gap-3">
@@ -336,57 +320,7 @@ export default function Read() {
         </div>
       )}
 
-      {/* 版本回看弹层 */}
-      {showVersions && (
-        <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setShowVersions(false)}>
-          <div
-            className="max-h-[75vh] w-full overflow-y-auto rounded-t-2xl border-t border-orange-100 bg-white p-5 pb-safe"
-            onClick={(e) => e.stopPropagation()}
-          >
-            {viewingVersion ? (
-              <>
-                <button
-                  type="button"
-                  className="mb-3 text-xs text-orange-600"
-                  onClick={() => setViewingVersion(null)}
-                >
-                  ← 返回版本列表
-                </button>
-                <div className="mb-2 text-xs text-stone-500">
-                  {viewingVersion.reason} · {viewingVersion.wordCount} 字
-                </div>
-                <div className="whitespace-pre-wrap text-sm leading-7 text-stone-600">
-                  {viewingVersion.content}
-                </div>
-              </>
-            ) : (
-              <>
-                <div className="mb-3 text-sm font-semibold text-stone-700">历史版本（新→旧）</div>
-                {(versions ?? []).length === 0 && (
-                  <div className="py-8 text-center text-xs text-stone-400">
-                    {versions ? '这章还没改过' : '加载中…'}
-                  </div>
-                )}
-                <div className="space-y-2">
-                  {(versions ?? []).map((v) => (
-                    <button
-                      key={v.id}
-                      type="button"
-                      className="w-full rounded-xl bg-orange-100 p-3 text-left active:bg-orange-100"
-                      onClick={() => setViewingVersion(v)}
-                    >
-                      <div className="text-xs text-stone-600">{v.reason}</div>
-                      <div className="mt-1 text-[11px] text-stone-400">
-                        {v.wordCount} 字 · {new Date(v.createdAt).toLocaleString('zh-CN')}
-                      </div>
-                    </button>
-                  ))}
-                </div>
-              </>
-            )}
-          </div>
-        </div>
-      )}
+      {/* 版本回看已随「改章不留档」拆除 */}
     </div>
   )
 }

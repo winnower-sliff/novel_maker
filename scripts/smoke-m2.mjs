@@ -128,22 +128,13 @@ try {
   ])
   ok(!!linan?.id, 'character:save（含初始活状态）')
 
-  // ── 导演循环第 1 回合（M6：选完走向 agent 自主到入书） ─────────────────────
+  // ── 导演循环第 1 回合（聊天驱动：startWrite 直通 agent 自主到入书） ──────────
   let job = await invoke('job:startWrite', [book.id])
-  ok(job.state === 'waiting_user' && job.step === 'outline', `startWrite → waiting_user/outline`)
-  const cards = job.payload?.cards ?? []
-  ok(cards.length === 4, `走向卡片 4 张（实际 ${cards.length}）`)
-  ok(new Set(cards.map((c) => c.kind)).size === 4, '卡片类型互不相同')
-
-  job = await invoke('job:chooseDirection', [
-    job.id,
-    { source: 'card', cardIndex: 3, text: 'wild：蓑衣老船工' }
-  ])
   job = await waitFor(
     job.id,
     (j) => j.state === 'done' || j.state === 'failed',
     90_000,
-    'agent 自主段（工具链→正文→自检→入书→沉淀）'
+    'agent 全链（工具链→正文→自检→入书→沉淀）'
   )
   ok(job.state === 'done', `第 1 章完成（state=${job.state}${job.error ? ` error=${job.error}` : ''}）`)
   ok(!!job.payload?.recap?.summary, '纪要卡（commit_chapter summary）')

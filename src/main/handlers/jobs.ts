@@ -1,6 +1,6 @@
 import {
+  approvePlan,
   cancelJob,
-  chooseDirection,
   getJobById,
   listJobsFor,
   retryJob,
@@ -18,12 +18,12 @@ import type { HandlerTable } from './types.js'
 type Domain = Pick<
   HandlerTable,
   | 'job:startWrite'
+  | 'job:approvePlan'
   | 'job:startRevise'
   | 'job:startReview'
   | 'job:startAudit'
   | 'job:startChat'
   | 'job:startDiagnose'
-  | 'job:chooseDirection'
   | 'job:retry'
   | 'job:cancel'
   | 'job:get'
@@ -32,13 +32,13 @@ type Domain = Pick<
 
 export const jobHandlers: Domain = {
   'job:startWrite': (_ctx, [bookId]) => startWrite(bookId),
+  'job:approvePlan': (_ctx, [jobId, feedback]) => approvePlan(jobId, feedback),
   'job:startRevise': (_ctx, [chapterId, instruction, segment]) =>
     startRevise(chapterId, instruction, segment),
   'job:startReview': (_ctx, [chapterId]) => startReview(chapterId),
   'job:startAudit': (_ctx, [bookId]) => startAudit(bookId),
   'job:startChat': (_ctx, [bookId, text]) => startChat(bookId, text),
   'job:startDiagnose': (_ctx, [bookId, question]) => startDiagnose(bookId, question),
-  'job:chooseDirection': (_ctx, [jobId, direction]) => chooseDirection(jobId, direction),
   'job:retry': (_ctx, [jobId]) => retryJob(jobId),
   'job:cancel': (_ctx, [jobId]) => cancelJob(jobId),
   'job:get': (_ctx, [jobId]) => getJobById(jobId),

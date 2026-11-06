@@ -115,14 +115,9 @@ try {
   })
   ok(true, '基础设定（卡+人物）')
 
-  // ── 写章 agent 全链路（M6：选完走向 agent 自主到入书）──
+  // ── 写章 agent 全链路（走向卡已废除：startWrite 直通）──
   let job = await invoke('job:startWrite', book.id)
-  job = await waitJob(job.id, (j) => j.state === 'waiting_user' && j.step === 'outline', '走向提案')
-  ok((job.payload.cards ?? []).length === 4, '走向卡片 4 张')
-  ok((job.payload.cards ?? []).every((c) => ['steady', 'twist', 'depth', 'wild'].includes(c.kind)), '卡片类型各异')
-
-  job = await invoke('job:chooseDirection', job.id, { source: 'card', cardIndex: 0, text: '随船南下' })
-  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 自主段（工具链+正文+入书+沉淀）')
+  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 全链（工具链+正文+入书+沉淀）', 90_000)
 
   const quick = job.payload.recap?.quickActions ?? []
   ok(quick.length >= 1 && quick[0].label.length > 0, `recap.quickActions=${quick.length}（agent 动态建议钮）`)
@@ -132,16 +127,17 @@ try {
   const ch0 = await invoke('chapter:get', detail.chapters[0].id)
   ok(ch0.content.includes('雾津港'), '正文内容正确')
 
-  // ── 改章 revise ──
+  // ── 改章 revise（局部替换 plan：一命中一未命中）──
   let rj = await invoke('job:startRevise', ch0.id, '测试改章：收尾再冷一点')
   ok(rj.kind === 'revise' && rj.payload.revise?.instruction === '测试改章：收尾再冷一点', 'startRevise 落队列')
   rj = await waitJob(rj.id, (j) => j.state === 'done', '改章')
-  ok(rj.payload.draftWordCount > 0, `改章字数 ${rj.payload.draftWordCount}`)
+  ok((rj.payload.reviseMode ?? '').includes('局部修改 1/2'), `reviseMode=${rj.payload.reviseMode}`)
   const ch1 = await invoke('chapter:get', ch0.id)
-  ok(ch1.content.includes('浸透了盐水的棉絮') && ch1.content !== ch0.content, '正文已被改写')
-  ok(ch1.wordCount !== ch0.wordCount || true, `字数 ${ch0.wordCount}→${ch1.wordCount}`)
-  const vers = await invoke('chapter:versions', ch0.id)
-  ok(vers.length === 1 && vers[0].reason.includes('改章'), `历史版本 1 条（${vers[0]?.reason}）`)
+  ok(
+    ch1.content.includes('像化开的盐雾') && !ch1.content.includes('像化在水里的蛋黄'),
+    '局部替换生效（命中段已换，未点名段不动）'
+  )
+  ok(!ch1.content.includes('不应出现'), '未命中的 edit 不落正文')
 
   // ── 审读 / 审计 / 诊断 ──
   let vj = await invoke('job:startReview', ch0.id)
