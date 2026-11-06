@@ -1,0 +1,68 @@
+import { memo } from 'react'
+import type { ChatMessageRow, Job } from '@shared/types'
+import { Markdown } from '../../components/Markdown'
+import JobCard from './JobCard'
+import ToolCard from './ToolCard'
+
+function hhmm(ts: number): string {
+  const d = new Date(ts)
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/** 单条消息分派：user 气泡 / 工具卡 / job 节点卡 / 导演白话气泡（memo 化） */
+export const MessageRow = memo(function MessageRow({
+  msg,
+  jobsById,
+  chaptersById,
+  active,
+  refresh,
+  refreshAll
+}: {
+  msg: ChatMessageRow
+  jobsById: Map<string, Job>
+  chaptersById: Map<string, { id: string; orderNo: number; title: string; wordCount: number }>
+  active: Job | null
+  refresh: () => void
+  refreshAll: () => void
+}) {
+  if (msg.role === 'user') {
+    return (
+      <div className="flex justify-end px-4 py-1.5">
+        <div className="max-w-[85%] rounded-2xl rounded-tr-sm bg-orange-600 px-3.5 py-2 text-sm leading-relaxed whitespace-pre-wrap text-white">
+          {msg.content}
+        </div>
+      </div>
+    )
+  }
+
+  const meta = msg.meta ?? {}
+  if (meta.kind === 'tool') {
+    return <ToolCard msg={msg} />
+  }
+  if (meta.kind === 'job' && typeof meta.jobId === 'string') {
+    const job = jobsById.get(meta.jobId)
+    if (job) {
+      return (
+        <JobCard
+          job={job}
+          step={typeof meta.step === 'string' ? meta.step : ''}
+          active={active}
+          chaptersById={chaptersById}
+          refresh={refresh}
+          refreshAll={refreshAll}
+        />
+      )
+    }
+  }
+  // chat 对话 / 找不到 job 的孤儿节点 → 白话气泡
+  return (
+    <div className="flex justify-start px-4 py-1.5">
+      <div className="max-w-[88%]">
+        <div className="rounded-2xl rounded-tl-sm border border-orange-100 bg-white px-3.5 py-2 text-sm leading-relaxed text-stone-700">
+          <Markdown text={msg.content} />
+        </div>
+        <div className="mt-0.5 pl-1 text-[10px] text-stone-400">{hhmm(msg.createdAt)}</div>
+      </div>
+    </div>
+  )
+})

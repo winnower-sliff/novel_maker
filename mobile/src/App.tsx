@@ -51,23 +51,11 @@ export default function App() {
     const unProgress = window.api.job.onProgress((jobId, p) => {
       tickerStore(jobId).getState().setProgress(p)
     })
-    const unDelta = window.api.job.onDelta((jobId, text, total) => {
-      const st = tickerStore(jobId)
-      st.getState().appendDelta(text, total)
-      // 累计长度失配=丢过事件：拉服务端唯一真相源（payload.answer）纠正
-      if (st.getState().chatText.length !== total) {
-        void window.api.job.get(jobId).then((job) => {
-          const answer = job?.payload.answer ?? ''
-          if (answer) st.getState().setChatText(answer)
-        })
-      }
-    })
     return () => {
       unAppend()
       unUpdate()
       unActivity()
       unProgress()
-      unDelta()
     }
   }, [conn, qc])
 
