@@ -155,9 +155,9 @@ function handleEvents(req: IncomingMessage, res: ServerResponse): void {
   res.on('error', cleanup)
 }
 
-function broadcast(channel: string, requestId: string, ...args: unknown[]): void {
+function broadcast(channel: string, ...args: unknown[]): void {
   if (sseClients.size === 0) return
-  const payload = `data: ${JSON.stringify({ channel, requestId, args })}\n\n`
+  const payload = `data: ${JSON.stringify({ channel, args })}\n\n`
   for (const client of sseClients.values()) {
     if (!client.writableEnded) client.write(payload)
   }

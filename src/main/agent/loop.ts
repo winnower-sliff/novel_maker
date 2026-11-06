@@ -21,6 +21,37 @@ import { execTool, type ToolCtx, type ToolResult, toolDefs } from './tools.js'
  * - 每轮系统提示重新注入红线/正负词/文风（防长程遗忘）。
  */
 
+/** 消息字符量（blocks 逐块累计），供上下文压缩阈值判断 */
+function messageChars(m: ChatMessage): number {
+  if (typeof m.content === 'string') return m.content.length
+  return m.content.reduce((n, b) => {
+    if (b.type === 'text') return n + b.text.length
+    if (b.type === 'tool_use') return n + b.name.length + JSON.stringify(b.input).length
+    return n + b.content.length
+  }, 0)
+}
+
+/** 压缩用的消息概览行：角色+文本/工具名+参数摘要/工具结果摘要 */
+function messageToBrief(m: ChatMessage): string {
+  if (typeof m.content === 'string') return `${m.role}: ${m.content}`
+  return m.content
+    .map((b) => {
+      if (b.type === 'text') return `${m.role}: ${b.text.slice(0, 200)}`
+      if (b.type === 'tool_use')
+        return `${m.role}→工具 ${b.name}(${JSON.stringify(b.input).slice(0, 200)})`
+      return `${m.role}←结果: ${b.content.slice(0, 300)}`
+    })
+    .join('\n')
+}
+
+/** 摘要调用失败时的降级：逐条截断保平铺信息 */
+function fallbackDigest(mid: ChatMessage[]): string {
+  return mid
+    .map((m) => messageToBrief(m).slice(0, 120))
+    .join('\n')
+    .slice(0, 2400)
+}
+
 export interface LoopOpts {
   jobId: string
   bookId: string
@@ -389,9 +420,53 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
   let lastFinishMessage = ''
 
   const messages: ChatMessage[] = [...opts.history, { role: 'user', content: task }]
+  const historyLen = opts.history.length
+  let compacted = false
+
+  /**
+   * 上下文压缩：一轮对话累计超 60000 字且未压缩过时，
+   * 把 history 之后、末尾 8 条之前的中间段摘要成一条〔前情工作纪要〕。
+   * 摘要失败退回逐条截断，保证调用必达。
+   */
+  async function compactIfNeeded(): Promise<void> {
+    if (compacted) return
+    const chars = messages.reduce((n, m) => n + messageChars(m), 0)
+    if (chars <= 60000) return
+    const tailStart = Math.max(historyLen + 1, messages.length - 8)
+    if (tailStart - (historyLen + 1) < 4) return // 中段太薄不值得压
+    // 尾段起点前移到安全边界（tool_result 必须紧跟对应 tool_use，不能被切开）
+    let safe = tailStart
+    while (safe > historyLen + 1 && messages[safe]?.role !== 'user') safe--
+    if (safe <= historyLen + 1 || safe === tailStart) safe = tailStart
+    const mid = messages.slice(historyLen + 1, safe)
+    const rows = mid.map(messageToBrief).join('\n').slice(0, 12000)
+    let digest: string
+    try {
+      const res = await callJson<{ digest?: string }>({
+        slot: 'utility',
+        system: '你是会话纪要助手，只输出 JSON。',
+        user: `以下是一段小说写作智能体的工作过程记录（工具调用与结果）。
+把它压缩成 ≤400 字的工作纪要：已做了什么、拿到了哪些关键结论/数据（章节名、人物状态变化、伏笔决定等）、尚待办什么。保留可执行的细节，不要空话。
+
+${rows}
+
+输出 JSON：{"digest":"纪要文本"}`,
+        jsonHint: '{"digest":"纪要文本"}'
+      })
+      digest = (res.digest ?? '').slice(0, 600) || fallbackDigest(mid)
+    } catch {
+      digest = fallbackDigest(mid)
+    }
+    messages.splice(historyLen + 1, safe - (historyLen + 1), {
+      role: 'user',
+      content: `〔前情工作纪要（${mid.length} 条已压缩）〕\n${digest}`
+    })
+    compacted = true
+  }
 
   for (let turn = 0; turn < maxTurns; turn++) {
     book = store.getBook(bookId) ?? book // 每轮重读（agent 可能改了配置/切了线）
+    await compactIfNeeded()
     const res = await callRaw(
       {
         slot: 'director',

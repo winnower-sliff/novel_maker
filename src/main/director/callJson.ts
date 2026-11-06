@@ -13,12 +13,21 @@ import { appendUsage } from '../usage.js'
  */
 
 export class StepError extends Error {
-  readonly category: 'network' | 'server' | 'bad_output' | 'aborted'
+  readonly category: 'network' | 'server' | 'bad_output' | 'aborted' | 'quota'
   constructor(message: string, category: StepError['category'] = 'server') {
     super(message)
     this.name = 'StepError'
     this.category = category
   }
+}
+
+/** 欠费/额度耗尽特征（HTTP 402 + 主流平台文案） */
+const QUOTA_RE =
+  /HTTP 402|insufficient[_ ]?(?:balance|quota|credits?)|balance is (?:low|insufficient|not enough)|quota.*exceed|exceeded.*quota|arrear|欠费|余额不足|额度不足|账户已欠费/i
+
+export function isQuotaError(err: unknown): boolean {
+  if ((err as StepError)?.category === 'quota') return true
+  return QUOTA_RE.test(String((err as Error | undefined)?.message ?? err))
 }
 
 function sleep(ms: number): Promise<void> {
@@ -129,6 +138,9 @@ export async function callRaw(
       lastErr = err
       if (!shouldRetry(err).retry) break
     }
+  }
+  if (isQuotaError(lastErr)) {
+    throw new StepError(`额度不足：${String((lastErr as Error)?.message ?? lastErr)}`, 'quota')
   }
   throw new StepError(`模型调用失败：${String((lastErr as Error)?.message ?? lastErr)}`, 'network')
 }

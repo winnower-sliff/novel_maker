@@ -107,17 +107,19 @@ export function useJobFlow(bookId: string | null) {
       }
     },
     enabled: !!bookId,
-    refetchInterval: 15_000 // SSE 断连时的兜底轮询
+    // 有任务在跑时加快兜底轮询（SSE 之外的保险）
+    refetchInterval: (query) =>
+      query.state.data?.active ? 5_000 : 20_000
   })
 }
 
 /** 书内消息时间轴（智能体页单一事实源：动作/节点卡/对话全在此） */
-export function useMessages(bookId: string | null) {
+export function useMessages(bookId: string | null, fast = false) {
   return useQuery({
     queryKey: qk.messages(bookId ?? ''),
     queryFn: async (): Promise<ChatMessageRow[]> => window.api.message.list(bookId as string),
     enabled: !!bookId,
-    refetchInterval: 20_000 // SSE 断连兜底
+    refetchInterval: fast ? 4_000 : 20_000 // SSE 断连兜底；任务运行中加快
   })
 }
 

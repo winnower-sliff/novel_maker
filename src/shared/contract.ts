@@ -331,6 +331,8 @@ export interface EventContract {
   'job:progress': [jobId: string, p: { phase: 'draft' | 'revise'; chars: number }]
   /** 导演白话流式增量（chat 气泡）；total=累计长度，失配即全量补拉 */
   'job:delta': [jobId: string, text: string, total: number]
+  /** 聊天流新消息落库（agent 运行中实时推，前端精确追加不整页重拉） */
+  'message:append': [msg: ChatMessageRow]
 }
 
 export const EVENT_CHANNELS = [
@@ -341,7 +343,8 @@ export const EVENT_CHANNELS = [
   'job:update',
   'job:activity',
   'job:progress',
-  'job:delta'
+  'job:delta',
+  'message:append'
 ] as const satisfies readonly (keyof EventContract)[]
 
 export type EventChannels = keyof EventContract & string
@@ -414,6 +417,7 @@ export interface Api {
   }
   message: {
     list: InvokeFn<'message:list'>
+    onAppend: SubscribeFn<'message:append'>
   }
   job: {
     startWrite: InvokeFn<'job:startWrite'>

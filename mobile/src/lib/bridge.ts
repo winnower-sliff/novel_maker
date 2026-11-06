@@ -16,6 +16,9 @@ type EventListener = (...args: never[]) => void
 
 const listeners = new Map<string, Set<EventListener>>()
 let source: EventSource | null = null
+let retryTimer: ReturnType<typeof setTimeout> | null = null
+let retryMs = 1000
+let wasDown = false
 
 function on(channel: string, cb: EventListener): () => void {
   let set = listeners.get(channel)
@@ -29,28 +32,54 @@ function on(channel: string, cb: EventListener): () => void {
   }
 }
 
-function ensureSource(): void {
-  if (source) return
+function scheduleReconnect(): void {
+  if (retryTimer) return
+  retryTimer = setTimeout(() => {
+    retryTimer = null
+    connect()
+  }, retryMs)
+  retryMs = Math.min(retryMs * 2, 15000)
+}
+
+function connect(): void {
   const conn = loadConn()
   if (!conn) return
+  source?.close()
   source = new EventSource(`${conn.baseUrl}/api/events`)
+  source.onopen = () => {
+    retryMs = 1000
+    if (wasDown) {
+      wasDown = false
+      window.dispatchEvent(new CustomEvent('nm-sse-state', { detail: { ok: true } }))
+      window.dispatchEvent(new CustomEvent('nm-sse-reconnect'))
+    }
+  }
   source.onmessage = (ev: MessageEvent<string>) => {
     try {
-      const data = JSON.parse(ev.data) as {
-        channel: string
-        requestId: string
-        args: unknown[]
-      }
+      const data = JSON.parse(ev.data) as { channel: string; args: unknown[] }
       const set = listeners.get(data.channel)
       if (!set) return
-      for (const cb of set) (cb as (...a: unknown[]) => void)(data.requestId, ...data.args)
+      for (const cb of set) (cb as (...a: unknown[]) => void)(...data.args)
     } catch {
       /* 忽略无法解析的事件 */
     }
   }
   source.onerror = () => {
-    /* EventSource 自动重连 */
+    // WebView 里 CLOSED 后 EventSource 不会自动重连：手动关掉再退避重建；
+    // CONNECTING 态的瞬时错误靠自动重连恢复，不弹横幅
+    if (source && source.readyState === EventSource.CLOSED) {
+      wasDown = true
+      window.dispatchEvent(new CustomEvent('nm-sse-state', { detail: { ok: false } }))
+      source.close()
+      source = null
+      scheduleReconnect()
+    }
   }
+}
+
+function ensureSource(): void {
+  if (source || retryTimer) return
+  connect()
 }
 
 async function rpc(channel: string, args: unknown[]): Promise<unknown> {

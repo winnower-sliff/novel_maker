@@ -1,7 +1,14 @@
 import type { ChatMessage, DirectionCard, Job, JobPayload } from '../shared/types.js'
 import { interceptorDefs, runAgentLoop } from './agent/loop.js'
 import { toolDefs } from './agent/tools.js'
-import { emitJob, emitJobActivity, emitJobDelta, emitJobProgress } from './broadcast.js'
+import {
+  emitJob,
+  emitJobActivity,
+  emitJobDelta,
+  emitJobProgress,
+  emitMessageAppend
+} from './broadcast.js'
+import { isQuotaError } from './director/callJson.js'
 import {
   compactMemories,
   genAudit,
@@ -47,7 +54,7 @@ let activeJobId: string | null = null
 function note(jobId: string, step: string, content = ''): void {
   const job = getJob(jobId)
   if (!job) return
-  appendMessage({
+  pushMessage({
     bookId: job.bookId,
     role: 'assistant',
     content,
@@ -62,12 +69,18 @@ function userMsg(
   jobId?: string,
   kind: 'action' | 'chat' = 'action'
 ): void {
-  appendMessage({
+  pushMessage({
     bookId,
     role: 'user',
     content,
     meta: jobId ? { kind, jobId } : { kind }
   })
+}
+
+/** 落库+广播：聊天流新行实时推给前端（message:append），运行中也能上墙 */
+function pushMessage(input: Parameters<typeof appendMessage>[0]): void {
+  const row = appendMessage(input)
+  if (row) emitMessageAppend(row)
 }
 
 function busy(): boolean {
@@ -105,12 +118,16 @@ async function guarded(jobId: string, fn: () => Promise<Job | null>): Promise<Jo
     emitJob(final)
     return final
   } catch (err) {
+    const raw = String((err as Error)?.message ?? err)
+    const quota = isQuotaError(err)
     const failed = updateJob(jobId, {
       state: 'failed',
-      error: String((err as Error)?.message ?? err)
+      error: quota
+        ? `额度不足：模型账户余额/额度已耗尽（${raw}）。请到对应平台充值后，回来点「重试」。`
+        : raw
     })
     if (failed) {
-      note(jobId, 'failed', `卡住了：${failed.error}`)
+      note(jobId, 'failed', quota ? failed.error : `卡住了：${failed.error}`)
       emitJob(failed)
     }
     return failed as Job
@@ -163,7 +180,7 @@ function agentSay(
   bookId: string
 ): (content: string, meta?: Record<string, unknown>) => void {
   return (content, meta) => {
-    appendMessage({ bookId, role: 'assistant', content, meta: { jobId, ...meta } })
+    pushMessage({ bookId, role: 'assistant', content, meta: { jobId, ...meta } })
     if (meta?.kind === 'tool') {
       emitJobActivity(jobId, {
         tool: String(meta.tool ?? ''),
@@ -578,7 +595,7 @@ async function runChatJob(job: Job): Promise<Job | null> {
     result.text &&
     !listMessages(job.bookId, { limit: 3 }).some((m) => m.content === result.text)
   ) {
-    appendMessage({
+    pushMessage({
       bookId: job.bookId,
       role: 'assistant',
       content: result.text,

@@ -5,6 +5,7 @@ import ReportCard from '../components/ReportCard'
 import QuickActionsBar from '../components/QuickActionsBar'
 import { Markdown } from '../components/Markdown'
 import { qk, useBook, useJobFlow, useMessages, useStatusCard } from '../lib/queries'
+import { tickerStore } from '../lib/tickerStore'
 import { useUiStore } from '../lib/uiStore'
 import { useKeyboardInset } from '../lib/useKeyboardInset'
 
@@ -35,10 +36,10 @@ export default function Write() {
   const bookId = useUiStore((s) => s.openBookId) ?? ''
   const qc = useQueryClient()
   const { data: flow } = useJobFlow(bookId)
-  const { data: messages } = useMessages(bookId)
+  const active = flow?.active ?? null
+  const { data: messages } = useMessages(bookId, !!active)
   const { data: detail } = useBook(bookId)
   const jobs = flow?.jobs ?? []
-  const active = flow?.active ?? null
 
   // 乐观消息：点发送立刻上墙（半透明+转圈），服务器确认落库后撤掉由真实消息顶上
   const [pending, setPending] = useState<Array<{ id: string; text: string; jobId: string | null; at: number; failed?: boolean }>>([])
@@ -677,54 +678,14 @@ const RUN_LABEL: Record<string, string> = {
   finalize: '收尾中…'
 }
 
-interface ActItem {
-  tool: string
-  summary: string
-  ok: boolean
-  ts: number
-}
-
 function AgentTicker({ job, refresh }: { job: Job; refresh: () => void }) {
-  const [acts, setActs] = useState<ActItem[]>([])
-  const [progress, setProgress] = useState<{ phase: string; chars: number } | null>(null)
+  // 聚合条状态在全局 store（App 接线 SSE 写入）：切子页卸载再回来不丢进度
+  const useTicker = tickerStore(job.id)
+  const acts = useTicker((s) => s.acts)
+  const progress = useTicker((s) => s.progress)
+  const chatText = useTicker((s) => s.chatText)
   const [open, setOpen] = useState(false)
-  const [chatText, setChatText] = useState('')
   const [cancelConfirm, setCancelConfirm] = useState(false)
-
-  useEffect(() => {
-    setActs([])
-    setProgress(null)
-    setChatText('')
-    const offA = window.api.job.onActivity((jobId, act) => {
-      if (jobId === job.id) {
-        setActs((a) => [...a, { ...act, ts: Date.now() }])
-        setProgress(null) // 新工具开跑，进度归零
-      }
-    })
-    const offP = window.api.job.onProgress((jobId, p) => {
-      if (jobId === job.id) setProgress(p)
-    })
-    // chat 白话流式（total 校验：失配即拉库，服务端唯一真相源）
-    const offD = window.api.job.onDelta((jobId, chunk, total) => {
-      if (jobId !== job.id) return
-      setChatText((t) => {
-        const next = t + chunk
-        if (next.length !== total) {
-          // 增量丢失（SSE 断连重连）：以落库快照为准
-          void window.api.job.get(jobId).then((j) => {
-            if (j?.payload.answer) setChatText(j.payload.answer)
-          })
-          return next
-        }
-        return next
-      })
-    })
-    return () => {
-      offA()
-      offP()
-      offD()
-    }
-  }, [job.id])
 
   useEffect(() => {
     if (stickToBottom()) {
