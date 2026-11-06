@@ -185,12 +185,17 @@ export function PremisePanel({ ui, projectId, onCreated, onUpdated, seed }: Prem
     }
     return (Object.entries(raw) as [string, VolumePlanView][])
       .filter(([, v]) => typeof v === 'object' && v !== null)
-      .map(([no, v]) => ({
-        no,
-        count: typeof v.count === 'number' && v.count > 0 ? v.count : 0,
-        idea: md(v.idea),
-        rules: md(v.rules)
-      }))
+      .map(([no, v]) => {
+        const n = Number.parseInt(no, 10)
+        return {
+          no,
+          // key 非规范（如 "01"/"卷一"）时原样展示，数字 key 归一化去前导零
+          label: Number.isFinite(n) ? String(n) : no,
+          count: typeof v.count === 'number' && v.count > 0 ? v.count : 0,
+          idea: md(v.idea),
+          rules: md(v.rules)
+        }
+      })
       .filter((v) => v.idea || v.rules)
       .sort((a, b) => volKey(a.no) - volKey(b.no) || a.no.localeCompare(b.no))
   }, [plan])
@@ -269,13 +274,18 @@ export function PremisePanel({ ui, projectId, onCreated, onUpdated, seed }: Prem
               <Markdown text={outlineRules} className="text-sm leading-relaxed text-zinc-300" />
             </section>
           )}
-          {volumes.map((v) => (
+          {volumes.map((v, i) => (
             <section
               key={v.no}
-              className="space-y-1 border-t border-zinc-800 pt-2.5 first:border-t-0 first:pt-0"
+              // 卡片首个区块不加边框；其后（含顶部有草稿/规则时）用边框分隔
+              className={
+                i > 0 || draftText || outlineRules
+                  ? 'space-y-1 border-t border-zinc-800 pt-2.5'
+                  : 'space-y-1'
+              }
             >
               <div className="text-xs font-medium text-zinc-400">
-                第 {v.no} 卷{v.count ? `（约 ${v.count} 章）` : ''}
+                第 {v.label} 卷{v.count ? `（约 ${v.count} 章）` : ''}
               </div>
               {v.idea && (
                 <Markdown text={v.idea} className="text-sm leading-relaxed text-zinc-300" />
