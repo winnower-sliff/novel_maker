@@ -79,7 +79,7 @@ export function toolDefs(): ToolDef[] {
     },
     {
       name: 'list_cards',
-      description: '列当前线设定卡（世界观/势力/物品等），支持按类型与关键词过滤。',
+      description: '按类别筛选查看当前线设定卡：kind=类别；brief=true 只列标题清单（省字数，适合盘点），false/不传带 100 字摘要。',
       input_schema: {
         type: 'object',
         properties: {
@@ -88,7 +88,8 @@ export function toolDefs(): ToolDef[] {
             enum: ['geography', 'faction', 'history', 'power', 'item', 'custom'],
             description: '卡类型'
           },
-          q: { type: 'string', description: '标题/正文关键词' }
+          q: { type: 'string', description: '标题/正文关键词' },
+          brief: { type: 'boolean', description: 'true=只列【类别】标题+id，不带正文摘要' }
         }
       }
     },
@@ -162,7 +163,7 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'save_card',
       description:
-        '建/改设定卡（传 id=改，不传=建）。写作中沉淀新设定、维护旧设定都用它。可选字段不传保留原值。',
+        '建/改设定卡（传 id=改，不传=建）。写作中沉淀新设定、维护旧设定都用它；改卡时传新 kind=把卡调整到别的类别（如把归错的地理卡挪成势力卡），改卡可不传 title（保留原名）。可选字段不传保留原值。',
       input_schema: {
         type: 'object',
         properties: {
@@ -181,8 +182,7 @@ export function toolDefs(): ToolDef[] {
               '结构化数据：键名=表名，值为对象数组即渲染成表格。如 {"成员":[{"姓名":"老船工","立场":"摇摆"}]}。表内行级增删改=读旧 data 改数组后整键写回'
           },
           pinned: { type: 'boolean', description: 'true=钉选（每章上下文必带）' }
-        },
-        required: ['title']
+        }
       }
     },
     {
@@ -413,13 +413,15 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const kind = typeof input.kind === 'string' ? (input.kind as CardKind) : undefined
       const q = typeof input.q === 'string' ? input.q : undefined
       const cards = store.listCards(lineId, { kind, q })
-      const rows = cards.map(
-        (c) =>
-          `【${c.kind}${c.pinned ? '·钉' : ''}】${c.title} (id=${c.id})：${brief(c.readerText, 100)}`
-      )
+      const rows = input.brief
+        ? cards.map((c) => `【${c.kind}${c.pinned ? '·钉' : ''}】${c.title} (id=${c.id})`)
+        : cards.map(
+            (c) =>
+              `【${c.kind}${c.pinned ? '·钉' : ''}】${c.title} (id=${c.id})：${brief(c.readerText, 100)}`
+          )
       return {
         ok: true,
-        summary: `查设定卡 ${cards.length} 张`,
+        summary: `查设定卡 ${cards.length} 张${input.brief ? '（仅标题）' : ''}`,
         data: rows.length ? rows.join(N) : '（没有匹配的设定卡）'
       }
     }
@@ -597,7 +599,7 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
         id: typeof input.id === 'string' && input.id ? input.id : undefined,
         lineId,
         kind: typeof input.kind === 'string' ? (input.kind as CardKind) : undefined,
-        title: String(input.title ?? ''),
+        title: typeof input.title === 'string' ? input.title : undefined,
         readerText: typeof input.readerText === 'string' ? input.readerText : undefined,
         authorText: typeof input.authorText === 'string' ? input.authorText : undefined,
         revealPlan: typeof input.revealPlan === 'string' ? input.revealPlan : undefined,

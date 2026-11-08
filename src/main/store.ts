@@ -567,7 +567,8 @@ export function getCard(id: string): Card | null {
 export interface CardInput {
   lineId: string
   kind?: CardKind
-  title: string
+  /** 改卡可不传（保留原名）；新建缺省「未命名」 */
+  title?: string
   readerText?: string
   authorText?: string
   revealPlan?: string
@@ -589,7 +590,7 @@ export function saveCard(input: CardInput & { id?: string }): Card | null {
        WHERE id = ?`
     ).run(
       input.kind ?? old.kind,
-      input.title,
+      input.title ?? old.title,
       input.readerText ?? old.readerText,
       input.authorText ?? old.authorText,
       input.revealPlan ?? old.revealPlan,
@@ -610,7 +611,7 @@ export function saveCard(input: CardInput & { id?: string }): Card | null {
     line.bookId,
     input.lineId,
     input.kind ?? 'custom',
-    input.title,
+    input.title ?? '未命名',
     input.readerText ?? '',
     input.authorText ?? '',
     input.revealPlan ?? '',
