@@ -78,6 +78,8 @@ export interface LoopOpts {
   onThinking?: (t: string) => void
   /** 思考模式：默认 disabled（思考 token 计入 max_tokens 吃工具循环预算）；仅 chat 链路开 */
   thinking?: 'enabled' | 'disabled'
+  /** 每轮回调（jobs 层喂看门狗：有真实进展就续命，挂死不喂→照杀） */
+  onTurn?: () => void
   /** 生成进度（正文/改章字数计数，聚合条显示；正文不进聊天流） */
   onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
   /** 落一条 assistant 消息（agent 白话/工具卡） */
@@ -475,6 +477,7 @@ ${rows}
   }
 
   for (let turn = 0; turn < maxTurns; turn++) {
+    opts.onTurn?.() // 每轮喂狗：有真实进展就续看门狗（挂死/死循环不喂→照杀）
     book = store.getBook(bookId) ?? book // 每轮重读（agent 可能改了配置/切了线）
     await compactIfNeeded()
     const res = await callRaw(
@@ -487,13 +490,17 @@ ${rows}
           messages,
           tools: opts.tools,
           responseFormat: 'text',
-          maxTokens: 4000
+          maxTokens: opts.thinking === 'enabled' ? 8192 : 4000
         },
         onThinking: opts.onThinking,
         thinking: opts.thinking
       },
       opts.onDelta
     )
+    // 思考块独立成卡（opencode 式交错：思考→工具→对话按真实顺序上墙）
+    if ((res.thinking ?? '').trim()) {
+      opts.say((res.thinking ?? '').trim().slice(0, 4000), { kind: 'thinking', jobId })
+    }
     // 白话（有 tool_use 时通常为空，跳过落消息避免噪音）
     if (res.text.trim() && !res.toolUses.length) {
       opts.say(res.text.trim(), { kind: 'chat', jobId })

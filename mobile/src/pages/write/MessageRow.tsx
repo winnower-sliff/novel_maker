@@ -1,4 +1,4 @@
-import { memo } from 'react'
+import { memo, useState } from 'react'
 import type { ChatMessageRow, Job } from '@shared/types'
 import { Markdown } from '../../components/Markdown'
 import JobCard from './JobCard'
@@ -39,6 +39,9 @@ export const MessageRow = memo(function MessageRow({
   if (meta.kind === 'tool') {
     return <ToolCard msg={msg} />
   }
+  if (meta.kind === 'thinking') {
+    return <ThinkingBubble text={msg.content} />
+  }
   if (meta.kind === 'job' && typeof meta.jobId === 'string') {
     const job = jobsById.get(meta.jobId)
     if (job) {
@@ -66,3 +69,24 @@ export const MessageRow = memo(function MessageRow({
     </div>
   )
 })
+
+/** 思考块（opencode 式独立卡：默认折叠，点开看全文） */
+function ThinkingBubble({ text }: { text: string }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="px-4 py-1">
+      <button
+        type="button"
+        className="w-full rounded-xl border border-stone-200/80 bg-stone-50/60 px-3 py-1.5 text-left"
+        onClick={() => setOpen(!open)}
+      >
+        <span className="text-[11px] text-stone-400">✦ 思考 {open ? '▲' : '▼'}</span>
+        {open && (
+          <div className="mt-1.5 max-h-56 overflow-y-auto no-scrollbar whitespace-pre-wrap text-xs leading-relaxed text-stone-400">
+            {text}
+          </div>
+        )}
+      </button>
+    </div>
+  )
+}

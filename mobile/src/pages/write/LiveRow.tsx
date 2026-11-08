@@ -5,25 +5,17 @@ import { Markdown } from '../../components/Markdown'
 import { RUN_LABEL, TOOL_LABEL } from './labels'
 
 /**
- * agent 聚合条（时间轴尾部）：干完收一行，过程只报进度。
- * chat（导演回话）特例：思考链折叠区 + 正文白话流式渲染——
- * 正文开始后思考自动折叠（可点开回看）。
+ * 时间轴尾部「进行中」胶囊（opencode 式）：思考/工具卡/对话已各自独立上墙交错，
+ * 这里只报总状态（干到第几步/写了多少字）+ 当前轮实时流预览（点开）+ 取消。
  */
-export default function AgentTicker({ job, refresh }: { job: Job; refresh: () => void }) {
-  // 聚合条状态在全局 store（App 接线 SSE 写入）：切子页卸载再回来不丢进度
+export default function LiveRow({ job, refresh }: { job: Job; refresh: () => void }) {
   const useTicker = tickerStore(job.id)
   const acts = useTicker((s) => s.acts)
   const progress = useTicker((s) => s.progress)
   const chatText = useTicker((s) => s.chatText)
   const thinking = useTicker((s) => s.thinking)
   const [open, setOpen] = useState(false)
-  const [thinkOpen, setThinkOpen] = useState(true)
   const [cancelConfirm, setCancelConfirm] = useState(false)
-
-  // 正文一旦开始，思考区自动折叠（首次出现时）
-  useEffect(() => {
-    if (chatText) setThinkOpen(false)
-  }, [chatText])
 
   useEffect(() => {
     if (stickToBottom()) {
@@ -44,45 +36,36 @@ export default function AgentTicker({ job, refresh }: { job: Job; refresh: () =>
   const last = acts[acts.length - 1]
   const isChat = job.kind === 'chat'
   const statusLine = isChat
-    ? '导演正在回话'
+    ? thinking
+      ? '导演思考中…'
+      : '导演正在回话'
     : last
       ? `${TOOL_LABEL[last.tool] ?? last.tool}·${last.summary}`
       : (RUN_LABEL[job.step] ?? '处理中…')
   const progressLine =
-    progress && (progress.phase === 'draft' ? `正在写正文·已 ${progress.chars} 字` : `改章中·已 ${progress.chars} 字`)
+    progress &&
+    (progress.phase === 'draft' ? `正在写正文·已 ${progress.chars} 字` : `改章中·已 ${progress.chars} 字`)
 
   return (
-    <div id="write-stream-box" className="px-4 py-2">
-      <div className="rounded-2xl border border-orange-100 bg-white p-3.5">
+    <div id="write-stream-box" className="px-4 py-1.5">
+      <div className="rounded-2xl border border-orange-100 bg-white/80 px-3.5 py-2">
         <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setOpen(!open)}>
           <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-orange-400" />
           <span className="min-w-0 flex-1 truncate text-xs text-stone-600">
             {progressLine ?? statusLine}
           </span>
-          {!isChat && acts.length > 0 && (
+          {acts.length > 0 && (
             <span className="shrink-0 text-[10px] text-stone-400">
               {acts.length} 步 {open ? '▲' : '▼'}
             </span>
           )}
         </button>
 
-        {isChat && (thinking || chatText) && (
+        {open && (thinking || chatText) && (
           <div className="mt-2 border-t border-orange-100/70 pt-2">
             {thinking && (
-              <div>
-                <button
-                  type="button"
-                  className="flex w-full items-center gap-1.5 text-left text-[11px] text-stone-400"
-                  onClick={() => setThinkOpen(!thinkOpen)}
-                >
-                  <span className={chatText ? '' : 'animate-pulse'}>{chatText ? '✦ 已思考' : '✦ 思考中…'}</span>
-                  <span className="text-stone-300">{thinkOpen ? '▲' : '▼'}</span>
-                </button>
-                {thinkOpen && (
-                  <div className="mt-1 max-h-36 overflow-y-auto no-scrollbar whitespace-pre-wrap text-xs leading-relaxed text-stone-400">
-                    {thinking}
-                  </div>
-                )}
+              <div className="max-h-32 overflow-y-auto no-scrollbar whitespace-pre-wrap text-xs leading-relaxed text-stone-400">
+                {thinking}
               </div>
             )}
             {chatText && (
@@ -94,19 +77,7 @@ export default function AgentTicker({ job, refresh }: { job: Job; refresh: () =>
           </div>
         )}
 
-        {open && !isChat && acts.length > 0 && (
-          <div className="mt-2 max-h-48 space-y-1 overflow-y-auto no-scrollbar border-t border-orange-100/70 pt-2">
-            {acts.map((a, i) => (
-              <div key={i} className="flex items-center gap-1.5 text-[11px]">
-                <span className={a.ok ? 'text-orange-400' : 'text-red-500'}>{a.ok ? '✓' : '✗'}</span>
-                <span className="shrink-0 text-stone-400">{TOOL_LABEL[a.tool] ?? a.tool}</span>
-                <span className={`min-w-0 flex-1 truncate ${a.ok ? 'text-stone-500' : 'text-red-600'}`}>{a.summary}</span>
-              </div>
-            ))}
-          </div>
-        )}
-
-        <div className="mt-2 flex justify-end">
+        <div className="mt-1.5 flex justify-end">
           <button
             type="button"
             className="rounded-lg border border-orange-100 px-2.5 py-1 text-[11px] text-stone-500"

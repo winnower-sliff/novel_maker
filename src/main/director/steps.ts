@@ -189,7 +189,10 @@ export async function genDraft(
   signal?: AbortSignal
 ): Promise<string> {
   const { system, user } = draftPrompt(input)
-  const text = await writeSegments({ system, user, targetWords: input.book.targetWords, signal }, onDelta)
+  const text = await writeSegments(
+    { system, user, targetWords: input.book.targetWords, signal },
+    onDelta
+  )
   if (!text) throw new Error('模型返回空正文')
   return text
 }

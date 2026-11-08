@@ -302,6 +302,7 @@ async function runAgentChapterJob(
     tools: [...toolDefs(), ...interceptorDefs('chapter')],
     onDelta: chatSaver(job.id),
     say: agentSay(job.id, job.bookId),
+    onTurn: () => updateJob(job.id, { watchdogAt: Date.now() }),
     onChapterCommitted: (chapter, extra) => {
       note(job.id, 'chapter', `《${chapter.title}》已入书`)
       updateJob(job.id, {
@@ -585,6 +586,7 @@ async function runChatJob(job: Job): Promise<Job | null> {
     // chat 白话链路开思考（思考折叠区 UI）；写章/改章链路保持默认 disabled
     thinking: 'enabled',
     say: agentSay(job.id, job.bookId),
+    onTurn: () => updateJob(job.id, { watchdogAt: Date.now() }),
     // 意图动作（对话驱动开章/审读/审计）：避免 loop→jobs 循环依赖，经 actions 注入
     actions: {
       startChapter: (hint) => {

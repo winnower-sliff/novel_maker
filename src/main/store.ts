@@ -820,6 +820,9 @@ export function saveMemory(input: {
 
 // ── messages（对话历史，M5 按章回看） ─────────────────────────────────────────
 
+/** 消息时间戳单调递增兜底：同一毫秒内连续落库（思考/工具卡交错）时排序仍稳定 */
+let lastMsgTs = 0
+
 export function appendMessage(input: {
   bookId: string
   chapterId?: string
@@ -829,7 +832,8 @@ export function appendMessage(input: {
 }): ChatMessageRow {
   const db = getDb()
   const id = randomUUID()
-  const now = Date.now()
+  const now = Math.max(Date.now(), lastMsgTs + 1)
+  lastMsgTs = now
   db.prepare(
     `INSERT INTO messages (id, book_id, chapter_id, role, content, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(

@@ -2,7 +2,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { qk, useBook, useJobFlow, useMessages } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
-import AgentTicker from './write/AgentTicker'
+import LiveRow from './write/LiveRow'
 import InputBar from './write/InputBar'
 import { MessageRow } from './write/MessageRow'
 import StatusHead from './write/StatusHead'
@@ -10,7 +10,7 @@ import StatusHead from './write/StatusHead'
 /**
  * 写作页=聊天时间轴。组件按域拆在 ./write/：
  * StatusHead 现状胶囊 / MessageRow 消息分派 / JobCard 节点卡（DoneCards 成品、
- * ToolCard 工具）/ AgentTicker 聚合条 / InputBar 恒定聊天（开章也靠对话）。
+ * ToolCard 工具）/ LiveRow 进行中胶囊（思考/工具/对话各自独立上墙交错） / InputBar 恒定聊天（开章也靠对话）。
  */
 export default function Write() {
   const bookId = useUiStore((s) => s.openBookId) ?? ''
@@ -137,7 +137,7 @@ export default function Write() {
             </div>
           ))}
           {active && (active.state === 'running' || active.state === 'queued') && (
-            <AgentTicker job={active} refresh={refresh} />
+            <LiveRow job={active} refresh={refresh} />
           )}
         </div>
         <div className="h-3" />
