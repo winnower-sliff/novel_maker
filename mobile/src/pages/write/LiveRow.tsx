@@ -1,20 +1,17 @@
 import { useEffect, useState } from 'react'
 import type { Job } from '@shared/types'
 import { tickerStore } from '../../lib/tickerStore'
-import { Markdown } from '../../components/Markdown'
 import { RUN_LABEL, TOOL_LABEL } from './labels'
 
 /**
- * 时间轴尾部「进行中」胶囊（opencode 式）：思考/工具卡/对话已各自独立上墙交错，
- * 这里只报总状态（干到第几步/写了多少字）+ 当前轮实时流预览（点开）+ 取消。
+ * 时间轴尾部「进行中」状态行（opencode 式）：思考/正文流式在 StreamRow 卡内刷新，
+ * 工具卡/消息各自独立上墙；这里只报总状态（干到第几步/写了多少字）+ 取消。
  */
 export default function LiveRow({ job, refresh }: { job: Job; refresh: () => void }) {
   const useTicker = tickerStore(job.id)
   const acts = useTicker((s) => s.acts)
   const progress = useTicker((s) => s.progress)
-  const chatText = useTicker((s) => s.chatText)
   const thinking = useTicker((s) => s.thinking)
-  const [open, setOpen] = useState(false)
   const [cancelConfirm, setCancelConfirm] = useState(false)
 
   useEffect(() => {
@@ -22,7 +19,7 @@ export default function LiveRow({ job, refresh }: { job: Job; refresh: () => voi
       const el = document.getElementById('write-stream-box')
       if (el) el.scrollIntoView({ block: 'end' })
     }
-  }, [acts.length, progress?.chars, chatText, thinking])
+  }, [acts.length, progress?.chars])
 
   if (job.state === 'queued') {
     return (
@@ -49,33 +46,13 @@ export default function LiveRow({ job, refresh }: { job: Job; refresh: () => voi
   return (
     <div id="write-stream-box" className="px-4 py-1.5">
       <div className="rounded-2xl border border-orange-100 bg-white/80 px-3.5 py-2">
-        <button type="button" className="flex w-full items-center gap-2 text-left" onClick={() => setOpen(!open)}>
+        <div className="flex w-full items-center gap-2 text-left">
           <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-orange-400" />
           <span className="min-w-0 flex-1 truncate text-xs text-stone-600">
             {progressLine ?? statusLine}
           </span>
-          {acts.length > 0 && (
-            <span className="shrink-0 text-[10px] text-stone-400">
-              {acts.length} 步 {open ? '▲' : '▼'}
-            </span>
-          )}
-        </button>
-
-        {open && (thinking || chatText) && (
-          <div className="mt-2 border-t border-orange-100/70 pt-2">
-            {thinking && (
-              <div className="max-h-32 overflow-y-auto no-scrollbar whitespace-pre-wrap text-xs leading-relaxed text-stone-400">
-                {thinking}
-              </div>
-            )}
-            {chatText && (
-              <div className="mt-2 text-sm leading-relaxed text-stone-700">
-                <Markdown text={chatText} />
-                <span className="ml-0.5 inline-block h-4 w-0.5 animate-pulse bg-orange-400 align-middle" />
-              </div>
-            )}
-          </div>
-        )}
+          {acts.length > 0 && <span className="shrink-0 text-[10px] text-stone-400">{acts.length} 步</span>}
+        </div>
 
         <div className="mt-1.5 flex justify-end">
           <button

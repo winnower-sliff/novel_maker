@@ -47,10 +47,14 @@ export function tickerStore(jobId: string): UseBoundStore<StoreApi<TickerState>>
         set((st) => ({ acts: [...st.acts.slice(-49), act], progress: null })), // 新工具开跑，进度归零
       setProgress: (progress) => set({ progress }),
       appendDelta: (chunk, total) =>
-        set((st) => ({ chatText: st.chatText + chunk, chatTotal: total })),
+        set((st) =>
+          total < st.chatTotal ? { chatText: chunk, chatTotal: total } : { chatText: st.chatText + chunk, chatTotal: total }
+        ),
       setChatText: (t, total) => set({ chatText: t, chatTotal: total ?? t.length }),
       appendThink: (chunk, total) =>
-        set((st) => ({ thinking: st.thinking + chunk, thinkTotal: total })),
+        set((st) =>
+          total < st.thinkTotal ? { thinking: chunk, thinkTotal: total } : { thinking: st.thinking + chunk, thinkTotal: total }
+        ),
       setThinking: (t, total) => set({ thinking: t, thinkTotal: total ?? t.length }),
       reset: () => set({ acts: [], progress: null, chatText: '', chatTotal: 0, thinking: '', thinkTotal: 0 })
     }))

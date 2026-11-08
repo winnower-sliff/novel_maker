@@ -28,13 +28,20 @@ export default function App() {
   const qc = useQueryClient()
   useEffect(() => {
     if (!conn || !window.api) return
-    // 聊天流新行直接进缓存（agent 运行中实时上墙，不等 job 结束）
+    // 聊天流新行直接进缓存（agent 运行中实时上墙，不等 job 结束）；
+    // 思考/白话落库时清对应实时流（时间轴上的流式卡被落库卡无缝接管）
     const unAppend = window.api.message.onAppend((msg) => {
       qc.setQueryData<ChatMessageRow[]>(qk.messages(msg.bookId), (old) =>
         old && !old.some((m) => m.id === msg.id)
           ? [...old, msg].sort((a, b) => a.createdAt - b.createdAt)
           : (old ?? [msg])
       )
+      const meta = msg.meta as { kind?: string; jobId?: string } | undefined
+      if (msg.role === 'assistant' && typeof meta?.jobId === 'string') {
+        const tk = tickerStore(meta.jobId).getState()
+        if (meta.kind === 'thinking') tk.setThinking('')
+        else if (meta.kind === 'chat') tk.setChatText('')
+      }
     })
     const unUpdate = window.api.job.onUpdate((_jobId, job) => {
       void qc.invalidateQueries({ queryKey: qk.jobs(job.bookId) })

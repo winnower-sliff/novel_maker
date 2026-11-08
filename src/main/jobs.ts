@@ -145,11 +145,13 @@ function requireJob(jobId: string): Job {
   return job
 }
 
-/** 导演白话流式（chat 气泡）：delta 带累计长度 total，前端失配即全量补拉（服务端唯一真相源） */
-function chatSaver(jobId: string): (t: string) => void {
+/** 导演白话流式（chat 气泡）：delta 带累计长度 total，前端失配即全量补拉（服务端唯一真相源）；
+ * reset() 供 agent 每轮开始清空（新一轮 total 从 0 重计，旧流让位给已落库消息卡） */
+type Saver = ((t: string) => void) & { reset: () => void }
+function chatSaver(jobId: string): Saver {
   let acc = ''
   let lastSave = 0
-  return (t: string) => {
+  const fn = (t: string) => {
     acc += t
     emitJobDelta(jobId, 'text', t, acc.length)
     const now = Date.now()
@@ -158,13 +160,18 @@ function chatSaver(jobId: string): (t: string) => void {
       updateJob(jobId, { payload: { answer: acc } })
     }
   }
+  fn.reset = () => {
+    acc = ''
+    updateJob(jobId, { payload: { answer: '' } })
+  }
+  return fn
 }
 
-/** 思考链流式（chat 折叠区）：与 chatSaver 同款节流落盘 payload.thinkingText */
-function thinkSaver(jobId: string): (t: string) => void {
+/** 思考链流式（思考卡内实时刷新）：与 chatSaver 同款节流落盘 payload.thinkingText */
+function thinkSaver(jobId: string): Saver {
   let acc = ''
   let lastSave = 0
-  return (t: string) => {
+  const fn = (t: string) => {
     acc += t
     emitJobDelta(jobId, 'thinking', t, acc.length)
     const now = Date.now()
@@ -173,6 +180,11 @@ function thinkSaver(jobId: string): (t: string) => void {
       updateJob(jobId, { payload: { thinkingText: acc } })
     }
   }
+  fn.reset = () => {
+    acc = ''
+    updateJob(jobId, { payload: { thinkingText: '' } })
+  }
+  return fn
 }
 
 /** 正文/改章进度：不进聊天流，聚合条只报字数；3s 快照落 payload.draftText（恢复回看） */
@@ -574,6 +586,9 @@ async function runChatJob(job: Job): Promise<Job | null> {
   const planBlock = waitingPlan?.payload.plan
     ? `\n\n〔本章计划（等作者过目中，作者聊的内容可能与此相关）〕\n${waitingPlan.payload.plan}`
     : ''
+  // 轮开始清空流式缓冲（新一轮从 0 计流，落库消息卡接管旧内容）
+  const cs = chatSaver(job.id)
+  const ts = thinkSaver(job.id)
   const result = await runAgentLoop({
     jobId: job.id,
     bookId: job.bookId,
@@ -581,12 +596,16 @@ async function runChatJob(job: Job): Promise<Job | null> {
     history,
     mode: 'free',
     tools: [...toolDefs(), ...interceptorDefs('free')],
-    onDelta: chatSaver(job.id),
-    onThinking: thinkSaver(job.id),
+    onDelta: cs,
+    onThinking: ts,
     // chat 白话链路开思考（思考折叠区 UI）；写章/改章链路保持默认 disabled
     thinking: 'enabled',
     say: agentSay(job.id, job.bookId),
-    onTurn: () => updateJob(job.id, { watchdogAt: Date.now() }),
+    onTurn: () => {
+      updateJob(job.id, { watchdogAt: Date.now() })
+      cs.reset()
+      ts.reset()
+    },
     // 意图动作（对话驱动开章/审读/审计）：避免 loop→jobs 循环依赖，经 actions 注入
     actions: {
       startChapter: (hint) => {

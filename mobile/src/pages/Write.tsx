@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { qk, useBook, useJobFlow, useMessages } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 import LiveRow from './write/LiveRow'
+import StreamRow from './write/StreamRow'
 import InputBar from './write/InputBar'
 import { MessageRow } from './write/MessageRow'
 import StatusHead from './write/StatusHead'
@@ -137,7 +138,10 @@ export default function Write() {
             </div>
           ))}
           {active && (active.state === 'running' || active.state === 'queued') && (
-            <LiveRow job={active} refresh={refresh} />
+            <>
+              <StreamRow jobId={active.id} />
+              <LiveRow job={active} refresh={refresh} />
+            </>
           )}
         </div>
         <div className="h-3" />
