@@ -59,19 +59,25 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'list_chapters',
       description:
-        '列当前线的完整章节序列（含分叉前祖先线的章），返回序号/标题/字数/每章摘要。掌握进度用。',
+        '列当前线的完整章节序列（含分叉前祖先线的章），返回序号/标题/字数/每章摘要。掌握进度用。brief=true 只列序号+标题+字数（大书盘点省字数）。',
       input_schema: {
         type: 'object',
-        properties: { q: { type: 'string', description: '可选，按标题/摘要过滤' } }
+        properties: {
+          q: { type: 'string', description: '可选，按标题/摘要过滤' },
+          brief: { type: 'boolean', description: 'true=只列序号+标题+字数，不带摘要' }
+        }
       }
     },
     {
       name: 'read_chapter',
-      description: '读一章正文。默认截断到前 6000 字；需要全文传 full:true。',
+      description:
+        '读一章正文。默认从头截 6000 字；q=关键词定位读（跳到命中处读前后文，找原句/查接缝用）；from=从第几字起读；需要全文传 full:true。',
       input_schema: {
         type: 'object',
         properties: {
           chapterId: { type: 'string', description: '章节 id（来自 list_chapters）' },
+          q: { type: 'string', description: '关键词定位：跳到该词首次出现处读前后文' },
+          from: { type: 'number', description: '从第几字起读（0 起）' },
           full: { type: 'boolean', description: 'true=不截断全文' }
         },
         required: ['chapterId']
@@ -79,7 +85,8 @@ export function toolDefs(): ToolDef[] {
     },
     {
       name: 'list_cards',
-      description: '按类别筛选查看当前线设定卡：kind=类别；brief=true 只列标题清单（省字数，适合盘点），false/不传带 100 字摘要。',
+      description:
+        '按类别筛选查看当前线设定卡：kind=类别；brief=true 只列标题清单（省字数，适合盘点），false/不传带 100 字摘要。',
       input_schema: {
         type: 'object',
         properties: {
@@ -104,10 +111,26 @@ export function toolDefs(): ToolDef[] {
     },
     {
       name: 'list_characters',
-      description: '列当前线全部人物：人设卡+活状态（位置/身心/目标/所知）+关系。',
+      description:
+        '列当前线全部人物：人设卡+活状态（位置/身心/目标/所知）+关系。brief=true 只列【定位】名字+id（人物多时盘点省字数），详情用 get_character。',
       input_schema: {
         type: 'object',
-        properties: { q: { type: 'string', description: '名字/人设关键词' } }
+        properties: {
+          q: { type: 'string', description: '名字/人设关键词' },
+          brief: { type: 'boolean', description: 'true=只列【定位】名字+id，不带状态' }
+        }
+      }
+    },
+    {
+      name: 'get_character',
+      description:
+        '读单个人物完整详情：人设卡 card 全文+活状态+关系网。人设卡内容多时用它精读（比 list_characters 全量省）。',
+      input_schema: {
+        type: 'object',
+        properties: {
+          characterId: { type: 'string', description: '优先用 list_characters 返回的 id' },
+          name: { type: 'string', description: '人物名兜底（没有 id 时按名匹配当前线）' }
+        }
       }
     },
     {
@@ -153,10 +176,18 @@ export function toolDefs(): ToolDef[] {
     },
     {
       name: 'search_project',
-      description: '跨板块关键词搜索：设定卡/人物/伏笔一次全查。',
+      description:
+        '跨板块关键词搜索：设定卡/人物/伏笔/章节正文一次全查（章节命中给摘句）。scope 可限定单板块（cards/characters/foreshadows/chapters）。找前文原句/设定出处用。',
       input_schema: {
         type: 'object',
-        properties: { q: { type: 'string' } },
+        properties: {
+          q: { type: 'string' },
+          scope: {
+            type: 'string',
+            enum: ['cards', 'characters', 'foreshadows', 'chapters'],
+            description: '可选：限定搜索板块，缺省全查'
+          }
+        },
         required: ['q']
       }
     },
@@ -288,7 +319,7 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'fork_line',
       description:
-        '从某章之后开剧情新线并切入（分叉树）。设定整体拷贝到新线各自演化。大转折实验/换走法时用。',
+        '从某章之后开剧情新线并切入（分叉树）。设定整体拷贝到新线各自演化。大转折实验/换走法时用。开线前可 list_lines 看现有线。',
       input_schema: {
         type: 'object',
         properties: {
@@ -297,6 +328,12 @@ export function toolDefs(): ToolDef[] {
         },
         required: ['forkChapterId']
       }
+    },
+    {
+      name: 'list_lines',
+      description:
+        '列本书全部剧情线（分叉树全貌）：线名/各自章数/分叉点章/★激活线。开线/切线前先看它。',
+      input_schema: { type: 'object', properties: {} }
     },
     {
       name: 'switch_line',
@@ -386,10 +423,12 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const rows = chapters
         .map((c, i) => ({ c, i }))
         .filter(({ c }) => !q || c.title.includes(q) || c.summary.includes(q))
-        .map(({ c, i }) => chapterLine(c, i))
+        .map(({ c, i }) =>
+          input.brief ? `${i + 1}. 《${c.title}》(${c.wordCount}字, id=${c.id})` : chapterLine(c, i)
+        )
       return {
         ok: true,
-        summary: `查章节序列（共 ${chapters.length} 章）`,
+        summary: `查章节序列（共 ${chapters.length} 章${input.brief ? '，仅标题' : ''}）`,
         data: rows.length ? rows.join(N) : '（当前线还没有章节）'
       }
     }
@@ -397,15 +436,35 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const id = String(input.chapterId ?? '')
       const c = store.getChapter(id)
       if (!c) return { ok: false, summary: '章节不存在', data: `章节 ${id} 不存在` }
+      // 定位起点：q 关键词命中处 / from 字数 / 默认开头
+      let start = 0
+      let loc = ''
+      const q = typeof input.q === 'string' ? input.q.trim() : ''
+      if (q) {
+        const idx = c.content.indexOf(q)
+        if (idx < 0)
+          return {
+            ok: false,
+            summary: `《${c.title}》里没有「${q}」`,
+            data: `本章没搜到「${q}」。可用 search_project 全书找，或去掉 q 从头读。`
+          }
+        start = Math.max(0, idx - 600)
+        loc = `（「${q}」命中处附近，第 ${idx + 1} 字起）`
+      } else if (typeof input.from === 'number' && input.from > 0) {
+        start = Math.min(Math.floor(input.from), Math.max(0, c.content.length - 1))
+        loc = `（从第 ${start + 1} 字起）`
+      }
       const full = input.full === true
       const body =
         full || c.content.length <= 6000
           ? c.content
-          : `${c.content.slice(0, 6000)}\n…（截断，需要全文传 full:true）`
+          : start > 0
+            ? `${c.content.slice(start, start + 6000)}${N}…（第 ${start + 1}-${start + 6000} 字；继续往后传 from:${start + 6000}）`
+            : `${c.content.slice(0, 6000)}${N}…（截断，需要全文传 full:true 或 from:6000 续读）`
       return {
         ok: true,
-        summary: `读《${c.title}》`,
-        data: `《${c.title}》（${c.wordCount}字）${N}${body}`
+        summary: `读《${c.title}》${loc ? '片段' : ''}`,
+        data: `《${c.title}》（${c.wordCount}字）${loc}${N}${body}`
       }
     }
     case 'list_cards': {
@@ -438,18 +497,44 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const { lineId } = ctxLine(ctx)
       const q = typeof input.q === 'string' ? input.q : undefined
       const chars = store.listCharacters(lineId, { q })
-      const rows = chars.map((c) => {
-        const st = Object.entries(c.state)
-          .filter(([, v]) => v)
-          .map(([k, v]) => `${k}=${v}`)
-          .join(' ')
-        const rel = c.relations.map((r) => `${r.to}(${r.label})`).join(' ')
-        return `【${c.role || '人物'}${c.pinned ? '·钉' : ''}】${c.name} (id=${c.id})：${st}${rel ? ` 关系：${rel}` : ''}`
-      })
+      const rows = input.brief
+        ? chars.map((c) => `【${c.role || '人物'}】${c.name} (id=${c.id})`)
+        : chars.map((c) => {
+            const st = Object.entries(c.state)
+              .filter(([, v]) => v)
+              .map(([k, v]) => `${k}=${v}`)
+              .join(' ')
+            const rel = c.relations.map((r) => `${r.to}(${r.label})`).join(' ')
+            return `【${c.role || '人物'}${c.pinned ? '·钉' : ''}】${c.name} (id=${c.id})：${st}${rel ? ` 关系：${rel}` : ''}`
+          })
       return {
         ok: true,
-        summary: `查人物 ${chars.length} 人`,
+        summary: `查人物 ${chars.length} 人${input.brief ? '（仅名单）' : ''}`,
         data: rows.length ? rows.join(N) : '（没有匹配的人物）'
+      }
+    }
+    case 'get_character': {
+      const { lineId } = ctxLine(ctx)
+      const id = typeof input.characterId === 'string' ? input.characterId : ''
+      let target = id ? store.getCharacter(id) : null
+      if (!target && typeof input.name === 'string' && input.name) {
+        target = store.listCharacters(lineId).find((c) => c.name === input.name) ?? null
+      }
+      if (!target || target.lineId !== lineId) {
+        return {
+          ok: false,
+          summary: '人物不存在',
+          data: `人物 ${id || String(input.name ?? '')} 不存在（或不在当前线），先 list_characters 看名单`
+        }
+      }
+      const rel = target.relations.map((r) => `${r.to}（${r.label}）`).join('；')
+      const card = Object.keys(target.card).length
+        ? JSON.stringify(target.card, null, 1)
+        : '（无人设卡内容）'
+      return {
+        ok: true,
+        summary: `读人物「${target.name}」详情`,
+        data: `【${target.role || '人物'}${target.pinned ? '·钉选' : ''}】${target.name} (id=${target.id})${N}〔人设卡〕${N}${card}${N}〔当前状态〕${N}${JSON.stringify(target.state, null, 1)}${N}〔关系〕${rel || '（无）'}`
       }
     }
     case 'list_foreshadows': {
@@ -481,20 +566,40 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const { lineId } = ctxLine(ctx)
       const q = String(input.q ?? '')
       if (!q) return { ok: false, summary: '搜索词为空', data: 'q 不能为空' }
-      const cards = store.listCards(lineId, { q })
-      const chars = store.listCharacters(lineId, { q })
-      const fores = store
-        .listForeshadows(lineId)
-        .filter((f) => f.title.includes(q) || f.detail.includes(q))
-      const rows = [
-        ...cards.map((c) => `[设定卡] ${c.title} (id=${c.id})`),
-        ...chars.map((c) => `[人物] ${c.name} (id=${c.id})`),
-        ...fores.map((f) => `[伏笔] ${f.title} (id=${f.id})`)
-      ]
+      const scope =
+        input.scope === 'cards' ||
+        input.scope === 'characters' ||
+        input.scope === 'foreshadows' ||
+        input.scope === 'chapters'
+          ? input.scope
+          : undefined
+      const rows: string[] = []
+      if (!scope || scope === 'cards')
+        for (const c of store.listCards(lineId, { q }))
+          rows.push(`[设定卡] ${c.title} (id=${c.id})`)
+      if (!scope || scope === 'characters')
+        for (const c of store.listCharacters(lineId, { q }))
+          rows.push(`[人物] ${c.name} (id=${c.id})`)
+      if (!scope || scope === 'foreshadows')
+        for (const f of store.listForeshadows(lineId))
+          if (f.title.includes(q) || f.detail.includes(q))
+            rows.push(`[伏笔] ${f.title} (id=${f.id})`)
+      if (!scope || scope === 'chapters') {
+        store.effectiveChapters(lineId).forEach((c, i) => {
+          const idx = c.content.indexOf(q)
+          if (c.title.includes(q) || c.summary.includes(q) || idx >= 0) {
+            const snip =
+              idx >= 0
+                ? `：…${c.content.slice(Math.max(0, idx - 30), idx + 50).replace(/\n/g, ' ')}…`
+                : ''
+            rows.push(`[章节] 第${i + 1}章《${c.title}》 (id=${c.id})${snip}`)
+          }
+        })
+      }
       return {
         ok: true,
-        summary: `搜「${q}」命中 ${rows.length} 条`,
-        data: rows.length ? rows.join(N) : `没有找到与「${q}」相关的内容`
+        summary: `搜「${q}」命中 ${rows.length} 条${scope ? `（${scope}）` : ''}`,
+        data: rows.length ? rows.slice(0, 30).join(N) : `没有找到与「${q}」相关的内容`
       }
     }
     case 'list_samples': {
@@ -701,6 +806,21 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
         ok: true,
         summary: `改书配置`,
         data: `配置已更新：红线 ${b.redlines.length} 条 / 正向词 ${b.positiveWords.length} / 负向词 ${b.negativeWords.length} / 目标 ${b.targetWords} 字`
+      }
+    }
+    case 'list_lines': {
+      const b = ctxBook(ctx)
+      const lines = store.listLines(ctx.bookId)
+      const rows = lines.map((l) => {
+        const forkCh = l.forkChapterId ? store.getChapter(l.forkChapterId) : null
+        const fork = forkCh ? `，分叉自《${forkCh.title}》之后` : l.parentLineId ? '' : '（主干）'
+        const star = l.id === b.activeLineId ? '★当前 ' : ''
+        return `${star}「${l.name}」 ${store.listChapters(l.id).length} 章${fork} (id=${l.id})${l.note ? ` 备注：${brief(l.note, 60)}` : ''}`
+      })
+      return {
+        ok: true,
+        summary: `查剧情线 ${lines.length} 条`,
+        data: `《${b.title}》剧情线（★=正在写的线）：${N}${rows.join(N)}${N}写作发生在激活线尾部；切线用 switch_line，从某章后开新线用 fork_line。`
       }
     }
     case 'fork_line': {
