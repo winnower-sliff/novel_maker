@@ -4,8 +4,8 @@ import { tickerStore } from '../../lib/tickerStore'
 import { RUN_LABEL, TOOL_LABEL } from './labels'
 
 /**
- * 时间轴尾部「进行中」状态行（opencode 式）：思考/正文流式在 StreamRow 卡内刷新，
- * 工具卡/消息各自独立上墙；这里只报总状态（干到第几步/写了多少字）+ 取消。
+ * 时间轴尾部「进行中」状态行（opencode 式）：无卡片容器——思考/正文流式在
+ * StreamRow 卡内刷新，工具卡/消息各自独立上墙；这里只一行小字报状态+取消。
  */
 export default function LiveRow({ job, refresh }: { job: Job; refresh: () => void }) {
   const useTicker = tickerStore(job.id)
@@ -44,25 +44,20 @@ export default function LiveRow({ job, refresh }: { job: Job; refresh: () => voi
     (progress.phase === 'draft' ? `正在写正文·已 ${progress.chars} 字` : `改章中·已 ${progress.chars} 字`)
 
   return (
-    <div id="write-stream-box" className="px-4 py-1.5">
-      <div className="rounded-2xl border border-orange-100 bg-white/80 px-3.5 py-2">
-        <div className="flex w-full items-center gap-2 text-left">
-          <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-orange-400" />
-          <span className="min-w-0 flex-1 truncate text-xs text-stone-600">
-            {progressLine ?? statusLine}
-          </span>
-          {acts.length > 0 && <span className="shrink-0 text-[10px] text-stone-400">{acts.length} 步</span>}
-        </div>
-
-        <div className="mt-1.5 flex justify-end">
-          <button
-            type="button"
-            className="rounded-lg border border-orange-100 px-2.5 py-1 text-[11px] text-stone-500"
-            onClick={() => (isChat ? cancel() : setCancelConfirm(true))}
-          >
-            取消
-          </button>
-        </div>
+    <div id="write-stream-box">
+      <div className="flex items-center gap-1.5 px-4 py-1 text-[11px] text-stone-400">
+        <span className="h-1.5 w-1.5 shrink-0 animate-pulse rounded-full bg-orange-400" />
+        <span className="min-w-0 flex-1 truncate">
+          {progressLine ?? statusLine}
+          {acts.length > 0 && ` · ${acts.length} 步`}
+        </span>
+        <button
+          type="button"
+          className="shrink-0 underline underline-offset-2"
+          onClick={() => (isChat ? cancel() : setCancelConfirm(true))}
+        >
+          取消
+        </button>
       </div>
       {cancelConfirm && (
         <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setCancelConfirm(false)}>
