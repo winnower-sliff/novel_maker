@@ -5,7 +5,6 @@ import {
   emitJob,
   emitJobActivity,
   emitJobDelta,
-  emitJobProgress,
   emitMessageAppend
 } from './broadcast.js'
 import { isQuotaError } from './director/callJson.js'
@@ -185,21 +184,6 @@ function thinkSaver(jobId: string): Saver {
     updateJob(jobId, { payload: { thinkingText: '' } })
   }
   return fn
-}
-
-/** 正文/改章进度：不进聊天流，聚合条只报字数；3s 快照落 payload.draftText（恢复回看） */
-function progressSaver(jobId: string): (t: string) => void {
-  let acc = ''
-  let lastSave = 0
-  return (t: string) => {
-    acc += t
-    emitJobProgress(jobId, { phase: 'draft', chars: acc.replace(/\s/g, '').length })
-    const now = Date.now()
-    if (now - lastSave > 3000) {
-      lastSave = now
-      updateJob(jobId, { payload: { draftText: acc } })
-    }
-  }
 }
 
 /** agent say 落库工厂：工具卡同时实时广播（job:activity） */

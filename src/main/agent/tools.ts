@@ -238,7 +238,8 @@ export function toolDefs(): ToolDef[] {
     },
     {
       name: 'save_character',
-      description: '建/改人物（传 id=改，不传=建）。人设卡/初始状态/关系网。',
+      description:
+        '建/改人物（传 id=改，不传=建）。部分更新：只需传要改的字段，未传字段保持原值（如只改 state 就只传 id+state）。人设卡/初始状态/关系网。',
       input_schema: {
         type: 'object',
         properties: {
@@ -302,7 +303,7 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'save_foreshadow',
       description:
-        '建/改伏笔（传 id=改）。埋设 planted→计划回收 planned→已回收 resolved 三态流转；priority 越大越优先。',
+        '建/改伏笔（传 id=改）。部分更新：只需传要改的字段，未传字段保持原值。埋设 planted→计划回收 planned→已回收 resolved 三态流转；priority 越大越优先。',
       input_schema: {
         type: 'object',
         properties: {
@@ -771,7 +772,7 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const ch = store.saveCharacter({
         id: typeof input.id === 'string' && input.id ? input.id : undefined,
         lineId,
-        name: String(input.name ?? ''),
+        name: typeof input.name === 'string' && input.name ? input.name : undefined,
         role: typeof input.role === 'string' ? input.role : undefined,
         card: (input.card as Record<string, unknown>) ?? undefined,
         state: (input.state as CharacterState) ?? undefined,
@@ -814,7 +815,7 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       const f = store.saveForeshadow({
         id: typeof input.id === 'string' && input.id ? input.id : undefined,
         lineId,
-        title: String(input.title ?? ''),
+        title: typeof input.title === 'string' && input.title ? input.title : undefined,
         detail: typeof input.detail === 'string' ? input.detail : undefined,
         plannedChapterId:
           typeof input.plannedChapterId === 'string' ? input.plannedChapterId : undefined,

@@ -667,7 +667,8 @@ export function getCharacter(id: string): Character | null {
 
 export interface CharacterInput {
   lineId: string
-  name: string
+  /** 改人物可不传（保留原名）；新建缺省「未命名」 */
+  name?: string
   role?: string
   card?: Record<string, unknown>
   state?: CharacterState
@@ -687,7 +688,7 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
       `UPDATE characters SET name = ?, role = ?, card = ?, state = ?, relations = ?, pinned = ?, tags = ?, updated_at = ?
        WHERE id = ?`
     ).run(
-      input.name,
+      input.name ?? old.name,
       input.role ?? old.role,
       JSON.stringify(input.card ?? old.card),
       JSON.stringify(input.state ?? old.state),
@@ -707,7 +708,7 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
     id,
     line.bookId,
     input.lineId,
-    input.name,
+    input.name ?? '未命名',
     input.role ?? '',
     JSON.stringify(input.card ?? {}),
     JSON.stringify(input.state ?? {}),
@@ -756,7 +757,8 @@ export function getForeshadow(id: string): Foreshadow | null {
 
 export interface ForeshadowInput {
   lineId: string
-  title: string
+  /** 改伏笔可不传（保留原名）；新建缺省「未命名伏笔」 */
+  title?: string
   detail?: string
   plantedChapterId?: string
   plannedChapterId?: string
@@ -776,7 +778,7 @@ export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foresh
       `UPDATE foreshadows SET title = ?, detail = ?, planted_chapter_id = ?, planned_chapter_id = ?, resolved_chapter_id = ?, status = ?, priority = ?, updated_at = ?
        WHERE id = ?`
     ).run(
-      input.title,
+      input.title ?? old.title,
       input.detail ?? old.detail,
       input.plantedChapterId ?? old.plantedChapterId,
       input.plannedChapterId ?? old.plannedChapterId,
@@ -796,7 +798,7 @@ export function saveForeshadow(input: ForeshadowInput & { id?: string }): Foresh
     id,
     line.bookId,
     input.lineId,
-    input.title,
+    input.title ?? '未命名伏笔',
     input.detail ?? '',
     input.plantedChapterId ?? '',
     input.plannedChapterId ?? '',

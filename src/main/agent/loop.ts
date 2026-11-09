@@ -281,7 +281,6 @@ export async function genStyleRefs(
     .map((id) => store.getSample(id))
     .filter((s): s is NonNullable<typeof s> => Boolean(s))
   if (!samples.length) return ''
-  const listTxt = samples.map((s) => `《${s.name}》`).join('、')
   let queries: Array<{ sample: string; q: string }> = []
   try {
     const res = await callJson<{ queries?: Array<{ sample?: string; q?: string }> }>({

@@ -119,6 +119,18 @@
 >   chat 流式光标+取消）；正文流式渲染整体移除
 > - 冒烟回归四套全绿（m6 18/m2 23/m4 18/m5 14）——M7 未加新断言（activity/progress 事件层，
 >   真机验收覆盖）
+>
+> **M8 打磨（2026-11：save 部分更新+删 LiveRow）**：
+> - **save_* 全量 patch 语义**（用户实锤：AI save_character 只传 id 没传 name 把人物名清空）：
+>   CharacterInput.name/ForeshadowInput.title 改 optional；store UPDATE 一律 `input.x ?? old.x`
+>   兑底（saveCard 此前已修，本轮补 character/foreshadow）；INSERT 兑底「未命名」；
+>   tools.ts case 用 `typeof x==='string' && x ? x : undefined` 防空串穿透；工具描述注明
+>   「部分更新：只需传要改的字段，未传字段保持原值」。**新 save 工具必须遵守此语义**
+> - smoke-partial-update.mjs 5 断言（三个 save 的「不传标题字段→保留」）；jobs.ts 死代码
+>   progressSaver/emitJobProgress import 清理（进度事件已由 loop 侧接管）
+> - 前端：删 LiveRow 底部细状态行（用户反馈表现不好）——取消入口并入 StatusHead 运行中变体
+>   （橙色胶囊+runText 按 kind 报状态+chat 直取消/写作确认弹层）；贴底跟随由 Write.tsx
+>   ResizeObserver 承担（LiveRow 删除不丢滚动跟随）
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）

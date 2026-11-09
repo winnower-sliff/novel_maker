@@ -4,7 +4,6 @@ import type {
   Chapter,
   ChapterOutline,
   ChapterRecap,
-  DirectionCard,
   JobPayload,
   LintReport,
   Scene
