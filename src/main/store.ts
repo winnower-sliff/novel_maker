@@ -542,7 +542,7 @@ export function deleteLastChapter(lineId: string): Chapter | null {
 
 // ── cards / characters / foreshadows（挂 line，各线独立） ─────────────────────
 
-export function listCards(lineId: string, opts?: { kind?: CardKind; q?: string }): Card[] {
+export function listCards(lineId: string, opts?: { kind?: string; q?: string }): Card[] {
   const db = getDb()
   let sql = 'SELECT * FROM cards WHERE line_id = ?'
   const vals: SQLInputValue[] = [lineId]
@@ -564,9 +564,27 @@ export function getCard(id: string): Card | null {
   return r ? rowToCard(r) : null
 }
 
+/** 类别清单（含各类卡数）——类别由卡派生，无卡的类别不出现 */
+export function listCardKinds(lineId: string): Array<{ kind: string; count: number }> {
+  const rows = getDb()
+    .prepare(
+      'SELECT kind, COUNT(*) AS n FROM cards WHERE line_id = ? GROUP BY kind ORDER BY n DESC'
+    )
+    .all(lineId) as Array<Record<string, unknown>>
+  return rows.map((r) => ({ kind: (r.kind as string) ?? 'custom', count: Number(r.n) }))
+}
+
+/** 整类重命名：该类别全部卡迁移到新类别（不动内容不刷 updated_at），返回迁移卡数 */
+export function renameCardKind(lineId: string, oldKind: string, newKind: string): number {
+  const r = getDb()
+    .prepare('UPDATE cards SET kind = ? WHERE line_id = ? AND kind = ?')
+    .run(newKind, lineId, oldKind)
+  return Number(r.changes)
+}
+
 export interface CardInput {
   lineId: string
-  kind?: CardKind
+  kind?: string
   /** 改卡可不传（保留原名）；新建缺省「未命名」 */
   title?: string
   readerText?: string

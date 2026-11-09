@@ -1,9 +1,10 @@
 import { useState } from 'react'
-import type { Card, CardKind, Character, Foreshadow } from '@shared/types'
+import type { Card, Character, Foreshadow } from '@shared/types'
 import { useBook, useCards, useCharacters, useForeshadows } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 
-const KIND_LABEL: Record<CardKind | 'all', string> = {
+/** 内置类别 slug（顺序=筛选栏顺序）；自定义类别原名直显 */
+const KIND_LABEL: Record<string, string> = {
   all: '全部',
   geography: '地理',
   faction: '势力',
@@ -12,6 +13,8 @@ const KIND_LABEL: Record<CardKind | 'all', string> = {
   item: '物品',
   custom: '其他'
 }
+const BUILTIN_KINDS = ['geography', 'faction', 'history', 'power', 'item', 'custom']
+const kindLabel = (k: string) => KIND_LABEL[k] ?? k
 
 export default function Cards() {
   const openBookId = useUiStore((s) => s.openBookId) ?? ''
@@ -61,7 +64,13 @@ async function toggleCardPin(card: Card) {
 function CardsList({ lineId }: { lineId: string }) {
   const { data: cards = [], refetch } = useCards(lineId)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const [kind, setKind] = useState<CardKind | 'all'>('all')
+  const [kind, setKind] = useState<string>('all')
+
+  // 筛选胶囊：全部 + 内置六类 + 数据里出现的自定义类别（保持出现序）
+  const extraKinds = Array.from(
+    new Set(cards.map((c) => c.kind ?? 'custom').filter((k) => !BUILTIN_KINDS.includes(k)))
+  )
+  const kindTabs = ['all', ...BUILTIN_KINDS, ...extraKinds]
 
   const filtered = kind === 'all' ? cards : cards.filter((c) => (c.kind ?? 'custom') === kind)
   const pinned = filtered.filter((c) => c.pinned)
@@ -75,7 +84,7 @@ function CardsList({ lineId }: { lineId: string }) {
         onClick={() => setExpanded(expanded === c.id ? null : c.id)}
       >
         <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-stone-500">
-          {KIND_LABEL[(c.kind ?? 'custom') as CardKind]}
+          {kindLabel(c.kind ?? 'custom')}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm">{c.title}</span>
         {c.pinned && <span className="text-[11px] text-orange-600">已钉选</span>}
@@ -139,7 +148,7 @@ function CardsList({ lineId }: { lineId: string }) {
   return (
     <div>
       <div className="no-scrollbar mb-3 flex gap-1.5 overflow-x-auto">
-        {(Object.keys(KIND_LABEL) as Array<CardKind | 'all'>).map((k) => (
+        {kindTabs.map((k) => (
           <button
             key={k}
             type="button"
@@ -149,7 +158,7 @@ function CardsList({ lineId }: { lineId: string }) {
             }
             onClick={() => setKind(k)}
           >
-            {KIND_LABEL[k]}
+            {kindLabel(k)}
           </button>
         ))}
       </div>

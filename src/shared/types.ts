@@ -263,13 +263,15 @@ export interface ChapterVersion {
   createdAt: number
 }
 
+/** 内置设定卡类别（slug）；类别可自由扩展——自定义类别建议 2-6 字中文词，空类别自动消失 */
 export type CardKind = 'geography' | 'faction' | 'history' | 'power' | 'item' | 'custom'
 
 export interface Card {
   id: string
   bookId: string
   lineId: string
-  kind: CardKind
+  /** 内置六类 slug 或自定义类别名（见 CardKind） */
+  kind: string
   title: string
   /** 读者已知层：写作措辞不得超出此层（B6） */
   readerText: string
@@ -414,7 +416,7 @@ export interface ChapterRecap {
   cardOps: Array<{
     op: 'create' | 'update' | 'delete'
     cardId?: string
-    kind?: CardKind
+    kind?: string
     title?: string
     readerText?: string
     authorText?: string

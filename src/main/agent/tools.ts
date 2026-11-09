@@ -92,8 +92,8 @@ export function toolDefs(): ToolDef[] {
         properties: {
           kind: {
             type: 'string',
-            enum: ['geography', 'faction', 'history', 'power', 'item', 'custom'],
-            description: '卡类型'
+            description:
+              '内置类别 slug：geography 地理/faction 势力/history 历史/power 力量体系/item 物品/custom 其他；也可用自定义类别名'
           },
           q: { type: 'string', description: '标题/正文关键词' },
           brief: { type: 'boolean', description: 'true=只列【类别】标题+id，不带正文摘要' }
@@ -107,6 +107,25 @@ export function toolDefs(): ToolDef[] {
         type: 'object',
         properties: { cardId: { type: 'string' } },
         required: ['cardId']
+      }
+    },
+    {
+      name: 'list_card_kinds',
+      description:
+        '列当前线设定卡类别清单+各类卡数（类别由卡派生：无卡的类别自动消失；新建类别=用新类别名存卡）。',
+      input_schema: { type: 'object', properties: {} }
+    },
+    {
+      name: 'rename_card_kind',
+      description:
+        '整类重命名/合并：oldKind 全部卡迁移到 newKind（如把自定义类别改成规范 slug、或两个类别合并）。迁移后旧类别无卡自动消失。',
+      input_schema: {
+        type: 'object',
+        properties: {
+          oldKind: { type: 'string', description: '现有类别名' },
+          newKind: { type: 'string', description: '目标类别名' }
+        },
+        required: ['oldKind', 'newKind']
       }
     },
     {
@@ -201,7 +220,8 @@ export function toolDefs(): ToolDef[] {
           id: { type: 'string', description: '改卡时传' },
           kind: {
             type: 'string',
-            enum: ['geography', 'faction', 'history', 'power', 'item', 'custom']
+            description:
+              '内置 slug（geography/faction/history/power/item/custom）或自定义类别名（2-6 字中文词，如「官制」「美食」）——用新类别名存卡即新建该类别'
           },
           title: { type: 'string' },
           readerText: { type: 'string', description: '读者已知层：读者此刻能看到的设定' },
@@ -469,7 +489,7 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
     }
     case 'list_cards': {
       const { lineId } = ctxLine(ctx)
-      const kind = typeof input.kind === 'string' ? (input.kind as CardKind) : undefined
+      const kind = typeof input.kind === 'string' ? input.kind : undefined
       const q = typeof input.q === 'string' ? input.q : undefined
       const cards = store.listCards(lineId, { kind, q })
       const rows = input.brief
@@ -491,6 +511,34 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
         ok: true,
         summary: `读设定卡「${c.title}」`,
         data: `【${c.kind}】${c.title}${c.pinned ? '（钉选）' : ''}${N}读者已知：${c.readerText}${N}作者真相：${c.authorText || '（无）'}${N}揭示计划：${c.revealPlan || '（无）'}`
+      }
+    }
+    case 'list_card_kinds': {
+      const { lineId } = ctxLine(ctx)
+      const kinds = store.listCardKinds(lineId)
+      return {
+        ok: true,
+        summary: `${kinds.length} 个类别`,
+        data: kinds.length
+          ? kinds.map((k) => `【${k.kind}】${k.count} 张`).join(N)
+          : '（还没有设定卡，用 save_card 存第一张即建类别）'
+      }
+    }
+    case 'rename_card_kind': {
+      const { lineId } = ctxLine(ctx)
+      const oldKind = String(input.oldKind ?? '')
+      const newKind = String(input.newKind ?? '')
+      if (!oldKind || !newKind)
+        return { ok: false, summary: '要传 oldKind 和 newKind', data: '要传 oldKind 和 newKind' }
+      const n = store.renameCardKind(lineId, oldKind, newKind)
+      return {
+        ok: n > 0,
+        summary:
+          n > 0 ? `「${oldKind}」已并入「${newKind}」（${n} 张）` : `类别「${oldKind}」不存在`,
+        data:
+          n > 0
+            ? `已把 ${n} 张卡从「${oldKind}」迁移到「${newKind}」。旧类别无卡后自动消失。`
+            : `没有找到类别「${oldKind}」的卡（list_card_kinds 先看现有类别）`
       }
     }
     case 'list_characters': {
