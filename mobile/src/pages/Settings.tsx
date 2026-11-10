@@ -127,12 +127,13 @@ export default function Settings() {
   )
 }
 
-/** 已归档的书：隐藏于书架，此处可恢复 */
+/** 已归档的书：隐藏于书架，此处可恢复或彻底删除 */
 function ArchivedBooks() {
   const qc = useQueryClient()
   const { data: books } = useBooks()
   const archived = (books ?? []).filter((b) => b.archived)
   const [busy, setBusy] = useState('')
+  const [confirmDel, setConfirmDel] = useState<string | null>(null)
   if (archived.length === 0) return null
   const restore = async (id: string) => {
     setBusy(id)
@@ -143,23 +144,66 @@ function ArchivedBooks() {
       setBusy('')
     }
   }
+  const wipe = async (id: string) => {
+    setBusy(id)
+    try {
+      await window.api.book.delete(id, true)
+      setConfirmDel(null)
+      await qc.invalidateQueries({ queryKey: ['books'] })
+    } finally {
+      setBusy('')
+    }
+  }
   return (
     <Section title={`已归档的书（${archived.length}）`}>
       <div className="space-y-2">
         {archived.map((b) => (
-          <div key={b.id} className="flex items-center gap-2 rounded-xl bg-orange-50 p-2.5">
-            <div className="min-w-0 flex-1">
-              <div className="truncate text-sm text-stone-700">{b.title || '未命名'}</div>
-              <div className="mt-0.5 text-[11px] text-stone-400">归档于书架，内容保留</div>
+          <div key={b.id} className="rounded-xl bg-orange-50 p-2.5">
+            <div className="flex items-center gap-2">
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-sm text-stone-700">{b.title || '未命名'}</div>
+                <div className="mt-0.5 text-[11px] text-stone-400">
+                  {confirmDel === b.id ? '删除后无法找回（会自动留一份当日快照）' : '归档于书架，内容保留'}
+                </div>
+              </div>
+              {confirmDel === b.id ? (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy === b.id}
+                    className="shrink-0 rounded-lg bg-red-100 px-3 py-1.5 text-[11px] text-red-600 disabled:opacity-50"
+                    onClick={() => void wipe(b.id)}
+                  >
+                    确认删除
+                  </button>
+                  <button
+                    type="button"
+                    className="shrink-0 rounded-lg border border-orange-200 px-3 py-1.5 text-[11px] text-stone-500"
+                    onClick={() => setConfirmDel(null)}
+                  >
+                    取消
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    disabled={busy === b.id}
+                    className="shrink-0 rounded-lg border border-orange-200 px-3 py-1.5 text-[11px] text-stone-500 disabled:opacity-50"
+                    onClick={() => void restore(b.id)}
+                  >
+                    恢复
+                  </button>
+                  <button
+                    type="button"
+                    className="shrink-0 text-[11px] text-stone-400"
+                    onClick={() => setConfirmDel(b.id)}
+                  >
+                    彻底删除
+                  </button>
+                </>
+              )}
             </div>
-            <button
-              type="button"
-              disabled={busy === b.id}
-              className="shrink-0 rounded-lg border border-orange-200 px-3 py-1.5 text-[11px] text-stone-500 disabled:opacity-50"
-              onClick={() => void restore(b.id)}
-            >
-              恢复
-            </button>
           </div>
         ))}
       </div>
