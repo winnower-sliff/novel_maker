@@ -58,6 +58,19 @@ export function useStatusCard(bookId: string | null) {
   })
 }
 
+/** 书架批量现状（每本一次 statusCard，书量小可接受）；与 books 同 key 前缀失效 */
+export function useShelfStatus(bookIds: string[]) {
+  return useQuery({
+    queryKey: ['shelfStatus', bookIds.join(',')],
+    queryFn: async (): Promise<StatusCard[]> =>
+      Promise.all(bookIds.map((id) => window.api.book.statusCard(id))).then((xs) =>
+        xs.filter((x): x is StatusCard => x != null)
+      ),
+    enabled: bookIds.length > 0,
+    staleTime: 30_000
+  })
+}
+
 export function useChapter(chapterId: string | null) {
   return useQuery({
     queryKey: qk.chapter(chapterId ?? ''),

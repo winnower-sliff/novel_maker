@@ -120,6 +120,7 @@ export function buildStatusCard(bookId: string): StatusCard | null {
     .slice(0, 6)
   const staleDays = last ? Math.floor((Date.now() - last.updatedAt) / 86400000) || null : null
   return {
+    bookId,
     bookTitle: book.title,
     lineName: line.name,
     chapterCount: chapters.length,

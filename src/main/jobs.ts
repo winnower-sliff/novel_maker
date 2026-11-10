@@ -1,12 +1,7 @@
 import type { ChatMessage, Job, JobPayload } from '../shared/types.js'
 import { interceptorDefs, runAgentLoop } from './agent/loop.js'
 import { toolDefs } from './agent/tools.js'
-import {
-  emitJob,
-  emitJobActivity,
-  emitJobDelta,
-  emitMessageAppend
-} from './broadcast.js'
+import { emitJob, emitJobActivity, emitJobDelta, emitMessageAppend } from './broadcast.js'
 import { isQuotaError } from './director/callJson.js'
 import {
   applyRevisePlan,

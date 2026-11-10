@@ -553,6 +553,7 @@ export const QUICK_ACTIONS: Array<{ label: string; instruction: string }> = [
 // ── 现状卡（W1，纯数据组装零模型成本） ──────────────────────────────────────
 
 export interface StatusCard {
+  bookId: string
   bookTitle: string
   lineName: string
   chapterCount: number

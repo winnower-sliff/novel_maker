@@ -5,6 +5,7 @@ import type { ProviderId } from '@shared/providers'
 import { useConnStore } from '../lib/conn'
 import { checkUpdate, downloadUpdate, installUpdate } from '../lib/apkUpdater'
 import { useUiStore } from '../lib/uiStore'
+import { useBooks } from '../lib/queries'
 import { SampleReader } from '../components/SampleReader'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
@@ -86,6 +87,8 @@ export default function Settings() {
         <SampleLib />
       </Section>
 
+      <ArchivedBooks />
+
       {/* 用量 */}
       <Section title="用量">
         {stats && (
@@ -121,6 +124,46 @@ export default function Settings() {
         <div className="mt-2 text-xs text-stone-400">当前版本 {APP_VERSION}</div>
       </Section>
     </div>
+  )
+}
+
+/** 已归档的书：隐藏于书架，此处可恢复 */
+function ArchivedBooks() {
+  const qc = useQueryClient()
+  const { data: books } = useBooks()
+  const archived = (books ?? []).filter((b) => b.archived)
+  const [busy, setBusy] = useState('')
+  if (archived.length === 0) return null
+  const restore = async (id: string) => {
+    setBusy(id)
+    try {
+      await window.api.book.update(id, { archived: false })
+      await qc.invalidateQueries({ queryKey: ['books'] })
+    } finally {
+      setBusy('')
+    }
+  }
+  return (
+    <Section title={`已归档的书（${archived.length}）`}>
+      <div className="space-y-2">
+        {archived.map((b) => (
+          <div key={b.id} className="flex items-center gap-2 rounded-xl bg-orange-50 p-2.5">
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-sm text-stone-700">{b.title || '未命名'}</div>
+              <div className="mt-0.5 text-[11px] text-stone-400">归档于书架，内容保留</div>
+            </div>
+            <button
+              type="button"
+              disabled={busy === b.id}
+              className="shrink-0 rounded-lg border border-orange-200 px-3 py-1.5 text-[11px] text-stone-500 disabled:opacity-50"
+              onClick={() => void restore(b.id)}
+            >
+              恢复
+            </button>
+          </div>
+        ))}
+      </div>
+    </Section>
   )
 }
 
