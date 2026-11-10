@@ -131,6 +131,12 @@
 > - 前端：删 LiveRow 底部细状态行（用户反馈表现不好）——取消入口并入 StatusHead 运行中变体
 >   （橙色胶囊+runText 按 kind 报状态+chat 直取消/写作确认弹层）；贴底跟随由 Write.tsx
 >   ResizeObserver 承担（LiveRow 删除不丢滚动跟随）
+> - 人设卡 UI（用户需求）：钉选=行尾图钉 PinToggle（与设定卡共享组件）+钉选置顶分组
+>   （「钉选（每次写作必带）/其余」）；详情里钉选按钮删除；charTags=tags 列 ∪ 人设 JSON 的
+>   tags/标签/身份/特质 键（数组/逗号串兼容），列表行胶囊展示
+> - **zod 契约同步坑**：store 层改 optional 不够——contract.ts 的 CharacterInputSchema.name/
+>   ForeshadowInputSchema.title 仍 min(1) 必填，HTTP invoke 链路照样拒（上轮只修了 agent 链路）；
+>   本轮已同步 optional，smoke-http-patch.mjs 5 断言（真起 server 打 fetch 验 zod+兑底）
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）

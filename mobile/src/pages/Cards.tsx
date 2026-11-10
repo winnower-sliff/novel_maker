@@ -61,6 +61,31 @@ async function toggleCardPin(card: Card) {
   await window.api.card.save({ id: card.id, lineId: card.lineId, title: card.title, pinned: !card.pinned })
 }
 
+/** 图钉按钮（钉选=每次写作必带）；内嵌可点击父级时靠 stopPropagation 隔离 */
+function PinToggle({ on, onToggle }: { on: boolean; onToggle: () => Promise<void> | void }) {
+  return (
+    <span
+      role="button"
+      tabIndex={0}
+      className={'shrink-0 rounded-full p-1.5 ' + (on ? 'text-orange-600' : 'text-stone-300')}
+      onClick={async (e) => {
+        e.stopPropagation()
+        await onToggle()
+      }}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter') {
+          e.stopPropagation()
+          void onToggle()
+        }
+      }}
+    >
+      <svg width="14" height="14" viewBox="0 0 24 24" fill={on ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2">
+        <path d="M12 17v5M9 3h6l1 7 3 3H5l3-3 1-7z" strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </span>
+  )
+}
+
 function CardsList({ lineId }: { lineId: string }) {
   const { data: cards = [], refetch } = useCards(lineId)
   const [expanded, setExpanded] = useState<string | null>(null)
@@ -87,27 +112,7 @@ function CardsList({ lineId }: { lineId: string }) {
           {kindLabel(c.kind ?? 'custom')}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm">{c.title}</span>
-        {c.pinned && <span className="text-[11px] text-orange-600">已钉选</span>}
-        <span
-          role="button"
-          tabIndex={0}
-          className="rounded-full p-1.5 text-stone-400"
-          onClick={async (e) => {
-            e.stopPropagation()
-            await toggleCardPin(c)
-            refetch()
-          }}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.stopPropagation()
-              toggleCardPin(c).then(() => refetch())
-            }
-          }}
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill={c.pinned ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2">
-            <path d="M12 17v5M9 3h6l1 7 3 3H5l3-3 1-7z" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </span>
+        <PinToggle on={c.pinned} onToggle={async () => { await toggleCardPin(c); refetch() }} />
       </button>
       {expanded === c.id && (
         <div className="border-t border-orange-100/70 px-4 py-3">
@@ -246,35 +251,92 @@ function JsonView({ value }: { value: unknown }) {
   )
 }
 
+/** 人设标签：tags 列 ∪ 人设 JSON 里的标签字段（tags/标签/身份/特质；数组或逗号串都兼容） */
+function charTags(ch: Character): string[] {
+  const out: string[] = []
+  const push = (v: unknown) => {
+    if (typeof v === 'string') {
+      for (const x of v.split(/[,，、;；]+/)) {
+        const t = x.trim()
+        if (t && !out.includes(t)) out.push(t)
+      }
+    } else if (Array.isArray(v)) v.forEach(push)
+  }
+  push(ch.tags)
+  for (const k of ['tags', '标签', '身份', '特质']) push((ch.card ?? {})[k])
+  return out
+}
+
 function CharactersList({ lineId }: { lineId: string }) {
   const { data: characters = [], refetch } = useCharacters(lineId)
   const [expanded, setExpanded] = useState<string | null>(null)
 
-  if (characters.length === 0) return <div className="py-16 text-center text-sm text-stone-400">还没有人物</div>
+  const pinned = characters.filter((c) => c.pinned)
+  const rest = characters.filter((c) => !c.pinned)
 
-  return (
-    <div className="space-y-1.5">
-      {characters.map((ch) => (
-        <div key={ch.id} className="rounded-xl border border-orange-100 bg-white">
+  const item = (ch: Character) => {
+    const tags = charTags(ch)
+    return (
+      <div key={ch.id} className="rounded-xl border border-orange-100 bg-white">
+        <div className="flex w-full items-center gap-1 px-3 py-3">
           <button
             type="button"
-            className="flex w-full items-center gap-2 px-3 py-3 text-left"
+            className="min-w-0 flex-1 text-left"
             onClick={() => setExpanded(expanded === ch.id ? null : ch.id)}
           >
-            <span className="min-w-0 flex-1 truncate text-sm font-medium">{ch.name}</span>
-            {ch.role && <span className="truncate text-xs text-stone-400">{ch.role}</span>}
-            {ch.pinned && <span className="text-[11px] text-orange-600">已钉选</span>}
+            <span className="flex items-baseline gap-2">
+              <span className="truncate text-sm font-medium">{ch.name}</span>
+              {ch.role && <span className="truncate text-xs text-stone-400">{ch.role}</span>}
+            </span>
+            {tags.length > 0 && (
+              <span className="mt-1.5 flex flex-wrap gap-1">
+                {tags.slice(0, 4).map((t) => (
+                  <span
+                    key={t}
+                    className="rounded-full border border-orange-100 bg-orange-50 px-1.5 py-0.5 text-[10px] text-orange-700/90"
+                  >
+                    {t}
+                  </span>
+                ))}
+                {tags.length > 4 && <span className="text-[10px] leading-5 text-stone-400">+{tags.length - 4}</span>}
+              </span>
+            )}
           </button>
-          {expanded === ch.id && <CharacterDetail ch={ch} onPin={() => refetch()} />}
+          <PinToggle
+            on={ch.pinned}
+            onToggle={async () => {
+              await window.api.character.save({ id: ch.id, lineId: ch.lineId, pinned: !ch.pinned })
+              refetch()
+            }}
+          />
         </div>
-      ))}
+        {expanded === ch.id && <CharacterDetail ch={ch} />}
+      </div>
+    )
+  }
+
+  if (characters.length === 0) return <div className="py-16 text-center text-sm text-stone-400">还没有人物</div>
+  return (
+    <div>
+      {pinned.length > 0 && (
+        <>
+          <div className="mb-2 text-[11px] text-stone-400">钉选（每次写作必带）</div>
+          <div className="mb-4 space-y-1.5">{pinned.map(item)}</div>
+        </>
+      )}
+      {rest.length > 0 && (
+        <>
+          <div className="mb-2 text-[11px] text-stone-400">其余（按相关度自动带）</div>
+          <div className="space-y-1.5">{rest.map(item)}</div>
+        </>
+      )}
     </div>
   )
 }
 
 const STATE_BASE_KEYS = ['location', 'body', 'mood', 'items', 'knows', 'goal']
 
-function CharacterDetail({ ch, onPin }: { ch: Character; onPin: () => void }) {
+function CharacterDetail({ ch }: { ch: Character }) {
   const state = (ch.state ?? {}) as Record<string, unknown>
   const stateBase = STATE_BASE_KEYS.filter((k) => typeof state[k] === 'string' && state[k])
   const stateExtra = Object.keys(state).filter(
@@ -322,16 +384,6 @@ function CharacterDetail({ ch, onPin }: { ch: Character; onPin: () => void }) {
           ))}
         </div>
       )}
-      <button
-        type="button"
-        className="rounded-lg border border-orange-100 px-3 py-1.5 text-xs text-stone-500"
-        onClick={async () => {
-          await window.api.character.save({ id: ch.id, lineId: ch.lineId, name: ch.name, pinned: !ch.pinned })
-          onPin()
-        }}
-      >
-        {ch.pinned ? '取消钉选' : '钉选（写作必带）'}
-      </button>
     </div>
   )
 }

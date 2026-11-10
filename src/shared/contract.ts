@@ -134,7 +134,8 @@ export const CardInputSchema = z.object({
 export const CharacterInputSchema = z.object({
   id: z.string().optional(),
   lineId: z.string(),
-  name: z.string().min(1),
+  /** 部分更新可不传（保留原名） */
+  name: z.string().min(1).optional(),
   role: z.string().optional(),
   card: z.record(z.string(), z.unknown()).optional(),
   /** 七要素沿用字符串；额外键放任意 JSON（嵌套对象/表格，设定页递归渲染） */
@@ -156,7 +157,8 @@ export const CharacterInputSchema = z.object({
 export const ForeshadowInputSchema = z.object({
   id: z.string().optional(),
   lineId: z.string(),
-  title: z.string().min(1),
+  /** 部分更新可不传（保留原标题） */
+  title: z.string().min(1).optional(),
   detail: z.string().optional(),
   plantedChapterId: z.string().optional(),
   plannedChapterId: z.string().optional(),

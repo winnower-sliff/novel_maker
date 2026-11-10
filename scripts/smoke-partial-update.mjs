@@ -31,6 +31,10 @@ const card1 = store.saveCard({ lineId: line.id, kind: 'world', title: '雾津港
 const card2 = store.saveCard({ id: card1.id, lineId: line.id, content: 'b' })
 ok('save_card 不传 title → 保留「雾津港」', card2?.title === '雾津港')
 
-rmSync(DATA, { recursive: true, force: true })
+try {
+  rmSync(DATA, { recursive: true, force: true })
+} catch {
+  // Windows 下 sqlite 句柄未释放时删不掉，留临时目录无害
+}
 console.log(`\n[部分更新冒烟] ${failed ? '失败 ×' + failed : '全部通过'}`)
 process.exit(failed ? 1 : 0)
