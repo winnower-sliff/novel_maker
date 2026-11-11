@@ -139,10 +139,16 @@
 >   本轮已同步 optional，smoke-http-patch.mjs 5 断言（真起 server 打 fetch 验 zod+兑底）
 > - 书架重设计+归档（用户需求「重新设计首页+删除书=归档」）：最近的书大卡（按 id hash 取色渐变+
 >   续写提示+relTime）置顶，其余列表卡带书脊色条+章数 meta+⋯ 菜单（打开/归档）；归档=
->   book.update {archived:true}（内容全保留，非真删），恢复入口=设置页「已归档的书」段；
+>   book.update {archived:true}（内容全保留，非真删），恢复入口=设置页「已归档的书」段+
+>   书架尾部「已归档 N 本」入口行（archivedCount>0 才显示）；已归档书支持彻底删除（两步确认，
+>   走 book:delete confirm=true，级联删+删前快照）；
 >   StatusCard 加 bookId 字段（Shelf 批量映射，此前按书名匹配不可靠）；useShelfStatus 批量
 >   statusCard（staleTime 30s）；book:list 保持全量返回（设置页要归档书），书架前端过滤；
 >   smoke-archive.mjs 7 断言
+> - **部署坑（归档静默失败实锤）**：改了主进程代码（contract/store/handlers）只跑 build-apk 不
+>   npm run deploy——APK 新了但 server 进程仍跑旧 dist（zod strip 掉新字段，手机端显示成功、
+>   库里没写）。判据：新功能手机端"成功"但不生效，先 curl /api/health 看 server 版本是否落后
+>   package.json。**改主进程代码后必须 deploy；build-apk 只管前端+APK**
 
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）

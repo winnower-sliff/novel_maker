@@ -64,6 +64,7 @@ export default function Shelf() {
 
   const recent = active[0]
   const rest = active.slice(1)
+  const archivedCount = (books ?? []).filter((b) => b.archived).length
   const metaOf = (b: Book): string => {
     const s = statusById.get(b.id)
     const parts: string[] = []
@@ -142,6 +143,16 @@ export default function Shelf() {
               </div>
             ))}
           </div>
+        )}
+
+        {archivedCount > 0 && (
+          <button
+            type="button"
+            className="mt-4 w-full py-1 text-center text-xs text-stone-400 active:text-stone-600"
+            onClick={() => setTab('settings')}
+          >
+            已归档 {archivedCount} 本 · 归档管理 →
+          </button>
         )}
       </div>
 
