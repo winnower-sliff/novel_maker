@@ -33,6 +33,7 @@ export default function Shelf() {
   const qc = useQueryClient()
   const [creating, setCreating] = useState(false)
   const [menuFor, setMenuFor] = useState<Book | null>(null)
+  const [confirmWipe, setConfirmWipe] = useState(false)
 
   const active = useMemo(
     () => (books ?? []).filter((b) => !b.archived).sort((a, b) => b.updatedAt - a.updatedAt),
@@ -62,6 +63,14 @@ export default function Shelf() {
     void qc.invalidateQueries({ queryKey: ['shelfStatus'] })
   }
 
+  const wipe = async (b: Book) => {
+    setMenuFor(null)
+    setConfirmWipe(false)
+    await window.api.book.delete(b.id, true)
+    void qc.invalidateQueries({ queryKey: ['books'] })
+    void qc.invalidateQueries({ queryKey: ['shelfStatus'] })
+  }
+
   const recent = (() => {
     let id: string | null = null
     try {
@@ -87,6 +96,23 @@ export default function Shelf() {
         <h1 className="pt-3 text-2xl font-bold">书架</h1>
         <div className="flex items-center gap-3 pt-3">
           {active.length > 0 && <span className="text-xs text-stone-400">共 {active.length} 本</span>}
+          {archivedCount > 0 && (
+            <button type="button" className="text-xs text-stone-400 underline underline-offset-2" onClick={() => setTab('settings')}>
+              已归档 {archivedCount}
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={creating}
+            className="flex h-8 w-8 items-center justify-center rounded-full border border-orange-200 text-lg font-light text-orange-600 active:bg-orange-50 disabled:opacity-50"
+            aria-label="开新书"
+            onClick={() => {
+              setCreating(true)
+              createBook.mutate('新书')
+            }}
+          >
+            ＋
+          </button>
           <button type="button" className="text-2xl text-stone-500" onClick={() => setTab('settings')}>
             ⚙️
           </button>
@@ -164,22 +190,30 @@ export default function Shelf() {
         )}
       </div>
 
-      <div className="px-5 pb-safe pt-3">
-        <button
-          type="button"
-          disabled={creating}
-          onClick={() => {
-            setCreating(true)
-            createBook.mutate('新书')
-          }}
-          className="w-full rounded-xl bg-orange-600 py-3.5 font-semibold text-white active:bg-orange-700 disabled:opacity-50"
-        >
-          {creating ? '创建中…' : '＋ 开新书'}
-        </button>
-      </div>
+      {active.length === 0 && (
+        <div className="px-5 pb-safe pt-3">
+          <button
+            type="button"
+            disabled={creating}
+            onClick={() => {
+              setCreating(true)
+              createBook.mutate('新书')
+            }}
+            className="w-full rounded-xl bg-orange-600 py-3.5 font-semibold text-white active:bg-orange-700 disabled:opacity-50"
+          >
+            {creating ? '创建中…' : '＋ 开新书'}
+          </button>
+        </div>
+      )}
 
       {menuFor && (
-        <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setMenuFor(null)}>
+        <div
+          className="fixed inset-0 z-40 flex items-end bg-black/60"
+          onClick={() => {
+            setMenuFor(null)
+            setConfirmWipe(false)
+          }}
+        >
           <div
             className="w-full rounded-t-2xl border-t border-orange-100 bg-white p-5 pb-safe"
             onClick={(e) => e.stopPropagation()}
@@ -205,7 +239,36 @@ export default function Shelf() {
             >
               归档（不再显示在书架）
             </button>
-            <div className="mt-2 text-center text-[11px] text-stone-400">归档后可在 设置 → 已归档的书 恢复</div>
+            {confirmWipe ? (
+              <div className="mt-2.5 flex gap-2.5">
+                <button
+                  type="button"
+                  disabled={creating}
+                  className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                  onClick={() => void wipe(menuFor)}
+                >
+                  确认彻底删除
+                </button>
+                <button
+                  type="button"
+                  className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500"
+                  onClick={() => setConfirmWipe(false)}
+                >
+                  取消
+                </button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                className="mt-2.5 w-full py-1.5 text-xs text-stone-400 active:text-red-600"
+                onClick={() => setConfirmWipe(true)}
+              >
+                彻底删除这本书…
+              </button>
+            )}
+            <div className="mt-2 text-center text-[11px] text-stone-400">
+              归档后可在 设置 → 已归档的书 恢复；彻底删除无法找回
+            </div>
           </div>
         </div>
       )}
