@@ -28,7 +28,14 @@ export const useUiStore = create<UiState>((set) => ({
   bookSub: 'write',
   onboardBookId: null,
   setTab: (tab) => set({ tab }),
-  openBook: (bookId) => set({ openBookId: bookId, bookSub: 'write' }),
+  openBook: (bookId) => {
+    try {
+      localStorage.setItem('nm-last-opened', bookId)
+    } catch {
+      // 无痕模式等场景忽略
+    }
+    set({ openBookId: bookId, bookSub: 'write' })
+  },
   closeBook: () => set({ openBookId: null }),
   setBookSub: (bookSub) => set({ bookSub }),
   startOnboard: (bookId) => set({ onboardBookId: bookId, openBookId: null }),

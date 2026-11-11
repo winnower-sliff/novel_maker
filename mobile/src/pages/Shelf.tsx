@@ -62,8 +62,16 @@ export default function Shelf() {
     void qc.invalidateQueries({ queryKey: ['shelfStatus'] })
   }
 
-  const recent = active[0]
-  const rest = active.slice(1)
+  const recent = (() => {
+    let id: string | null = null
+    try {
+      id = localStorage.getItem('nm-last-opened')
+    } catch {
+      // 忽略
+    }
+    return active.find((b) => b.id === id) ?? active[0]
+  })()
+  const rest = active.filter((b) => b !== recent)
   const archivedCount = (books ?? []).filter((b) => b.archived).length
   const metaOf = (b: Book): string => {
     const s = statusById.get(b.id)
@@ -103,7 +111,7 @@ export default function Shelf() {
             onClick={() => openBook(recent.id)}
           >
             <span className="absolute left-0 top-0 h-full w-1.5 bg-white/25" />
-            <div className="text-[11px] font-medium tracking-wide text-white/75">最近在写</div>
+            <div className="text-[11px] font-medium tracking-wide text-white/75">上次打开</div>
             <div className="mt-1 line-clamp-1 text-lg font-bold text-white">{recent.title || '未命名'}</div>
             <div className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-white/85">{metaOf(recent)}</div>
             <div className="mt-2.5 flex items-center justify-between">
