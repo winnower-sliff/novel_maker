@@ -24,6 +24,11 @@ import java.util.concurrent.Executors;
 @CapacitorPlugin(name = "ApkUpdater")
 public class ApkUpdaterPlugin extends Plugin {
     private final ExecutorService pool = Executors.newSingleThreadExecutor();
+    // 下载状态（跨 WebView 重载可查询；文件本身是跨进程重启的持久真相）
+    private volatile boolean downloading = false;
+    private volatile long done = 0;
+    private volatile long total = 0;
+    private volatile String lastError = null;
 
     @PluginMethod
     public void getVersion(PluginCall call) {
@@ -38,6 +43,23 @@ public class ApkUpdaterPlugin extends Plugin {
         }
     }
 
+    /** 下载状态快照：JS 轮询用，不依赖事件回调存活 */
+    @PluginMethod
+    public void status(PluginCall call) {
+        JSObject r = new JSObject();
+        File apk = apkFile();
+        r.put("downloading", downloading);
+        r.put("done", done);
+        r.put("total", total);
+        r.put("size", apk.isFile() ? apk.length() : 0);
+        if (lastError != null) r.put("error", lastError);
+        call.resolve(r);
+    }
+
+    private File apkFile() {
+        return new File(getContext().getCacheDir(), "NovelMaker.apk");
+    }
+
     @PluginMethod
     public void download(PluginCall call) {
         String url = call.getString("url");
@@ -45,9 +67,18 @@ public class ApkUpdaterPlugin extends Plugin {
             call.reject("缺少 url");
             return;
         }
+        // 可重入：已在下载中不重复起任务，JS 靠 status() 轮询进度
+        if (downloading) {
+            call.resolve();
+            return;
+        }
         String token = call.getString("token", "");
         pool.execute(() -> {
-            File dest = new File(getContext().getCacheDir(), "NovelMaker.apk");
+            File dest = apkFile();
+            downloading = true;
+            done = 0;
+            total = 0;
+            lastError = null;
             try {
                 HttpURLConnection conn = (HttpURLConnection) new URL(url).openConnection();
                 conn.setConnectTimeout(8000);
@@ -58,19 +89,21 @@ public class ApkUpdaterPlugin extends Plugin {
                     conn.disconnect();
                     throw new IOException("HTTP " + code);
                 }
-                long total = conn.getContentLength();
+                long t = conn.getContentLength();
+                total = t;
                 try (InputStream in = conn.getInputStream();
                      FileOutputStream out = new FileOutputStream(dest)) {
                     byte[] buf = new byte[16 * 1024];
-                    long done = 0;
+                    long d = 0;
                     int n;
                     while ((n = in.read(buf)) > 0) {
                         out.write(buf, 0, n);
-                        done += n;
-                        if (total > 0) {
+                        d += n;
+                        done = d;
+                        if (t > 0) {
                             JSObject p = new JSObject();
-                            p.put("done", done);
-                            p.put("total", total);
+                            p.put("done", d);
+                            p.put("total", t);
                             notifyListeners("progress", p);
                         }
                     }
@@ -84,7 +117,11 @@ public class ApkUpdaterPlugin extends Plugin {
             } catch (Exception e) {
                 // noinspection ResultOfMethodCallIgnored
                 dest.delete();
-                call.reject(e.getMessage() != null ? e.getMessage() : e.toString());
+                done = 0;
+                lastError = e.getMessage() != null ? e.getMessage() : e.toString();
+                call.reject(lastError);
+            } finally {
+                downloading = false;
             }
         });
     }

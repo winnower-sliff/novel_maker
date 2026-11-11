@@ -202,6 +202,8 @@ function migrate(d: DatabaseSync): void {
   if (!cols.has('negative_words'))
     d.exec("ALTER TABLE books ADD COLUMN negative_words TEXT DEFAULT '[]'")
   if (!cols.has('plan_mode')) d.exec('ALTER TABLE books ADD COLUMN plan_mode INTEGER DEFAULT 0')
+  // 草稿书（用户决策：点「开新书」后没产生任何用户对话的书不算书，自动清理）
+  if (!cols.has('draft')) d.exec('ALTER TABLE books ADD COLUMN draft INTEGER NOT NULL DEFAULT 0')
   if (!cols.has('style_sample_source'))
     d.exec("ALTER TABLE books ADD COLUMN style_sample_source TEXT DEFAULT ''")
   if (!cols.has('sample_sources')) {

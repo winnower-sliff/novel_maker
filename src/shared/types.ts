@@ -211,6 +211,8 @@ export interface Book {
   negativeWords: string[]
   /** 计划模式：写章前先出计划书等作者批准 */
   planMode: boolean
+  /** 草稿书：创建后用户还没发过言；一旦发言即转正（前端各列表一律过滤） */
+  draft: boolean
   activeLineId: string
   archived: boolean
   createdAt: number

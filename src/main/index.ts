@@ -4,6 +4,7 @@ import { connectHost } from './connect.js'
 import { recoverJobsOnBoot, watchdogTick } from './jobs.js'
 import { startServer } from './server.js'
 import { getServerStatus } from './serverState.js'
+import { purgeDraftBooks } from './store.js'
 import { shutdown, startTray } from './tray.js'
 
 process.title = 'novel-maker'
@@ -12,6 +13,8 @@ async function main(): Promise<void> {
   initConfig()
 
   await startServer()
+  // 清理误触「开新书」留下的空草稿书（用户从未发言）
+  purgeDraftBooks()
   // 写作任务恢复：重启前 running 的任务标 failed（W13 可 retry 续跑）+ 看门狗巡检
   recoverJobsOnBoot()
   setInterval(watchdogTick, 60_000).unref()

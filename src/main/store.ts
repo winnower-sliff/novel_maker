@@ -41,6 +41,7 @@ function rowToBook(r: Record<string, unknown>): Book {
     positiveWords: JSON.parse((r.positive_words as string) || '[]') as string[],
     negativeWords: JSON.parse((r.negative_words as string) || '[]') as string[],
     planMode: Boolean(r.plan_mode),
+    draft: Boolean(r.draft),
     activeLineId: (r.active_line_id as string) ?? '',
     archived: Boolean(r.archived),
     createdAt: r.created_at as number,
@@ -179,9 +180,11 @@ export function createBook(input: { title: string; genre?: string; targetWords?:
   const now = Date.now()
   const bookId = randomUUID()
   const lineId = randomUUID()
+  // 顺带清掉历史误触留下的草稿书（无用户发言的 draft 书）
+  purgeDraftBooks()
   db.prepare(
-    `INSERT INTO books (id, title, genre, target_words, redlines, active_line_id, created_at, updated_at)
-     VALUES (?, ?, ?, ?, '[]', ?, ?, ?)`
+    `INSERT INTO books (id, title, genre, target_words, redlines, active_line_id, draft, created_at, updated_at)
+     VALUES (?, ?, ?, ?, '[]', ?, 1, ?, ?)`
   ).run(bookId, input.title, input.genre ?? '', input.targetWords ?? 2000, lineId, now, now)
   db.prepare(`INSERT INTO lines (id, book_id, name, created_at) VALUES (?, ?, '主线', ?)`).run(
     lineId,
@@ -189,6 +192,19 @@ export function createBook(input: { title: string; genre?: string; targetWords?:
     now
   )
   return getBook(bookId) as Book
+}
+
+/** 清掉从未有过用户发言的草稿书（级联删空设定；误触「开新书」不留痕） */
+export function purgeDraftBooks(): number {
+  const db = getDb()
+  return Number(
+    db
+      .prepare(
+        `DELETE FROM books WHERE draft = 1 AND id NOT IN
+         (SELECT DISTINCT book_id FROM messages WHERE role = 'user')`
+      )
+      .run().changes
+  )
 }
 
 export function getBook(id: string): Book | null {
@@ -855,6 +871,10 @@ export function appendMessage(input: {
   const id = randomUUID()
   const now = Math.max(Date.now(), lastMsgTs + 1)
   lastMsgTs = now
+  // 用户第一次发言 = 书真正立起来（草稿转正，用户决策：没产生对话的书不算书）
+  if (input.role === 'user') {
+    db.prepare('UPDATE books SET draft = 0 WHERE id = ? AND draft = 1').run(input.bookId)
+  }
   db.prepare(
     `INSERT INTO messages (id, book_id, chapter_id, role, content, meta, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)`
   ).run(

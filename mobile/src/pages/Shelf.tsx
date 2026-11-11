@@ -36,7 +36,7 @@ export default function Shelf() {
   const [confirmWipe, setConfirmWipe] = useState(false)
 
   const active = useMemo(
-    () => (books ?? []).filter((b) => !b.archived).sort((a, b) => b.updatedAt - a.updatedAt),
+    () => (books ?? []).filter((b) => !b.archived && !b.draft).sort((a, b) => b.updatedAt - a.updatedAt),
     [books]
   )
   const { data: statuses } = useShelfStatus(active.map((b) => b.id))

@@ -8,6 +8,7 @@ import { useConnStore } from './conn'
 interface ApkUpdaterPlugin {
   getVersion(): Promise<{ version: string; versionCode: number }>
   download(opts: { url: string }): Promise<{ path: string; size: number }>
+  status(): Promise<DownloadStatus>
   install(): Promise<void | { needsGrant?: boolean }>
   addListener(
     event: 'progress',
@@ -73,7 +74,32 @@ export type DownloadState =
   | { state: 'ready' }
   | { state: 'error'; error: string }
 
-/** 下载 APK 到 cacheDir（原生执行），onProgress 0-100；完成后调 install() 安装 */
+/** 原生下载状态快照：downloading 进行中；size=cacheDir 已有 APK 字节数（跨进程重启仍准确） */
+export interface DownloadStatus {
+  downloading: boolean
+  done: number
+  total: number
+  size: number
+  error?: string
+}
+
+export async function getDownloadStatus(): Promise<DownloadStatus | null> {
+  const plugin = apkUpdater()
+  if (!plugin) return null
+  return plugin.status()
+}
+
+/**
+ * 触发下载（原生后台线程执行，立即返回，不等待完成）。
+ * 进度/完成/失败一律经 getDownloadStatus() 轮询——切走再回来、甚至 WebView 重载后状态都不丢。
+ */
+export async function startDownload(url: string): Promise<void> {
+  const plugin = apkUpdater()
+  if (!plugin) throw new Error('仅 APP 内可用')
+  await plugin.download({ url })
+}
+
+/** 旧接口保留兼容：一次性下载并等完成（内部轮询 status，不再依赖事件/Promise 存活） */
 export async function downloadUpdate(
   url: string,
   onProgress?: (pct: number) => void
@@ -81,12 +107,19 @@ export async function downloadUpdate(
   const plugin = apkUpdater()
   if (!plugin) return { state: 'error', error: '仅 APP 内可用' }
   try {
-    const listener = await plugin.addListener('progress', (p) => {
-      if (onProgress && p.total > 0) onProgress(Math.round((p.done / p.total) * 100))
-    })
-    await plugin.download({ url })
-    listener.remove()
-    return { state: 'ready' }
+    await startDownload(url)
+    // 轮询直到完成或失败（最长 10 分钟）
+    for (let i = 0; i < 750; i++) {
+      await new Promise((r) => setTimeout(r, 800))
+      const s = await plugin.status()
+      if (!s) continue
+      if (onProgress && s.total > 0) onProgress(Math.round((s.done / s.total) * 100))
+      if (!s.downloading) {
+        if (s.error && s.size === 0) return { state: 'error', error: s.error }
+        return { state: 'ready' }
+      }
+    }
+    return { state: 'error', error: '下载超时' }
   } catch (e) {
     return { state: 'error', error: e instanceof Error ? e.message : String(e) }
   }

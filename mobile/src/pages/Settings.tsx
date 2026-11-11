@@ -1,9 +1,9 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import type { Book, SampleFileInfo, SampleInfo, SettingsView, UsageStats } from '@shared/types'
 import type { ProviderId } from '@shared/providers'
 import { useConnStore } from '../lib/conn'
-import { checkUpdate, downloadUpdate, installUpdate } from '../lib/apkUpdater'
+import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
 import { useUiStore } from '../lib/uiStore'
 import { useBooks } from '../lib/queries'
 import { SampleReader } from '../components/SampleReader'
@@ -320,10 +320,10 @@ function SampleLib() {
                     </button>
                   )}
                 </div>
-                {(books ?? []).filter((b) => !b.archived).length > 0 && confirmDel !== s.id && (
+                {(books ?? []).filter((b) => !b.archived && !b.draft).length > 0 && confirmDel !== s.id && (
                   <div className="mt-2 flex flex-wrap gap-1.5">
                     {(books ?? [])
-                      .filter((b) => !b.archived)
+                      .filter((b) => !b.archived && !b.draft)
                       .map((b) => {
                         const on = b.sampleSources?.includes(s.id) ?? false
                         return (
@@ -655,13 +655,27 @@ function UpdateRow() {
   )
   const [note, setNote] = useState('')
   const [apkUrl, setApkUrl] = useState('')
+  const [apkSize, setApkSize] = useState(0)
 
+  // 检查更新：进设置页自动跑一次；下载中/已下载未装的状态经原生 status 自动恢复
   const check = async () => {
     setState('checking')
     const r = await checkUpdate()
     if (r.state === 'found') {
-      setState('found')
       setApkUrl(r.url)
+      setApkSize(r.size)
+      const s = await getDownloadStatus()
+      if (s && !s.downloading && r.size > 0 && s.size >= r.size) {
+        setState('ready')
+        setNote(`新版 ${r.version} 已下载，点击安装`)
+        return
+      }
+      if (s?.downloading) {
+        setState('downloading')
+        setNote('继续下载中…')
+        return
+      }
+      setState('found')
       setNote(`发现新版 ${r.version}`)
     } else if (r.state === 'latest') {
       setState('latest')
@@ -672,17 +686,46 @@ function UpdateRow() {
     }
   }
 
+  useEffect(() => {
+    void check()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
   const download = async () => {
     setState('downloading')
-    const r = await downloadUpdate(apkUrl, (pct) => setNote(`下载中 ${pct}%`))
-    if (r.state === 'ready') {
-      setState('ready')
-      setNote('下载完成，点击安装')
-    } else if (r.state === 'error') {
+    setNote('下载中…')
+    try {
+      await startDownload(apkUrl)
+    } catch (e) {
       setState('error')
-      setNote(r.error ?? '下载失败')
+      setNote(e instanceof Error ? e.message : String(e))
     }
   }
+
+  // 下载进度轮询（原生线程执行，状态不随页面/WebView 重载丢失）
+  useEffect(() => {
+    if (state !== 'downloading') return
+    const t = setInterval(async () => {
+      const s = await getDownloadStatus()
+      if (!s) return
+      if (s.downloading) {
+        setNote(
+          s.total > 0
+            ? `下载中 ${Math.round((s.done / s.total) * 100)}%`
+            : `下载中 ${(s.done / 1048576).toFixed(1)} MB`
+        )
+        return
+      }
+      if (apkSize > 0 && s.size >= apkSize) {
+        setState('ready')
+        setNote('下载完成，点击安装')
+      } else if (s.error) {
+        setState('error')
+        setNote(`下载失败：${s.error}`)
+      }
+    }, 800)
+    return () => clearInterval(t)
+  }, [state, apkSize])
 
   const install = async () => {
     const r = await installUpdate()
@@ -691,19 +734,20 @@ function UpdateRow() {
 
   return (
     <div>
-      {state === 'idle' || state === 'latest' || state === 'error' ? (
+      {state === 'idle' || state === 'checking' || state === 'latest' || state === 'error' ? (
         <button
           type="button"
-          className="w-full rounded-xl border border-orange-100 py-2.5 text-sm text-stone-600"
-          onClick={check}
+          disabled={state === 'checking'}
+          className="w-full rounded-xl border border-orange-100 py-2.5 text-sm text-stone-600 disabled:opacity-50"
+          onClick={() => void check()}
         >
-          检查更新
+          {state === 'checking' ? '检查中…' : '检查更新'}
         </button>
       ) : state === 'found' ? (
         <button
           type="button"
           className="w-full rounded-xl bg-orange-600 py-2.5 text-sm font-medium"
-          onClick={download}
+          onClick={() => void download()}
         >
           {note}
         </button>
@@ -715,7 +759,7 @@ function UpdateRow() {
         <button
           type="button"
           className="w-full rounded-xl bg-orange-600 py-2.5 text-sm font-medium"
-          onClick={install}
+          onClick={() => void install()}
         >
           {note}
         </button>

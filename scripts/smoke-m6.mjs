@@ -153,6 +153,10 @@ try {
   const chatTools = msgs.filter((m) => m.meta?.kind === 'tool' && m.meta.jobId === cj.id)
   ok(chatTools.length >= 1 && chatTools[0].meta.tool === 'list_chapters', 'chat agent 用了 list_chapters 工具')
 
+  // 用户动作消息（role=user）触发草稿转正：写章+chat 后书必须是正书
+  const bookNow = await invoke('book:get', book.id)
+  ok(bookNow?.book?.draft === false, '用户发言后草稿书转正（draft=false）')
+
   // ── spawn_subagent：父派只读调查员，子静默执行，结论回父 ──
   {
     let sj = await invoke('job:startChat', book.id, '派个调查员查一下写到第几章了，回头告诉我。')
