@@ -168,7 +168,7 @@ export default function Shelf() {
                 </button>
                 <button
                   type="button"
-                  className="shrink-0 px-3 text-stone-300 active:text-stone-500"
+                  className="my-auto ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-stone-400 active:bg-orange-100 active:text-stone-600"
                   onClick={() => setMenuFor(b)}
                   aria-label="书操作"
                 >
