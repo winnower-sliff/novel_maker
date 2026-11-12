@@ -137,6 +137,12 @@
 > - **zod 契约同步坑**：store 层改 optional 不够——contract.ts 的 CharacterInputSchema.name/
 >   ForeshadowInputSchema.title 仍 min(1) 必填，HTTP invoke 链路照样拒（上轮只修了 agent 链路）；
 >   本轮已同步 optional，smoke-http-patch.mjs 5 断言（真起 server 打 fetch 验 zod+兑底）
+> - **人设卡三件套（2026-11 grillme 共识）**：characters 表 card 列 RENAME 为 data+启用 tags 列
+>   （平铺无嵌套，冷热分离：data=你是谁/state=你现在怎样）；工具拆四——save_character 建档/元信息
+>   （已有人物传 data/tags 不生效）、update_character_tags 增量 add/delete、update_character_data
+>   浅合并 merge、patch_character_state 不动；前端人设列表 tags 筛选胶囊（复用设定卡模式）；
+>   charTags 兜底读 data 身份/定位键（存量不断档）。**forkLine 深拷贝列清单也写死列名——
+>   改表列必须同步 fork 的 characters:['name','role','data',...] 数组**（m2 冒烟实锤）
 > - 书架重设计+归档（用户需求「重新设计首页+删除书=归档」）：最近的书大卡（按 id hash 取色渐变+
 >   续写提示+relTime）置顶，其余列表卡带书脊色条+章数 meta+⋯ 菜单（打开/归档）；归档=
 >   book.update {archived:true}（内容全保留，非真删），恢复入口=设置页「已归档的书」段+
