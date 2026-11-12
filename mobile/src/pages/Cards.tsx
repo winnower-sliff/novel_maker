@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { Card, Character, Foreshadow } from '@shared/types'
 import { useBook, useCards, useCharacters, useForeshadows } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
@@ -263,16 +263,25 @@ function charTags(ch: Character): string[] {
     } else if (Array.isArray(v)) v.forEach(push)
   }
   push(ch.tags)
-  for (const k of ['tags', '标签', '身份', '特质']) push((ch.card ?? {})[k])
+  for (const k of ['tags', '标签', '身份', '特质']) push((ch.data ?? {})[k])
   return out
 }
 
 function CharactersList({ lineId }: { lineId: string }) {
   const { data: characters = [], refetch } = useCharacters(lineId)
   const [expanded, setExpanded] = useState<string | null>(null)
+  const [tagFilter, setTagFilter] = useState<string | null>(null)
 
-  const pinned = characters.filter((c) => c.pinned)
-  const rest = characters.filter((c) => !c.pinned)
+  // 全部标签按出现频次排序（筛选胶囊栏复用设定卡模式）
+  const allTags = useMemo(() => {
+    const freq = new Map<string, number>()
+    for (const c of characters) for (const t of charTags(c)) freq.set(t, (freq.get(t) ?? 0) + 1)
+    return [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t)
+  }, [characters])
+
+  const shown = tagFilter ? characters.filter((c) => charTags(c).includes(tagFilter)) : characters
+  const pinned = shown.filter((c) => c.pinned)
+  const rest = shown.filter((c) => !c.pinned)
 
   const item = (ch: Character) => {
     const tags = charTags(ch)
@@ -318,6 +327,25 @@ function CharactersList({ lineId }: { lineId: string }) {
   if (characters.length === 0) return <div className="py-16 text-center text-sm text-stone-400">还没有人物</div>
   return (
     <div>
+      {allTags.length > 0 && (
+        <div className="no-scrollbar -mx-1 mb-3 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+          {[null, ...allTags].map((t) => (
+            <button
+              key={t ?? '__all'}
+              type="button"
+              className={
+                'shrink-0 rounded-full px-2.5 py-1 text-[11px] ' +
+                (tagFilter === t
+                  ? 'bg-orange-600 text-white'
+                  : 'border border-orange-100 bg-orange-50 text-orange-800/80')
+              }
+              onClick={() => setTagFilter(t)}
+            >
+              {t ?? '全部'}
+            </button>
+          ))}
+        </div>
+      )}
       {pinned.length > 0 && (
         <>
           <div className="mb-2 text-[11px] text-stone-400">钉选（每次写作必带）</div>
@@ -330,6 +358,7 @@ function CharactersList({ lineId }: { lineId: string }) {
           <div className="space-y-1.5">{rest.map(item)}</div>
         </>
       )}
+      {shown.length === 0 && <div className="py-10 text-center text-sm text-stone-400">没有「{tagFilter}」标签的人物</div>}
     </div>
   )
 }
@@ -342,7 +371,7 @@ function CharacterDetail({ ch }: { ch: Character }) {
   const stateExtra = Object.keys(state).filter(
     (k) => !STATE_BASE_KEYS.includes(k) && state[k] != null && typeof state[k] === 'object'
   )
-  const cardKeys = Object.keys(ch.card ?? {}).filter((k) => ch.card[k] != null)
+  const dataKeys = Object.keys(ch.data ?? {}).filter((k) => ch.data[k] != null)
   return (
     <div className="border-t border-orange-100/70 px-4 py-3">
       {stateBase.length > 0 && (
@@ -371,14 +400,14 @@ function CharacterDetail({ ch }: { ch: Character }) {
           ))}
         </div>
       )}
-      {cardKeys.length > 0 && (
+      {dataKeys.length > 0 && (
         <div className="mb-3">
           <div className="mb-1 text-[11px] text-stone-400">人设</div>
-          {cardKeys.map((k) => (
+          {dataKeys.map((k) => (
             <div key={k} className="mb-1.5">
               <div className="text-[11px] text-stone-400">{k}</div>
               <div className="ml-1.5 border-l border-orange-100 pl-2">
-                <JsonView value={ch.card[k]} />
+                <JsonView value={ch.data[k]} />
               </div>
             </div>
           ))}

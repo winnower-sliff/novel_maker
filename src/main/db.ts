@@ -91,11 +91,11 @@ CREATE TABLE IF NOT EXISTS characters (
   line_id TEXT NOT NULL REFERENCES lines(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   role TEXT DEFAULT '',
-  card TEXT DEFAULT '{}',
+  data TEXT DEFAULT '{}',
   state TEXT DEFAULT '{}',
   relations TEXT DEFAULT '[]',
   pinned INTEGER DEFAULT 0,
-  tags TEXT DEFAULT '',
+  tags TEXT DEFAULT '[]',
   created_at INTEGER NOT NULL,
   updated_at INTEGER NOT NULL
 );
@@ -215,6 +215,11 @@ function migrate(d: DatabaseSync): void {
   }
   // 设定卡结构化数据（对象数组渲染成表格）
   if (!tableCols('cards').has('data')) d.exec("ALTER TABLE cards ADD COLUMN data TEXT DEFAULT '{}'")
+  // 人设卡平铺（用户决策：card 拆成 tags+data，冷热分离）：旧 card 列整体改名 data，内容原样保留
+  const charCols = tableCols('characters')
+  if (charCols.has('card') && !charCols.has('data'))
+    d.exec('ALTER TABLE characters RENAME COLUMN card TO data')
+  if (!charCols.has('tags')) d.exec("ALTER TABLE characters ADD COLUMN tags TEXT DEFAULT '[]'")
 }
 
 /** 灾难恢复快照（删书/删线前调用，D4）。VACUUM INTO 不覆盖已存在文件——文件名带时分秒，同秒冲突加序号 */

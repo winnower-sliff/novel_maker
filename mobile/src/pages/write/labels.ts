@@ -17,6 +17,8 @@ export const TOOL_LABEL: Record<string, string> = {
   get_character: '看人物详情',
   save_card: '存设定卡',
   save_character: '存人物',
+  update_character_tags: '改人物标签',
+  update_character_data: '改人设',
   patch_character_state: '更新人物状态',
   save_foreshadow: '记伏笔',
   update_book_config: '改书配置',

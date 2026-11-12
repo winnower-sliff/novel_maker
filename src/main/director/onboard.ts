@@ -41,7 +41,8 @@ export interface CharactersDraft {
   characters: Array<{
     name: string
     role: string
-    card: Record<string, unknown>
+    tags: string[]
+    data: Record<string, unknown>
     state: CharacterState
     relations: Array<{ to: string; label: string }>
   }>
@@ -67,7 +68,7 @@ function stageInstruction(stage: OnboardStage, _book: Book, collected: string): 
     case 'world':
       return `当前阶段【世界观草案】。基于采访结果产出一套世界观设定卡（5-10 张：地理/势力/历史/力量体系/物品/其他），每张卡区分读者已知（第一章就能感知的）与作者真相（暂不揭示的底层设定，含揭示计划）。draft 形状：{"cards":[{"kind":"geography|faction|history|power|item|custom","title":"...","readerText":"...","authorText":"...","revealPlan":"第N章前后揭示..."}]}。reply 简述这套世界观的卖点。options 固定为 ["就这么定","重来一套","我要改（选此项后在下方输入）"]。`
     case 'characters':
-      return `当前阶段【人物草案】。产出 3-8 个核心人物（主角必在）：人物卡（背景/外貌/性格/口癖）+ 初始活状态（location/body/mood/items/knows/goal 尽量填）+ 与其他人物的关系。draft 形状：{"characters":[{"name":"...","role":"主角|配角|反派...","card":{"背景":"...","外貌":"...","性格":"..."},"state":{"location":"...","mood":"...","goal":"..."},"relations":[{"to":"另一人物名","label":"关系"}]}]}。options 固定为 ["就这么定","重来一套","我要改（选此项后在下方输入）"]。`
+      return `当前阶段【人物草案】。产出 3-8 个核心人物（主角必在）：三件套——tags 标签（2-4 个短词，如「复仇者」「盐帮」，前端按标签筛选）+ data 人设（背景/外貌/性格/口癖）+ state 初始活状态（location/body/mood/items/knows/goal 尽量填）+ 与其他人物的关系。draft 形状：{"characters":[{"name":"...","role":"主角|配角|反派...","tags":["...","..."],"data":{"背景":"...","外貌":"...","性格":"..."},"state":{"location":"...","mood":"...","goal":"..."},"relations":[{"to":"另一人物名","label":"关系"}]}]}。options 固定为 ["就这么定","重来一套","我要改（选此项后在下方输入）"]。`
     case 'title':
       return `当前阶段【书名与骨架】。产出 3 个书名候选（各配 100 字内简介）、文风卡（styleName+styleNotes）、单章字数建议（1500-4000）、红线清单（从采访提取，含用户明确说的雷点）、轻骨架（终局方向感 ending——注意不是预定义结局，只是长线方向感；前 3 章概要 firstThree 各一句）。draft 形状：{"titles":[{"title":"...","intro":"..."}],"styleName":"...","styleNotes":"...","targetWords":2000,"redlines":["..."],"skeleton":{"ending":"...","firstThree":["...","...","..."]}}。options 为三个书名+「我要改」。`
     default:
@@ -181,7 +182,8 @@ async function confirmDraft(
         lineId: book.activeLineId,
         name: c.name,
         role: c.role,
-        card: c.card,
+        tags: c.tags,
+        data: c.data,
         state: c.state,
         relations: c.relations
       })

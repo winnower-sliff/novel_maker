@@ -137,7 +137,8 @@ export const CharacterInputSchema = z.object({
   /** 部分更新可不传（保留原名） */
   name: z.string().min(1).optional(),
   role: z.string().optional(),
-  card: z.record(z.string(), z.unknown()).optional(),
+  /** 人设数据（你是谁）：新建=初值；改人设走 update_character_data 浅合并（HTTP 直连场景此处也可改） */
+  data: z.record(z.string(), z.unknown()).optional(),
   /** 七要素沿用字符串；额外键放任意 JSON（嵌套对象/表格，设定页递归渲染） */
   state: z
     .looseObject({

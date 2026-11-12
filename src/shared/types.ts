@@ -311,8 +311,8 @@ export interface Character {
   lineId: string
   name: string
   role: string
-  /** 人物卡自由结构（背景/外貌/性格/口癖等） */
-  card: Record<string, unknown>
+  /** 人设数据（你是谁）：背景/外貌/性格等自由键值，浅合并更新 */
+  data: Record<string, unknown>
   state: CharacterState
   relations: CharacterRelation[]
   pinned: boolean

@@ -102,7 +102,7 @@ function rowToCharacter(r: Record<string, unknown>): Character {
     lineId: r.line_id as string,
     name: r.name as string,
     role: (r.role as string) ?? '',
-    card: JSON.parse((r.card as string) || '{}') as Record<string, unknown>,
+    data: JSON.parse((r.data as string) || '{}') as Record<string, unknown>,
     state: JSON.parse((r.state as string) || '{}') as CharacterState,
     relations: JSON.parse((r.relations as string) || '[]') as Character['relations'],
     pinned: Boolean(r.pinned),
@@ -325,7 +325,7 @@ export function forkLine(
   // 深拷贝列白名单（与 db.ts 建表列对齐；列名来自本常量，无注入面）
   const COPY_COLUMNS = {
     cards: ['kind', 'title', 'reader_text', 'author_text', 'reveal_plan', 'data', 'pinned', 'tags'],
-    characters: ['name', 'role', 'card', 'state', 'relations', 'pinned', 'tags'],
+    characters: ['name', 'role', 'data', 'state', 'relations', 'pinned', 'tags'],
     foreshadows: [
       'title',
       'detail',
@@ -668,7 +668,7 @@ export function listCharacters(lineId: string, opts?: { q?: string }): Character
   let sql = 'SELECT * FROM characters WHERE line_id = ?'
   const vals: SQLInputValue[] = [lineId]
   if (opts?.q) {
-    sql += ' AND (name LIKE ? OR role LIKE ? OR card LIKE ?)'
+    sql += ' AND (name LIKE ? OR role LIKE ? OR data LIKE ?)'
     const like = `%${opts.q}%`
     vals.push(like, like, like)
   }
@@ -686,7 +686,7 @@ export interface CharacterInput {
   /** 改人物可不传（保留原名）；新建缺省「未命名」 */
   name?: string
   role?: string
-  card?: Record<string, unknown>
+  data?: Record<string, unknown>
   state?: CharacterState
   relations?: Character['relations']
   pinned?: boolean
@@ -701,12 +701,12 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
     const old = getCharacter(input.id)
     if (!old) return null
     db.prepare(
-      `UPDATE characters SET name = ?, role = ?, card = ?, state = ?, relations = ?, pinned = ?, tags = ?, updated_at = ?
+      `UPDATE characters SET name = ?, role = ?, data = ?, state = ?, relations = ?, pinned = ?, tags = ?, updated_at = ?
        WHERE id = ?`
     ).run(
       input.name ?? old.name,
       input.role ?? old.role,
-      JSON.stringify(input.card ?? old.card),
+      JSON.stringify(input.data ?? old.data),
       JSON.stringify(input.state ?? old.state),
       JSON.stringify(input.relations ?? old.relations),
       (input.pinned ?? old.pinned) ? 1 : 0,
@@ -718,7 +718,7 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
   }
   const id = randomUUID()
   db.prepare(
-    `INSERT INTO characters (id, book_id, line_id, name, role, card, state, relations, pinned, tags, created_at, updated_at)
+    `INSERT INTO characters (id, book_id, line_id, name, role, data, state, relations, pinned, tags, created_at, updated_at)
      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     id,
@@ -726,7 +726,7 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
     input.lineId,
     input.name ?? '未命名',
     input.role ?? '',
-    JSON.stringify(input.card ?? {}),
+    JSON.stringify(input.data ?? {}),
     JSON.stringify(input.state ?? {}),
     JSON.stringify(input.relations ?? []),
     input.pinned ? 1 : 0,
@@ -734,6 +734,35 @@ export function saveCharacter(input: CharacterInput & { id?: string }): Characte
     now,
     now
   )
+  return getCharacter(id)
+}
+
+/** 人设 tags 增量更新（add/delete 去重保序） */
+export function updateCharacterTags(
+  id: string,
+  opts: { add?: string[]; delete?: string[] }
+): Character | null {
+  const old = getCharacter(id)
+  if (!old) return null
+  const del = new Set(opts.delete ?? [])
+  const next: string[] = []
+  for (const t of [...old.tags, ...(opts.add ?? [])]) {
+    if (!del.has(t) && !next.includes(t)) next.push(t)
+  }
+  getDb()
+    .prepare('UPDATE characters SET tags = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(next), Date.now(), id)
+  return getCharacter(id)
+}
+
+/** 人设 data 浅合并（只改传入的顶层键，未传键保留原值） */
+export function updateCharacterData(id: string, merge: Record<string, unknown>): Character | null {
+  const old = getCharacter(id)
+  if (!old) return null
+  const next = { ...old.data, ...merge }
+  getDb()
+    .prepare('UPDATE characters SET data = ?, updated_at = ? WHERE id = ?')
+    .run(JSON.stringify(next), Date.now(), id)
   return getCharacter(id)
 }
 

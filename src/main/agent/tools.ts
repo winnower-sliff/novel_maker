@@ -239,18 +239,26 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'save_character',
       description:
-        '建/改人物（传 id=改，不传=建）。部分更新：只需传要改的字段，未传字段保持原值（如只改 state 就只传 id+state）。人设卡/初始状态/关系网。',
+        '建人物档案（不传 id=新建，name 必填）或改元信息（传 id：改名/改定位/改关系网/钉选）。人设正文用 update_character_data、标签用 update_character_tags、活状态用 patch_character_state。部分更新：只需传要改的字段，未传字段保持原值。',
       input_schema: {
         type: 'object',
         properties: {
           id: { type: 'string', description: '改人物时传' },
-          name: { type: 'string' },
+          name: { type: 'string', description: '人物名（新建必填；改名时传新名）' },
           role: { type: 'string', description: '一句话定位（主角/对手/导师…）' },
-          card: { type: 'object', description: '自由结构人设卡' },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '标签（仅新建时全量传入；已有人物改标签用 update_character_tags）'
+          },
+          data: {
+            type: 'object',
+            description: '人设数据初值（仅新建时可带；已有人物改数据用 update_character_data）'
+          },
           state: {
             type: 'object',
             description:
-              '活状态。七要素字段收字符串：{location?,body?,mood?,items?,knows?,goal?}；也可加任意自定义键（对象/数组皆可，设定页递归渲染）',
+              '初始活状态。七要素字段收字符串：{location?,body?,mood?,items?,knows?,goal?}；也可加任意自定义键（对象/数组皆可，设定页递归渲染）',
             properties: {
               location: { type: 'string' },
               body: { type: 'string', description: '身体状态（伤病等）' },
@@ -272,6 +280,36 @@ export function toolDefs(): ToolDef[] {
           pinned: { type: 'boolean', description: 'true=钉选（每章上下文必带）' }
         },
         required: ['name']
+      }
+    },
+    {
+      name: 'update_character_tags',
+      description:
+        '增量改人物标签：add 加（去重）、delete 删。前端按标签筛选人物，标签宜短（2-6 字，如「盐帮」「反派」「复仇者」）。',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'list_characters 返回的 id' },
+          add: { type: 'array', items: { type: 'string' }, description: '要加的标签' },
+          delete: { type: 'array', items: { type: 'string' }, description: '要删的标签' }
+        },
+        required: ['id']
+      }
+    },
+    {
+      name: 'update_character_data',
+      description:
+        '改人物人设数据（你是谁：背景/外貌/性格/口癖等自由键值）。浅合并：只传要改的顶层键，未传键保留原值。整键替换语义——复杂键先 list_characters 读旧值改完再写。',
+      input_schema: {
+        type: 'object',
+        properties: {
+          id: { type: 'string', description: 'list_characters 返回的 id' },
+          merge: {
+            type: 'object',
+            description: '要合并进去的键值对（如 {"外貌":"高瘦","口癖":"啧"}）'
+          }
+        },
+        required: ['id', 'merge']
       }
     },
     {
@@ -577,13 +615,13 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
         }
       }
       const rel = target.relations.map((r) => `${r.to}（${r.label}）`).join('；')
-      const card = Object.keys(target.card).length
-        ? JSON.stringify(target.card, null, 1)
-        : '（无人设卡内容）'
+      const card = Object.keys(target.data).length
+        ? JSON.stringify(target.data, null, 1)
+        : '（无人设内容）'
       return {
         ok: true,
         summary: `读人物「${target.name}」详情`,
-        data: `【${target.role || '人物'}${target.pinned ? '·钉选' : ''}】${target.name} (id=${target.id})${N}〔人设卡〕${N}${card}${N}〔当前状态〕${N}${JSON.stringify(target.state, null, 1)}${N}〔关系〕${rel || '（无）'}`
+        data: `【${target.role || '人物'}${target.pinned ? '·钉选' : ''}】${target.name} (id=${target.id})${N}〔标签〕${target.tags.join('、') || '（无）'}${N}〔人设〕${N}${card}${N}〔当前状态〕${N}${JSON.stringify(target.state, null, 1)}${N}〔关系〕${rel || '（无）'}`
       }
     }
     case 'list_foreshadows': {
@@ -769,12 +807,15 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
     }
     case 'save_character': {
       const { lineId } = ctxLine(ctx)
+      const isNew = !(typeof input.id === 'string' && input.id)
       const ch = store.saveCharacter({
-        id: typeof input.id === 'string' && input.id ? input.id : undefined,
+        id: isNew ? undefined : (input.id as string),
         lineId,
         name: typeof input.name === 'string' && input.name ? input.name : undefined,
         role: typeof input.role === 'string' ? input.role : undefined,
-        card: (input.card as Record<string, unknown>) ?? undefined,
+        // data/tags 仅新建时作初值；已有人物走 update_character_data/tags（防全量覆盖）
+        data: isNew ? ((input.data as Record<string, unknown>) ?? undefined) : undefined,
+        tags: isNew && Array.isArray(input.tags) ? (input.tags as string[]) : undefined,
         state: (input.state as CharacterState) ?? undefined,
         relations: (input.relations as Character['relations']) ?? undefined,
         pinned: typeof input.pinned === 'boolean' ? input.pinned : undefined
@@ -782,8 +823,40 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       if (!ch) return { ok: false, summary: '保存人物失败', data: '保存失败：人物不存在或参数无效' }
       return {
         ok: true,
-        summary: `${input.id ? '改' : '建'}人物「${ch.name}」`,
+        summary: `${isNew ? '建' : '改'}人物「${ch.name}」`,
         data: `已保存 ${ch.name}（${ch.role || '人物'}）(id=${ch.id})`
+      }
+    }
+    case 'update_character_tags': {
+      const { lineId } = ctxLine(ctx)
+      const id = typeof input.id === 'string' ? input.id : ''
+      const target = store.getCharacter(id)
+      if (!target || target.lineId !== lineId) {
+        return { ok: false, summary: '人物不存在', data: `人物 ${id} 不存在（或不在当前线）` }
+      }
+      const ch = store.updateCharacterTags(id, {
+        add: Array.isArray(input.add) ? (input.add as string[]) : undefined,
+        delete: Array.isArray(input.delete) ? (input.delete as string[]) : undefined
+      })
+      return {
+        ok: true,
+        summary: `改「${target.name}」标签`,
+        data: `已更新 ${target.name} 标签：${JSON.stringify(ch?.tags ?? [])}`
+      }
+    }
+    case 'update_character_data': {
+      const { lineId } = ctxLine(ctx)
+      const id = typeof input.id === 'string' ? input.id : ''
+      const target = store.getCharacter(id)
+      if (!target || target.lineId !== lineId) {
+        return { ok: false, summary: '人物不存在', data: `人物 ${id} 不存在（或不在当前线）` }
+      }
+      const merge = (input.merge as Record<string, unknown>) ?? {}
+      const ch = store.updateCharacterData(id, merge)
+      return {
+        ok: true,
+        summary: `改「${target.name}」人设`,
+        data: `已合并人设键：${Object.keys(merge).join('、') || '(空)'}；现有人设键：${Object.keys(ch?.data ?? {}).join('、')}`
       }
     }
     case 'patch_character_state': {

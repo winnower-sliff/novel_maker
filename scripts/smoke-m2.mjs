@@ -121,12 +121,14 @@ try {
       lineId: mainLineId,
       name: '林岸',
       role: '主角',
-      card: { age: '24', trait: '隐忍' },
+      tags: ['主角', '逃亡者'],
+      data: { age: '24', trait: '隐忍' },
       state: { location: '雾津港七号泊位', mood: '警觉', goal: '带断刀离开雾津港' },
       pinned: true
     }
   ])
   ok(!!linan?.id, 'character:save（含初始活状态）')
+  ok(linan?.tags?.length === 2 && !!linan?.data?.age, 'character 三件套（tags+data）')
 
   // ── 导演循环第 1 回合（聊天驱动：startWrite 直通 agent 自主到入书） ──────────
   let job = await invoke('job:startWrite', [book.id])
