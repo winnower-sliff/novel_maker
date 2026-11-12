@@ -490,12 +490,13 @@ ${rows}
           messages,
           tools: opts.tools,
           responseFormat: 'text',
-          // 截断补救轮翻倍预算（首次补救即生效：truncNudges 在上一轮末尾已自增）
+          // 思考计入输出 token（DeepSeek/GPT 系皆然）：上限必须盖住「思考+正文」，只按实际生成计费；
+          // 截断补救轮再翻倍（8192 顶格实锤过三次静默中断，2026-11）
           maxTokens:
             opts.thinking === 'enabled'
               ? truncNudges > 0
-                ? 16384
-                : 8192
+                ? 32768
+                : 16384
               : truncNudges > 0
                 ? 8000
                 : 4000
