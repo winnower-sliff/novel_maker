@@ -141,6 +141,11 @@
 >   NovelMaker.apk——旧版残留字节数 ≥ 新版 manifest size 时 size 判据误判「已完整」直接装旧文件；
 >   修复=download/status/install 三方法带 versionCode，文件存 nm-<vc>.apk（vc=0 回退旧名兼容），
 >   checkUpdate 返回 versionCode 全链路传递。**教训：文件完整性判据不能只比 size，必须与版本身份绑定**
+> - **thinking 吃满输出预算=静默空响应（2026-11 用户实锤：chat 三连「中途停止」）**：deepseek thinking
+>   计入输出 token，末轮 out:8192 顶格截断（finish_reason=length）→无正文无工具，loop 旧逻辑直接
+>   return 占位符「（导演没有说话）」。修复（loop.ts）：空响应+stopReason==='max_tokens' 不静默退出
+>   ——推 nudge 消息（压缩思考直接作答）+补救轮 maxTokens 翻倍（8192→16384/4000→8000），2 次仍空
+>   才返回可见错误文案；console.warn 留痕。**判据：usage out 恰好=上限值即中招**
 > - **人设卡三件套（2026-11 grillme 共识）**：characters 表 card 列 RENAME 为 data+启用 tags 列
 >   （平铺无嵌套，冷热分离：data=你是谁/state=你现在怎样）；工具拆四——save_character 建档/元信息
 >   （已有人物传 data/tags 不生效）、update_character_tags 增量 add/delete、update_character_data

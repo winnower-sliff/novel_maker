@@ -475,6 +475,7 @@ ${rows}
     compacted = true
   }
 
+  let truncNudges = 0 // 思考耗尽输出预算的补救次数（实锤：deepseek thinking 吃满 8192 token，正文/工具全空静默退出）
   for (let turn = 0; turn < maxTurns; turn++) {
     opts.onTurn?.() // 每轮喂狗：有真实进展就续看门狗（挂死/死循环不喂→照杀）
     book = store.getBook(bookId) ?? book // 每轮重读（agent 可能改了配置/切了线）
@@ -489,7 +490,15 @@ ${rows}
           messages,
           tools: opts.tools,
           responseFormat: 'text',
-          maxTokens: opts.thinking === 'enabled' ? 8192 : 4000
+          // 截断补救轮翻倍预算（首次补救即生效：truncNudges 在上一轮末尾已自增）
+          maxTokens:
+            opts.thinking === 'enabled'
+              ? truncNudges > 0
+                ? 16384
+                : 8192
+              : truncNudges > 0
+                ? 8000
+                : 4000
         },
         onThinking: opts.onThinking,
         thinking: opts.thinking
@@ -516,6 +525,27 @@ ${rows}
       messages.push({ role: 'assistant', content: blocks })
     }
     if (!res.toolUses.length) {
+      if (!res.text.trim() && res.stopReason === 'max_tokens' && truncNudges < 2) {
+        // 输出预算被思考耗尽（finish=length、无正文无工具）：不静默退出，推提示让模型直接作答
+        truncNudges++
+        console.warn(
+          `[agent] jobId=${jobId} 第 ${turn + 1} 轮输出被截断（思考占满 max_tokens），第 ${truncNudges} 次补救`
+        )
+        messages.push({
+          role: 'user',
+          content:
+            '（系统提示：你上一轮把输出 token 全部耗在思考上，正文没有任何产出。现在压缩思考、直接给最终答复；要动手就调工具，不要重新展开长推理。）'
+        })
+        continue
+      }
+      if (!res.text.trim() && res.stopReason === 'max_tokens') {
+        console.warn(`[agent] jobId=${jobId} 截断补救 ${truncNudges} 次后仍空响应，放弃`)
+        return {
+          text: '（这轮回复被截断了：模型的思考占满输出上限，重试两次仍未产出。请把指令拆小一点再发，或稍后再试。）',
+          turns: turn + 1,
+          chaptersCommitted
+        }
+      }
       return { text: finishText || '（导演没有说话）', turns: turn + 1, chaptersCommitted }
     }
 
