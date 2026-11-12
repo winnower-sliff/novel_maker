@@ -131,11 +131,16 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'list_characters',
       description:
-        '列当前线全部人物：人设卡+活状态（位置/身心/目标/所知）+关系。brief=true 只列【定位】名字+id（人物多时盘点省字数），详情用 get_character。',
+        '列当前线人物：活状态（位置/身心/目标/所知）+关系+标签。brief=true 只列【定位】名字+id（盘点省字数）。tags 传标签数组只列命中标签的人物（任一命中即中）；不传 tags 时结果尾部附全部标签索引（标签(人数)）——先看索引再按标签查。详情用 get_character。',
       input_schema: {
         type: 'object',
         properties: {
           q: { type: 'string', description: '名字/人设关键词' },
+          tags: {
+            type: 'array',
+            items: { type: 'string' },
+            description: '按标签筛（命中任一即中）；不传=全部+附标签索引'
+          },
           brief: { type: 'boolean', description: 'true=只列【定位】名字+id，不带状态' }
         }
       }
@@ -143,7 +148,7 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'get_character',
       description:
-        '读单个人物完整详情：人设卡 card 全文+活状态+关系网。人设卡内容多时用它精读（比 list_characters 全量省）。',
+        '读单个人物完整详情：〔标签〕+〔人设 data〕全文+活状态+关系网。人设内容多时用它精读（比 list_characters 全量省）。',
       input_schema: {
         type: 'object',
         properties: {
@@ -583,21 +588,41 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
     case 'list_characters': {
       const { lineId } = ctxLine(ctx)
       const q = typeof input.q === 'string' ? input.q : undefined
-      const chars = store.listCharacters(lineId, { q })
+      const tagFilter = Array.isArray(input.tags) ? input.tags.map(String).filter(Boolean) : []
+      let chars = store.listCharacters(lineId, { q })
+      if (tagFilter.length > 0) {
+        const want = new Set(tagFilter)
+        chars = chars.filter((c) => c.tags.some((t) => want.has(t)))
+      }
       const rows = input.brief
-        ? chars.map((c) => `【${c.role || '人物'}】${c.name} (id=${c.id})`)
+        ? chars.map(
+            (c) =>
+              `【${c.role || '人物'}】${c.name} (id=${c.id})${c.tags.length ? ` #${c.tags.join(' #')}` : ''}`
+          )
         : chars.map((c) => {
             const st = Object.entries(c.state)
               .filter(([, v]) => v)
               .map(([k, v]) => `${k}=${v}`)
               .join(' ')
             const rel = c.relations.map((r) => `${r.to}(${r.label})`).join(' ')
-            return `【${c.role || '人物'}${c.pinned ? '·钉' : ''}】${c.name} (id=${c.id})：${st}${rel ? ` 关系：${rel}` : ''}`
+            return `【${c.role || '人物'}${c.pinned ? '·钉' : ''}】${c.name} (id=${c.id})${c.tags.length ? ` #${c.tags.join(' #')}` : ''}：${st}${rel ? ` 关系：${rel}` : ''}`
           })
+      // 无标签过滤时附全部标签索引（先看索引→再按标签查，两步走）
+      let tagIndex = ''
+      if (tagFilter.length === 0) {
+        const counts = new Map<string, number>()
+        for (const c of store.listCharacters(lineId))
+          for (const t of c.tags) counts.set(t, (counts.get(t) ?? 0) + 1)
+        const idx = [...counts.entries()]
+          .sort((a, b) => b[1] - a[1])
+          .map(([t, n]) => `${t}(${n})`)
+          .join(' ')
+        if (idx) tagIndex = `${N}◆ 标签索引：${idx}`
+      }
       return {
         ok: true,
-        summary: `查人物 ${chars.length} 人${input.brief ? '（仅名单）' : ''}`,
-        data: rows.length ? rows.join(N) : '（没有匹配的人物）'
+        summary: `查人物 ${chars.length} 人${input.brief ? '（仅名单）' : ''}${tagFilter.length ? `（标签 ${tagFilter.join('/')}）` : ''}`,
+        data: rows.length ? rows.join(N) + tagIndex : `（没有匹配的人物）${tagIndex}`
       }
     }
     case 'get_character': {
