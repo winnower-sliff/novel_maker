@@ -160,6 +160,13 @@
 >   库里没写）。判据：新功能手机端"成功"但不生效，先 curl /api/health 看 server 版本是否落后
 >   package.json。**改主进程代码后必须 deploy；build-apk 只管前端+APK**
 
+## 任务交接纪律（防会话中断丢状态）
+- 长任务（多文件/多轮改动）**动手前**先写计划到 `docs/v2/HANDOFF.md`，再开工；
+- 每完成一步立即更新勾选与「下一步」（精确到文件与操作），不等全做完才写；
+- **新会话开始先看 HANDOFF.md**：有未完成任务就先续做，不接新需求；
+- 任务完成（commit+push+部署）后把文件清回空闲模板；
+- 长任务每达成一个绿里程碑（typecheck+lint+冒烟过）就 commit——git 历史本身就是进度账。
+
 ## 常用命令
 - `npm run dev` 启动开发（Electron 窗口）
 - `npm run typecheck` 三套 tsconfig（node=主进程/preload，根=renderer，mobile）类型检查
