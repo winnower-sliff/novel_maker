@@ -346,7 +346,8 @@ function agentSystem(book: Book, mode: 'chapter' | 'free'): string {
 ## 自由任务纪律
 - 你没有 commit_chapter/write_chapter_draft 权限（写新章走「写下一章」流程，作者会先选走向）。
 - 作者要在已有章上改稿→revise_chapter；维护设定/人物/伏笔/红线/正负词→对应工具。
-- 作者要写新章→白话引导他点「写下一章」按钮。`
+- 作者要写新章→白话引导他点「写下一章」按钮。
+- 承诺即执行：凡对作者说「这就改/马上改/现在就动手」，必须在同一轮调用对应工具完成，只说不做是违规；改不动就明说原因，不许空头承诺。`
   return `${directorPersona()}
 
 ${bookBasics(book)}
@@ -372,6 +373,9 @@ const SUB_SYSTEM = `你是只读调查员，受导演指派调查小说项目的
 
 const MAX_DATA = 30000
 const N = '\n'
+
+/** 即时执行承诺信号：这就改/马上删/现在就写…（拦「光说不练」：承诺了却不在本轮调工具） */
+const ACT_NOW_RE = /(这就|现在就|马上|立刻|立即)[^。！？!?\n]{0,10}(改|删|建|写|加|换|存|更新|动)/
 
 /** 子代理可用工具：全部读类 + finish */
 const READ_TOOLS = new Set([
@@ -476,6 +480,7 @@ ${rows}
   }
 
   let truncNudges = 0 // 思考耗尽输出预算的补救次数（实锤：deepseek thinking 吃满 8192 token，正文/工具全空静默退出）
+  let promiseNudges = 0 // 「光说不练」补救次数（实锤：白话承诺「这就改」但本轮无 tool_use，纯文本路径直接结束任务）
   for (let turn = 0; turn < maxTurns; turn++) {
     opts.onTurn?.() // 每轮喂狗：有真实进展就续看门狗（挂死/死循环不喂→照杀）
     book = store.getBook(bookId) ?? book // 每轮重读（agent 可能改了配置/切了线）
@@ -546,6 +551,19 @@ ${rows}
           turns: turn + 1,
           chaptersCommitted
         }
+      }
+      // 光说不练检测：本轮承诺执行（这就改/马上删…）却没带任何工具调用——不放过，逼一轮
+      if (res.text.trim() && promiseNudges < 2 && ACT_NOW_RE.test(res.text)) {
+        promiseNudges++
+        console.warn(
+          `[agent] jobId=${jobId} 第 ${turn + 1} 轮口头承诺执行但未调工具，第 ${promiseNudges} 次追问`
+        )
+        messages.push({
+          role: 'user',
+          content:
+            '（系统提示：你刚才口头承诺要执行操作，但本轮没有调用任何工具。现在要么立即调用对应工具执行，要么向作者明确说明为什么暂不执行——禁止空头承诺。）'
+        })
+        continue
       }
       return { text: finishText || '（导演没有说话）', turns: turn + 1, chaptersCommitted }
     }
