@@ -1,6 +1,6 @@
 {
   "name": "novel-maker",
-  "version": "3.13.0",
+  "version": "4.0.0",
   "description": "手机小说工坊（v2）：纯 Node 服务器 + 托盘 + 手机 APP，OpenAI 协议，导演式 agent",
   "type": "module",
   "license": "MIT",

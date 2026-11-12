@@ -294,8 +294,8 @@ function CharactersList({ lineId }: { lineId: string }) {
             onClick={() => setExpanded(expanded === ch.id ? null : ch.id)}
           >
             <span className="flex items-baseline gap-2">
-              <span className="truncate text-sm font-medium">{ch.name}</span>
-              {ch.role && <span className="truncate text-xs text-stone-400">{ch.role}</span>}
+              <span className="max-w-[60%] shrink-0 truncate text-sm font-medium">{ch.name}</span>
+              {ch.role && <span className="min-w-0 truncate text-xs text-stone-400">{ch.role}</span>}
             </span>
             {tags.length > 0 && (
               <span className="mt-1.5 flex flex-wrap gap-1">
