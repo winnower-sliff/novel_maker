@@ -251,20 +251,9 @@ function JsonView({ value }: { value: unknown }) {
   )
 }
 
-/** 人设标签：tags 列 ∪ 人设 JSON 里的标签字段（tags/标签/身份/特质；数组或逗号串都兼容） */
+/** 人设标签：只读 tags 列（用户决策；data 里的身份/特质是长句人设，不配做胶囊） */
 function charTags(ch: Character): string[] {
-  const out: string[] = []
-  const push = (v: unknown) => {
-    if (typeof v === 'string') {
-      for (const x of v.split(/[,，、;；]+/)) {
-        const t = x.trim()
-        if (t && !out.includes(t)) out.push(t)
-      }
-    } else if (Array.isArray(v)) v.forEach(push)
-  }
-  push(ch.tags)
-  for (const k of ['tags', '标签', '身份', '特质']) push((ch.data ?? {})[k])
-  return out
+  return ch.tags ?? []
 }
 
 function CharactersList({ lineId }: { lineId: string }) {
