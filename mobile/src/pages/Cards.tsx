@@ -51,7 +51,7 @@ export default function Cards() {
       ) : seg === 'characters' ? (
         <CharactersList lineId={lineId} />
       ) : (
-        <ForeshadowsList lineId={lineId} />
+        <ForeshadowsList lineId={lineId} chapters={data?.chapters ?? []} />
       )}
     </div>
   )
@@ -406,34 +406,51 @@ function CharacterDetail({ ch }: { ch: Character }) {
   )
 }
 
-function ForeshadowsList({ lineId }: { lineId: string }) {
+function ForeshadowsList({
+  lineId,
+  chapters
+}: {
+  lineId: string
+  chapters: Array<{ id: string; orderNo: number; title: string }>
+}) {
   const [status, setStatus] = useState<'open' | 'planned' | 'resolved' | undefined>(undefined)
+  const [expanded, setExpanded] = useState<string | null>(null)
   const { data: all = [] } = useForeshadows(lineId)
   const foreshadows = status ? all.filter((f) => f.status === status) : all
   const open = foreshadows.filter((f) => f.status !== 'resolved')
   const resolved = foreshadows.filter((f) => f.status === 'resolved')
 
+  const chLabel = (id: string) => {
+    if (!id) return ''
+    const c = chapters.find((x) => x.id === id)
+    return c ? `第 ${c.orderNo} 章 · ${c.title}` : ''
+  }
+
   const row = (f: Foreshadow, dim: boolean) => (
     <div
       key={f.id}
-      className={'rounded-xl border border-orange-100 bg-white px-3 py-3 ' + (dim ? 'opacity-50' : '')}
+      className={'rounded-xl border border-orange-100 bg-white px-3 py-3 ' + (dim && expanded !== f.id ? 'opacity-50' : '')}
     >
-      <div className="flex items-center gap-2">
-        <span
-          className={
-            'rounded-full px-2 py-0.5 text-[11px] ' +
-            (f.status === 'resolved'
-              ? 'bg-orange-100 text-stone-500'
-              : f.status === 'planned'
-                ? 'bg-amber-200/90 text-orange-800'
-                : 'bg-orange-100 text-orange-700')
-          }
-        >
-          {f.status === 'resolved' ? '已回收' : f.status === 'planned' ? '已计划' : '埋设中'}
-        </span>
-        <span className="min-w-0 flex-1 truncate text-sm">{f.title}</span>
-      </div>
-      {f.detail && <div className="mt-1.5 line-clamp-2 text-xs text-stone-500">{f.detail}</div>}
+      <button type="button" className="w-full text-left" onClick={() => setExpanded(expanded === f.id ? null : f.id)}>
+        <div className="flex items-center gap-2">
+          <span
+            className={
+              'rounded-full px-2 py-0.5 text-[11px] ' +
+              (f.status === 'resolved'
+                ? 'bg-orange-100 text-stone-500'
+                : f.status === 'planned'
+                  ? 'bg-amber-200/90 text-orange-800'
+                  : 'bg-orange-100 text-orange-700')
+            }
+          >
+            {f.status === 'resolved' ? '已回收' : f.status === 'planned' ? '已计划' : '埋设中'}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-sm">{f.title}</span>
+          <span className="shrink-0 text-[10px] text-stone-300">{expanded === f.id ? '收起' : '详情'}</span>
+        </div>
+        {f.detail && <div className="mt-1.5 line-clamp-2 text-xs text-stone-500">{f.detail}</div>}
+      </button>
+      {expanded === f.id && <ForeshadowDetail f={f} chLabel={chLabel} />}
     </div>
   )
 
@@ -468,6 +485,41 @@ function ForeshadowsList({ lineId }: { lineId: string }) {
         </>
       )}
       {foreshadows.length === 0 && <div className="py-16 text-center text-sm text-stone-400">没有伏笔</div>}
+    </div>
+  )
+}
+
+function ForeshadowDetail({ f, chLabel }: { f: Foreshadow; chLabel: (id: string) => string }) {
+  const rows: Array<[string, string]> = []
+  if (f.plantedChapterId) {
+    const l = chLabel(f.plantedChapterId)
+    if (l) rows.push(['埋设于', l])
+  }
+  if (f.plannedChapterId) {
+    const l = chLabel(f.plannedChapterId)
+    if (l) rows.push(['计划回收', l])
+  }
+  if (f.resolvedChapterId) {
+    const l = chLabel(f.resolvedChapterId)
+    if (l) rows.push(['已回收', l])
+  }
+  return (
+    <div className="mt-2 border-t border-orange-100/70 pt-2">
+      {rows.length > 0 && (
+        <div className="mb-2 space-y-1">
+          {rows.map(([k, v]) => (
+            <div key={k} className="flex gap-2 text-xs">
+              <span className="shrink-0 text-stone-400">{k}</span>
+              <span className="min-w-0 flex-1 text-stone-600">{v}</span>
+            </div>
+          ))}
+        </div>
+      )}
+      {f.detail ? (
+        <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-600">{f.detail}</div>
+      ) : (
+        <div className="text-xs text-stone-400">（无详情）</div>
+      )}
     </div>
   )
 }
