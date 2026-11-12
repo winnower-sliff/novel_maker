@@ -61,6 +61,47 @@ async function toggleCardPin(card: Card) {
   await window.api.card.save({ id: card.id, lineId: card.lineId, title: card.title, pinned: !card.pinned })
 }
 
+/** 详情区底部删除条：两步确认（服务端删前自动快照，误删可从备份库找回） */
+function DeleteBar({ label, onConfirm }: { label: string; onConfirm: () => Promise<void> | void }) {
+  const [arming, setArming] = useState(false)
+  const [busy, setBusy] = useState(false)
+  if (!arming)
+    return (
+      <div className="mt-3 flex justify-end">
+        <button type="button" className="text-[11px] text-stone-400" onClick={() => setArming(true)}>
+          删除
+        </button>
+      </div>
+    )
+  return (
+    <div className="mt-3 flex items-center gap-2">
+      <span className="flex-1 text-[11px] text-red-600">删除{label}？不可恢复</span>
+      <button
+        type="button"
+        disabled={busy}
+        className="rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] text-red-600 disabled:opacity-50"
+        onClick={async () => {
+          setBusy(true)
+          try {
+            await onConfirm()
+          } finally {
+            setBusy(false)
+          }
+        }}
+      >
+        删除
+      </button>
+      <button
+        type="button"
+        className="rounded-lg border border-orange-200 px-2.5 py-1.5 text-[11px] text-stone-500"
+        onClick={() => setArming(false)}
+      >
+        取消
+      </button>
+    </div>
+  )
+}
+
 /** 图钉按钮（钉选=每次写作必带）；内嵌可点击父级时靠 stopPropagation 隔离 */
 function PinToggle({ on, onToggle }: { on: boolean; onToggle: () => Promise<void> | void }) {
   return (
@@ -145,6 +186,14 @@ function CardsList({ lineId }: { lineId: string }) {
               ))}
             </div>
           )}
+          <DeleteBar
+            label="这张设定卡"
+            onConfirm={async () => {
+              await window.api.card.delete(c.id)
+              setExpanded(null)
+              refetch()
+            }}
+          />
         </div>
       )}
     </div>
@@ -308,7 +357,21 @@ function CharactersList({ lineId }: { lineId: string }) {
             }}
           />
         </div>
-        {expanded === ch.id && <CharacterDetail ch={ch} />}
+        {expanded === ch.id && (
+          <>
+            <CharacterDetail ch={ch} />
+            <div className="border-t border-orange-100/70 px-4 pt-1 pb-3">
+              <DeleteBar
+                label="这个人设卡"
+                onConfirm={async () => {
+                  await window.api.character.delete(ch.id)
+                  setExpanded(null)
+                  refetch()
+                }}
+              />
+            </div>
+          </>
+        )}
       </div>
     )
   }

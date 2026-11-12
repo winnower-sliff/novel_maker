@@ -1,4 +1,5 @@
 import type { ForeshadowStatus } from '../../shared/types.js'
+import { snapshotDb } from '../db.js'
 import { buildStatusCard } from '../director/context.js'
 import {
   activateLine,
@@ -106,6 +107,7 @@ export const bookHandlers: Domain = {
   },
   'card:delete': (_ctx, [cardId]) => {
     if (!getCard(cardId)) throw new Error('设定卡不存在')
+    snapshotDb(`card-${cardId.slice(0, 8)}`) // 删前快照，与 agent 工具路径同语义
     return deleteCard(cardId)
   },
   'character:list': (_ctx, [lineId, q]) => listCharacters(lineId, { q }),
@@ -116,6 +118,7 @@ export const bookHandlers: Domain = {
   },
   'character:delete': (_ctx, [characterId]) => {
     if (!getCharacter(characterId)) throw new Error('人物不存在')
+    snapshotDb(`char-${characterId.slice(0, 8)}`) // 删前快照
     return deleteCharacter(characterId)
   },
   'foreshadow:list': (_ctx, [lineId, status]) =>
