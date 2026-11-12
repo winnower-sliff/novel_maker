@@ -43,11 +43,11 @@ public class ApkUpdaterPlugin extends Plugin {
         }
     }
 
-    /** 下载状态快照：JS 轮询用，不依赖事件回调存活 */
+    /** 下载状态快照：JS 轮询用，不依赖事件回调存活；versionCode 指定查哪个版本的文件 */
     @PluginMethod
     public void status(PluginCall call) {
         JSObject r = new JSObject();
-        File apk = apkFile();
+        File apk = apkFile(call.getLong("versionCode", 0L));
         r.put("downloading", downloading);
         r.put("done", done);
         r.put("total", total);
@@ -56,8 +56,14 @@ public class ApkUpdaterPlugin extends Plugin {
         call.resolve(r);
     }
 
-    private File apkFile() {
-        return new File(getContext().getCacheDir(), "NovelMaker.apk");
+    /**
+     * 下载文件按 versionCode 隔离（nm-<vc>.apk）：旧版本残留文件与新版本天然不同名，
+     * 杜绝「旧包字节数 ≥ 新包 manifest size 被误判完整 → 反复安装旧版」。
+     * vc=0（旧 JS 不传）回退历史固定名 NovelMaker.apk。
+     */
+    private File apkFile(long versionCode) {
+        String name = versionCode > 0 ? "nm-" + versionCode + ".apk" : "NovelMaker.apk";
+        return new File(getContext().getCacheDir(), name);
     }
 
     @PluginMethod
@@ -73,8 +79,9 @@ public class ApkUpdaterPlugin extends Plugin {
             return;
         }
         String token = call.getString("token", "");
+        long vc = call.getLong("versionCode", 0L);
         pool.execute(() -> {
-            File dest = apkFile();
+            File dest = apkFile(vc);
             downloading = true;
             done = 0;
             total = 0;
@@ -131,7 +138,7 @@ public class ApkUpdaterPlugin extends Plugin {
         try {
             android.app.Activity activity = getBridge().getActivity();
             android.content.Context ctx = getContext();
-            File apk = new File(ctx.getCacheDir(), "NovelMaker.apk");
+            File apk = apkFile(call.getLong("versionCode", 0L));
             if (!apk.isFile()) {
                 call.reject("APK 未下载");
                 return;

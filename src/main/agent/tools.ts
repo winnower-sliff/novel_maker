@@ -254,7 +254,8 @@ export function toolDefs(): ToolDef[] {
           tags: {
             type: 'array',
             items: { type: 'string' },
-            description: '标签，2-6 字短词如「反派」「盐帮」（仅新建时全量传入；已有人物改标签用 update_character_tags）。身份/特质这类长句描述写进 data，不进 tags'
+            description:
+              '标签，2-6 字短词如「反派」「盐帮」（仅新建时全量传入；已有人物改标签用 update_character_tags）。身份/特质这类长句描述写进 data，不进 tags'
           },
           data: {
             type: 'object',

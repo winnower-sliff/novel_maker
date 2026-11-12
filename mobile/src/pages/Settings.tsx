@@ -656,15 +656,18 @@ function UpdateRow() {
   const [note, setNote] = useState('')
   const [apkUrl, setApkUrl] = useState('')
   const [apkSize, setApkSize] = useState(0)
+  const [apkVc, setApkVc] = useState(0)
 
   // 检查更新：进设置页自动跑一次；下载中/已下载未装的状态经原生 status 自动恢复
+  // （下载文件按 versionCode 隔离，旧版本残留文件不会被误判成新版已就绪）
   const check = async () => {
     setState('checking')
     const r = await checkUpdate()
     if (r.state === 'found') {
       setApkUrl(r.url)
       setApkSize(r.size)
-      const s = await getDownloadStatus()
+      setApkVc(r.versionCode)
+      const s = await getDownloadStatus(r.versionCode)
       if (s && !s.downloading && r.size > 0 && s.size >= r.size) {
         setState('ready')
         setNote(`新版 ${r.version} 已下载，点击安装`)
@@ -695,7 +698,7 @@ function UpdateRow() {
     setState('downloading')
     setNote('下载中…')
     try {
-      await startDownload(apkUrl)
+      await startDownload(apkUrl, apkVc)
     } catch (e) {
       setState('error')
       setNote(e instanceof Error ? e.message : String(e))
@@ -706,7 +709,7 @@ function UpdateRow() {
   useEffect(() => {
     if (state !== 'downloading') return
     const t = setInterval(async () => {
-      const s = await getDownloadStatus()
+      const s = await getDownloadStatus(apkVc)
       if (!s) return
       if (s.downloading) {
         setNote(
@@ -725,10 +728,10 @@ function UpdateRow() {
       }
     }, 800)
     return () => clearInterval(t)
-  }, [state, apkSize])
+  }, [state, apkSize, apkVc])
 
   const install = async () => {
-    const r = await installUpdate()
+    const r = await installUpdate(apkVc)
     if (r.needsGrant) setNote('请先在系统里允许本应用安装未知应用，再回来点安装')
   }
 

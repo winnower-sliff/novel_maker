@@ -7,9 +7,9 @@ import { useConnStore } from './conn'
  */
 interface ApkUpdaterPlugin {
   getVersion(): Promise<{ version: string; versionCode: number }>
-  download(opts: { url: string }): Promise<{ path: string; size: number }>
-  status(): Promise<DownloadStatus>
-  install(): Promise<void | { needsGrant?: boolean }>
+  download(opts: { url: string; versionCode?: number }): Promise<{ path: string; size: number }>
+  status(opts?: { versionCode?: number }): Promise<DownloadStatus>
+  install(opts?: { versionCode?: number }): Promise<void | { needsGrant?: boolean }>
   addListener(
     event: 'progress',
     cb: (data: { done: number; total: number }) => void
@@ -44,7 +44,7 @@ interface MobileManifest {
 
 export type UpdateCheck =
   | { state: 'latest' }
-  | { state: 'found'; version: string; url: string; size: number }
+  | { state: 'found'; version: string; versionCode: number; url: string; size: number }
   | { state: 'error'; error: string }
 
 /** 对比服务端 manifest 与本地 APP 版本：versionCode 数值判新（单调递增），versionName 仅作展示 */
@@ -63,19 +63,19 @@ export async function checkUpdate(): Promise<UpdateCheck> {
         ? m.apk.versionCode > cur.versionCode
         : m.apk.version !== cur.version
     if (!isNewer) return { state: 'latest' }
-    return { state: 'found', version: m.apk.version, url: `${base}/api/mobile/apk`, size: m.apk.size }
+    return {
+      state: 'found',
+      version: m.apk.version,
+      versionCode: m.apk.versionCode ?? 0,
+      url: `${base}/api/mobile/apk`,
+      size: m.apk.size,
+    }
   } catch (e) {
     return { state: 'error', error: e instanceof Error ? e.message : String(e) }
   }
 }
 
-export type DownloadState =
-  | { state: 'downloading' }
-  | { state: 'ready' }
-  | { state: 'error'; error: string }
-
-/** 原生下载状态快照：downloading 进行中；size=cacheDir 已有 APK 字节数（跨进程重启仍准确） */
-export interface DownloadStatus {
+/** 原生下载状态快照：downloading 进行中；size=cacheDir 里该 versionCode 文件字节数（跨进程重启仍准确） */export interface DownloadStatus {
   downloading: boolean
   done: number
   total: number
@@ -83,52 +83,27 @@ export interface DownloadStatus {
   error?: string
 }
 
-export async function getDownloadStatus(): Promise<DownloadStatus | null> {
+/** versionCode 必传：下载文件按版本隔离（nm-<vc>.apk），旧版本残留永不误判 */
+export async function getDownloadStatus(versionCode: number): Promise<DownloadStatus | null> {
   const plugin = apkUpdater()
   if (!plugin) return null
-  return plugin.status()
+  return plugin.status({ versionCode })
 }
 
 /**
  * 触发下载（原生后台线程执行，立即返回，不等待完成）。
  * 进度/完成/失败一律经 getDownloadStatus() 轮询——切走再回来、甚至 WebView 重载后状态都不丢。
  */
-export async function startDownload(url: string): Promise<void> {
+export async function startDownload(url: string, versionCode: number): Promise<void> {
   const plugin = apkUpdater()
   if (!plugin) throw new Error('仅 APP 内可用')
-  await plugin.download({ url })
+  await plugin.download({ url, versionCode })
 }
 
-/** 旧接口保留兼容：一次性下载并等完成（内部轮询 status，不再依赖事件/Promise 存活） */
-export async function downloadUpdate(
-  url: string,
-  onProgress?: (pct: number) => void
-): Promise<DownloadState> {
-  const plugin = apkUpdater()
-  if (!plugin) return { state: 'error', error: '仅 APP 内可用' }
-  try {
-    await startDownload(url)
-    // 轮询直到完成或失败（最长 10 分钟）
-    for (let i = 0; i < 750; i++) {
-      await new Promise((r) => setTimeout(r, 800))
-      const s = await plugin.status()
-      if (!s) continue
-      if (onProgress && s.total > 0) onProgress(Math.round((s.done / s.total) * 100))
-      if (!s.downloading) {
-        if (s.error && s.size === 0) return { state: 'error', error: s.error }
-        return { state: 'ready' }
-      }
-    }
-    return { state: 'error', error: '下载超时' }
-  } catch (e) {
-    return { state: 'error', error: e instanceof Error ? e.message : String(e) }
-  }
-}
-
-/** 调起系统安装器（API 26+ 未授权时跳授权页，返回 needsGrant） */
-export async function installUpdate(): Promise<InstallResult> {
+/** 调起系统安装器（API 26+ 未授权时跳授权页，返回 needsGrant）；versionCode 指定装哪个文件 */
+export async function installUpdate(versionCode: number): Promise<InstallResult> {
   const plugin = apkUpdater()
   if (!plugin) return {}
-  const r = await plugin.install()
+  const r = await plugin.install({ versionCode })
   return r ?? {}
 }
