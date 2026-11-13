@@ -1,6 +1,6 @@
 {
   "name": "novel-maker",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "description": "手机小说工坊（v2）：纯 Node 服务器 + 托盘 + 手机 APP，OpenAI 协议，导演式 agent",
   "type": "module",
   "license": "MIT",
@@ -23,6 +23,7 @@
     "@capacitor/preferences": "^7.0.4",
     "@capacitor/status-bar": "^7.0.6",
     "@tanstack/react-query": "^5.90.2",
+    "fflate": "^0.8.3",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",

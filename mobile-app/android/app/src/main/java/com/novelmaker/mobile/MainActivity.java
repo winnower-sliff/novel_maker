@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
         // 插件必须在 super.onCreate 之前注册，否则 Bridge 初始化时插件表里没有它，
         // JS 侧会报 "plugin is not implemented on android"
         registerPlugin(ApkUpdaterPlugin.class);
+        registerPlugin(ExportPlugin.class);
         Updater.ensureLocalBundle(this);
         super.onCreate(savedInstanceState);
         // edge-to-edge margin 避让处露出的 WebView 底色默认为白，统一为应用底色

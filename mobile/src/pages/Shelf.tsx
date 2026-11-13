@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import type { Book } from '@shared/types'
+import { exportBookZip } from '@mobile/lib/exportPlugin'
 import { useBooks, useShelfStatus } from '@mobile/lib/queries'
 import { useUiStore } from '@mobile/lib/uiStore'
 
@@ -34,6 +35,24 @@ export default function Shelf() {
   const [creating, setCreating] = useState(false)
   const [menuFor, setMenuFor] = useState<Book | null>(null)
   const [confirmWipe, setConfirmWipe] = useState(false)
+  const [exporting, setExporting] = useState<string | null>(null)
+  const [exportMsg, setExportMsg] = useState('')
+
+  const doExport = async (b: Book) => {
+    setMenuFor(null)
+    setExporting(b.id)
+    setExportMsg('')
+    try {
+      await exportBookZip(b.id, b.title)
+      setExportMsg(`已导出《${b.title || '未命名'}》压缩包`)
+    } catch (e) {
+      const m = e instanceof Error ? e.message : String(e)
+      if (m !== 'cancelled') setExportMsg(`导出失败：${m}`)
+    } finally {
+      setExporting(null)
+      setTimeout(() => setExportMsg(''), 5000)
+    }
+  }
 
   const active = useMemo(
     () => (books ?? []).filter((b) => !b.archived && !b.draft).sort((a, b) => b.updatedAt - a.updatedAt),
@@ -120,6 +139,13 @@ export default function Shelf() {
       </header>
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-safe">
+        {(exporting || exportMsg) && (
+          <div className="mt-2 rounded-xl bg-orange-50 px-3 py-2 text-center text-xs text-stone-600">
+            {exporting
+              ? `正在打包下载《${(books ?? []).find((b) => b.id === exporting)?.title ?? ''}》，完成后选择保存位置…`
+              : exportMsg}
+          </div>
+        )}
         {isLoading && <p className="mt-10 text-center text-stone-500">加载中…</p>}
         {!isLoading && active.length === 0 && (
           <div className="mt-24 text-center text-stone-500">
@@ -130,21 +156,31 @@ export default function Shelf() {
         )}
 
         {recent && (
-          <button
-            type="button"
-            className="relative mt-2 block w-full overflow-hidden rounded-2xl p-4 pl-5 text-left active:brightness-95"
-            style={{ background: `linear-gradient(135deg, ${spineColor(recent.id)} 0%, #f59e0b 130%)` }}
-            onClick={() => openBook(recent.id)}
-          >
-            <span className="absolute left-0 top-0 h-full w-1.5 bg-white/25" />
-            <div className="text-[11px] font-medium tracking-wide text-white/75">上次打开</div>
-            <div className="mt-1 line-clamp-1 text-lg font-bold text-white">{recent.title || '未命名'}</div>
-            <div className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-white/85">{metaOf(recent)}</div>
-            <div className="mt-2.5 flex items-center justify-between">
-              <span className="text-[11px] text-white/70">{relTime(recent.updatedAt)}</span>
-              <span className="rounded-full bg-white/20 px-3 py-1 text-[11px] font-medium text-white">继续 →</span>
-            </div>
-          </button>
+          <div className="relative mt-2">
+            <button
+              type="button"
+              className="block w-full overflow-hidden rounded-2xl p-4 pl-5 text-left active:brightness-95"
+              style={{ background: `linear-gradient(135deg, ${spineColor(recent.id)} 0%, #f59e0b 130%)` }}
+              onClick={() => openBook(recent.id)}
+            >
+              <span className="absolute left-0 top-0 h-full w-1.5 bg-white/25" />
+              <div className="text-[11px] font-medium tracking-wide text-white/75">上次打开</div>
+              <div className="mt-1 line-clamp-1 text-lg font-bold text-white">{recent.title || '未命名'}</div>
+              <div className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-white/85">{metaOf(recent)}</div>
+              <div className="mt-2.5 flex items-center justify-between">
+                <span className="text-[11px] text-white/70">{relTime(recent.updatedAt)}</span>
+                <span className="rounded-full bg-white/20 px-3 py-1 text-[11px] font-medium text-white">继续 →</span>
+              </div>
+            </button>
+            <button
+              type="button"
+              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/25 text-lg font-light text-white active:bg-white/40"
+              onClick={() => setMenuFor(recent)}
+              aria-label="书操作"
+            >
+              ⋯
+            </button>
+          </div>
         )}
 
         {rest.length > 0 && (
@@ -231,6 +267,14 @@ export default function Shelf() {
               }}
             >
               打开这本书
+            </button>
+            <button
+              type="button"
+              disabled={exporting !== null}
+              className="mt-2.5 w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600 disabled:opacity-50"
+              onClick={() => void doExport(menuFor)}
+            >
+              {exporting === menuFor.id ? '导出中…' : '导出压缩包（每章一个 TXT）'}
             </button>
             <button
               type="button"

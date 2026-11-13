@@ -141,6 +141,13 @@
 >   NovelMaker.apk——旧版残留字节数 ≥ 新版 manifest size 时 size 判据误判「已完整」直接装旧文件；
 >   修复=download/status/install 三方法带 versionCode，文件存 nm-<vc>.apk（vc=0 回退旧名兼容），
 >   checkUpdate 返回 versionCode 全链路传递。**教训：文件完整性判据不能只比 size，必须与版本身份绑定**
+> - **书架全书导出（2026-11）**：GET /api/export/:bookId（server.ts，fflate zipSync，当前激活线
+>   effectiveChapters 每章一个 `0001-标题.txt`，非法文件名字符替换空格，空书 400/不存在 404）；
+>   mobile-app ExportPlugin.java（SAF ACTION_CREATE_DOCUMENT 系统保存器选位置，@ActivityCallback
+>   模式回 uri，writeFileToUri 写 base64；**注册在 MainActivity super.onCreate 前**同 ApkUpdaterPlugin）；
+>   前端 exportPlugin.ts（isNativePlatform 判定，fetch zip→分块 btoa→presentCreateDocument(书名.zip)）；
+>   Shelf 大卡右上角 ⋯+列表卡菜单「导出压缩包」；用户取消 SAF reject('cancelled') 静默。v2 曾定「无导出」
+>   已被用户需求推翻；smoke-export.mjs 9 断言（node:sqlite 直插章绕过 LLM 造数据）
 > - **thinking 吃满输出预算=静默空响应（2026-11 用户实锤：chat 三连「中途停止」）**：deepseek thinking
 >   计入输出 token，末轮 out:8192 顶格截断（finish_reason=length）→无正文无工具，loop 旧逻辑直接
 >   return 占位符「（导演没有说话）」。修复（loop.ts）：空响应+stopReason==='max_tokens' 不静默退出

@@ -2,6 +2,7 @@ import { createReadStream, existsSync, readFileSync, statSync } from 'node:fs'
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http'
 import { networkInterfaces } from 'node:os'
 import { join, normalize, resolve } from 'node:path'
+import { strToU8, zipSync } from 'fflate'
 import { invokeContract } from '../shared/contract.js'
 import { setGlobalSink } from './broadcast.js'
 import { getPort } from './config.js'
@@ -9,6 +10,7 @@ import type { EventSink } from './eventSink.js'
 import { appVersion, sharedHandlers } from './handlers/index.js'
 import { dataDir } from './paths.js'
 import { setServerStatus } from './serverState.js'
+import * as store from './store.js'
 
 /**
  * v2 HTTP 服务：手机 APK 唯一入口（无浏览器/WebSocket）。
@@ -233,6 +235,38 @@ function handleMobileVersion(req: IncomingMessage, res: ServerResponse): void {
   json(res, 200, manifest, req)
 }
 
+/** 全书导出：当前激活线的有效章节，每章一个 txt（`0001-章标题.txt`）打成一个 zip */
+function handleBookExport(req: IncomingMessage, res: ServerResponse, bookId: string): void {
+  try {
+    const book = store.getBook(bookId)
+    if (!book) {
+      json(res, 404, { error: '书不存在' }, req)
+      return
+    }
+    const chapters = store.effectiveChapters(book.activeLineId)
+    if (!chapters.length) {
+      json(res, 400, { error: '这本书还没有章节' }, req)
+      return
+    }
+    const files: Record<string, Uint8Array> = {}
+    for (const c of chapters) {
+      const safe = c.title.replace(/[\\/:*?"<>|\r\n]/g, ' ').trim() || '未命名'
+      files[`${String(c.orderNo).padStart(4, '0')}-${safe}.txt`] = strToU8(c.content)
+    }
+    const buf = Buffer.from(zipSync(files))
+    res.writeHead(200, {
+      'content-type': 'application/zip',
+      'content-length': String(buf.length),
+      'content-disposition': `attachment; filename*=UTF-8''${encodeURIComponent(`${book.title}.zip`)}`,
+      'x-content-type-options': 'nosniff',
+      ...corsHeaders(req)
+    })
+    res.end(buf)
+  } catch (e) {
+    json(res, 500, { error: (e as Error).message }, req)
+  }
+}
+
 function handleApkDownload(req: IncomingMessage, res: ServerResponse): void {
   const manifest = readMobileManifest()
   const apk = manifest?.apk
@@ -272,6 +306,9 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
   if (path === '/api/events' && req.method === 'GET') return handleEvents(req, res)
   if (path === '/api/mobile/version' && req.method === 'GET') return handleMobileVersion(req, res)
   if (path === '/api/mobile/apk' && req.method === 'GET') return handleApkDownload(req, res)
+  if (path.startsWith('/api/export/') && req.method === 'GET') {
+    return handleBookExport(req, res, decodeURIComponent(path.slice('/api/export/'.length)))
+  }
   if (path.startsWith('/api/invoke/') && req.method === 'POST') {
     return handleInvoke(req, res, decodeURIComponent(path.slice('/api/invoke/'.length)))
   }
