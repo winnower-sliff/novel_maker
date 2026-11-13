@@ -8,7 +8,8 @@ import { useUiStore } from '../lib/uiStore'
 
 const THEME_BG: Record<Appearance, string> = {
   sepia: 'bg-[#f4ecd8] text-[#433422]',
-  light: 'bg-white text-stone-800'
+  light: 'bg-white text-stone-800',
+  dark: 'bg-[#1c1917] text-[#d6cfc4]'
 }
 
 /** 段落切分：空行分段；段内换行保留 */
@@ -34,6 +35,9 @@ export default function Read() {
   const [segText, setSegText] = useState('')
   const boxRef = useRef<HTMLDivElement>(null)
 
+  /** 滚动容器是 BookWorkspace 的 <main>（正文 div 自身不滚），章切换后回到顶部 */
+  const scrollTop = () => boxRef.current?.closest('main')?.scrollTo({ top: 0 })
+
   const book = data?.book
   const activeLineId = book?.activeLineId ?? ''
 
@@ -52,12 +56,14 @@ export default function Read() {
     })
   }, [openBookId])
 
-  // 拉正文
+  // 拉正文（章已被删则回目录）
   useEffect(() => {
     if (!chapterId) return
     let alive = true
     window.api.chapter.get(chapterId).then((c) => {
-      if (alive) setChapter(c)
+      if (!alive) return
+      if (c) setChapter(c)
+      else setListOpen(true)
     })
     return () => {
       alive = false
@@ -76,7 +82,17 @@ export default function Read() {
     applySystemBars(theme)
   }, [theme])
 
+  // 切章自动回顶（章内容渲染后滚外层 main）
+  useEffect(() => {
+    if (chapter) scrollTop()
+  }, [chapter?.id])
+
   if (!book) return <div className="py-20 text-center text-sm text-stone-400">加载中…</div>
+
+  // 恢复阅读进度：章正文拉取中不闪目录
+  if (!listOpen && chapterId && !chapter) {
+    return <div className="py-20 text-center text-sm opacity-40">正在打开上一回读到的章节…</div>
+  }
 
   // 目录视图：本线章节 + 分叉标记
   if (listOpen || !chapter) {
@@ -97,7 +113,6 @@ export default function Read() {
                 setChapterId(c.id)
                 setListOpen(false)
                 persist({ chapterId: c.id })
-                boxRef.current?.scrollTo({ top: 0 })
               }}
             >
               <span className="w-8 shrink-0 text-xs text-stone-400">{c.orderNo}</span>
@@ -114,10 +129,11 @@ export default function Read() {
   }
 
   // 正文视图
+  const lineChapters = (data?.chapters ?? []).filter((c) => c.lineId === activeLineId)
+  const chIdx = lineChapters.findIndex((c) => c.id === chapter.id)
+  const isLast = chIdx === lineChapters.length - 1
   const prev = () => {
-    const list = (data?.chapters ?? []).filter((c) => c.lineId === activeLineId)
-    const idx = list.findIndex((c) => c.id === chapter.id)
-    const p = list[idx - 1]
+    const p = lineChapters[chIdx - 1]
     if (p) {
       setChapterId(p.id)
       persist({ chapterId: p.id })
@@ -125,9 +141,7 @@ export default function Read() {
     }
   }
   const next = () => {
-    const list = (data?.chapters ?? []).filter((c) => c.lineId === activeLineId)
-    const idx = list.findIndex((c) => c.id === chapter.id)
-    const n = list[idx + 1]
+    const n = lineChapters[chIdx + 1]
     if (n) {
       setChapterId(n.id)
       persist({ chapterId: n.id })
@@ -151,8 +165,8 @@ export default function Read() {
         >
           ← 目录
         </button>
-        <span className="truncate px-2 text-xs opacity-50">
-          第 {chapter.orderNo} 章 · {chapter.title}
+        <span className="min-w-0 flex-1 truncate px-2 text-center text-xs opacity-50">
+          {chIdx + 1}/{lineChapters.length} · 第 {chapter.orderNo} 章 · {chapter.title}
         </span>
         <button type="button" className="rounded-lg px-2 py-1 text-xs opacity-60" onClick={() => setShowSettings((v) => !v)}>
           Aa
@@ -163,7 +177,7 @@ export default function Read() {
         <div className="mx-4 mb-2 rounded-xl border border-orange-200 bg-orange-50 p-3">
           <div className="mb-2 flex items-center gap-3">
             <span className="text-xs opacity-60">字号</span>
-            {[15, 17, 19, 21].map((s) => (
+            {[15, 17, 19, 21, 23].map((s) => (
               <button
                 key={s}
                 type="button"
@@ -182,7 +196,7 @@ export default function Read() {
           </div>
           <div className="flex items-center gap-3">
             <span className="text-xs opacity-60">主题</span>
-            {(['sepia', 'light'] as Appearance[]).map((t) => (
+            {(['sepia', 'light', 'dark'] as Appearance[]).map((t) => (
               <button
                 key={t}
                 type="button"
@@ -195,7 +209,7 @@ export default function Read() {
                   persist({ theme: t })
                 }}
               >
-                {t === 'sepia' ? '护眼' : '日间'}
+                {t === 'sepia' ? '护眼' : t === 'light' ? '日间' : '夜间'}
               </button>
             ))}
           </div>
@@ -210,7 +224,7 @@ export default function Read() {
               <button
                 key={i}
                 type="button"
-                className="mb-4 w-full rounded-lg px-2 py-1 text-left ring-1 ring-transparent active:ring-orange-500/60"
+                className="mb-4 w-full rounded-lg px-2 py-1 text-left indent-8 ring-1 ring-transparent active:ring-orange-500/60"
                 onClick={() => {
                   setSegTarget(p)
                   setSegText('')
@@ -219,7 +233,7 @@ export default function Read() {
                 {p}
               </button>
             ) : (
-              <p key={i} className="mb-4 whitespace-pre-wrap">
+              <p key={i} className="mb-4 whitespace-pre-wrap indent-8">
                 {p}
               </p>
             )
@@ -265,13 +279,23 @@ export default function Read() {
           >
             上一章
           </button>
-          <button
-            type="button"
-            className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium text-white"
-            onClick={next}
-          >
-            下一章
-          </button>
+          {isLast ? (
+            <button
+              type="button"
+              className="flex-1 rounded-xl border border-orange-600 py-2.5 text-sm font-medium text-orange-600"
+              onClick={next}
+            >
+              已是最新 · 回目录
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium text-white"
+              onClick={next}
+            >
+              下一章
+            </button>
+          )}
         </div>
       </div>
 
