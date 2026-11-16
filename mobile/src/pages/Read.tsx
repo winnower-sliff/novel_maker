@@ -23,6 +23,7 @@ function splitParagraphs(content: string): string[] {
 export default function Read() {
   const openBookId = useUiStore((s) => s.openBookId) ?? ''
   const setBookSub = useUiStore((s) => s.setBookSub)
+  const setReaderDark = useUiStore((s) => s.setReaderDark)
   const { data } = useBook(openBookId)
   const [chapterId, setChapterId] = useState<string | null>(null)
   const [chapter, setChapter] = useState<Chapter | null>(null)
@@ -80,6 +81,7 @@ export default function Read() {
 
   useEffect(() => {
     applySystemBars(theme)
+    setReaderDark(theme === 'dark')
   }, [theme])
 
   // 切章自动回顶（章内容渲染后滚外层 main）

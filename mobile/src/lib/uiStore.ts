@@ -14,12 +14,15 @@ interface UiState {
   bookSub: BookSub
   /** 开书引导中的书（全屏向导） */
   onboardBookId: string | null
+  /** 阅读页当前是否夜间主题（底栏跟随深色；仅阅读子页生效，离开自动复位） */
+  readerDark: boolean
   setTab: (tab: Tab) => void
   openBook: (bookId: string) => void
   closeBook: () => void
   setBookSub: (sub: BookSub) => void
   startOnboard: (bookId: string) => void
   finishOnboard: () => void
+  setReaderDark: (dark: boolean) => void
 }
 
 export const useUiStore = create<UiState>((set) => ({
@@ -27,6 +30,7 @@ export const useUiStore = create<UiState>((set) => ({
   openBookId: null,
   bookSub: 'write',
   onboardBookId: null,
+  readerDark: false,
   setTab: (tab) => set({ tab }),
   openBook: (bookId) => {
     try {
@@ -39,5 +43,6 @@ export const useUiStore = create<UiState>((set) => ({
   closeBook: () => set({ openBookId: null }),
   setBookSub: (bookSub) => set({ bookSub }),
   startOnboard: (bookId) => set({ onboardBookId: bookId, openBookId: null }),
-  finishOnboard: () => set({ onboardBookId: null })
+  finishOnboard: () => set({ onboardBookId: null }),
+  setReaderDark: (readerDark) => set({ readerDark })
 }))

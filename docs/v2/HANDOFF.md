@@ -13,6 +13,10 @@
 
 （无——空闲态）
 
+### 待办
+- **待 push**：69f2f7c feat(read): 阅读页体验优化（GitHub 连接 reset 推送失败，APK 已部署不受影响）；
+  网络恢复后 `git push origin feat/v2-rebuild` 补推即可
+
 <!-- 模板：
 ## 当前任务：<一句话任务名>
 

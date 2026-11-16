@@ -1,5 +1,5 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { qk, useBook } from '../lib/queries'
+import { qk, useBook, useJobFlow } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 import Cards from './Cards'
 import Lines from './Lines'
@@ -7,10 +7,49 @@ import Read from './Read'
 import Write from './Write'
 
 const SUBS = [
-  { key: 'write', label: '写作' },
-  { key: 'read', label: '阅读' },
-  { key: 'cards', label: '设定' },
-  { key: 'lines', label: '线' }
+  {
+    key: 'write',
+    label: '写作',
+    icon: (
+      <g>
+        <path d="M12 20h9" strokeLinecap="round" />
+        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+    )
+  },
+  {
+    key: 'read',
+    label: '阅读',
+    icon: (
+      <g>
+        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+    )
+  },
+  {
+    key: 'cards',
+    label: '设定',
+    icon: (
+      <g>
+        <path d="M12 2L2 7l10 5 10-5-10-5z" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M2 17l10 5 10-5" strokeLinecap="round" strokeLinejoin="round" />
+        <path d="M2 12l10 5 10-5" strokeLinecap="round" strokeLinejoin="round" />
+      </g>
+    )
+  },
+  {
+    key: 'lines',
+    label: '线',
+    icon: (
+      <g>
+        <path d="M6 3v12" strokeLinecap="round" />
+        <circle cx="18" cy="6" r="3" />
+        <circle cx="6" cy="18" r="3" />
+        <path d="M18 9a9 9 0 0 1-9 9" strokeLinecap="round" />
+      </g>
+    )
+  }
 ] as const
 
 export default function BookWorkspace() {
@@ -18,7 +57,9 @@ export default function BookWorkspace() {
   const bookSub = useUiStore((s) => s.bookSub)
   const setBookSub = useUiStore((s) => s.setBookSub)
   const closeBook = useUiStore((s) => s.closeBook)
+  const readerDark = useUiStore((s) => s.readerDark)
   const { data } = useBook(openBookId ?? '')
+  const { data: jobFlow } = useJobFlow(openBookId ?? '')
   const queryClient = useQueryClient()
 
   const book = data?.book
@@ -57,20 +98,48 @@ export default function BookWorkspace() {
         {bookSub === 'lines' && <Lines />}
       </main>
 
-      <nav className="pb-safe grid grid-cols-4 border-t border-orange-100">
-        {SUBS.map((s) => (
-          <button
-            key={s.key}
-            type="button"
-            className={
-              'flex flex-col items-center gap-0.5 py-2 text-xs ' +
-              (bookSub === s.key ? 'text-orange-600' : 'text-stone-500')
-            }
-            onClick={() => setBookSub(s.key)}
-          >
-            {s.label}
-          </button>
-        ))}
+      {/* 阅读页夜间主题时底栏联动深色，避免暗室里一条亮带 */}
+      <nav
+        className={
+          'pb-safe grid grid-cols-4 border-t ' +
+          (bookSub === 'read' && readerDark
+            ? 'border-stone-800 bg-[#141210] '
+            : 'border-orange-100 bg-[#fbf6ec] ')
+        }
+      >
+        {SUBS.map((s) => {
+          const on = bookSub === s.key
+          const dark = bookSub === 'read' && readerDark
+          return (
+            <button
+              key={s.key}
+              type="button"
+              className={
+                'relative flex flex-col items-center gap-0.5 py-2 text-[11px] ' +
+                (dark ? 'active:bg-white/5 ' : 'active:bg-orange-50 ') +
+                (on
+                  ? dark
+                    ? 'font-medium text-orange-400'
+                    : 'font-medium text-orange-600'
+                  : dark
+                    ? 'text-stone-500'
+                    : 'text-stone-400')
+              }
+              onClick={() => setBookSub(s.key)}
+            >
+              <span className="relative">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={on ? 2.2 : 1.8}>
+                  {s.icon}
+                </svg>
+                {/* 写作任务运行中：写作 tab 亮橙点，其他页也能看见导演在干活 */}
+                {s.key === 'write' && jobFlow?.active && (
+                  <span className="absolute -right-1.5 -top-0.5 h-2 w-2 rounded-full bg-orange-500" />
+                )}
+              </span>
+              {s.label}
+            </button>
+          )
+        })}
       </nav>
     </div>
   )
