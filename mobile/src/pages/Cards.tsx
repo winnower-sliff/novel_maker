@@ -2,6 +2,7 @@ import type { Card, Character, Foreshadow } from '@shared/types'
 import { useMemo, useState } from 'react'
 import { ErrorBox } from '../components/ErrorBox'
 import { useBook, useCards, useCharacters, useForeshadows } from '../lib/queries'
+import { toastError } from '../lib/toastStore'
 import { useUiStore } from '../lib/uiStore'
 
 /** 内置类别 slug（顺序=筛选栏顺序）；自定义类别原名直显 */
@@ -72,6 +73,15 @@ async function toggleCardPin(card: Card) {
   })
 }
 
+/** 小写操作（钉选等）统一兜底：失败弹提示，不让一次点击静默无效 */
+async function attempt(fn: () => Promise<void> | void, failText: string): Promise<void> {
+  try {
+    await fn()
+  } catch (e) {
+    toastError(e, failText)
+  }
+}
+
 /** 详情区底部删除条：两步确认（服务端删前自动快照，误删可从备份库找回） */
 function DeleteBar({ label, onConfirm }: { label: string; onConfirm: () => Promise<void> | void }) {
   const [arming, setArming] = useState(false)
@@ -99,6 +109,9 @@ function DeleteBar({ label, onConfirm }: { label: string; onConfirm: () => Promi
           setBusy(true)
           try {
             await onConfirm()
+          } catch (e) {
+            // 失败时停在确认态：作者可以直接再点一次，或点取消
+            toastError(e, '删除失败')
           } finally {
             setBusy(false)
           }
@@ -126,14 +139,14 @@ function PinToggle({ on, onToggle }: { on: boolean; onToggle: () => Promise<void
       tabIndex={0}
       aria-label={on ? '取消钉选' : '钉选'}
       className={`shrink-0 rounded-full p-1.5 ${on ? 'text-orange-600' : 'text-stone-300'}`}
-      onClick={async (e) => {
+      onClick={(e) => {
         e.stopPropagation()
-        await onToggle()
+        void attempt(onToggle, on ? '取消钉选失败' : '钉选失败')
       }}
       onKeyDown={(e) => {
         if (e.key === 'Enter') {
           e.stopPropagation()
-          void onToggle()
+          void attempt(onToggle, on ? '取消钉选失败' : '钉选失败')
         }
       }}
     >
