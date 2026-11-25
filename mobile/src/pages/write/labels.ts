@@ -1,4 +1,4 @@
-/** AI 页统一标签表：agent 工具/运行阶段/走向类型（展示层唯一来源） */
+/** AI 页统一标签表：agent 工具（展示层唯一来源） */
 
 /** agent 工具 → 中文名（缺省裸名兜底） */
 export const TOOL_LABEL: Record<string, string> = {
@@ -38,13 +38,4 @@ export const TOOL_LABEL: Record<string, string> = {
   request_review: '申请审读',
   request_audit: '申请审计',
   finish: '收工'
-}
-
-/** job 运行阶段 → 概括文案 */
-export const RUN_LABEL: Record<string, string> = {
-  proposal: '导演正在构思走向…',
-  agent: '导演自主工作中',
-  report: '出报告中…',
-  draft: '改章中',
-  finalize: '收尾中…'
 }
