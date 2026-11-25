@@ -203,7 +203,11 @@ async function handleInvoke(
     )
     json(res, 200, { result }, req)
   } catch (err) {
-    json(res, 400, { error: (err as Error)?.message ?? String(err) }, req)
+    // 业务校验的报错是给作者看的中文提示，留一行痕迹即可；其余是内部异常，带堆栈进日志
+    const message = (err as Error)?.message ?? ''
+    if (/[\u4e00-\u9fff]/.test(message)) console.warn(`[invoke] ${channel} 被拒绝：${message}`)
+    else console.error(`[invoke] ${channel} 内部异常`, err)
+    json(res, 400, { error: message || String(err) }, req)
   }
 }
 
