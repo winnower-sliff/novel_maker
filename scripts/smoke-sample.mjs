@@ -115,6 +115,33 @@ try {
   const b3 = (await invoke('book:get', b.id)).book
   ok('空数组全解绑', b3.sampleSources.length === 0)
 
+  // 摘要链路不读全文：列表只带 120 字预览，绑定校验只查存在性
+  const brief = (await invoke('sample:list')).find((x) => x.id === imp.id)
+  ok(
+    '范文列表只带预览不带全文',
+    brief &&
+      brief.preview === SAMPLE_TXT.slice(0, 120) &&
+      !Object.hasOwn(brief, 'content') &&
+      brief.chapterCount === 3
+  )
+  const dirInfo = dir.find((f) => f.fileName === '测试范文.txt')
+  ok(
+    '待导入列表只读文件头',
+    dirInfo &&
+      dirInfo.sizeBytes > 0 &&
+      !Object.hasOwn(dirInfo, 'chars') &&
+      dirInfo.preview.startsWith('测试范文')
+  )
+  const bad = await fetch(`${BASE}/api/invoke/sample:attach`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ args: [b.id, ['no-such-sample']] })
+  })
+  ok(
+    '绑定不存在的范文被拒',
+    bad.status === 400 && ((await bad.json()).error ?? '').includes('范文不存在')
+  )
+
   await invoke('sample:delete', imp.id)
   const list2 = await invoke('sample:list')
   ok('删除范文', !list2.some((x) => x.id === imp.id))

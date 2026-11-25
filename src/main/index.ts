@@ -1,4 +1,5 @@
 // v2 入口：纯 Node 常驻服务 + 系统托盘，无 Electron。
+import { dailyBackup } from './backup.js'
 import { initConfig } from './config.js'
 import { connectHost } from './connect.js'
 import { recoverJobsOnBoot, watchdogTick } from './jobs.js'
@@ -18,6 +19,9 @@ async function main(): Promise<void> {
   // 写作任务恢复：重启前 running 的任务标 failed（W13 可 retry 续跑）+ 看门狗巡检
   recoverJobsOnBoot()
   setInterval(watchdogTick, 60_000).unref()
+  // 每日备份：错开启动高峰；电脑端常开则每 24h 检查一次（今天备过就跳过）
+  setTimeout(() => void dailyBackup(), 15_000).unref()
+  setInterval(() => void dailyBackup(), 24 * 60 * 60_000).unref()
   const status = getServerStatus()
   const { host, port } = connectHost()
   console.log(`[novel-maker] 服务已启动：${host}:${port}（版本 ${status.version}）`)

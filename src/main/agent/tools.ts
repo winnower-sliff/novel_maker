@@ -264,7 +264,7 @@ export function toolDefs(): ToolDef[] {
           state: {
             type: 'object',
             description:
-              '初始活状态。七要素字段收字符串：{location?,body?,mood?,items?,knows?,goal?}；也可加任意自定义键（对象/数组皆可，设定页递归渲染）',
+              '初始活状态，仅新建时可带（已有人物改活状态用 patch_character_state，传了也不生效）。七要素字段收字符串：{location?,body?,mood?,items?,knows?,goal?}；也可加任意自定义键（对象/数组皆可，设定页递归渲染）',
             properties: {
               location: { type: 'string' },
               body: { type: 'string', description: '身体状态（伤病等）' },
@@ -276,7 +276,8 @@ export function toolDefs(): ToolDef[] {
           },
           relations: {
             type: 'array',
-            description: '关系网 [{to:"另一人物名",label:"关系"}]',
+            description:
+              '关系网 [{to:"另一人物名",label:"关系"}]。传了就整体替换现有关系网（要保留的关系也得再写一遍）',
             items: {
               type: 'object',
               properties: { to: { type: 'string' }, label: { type: 'string' } },
@@ -842,7 +843,8 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
         // data/tags 仅新建时作初值；已有人物走 update_character_data/tags（防全量覆盖）
         data: isNew ? ((input.data as Record<string, unknown>) ?? undefined) : undefined,
         tags: isNew && Array.isArray(input.tags) ? (input.tags as string[]) : undefined,
-        state: (input.state as CharacterState) ?? undefined,
+        // 活状态同理：写作过程中由 patch_character_state 逐步演进，改元信息不能顺手抹掉
+        state: isNew ? ((input.state as CharacterState) ?? undefined) : undefined,
         relations: (input.relations as Character['relations']) ?? undefined,
         pinned: typeof input.pinned === 'boolean' ? input.pinned : undefined
       })
@@ -1043,6 +1045,14 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
           ok: false,
           summary: '只能删本线末章',
           data: `末章《${last.title}》不是当前故事序列的最后一章（分叉线上有后续章节），不能删`
+        }
+      }
+      const fork = store.forkPointOf(last.id)
+      if (fork) {
+        return {
+          ok: false,
+          summary: '这一章是分叉线的起点',
+          data: `《${last.title}》是分叉线「${fork.name}」的起点，不能删；要删请先删那条分叉线`
         }
       }
       snapshotDb(`del-chapter`)

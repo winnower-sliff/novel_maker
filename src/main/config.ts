@@ -1,5 +1,5 @@
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { basename, join } from 'node:path'
 import type { SettingsPatch } from '../shared/contract.js'
 import {
   isProviderId,
@@ -47,8 +47,30 @@ function defaults(): StoredConfig {
 }
 
 function load(): StoredConfig {
+  const f = file()
+  if (!existsSync(f)) return defaults()
+  let raw: Partial<StoredConfig>
   try {
-    const raw = JSON.parse(readFileSync(file(), 'utf-8')) as Partial<StoredConfig>
+    raw = JSON.parse(readFileSync(f, 'utf-8')) as Partial<StoredConfig>
+  } catch {
+    // 文件损坏：改名保留（里面有作者的 API Key，不能让下次保存拿默认值把它覆盖掉）
+    const now = new Date()
+    const p = (n: number) => String(n).padStart(2, '0')
+    const stamp = `${now.getFullYear()}${p(now.getMonth() + 1)}${p(now.getDate())}-${p(now.getHours())}${p(now.getMinutes())}${p(now.getSeconds())}`
+    const kept = `${f}.corrupt-${stamp}`
+    try {
+      renameSync(f, kept)
+      console.error(
+        `[config] settings.json 无法解析，已改名保留为 ${basename(kept)}；本次使用默认设置`
+      )
+    } catch {
+      console.error(
+        '[config] settings.json 无法解析，且改名失败；本次使用默认设置（不要保存设置，否则原文件会被覆盖）'
+      )
+    }
+    return defaults()
+  }
+  try {
     const d = defaults()
     const rawPort = raw.server?.port
     const port =
@@ -74,9 +96,13 @@ function config(): StoredConfig {
   return current
 }
 
+/** 原子写：先写临时文件再改名覆盖，写到一半断电/崩溃不会留下半个 settings.json */
 function persist(): void {
   ensureDataDir()
-  writeFileSync(file(), JSON.stringify(config(), null, 2), 'utf-8')
+  const target = file()
+  const tmp = `${target}.${process.pid}.tmp`
+  writeFileSync(tmp, JSON.stringify(config(), null, 2), 'utf-8')
+  renameSync(tmp, target)
 }
 
 // ── 服务器配置 ───────────────────────────────────────────────────────────────

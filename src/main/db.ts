@@ -1,6 +1,7 @@
-import { existsSync, mkdirSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import type { BackupEntry } from '../shared/types.js'
 import { dataDir } from './paths.js'
 
 /**
@@ -14,6 +15,9 @@ import { dataDir } from './paths.js'
  */
 
 let db: DatabaseSync | null = null
+
+/** 表结构版本（PRAGMA user_version）：改 SCHEMA 或 migrate 时 +1，老库升级前会自动留快照 */
+const SCHEMA_VERSION = 1
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS books (
@@ -40,6 +44,7 @@ CREATE TABLE IF NOT EXISTS lines (
   book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
   parent_line_id TEXT DEFAULT '',
   fork_chapter_id TEXT DEFAULT '',
+  fork_order INTEGER NOT NULL DEFAULT -1,
   name TEXT NOT NULL,
   note TEXT DEFAULT '',
   created_at INTEGER NOT NULL
@@ -185,9 +190,36 @@ export function getDb(): DatabaseSync {
   db = new DatabaseSync(join(dir, 'novel.db'))
   db.exec('PRAGMA journal_mode = WAL')
   db.exec('PRAGMA foreign_keys = ON')
+  // 老库升级前留一份：列迁移不可逆，出问题还能回到升级前
+  if (schemaIsOlder(db)) {
+    try {
+      console.log(`[db] 数据库结构升级，已留升级前快照：${snapshotDb('pre-migrate')}`)
+    } catch (e) {
+      console.error('[db] 升级前快照失败，继续升级', e)
+    }
+  }
   db.exec(SCHEMA)
   migrate(db)
+  db.exec(`PRAGMA user_version = ${SCHEMA_VERSION}`)
   return db
+}
+
+/** 关闭连接（恢复备份要换库文件时用；下次 getDb 重新打开） */
+export function closeDb(): void {
+  try {
+    db?.close()
+  } finally {
+    db = null
+  }
+}
+
+function schemaIsOlder(d: DatabaseSync): boolean {
+  const hasBooks = d
+    .prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'books'")
+    .get()
+  if (!hasBooks) return false
+  const row = d.prepare('PRAGMA user_version').get() as { user_version: number }
+  return row.user_version < SCHEMA_VERSION
 }
 
 /** 列迁移：老库补新列（幂等） */
@@ -220,6 +252,13 @@ function migrate(d: DatabaseSync): void {
   if (charCols.has('card') && !charCols.has('data'))
     d.exec('ALTER TABLE characters RENAME COLUMN card TO data')
   if (!charCols.has('tags')) d.exec("ALTER TABLE characters ADD COLUMN tags TEXT DEFAULT '[]'")
+  // 分叉点序号（-1=未记录）：分叉点章日后被删时，子线靠它保住更早的祖先章
+  if (!tableCols('lines').has('fork_order'))
+    d.exec('ALTER TABLE lines ADD COLUMN fork_order INTEGER NOT NULL DEFAULT -1')
+  d.exec(
+    `UPDATE lines SET fork_order = COALESCE((SELECT order_no FROM chapters WHERE id = lines.fork_chapter_id), fork_order)
+     WHERE fork_order = -1 AND fork_chapter_id != ''`
+  )
 }
 
 /** 灾难恢复快照（删书/删线前调用，D4）。VACUUM INTO 不覆盖已存在文件——文件名带时分秒，同秒冲突加序号 */
@@ -231,5 +270,103 @@ export function snapshotDb(tag: string): string {
   let file = join(dataDir(), `backup-${tag}-${stamp}.db`)
   for (let i = 2; existsSync(file); i++) file = join(dataDir(), `backup-${tag}-${stamp}-${i}.db`)
   d.exec(`VACUUM INTO '${file.replaceAll("'", "''")}'`)
+  try {
+    pruneBackups()
+  } catch (e) {
+    console.error('[db] 清理旧快照失败', e)
+  }
   return file
+}
+
+// ── 备份清单与保留策略 ───────────────────────────────────────────────────────
+
+const DAILY_RE = /^backup-daily-(\d{8})-(\d{6})(?:-(\d+))?\.db\.gz$/
+const OP_RE = /^backup-(?!daily-)(.+)-(\d{8})-(\d{6})(?:-(\d+))?\.db$/
+/** 每次删除操作自动留的快照：数量多、价值低，只留最近一批。手动备份/升级前/恢复前的不在此列，永不自动清理 */
+const PRUNABLE_TAG = /^(del-|card-|char-|book-|line-|fore-)/
+const OP_KEEP = 30
+const DAILY_KEEP_DAYS = 7
+const DAILY_BUCKET_DAYS = 7
+const DAILY_BUCKETS = 8
+
+function backupEntry(
+  name: string,
+  kind: BackupEntry['kind'],
+  tag: string | undefined,
+  day: string | undefined,
+  time: string | undefined,
+  seq: string | undefined
+): BackupEntry | null {
+  if (!tag || !day || !time) return null
+  let size = 0
+  try {
+    size = statSync(join(dataDir(), name)).size
+  } catch {
+    return null
+  }
+  const at = new Date(
+    Number(day.slice(0, 4)),
+    Number(day.slice(4, 6)) - 1,
+    Number(day.slice(6, 8)),
+    Number(time.slice(0, 2)),
+    Number(time.slice(2, 4)),
+    Number(time.slice(4, 6))
+  ).getTime()
+  return {
+    name,
+    kind,
+    tag,
+    size,
+    at,
+    key: `${day}${time}.${String(Number(seq ?? 1)).padStart(4, '0')}`
+  }
+}
+
+/** 数据目录里的全部备份，新 → 旧 */
+export function listBackups(): BackupEntry[] {
+  const dir = dataDir()
+  if (!existsSync(dir)) return []
+  const out: BackupEntry[] = []
+  for (const name of readdirSync(dir)) {
+    const daily = DAILY_RE.exec(name)
+    const op = daily ? null : OP_RE.exec(name)
+    const e = daily
+      ? backupEntry(name, 'daily', 'daily', daily[1], daily[2], daily[3])
+      : op
+        ? backupEntry(name, 'op', op[1], op[2], op[3], op[4])
+        : null
+    if (e) out.push(e)
+  }
+  return out.sort((a, b) => (a.key < b.key ? 1 : a.key > b.key ? -1 : 0))
+}
+
+/**
+ * 清理旧备份，返回被删的文件名。
+ * 删除操作快照只留最近 OP_KEEP 个；每日备份最近 7 天全留，更早的每 7 天留 1 个、最多 8 个。
+ */
+export function pruneBackups(): string[] {
+  const removed: string[] = []
+  const now = Date.now()
+  const seenBuckets = new Set<number>()
+  let ops = 0
+  for (const e of listBackups()) {
+    let drop = false
+    if (e.kind === 'op') {
+      if (!PRUNABLE_TAG.test(e.tag)) continue
+      ops += 1
+      drop = ops > OP_KEEP
+    } else {
+      const ageDays = (now - e.at) / 86_400_000
+      if (ageDays > DAILY_KEEP_DAYS) {
+        const bucket = Math.floor(ageDays / DAILY_BUCKET_DAYS)
+        drop = seenBuckets.has(bucket) || seenBuckets.size >= DAILY_BUCKETS
+        if (!drop) seenBuckets.add(bucket)
+      }
+    }
+    if (drop) {
+      rmSync(join(dataDir(), e.name))
+      removed.push(e.name)
+    }
+  }
+  return removed
 }

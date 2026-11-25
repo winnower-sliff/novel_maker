@@ -6,6 +6,7 @@ import { probeModels } from '../llm.js'
 import { dataDir } from '../paths.js'
 import { getServerStatus } from '../serverState.js'
 import { computeStats, listUsage } from '../usage.js'
+import { backupHandlers } from './backup.js'
 import { bookHandlers } from './books.js'
 import { jobHandlers } from './jobs.js'
 import { onboardHandlers } from './onboard.js'
@@ -57,6 +58,7 @@ export const sharedHandlers: HandlerTable = {
   ...appHandlers,
   ...settingsHandlers,
   ...usageHandlers,
+  ...backupHandlers,
   ...bookHandlers,
   ...jobHandlers,
   ...onboardHandlers,

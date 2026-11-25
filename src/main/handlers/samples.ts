@@ -5,10 +5,14 @@ import {
   getSample,
   listSampleSections,
   listSamples,
+  sampleExists,
   saveSample,
   updateBook
 } from '../store.js'
 import type { HandlerTable } from './types.js'
+
+/** 单本范文入库上限（字符数）。超出说明放错了文件（如整站合集），拒绝并提示拆分 */
+const MAX_SAMPLE_CHARS = 30_000_000
 
 const sampleHandlers: Pick<
   HandlerTable,
@@ -24,13 +28,18 @@ const sampleHandlers: Pick<
   'sample:listDir': () => listImportFiles(),
   'sample:import': async (_ctx, [{ fileName, name }]) => {
     const text = await readImportFile(fileName)
+    if (text.length > MAX_SAMPLE_CHARS) {
+      throw new Error(
+        `这个文件有 ${text.length.toLocaleString()} 字，超过单本范文上限（3000 万字）。请拆成几本再导入`
+      )
+    }
     return saveSample(name || fileName.replace(/\.txt$/i, ''), text)
   },
   'sample:list': () => listSamples(),
   /** 整组设置绑定（多本；空数组=全解绑）。sampleId 不存在时拒绝，防悬空 */
   'sample:attach': (_ctx, [bookId, sampleIds]) => {
     for (const id of sampleIds) {
-      if (!getSample(id)) throw new Error(`范文不存在：${id}`)
+      if (!sampleExists(id)) throw new Error(`范文不存在：${id}`)
     }
     const book = updateBook(bookId, { sampleSources: sampleIds })
     if (!book) throw new Error('书不存在')
@@ -38,7 +47,7 @@ const sampleHandlers: Pick<
   },
   'sample:delete': (_ctx, [sampleId]) => deleteSample(sampleId),
   'sample:sections': (_ctx, [sampleId]) => {
-    if (!getSample(sampleId)) throw new Error('范文不存在')
+    if (!sampleExists(sampleId)) throw new Error('范文不存在')
     return listSampleSections(sampleId)
   },
   'sample:readText': (_ctx, [sampleId, from, size]) => {

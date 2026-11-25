@@ -1,6 +1,7 @@
 import { z } from 'zod'
 import { MODEL_SLOTS, PROVIDER_IDS } from './providers.js'
 import type {
+  BackupEntry,
   Book,
   Card,
   Chapter,
@@ -188,6 +189,12 @@ export const invokeContract = {
   },
   'usage:list': { args: z.tuple([z.number().optional()]), ret: ret<UsageRecord[]>() },
   'usage:stats': { args: z.tuple([]), ret: ret<UsageStats>() },
+  'backup:list': { args: z.tuple([]), ret: ret<BackupEntry[]>() },
+  'backup:create': { args: z.tuple([]), ret: ret<BackupEntry>() },
+  'backup:restore': {
+    args: z.tuple([z.string()]),
+    ret: ret<{ books: number; safeguard: string }>()
+  },
 
   // ── 书架 / 分叉树（D1-D6） ────────────────────────────────────────────────
   'book:create': { args: z.tuple([BookCreateSchema]), ret: ret<Book>() },
@@ -256,7 +263,8 @@ export const invokeContract = {
     ret: ret<{ reply: string; options: string[]; stage: string; draft?: unknown; done?: boolean }>()
   },
   'onboard:answer': {
-    args: z.tuple([z.string(), z.string()]),
+    // 第三参=作者发这句话时看到的草案阶段；用于识别超时后的重复确认
+    args: z.tuple([z.string(), z.string(), z.string().optional()]),
     ret: ret<{ reply: string; options: string[]; stage: string; draft?: unknown; done?: boolean }>()
   },
 
@@ -335,6 +343,11 @@ export interface Api {
   usage: {
     list: InvokeFn<'usage:list'>
     stats: InvokeFn<'usage:stats'>
+  }
+  backup: {
+    list: InvokeFn<'backup:list'>
+    create: InvokeFn<'backup:create'>
+    restore: InvokeFn<'backup:restore'>
   }
   book: {
     create: InvokeFn<'book:create'>

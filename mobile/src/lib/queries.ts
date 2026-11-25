@@ -1,4 +1,5 @@
 import type {
+  BackupEntry,
   Book,
   Card,
   Chapter,
@@ -146,5 +147,13 @@ export function useReports(bookId: string | null) {
       )
     },
     enabled: !!bookId
+  })
+}
+
+/** 数据目录里的备份清单（新→旧） */
+export function useBackups() {
+  return useQuery({
+    queryKey: ['backups'],
+    queryFn: async (): Promise<BackupEntry[]> => window.api.backup.list()
   })
 }

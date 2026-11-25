@@ -7,5 +7,6 @@ type Domain = Pick<HandlerTable, 'onboard:start' | 'onboard:answer'>
 
 export const onboardHandlers: Domain = {
   'onboard:start': (_ctx, [bookId]) => onboardStart(bookId),
-  'onboard:answer': (_ctx, [bookId, answer]) => onboardAnswer(bookId, answer)
+  'onboard:answer': (_ctx, [bookId, answer, expectStage]) =>
+    onboardAnswer(bookId, answer, expectStage)
 }
