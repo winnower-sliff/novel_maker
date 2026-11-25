@@ -6,6 +6,9 @@
   "license": "MIT",
   "private": true,
   "main": "dist/main/index.js",
+  "engines": {
+    "node": ">=24"
+  },
   "scripts": {
     "dev": "tsx watch src/main/index.ts",
     "build": "tsc -p tsconfig.json && node scripts/build-info.mjs",
@@ -14,9 +17,9 @@
     "lint": "biome check src mobile/src mobile/vite.config.ts scripts",
     "lint:fix": "biome check --write src mobile/src mobile/vite.config.ts scripts",
     "test": "npm run build && node scripts/smoke-all.mjs",
+    "verify": "npm run typecheck && npm run lint && npm test",
     "deploy": "node scripts/deploy.mjs",
-    "apk": "node scripts/build-apk.mjs",
-    "verify": "npm run typecheck && npm run lint && npm test"
+    "apk": "node scripts/build-apk.mjs"
   },
   "dependencies": {
     "@capacitor/core": "^7.4.4",

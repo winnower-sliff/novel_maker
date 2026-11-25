@@ -1,12 +1,26 @@
+# 依赖与构建产物
 node_modules/
-out/
 dist/
-*.log
-dev.log
-.DS_Store
-
-.opencode/
-.playwright-mcp/
+dist.next/
 dist-mobile/
 NovelMaker.apk
 mobile-app/android/version.properties
+
+# 运行时数据（默认在 %APPDATA%/novel-maker-v2；用 NM_DATA_DIR 指到仓库里时也不能进版本库）
+*.db
+*.db-wal
+*.db-shm
+server.pid
+server.checkout
+*.log
+
+# 密钥
+.env
+.env.*
+*.keystore
+*.jks
+
+# 本地工具与系统文件
+.opencode/
+.playwright-mcp/
+.DS_Store
