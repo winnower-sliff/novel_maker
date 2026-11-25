@@ -78,17 +78,22 @@
   - e876dbe invoke 异常留痕
   - 未做（留给后续）：LLM 错误对用户的友好文案（现直接显示底层错误信息）
   - 遗留给线 D：BottomSheet 尚未接返回键；离开阅读页未恢复状态栏
-- **C `feat/data-safety`**（**开发中**）——开工前逐项读代码核实：
-  - [ ] C1 备份体系：删除前快照无保留上限（29 个共 164MB）→ 修剪策略；每日自动全量备份；
-        迁移前快照；`quick_check`；恢复入口
-  - [ ] C3 `save_character` 改已有人物时传 state/relations 会整体覆盖（tools.ts ~845 + store.ts ~710）
-  - [ ] C4 onboard 先落库再 ask，ask 抛错后重试重复入库（onboard.ts ~165-192）
-  - [ ] C5 `delete_last_chapter` 可删掉分叉点章 → 子线丢失全部祖先章（tools.ts ~1041 + store.ts ~478）
-  - [ ] C6 settings.json 非原子写；损坏时静默回落默认值并覆盖原文件（config.ts ~65-80）
-  - [ ] C7 `purgeDraftBooks` 无快照硬删（index.ts:17、store.ts ~184-208）
-  - [ ] C8 `sample:import` 无大小上限；`listSamples` 加载全文（store.ts ~1122）
-  - （applyRevisePlan 字符串 replace 陷阱已在线 B 修复）
-- **D `feat/mobile-polish`**：失败卡重试钮（`job.state==='failed'`）+计划卡闪「已处理」；
+- **C `feat/data-safety`**（**已部署** 2026-11-25，合并提交 b8806c7；APK v4.6.0-202611251900，release fbdbe4b）：
+  - 9186eba 范文摘要链路不再读全文（列表/绑定校验/待导入预览只读文件头；导入上限 3000 万字）
+  - 7c336c9 `save_character` 改已有人物时不再覆盖活状态（state 仅新建时可带）
+  - 95835de 开书引导：确认草案**先问后存**（下一阶段生成失败不重复入库）；重复确认幂等返回最新草案；
+    `onboard:answer` 增加 `expectStage`，阶段不符不再误确认下一阶段；手机端失败保留选项可重试
+  - f3d6e26 分叉点保护：起点章不可删（工具层先拦，不白占快照）；`lines.fork_order` 记录分叉点序号，
+    分叉点章不在时子线仍保住更早的祖先章
+  - 33971d9 settings.json 原子写（tmp→rename）；JSON 损坏时改名 `settings.json.corrupt-<时间>` 保全后用默认值
+  - e2306cf 备份体系：`src/main/backup.ts` 每日一份 gzip（近 7 天全留、更早每周 1 份共 8 桶）；删除前快照
+    （del-/card-/char-/book-/line-/fore-）只留最新 30 份，manual/pre-migrate/pre-restore 永不自动清；
+    `PRAGMA user_version`+结构升级前自动快照；通道 `backup:list/create/restore`（进程内换库：先留
+    pre-restore 快照→关连接→换文件→重开，失败自动换回）；设置页「备份与恢复」可立即备份/一键恢复
+  - 冒烟：smoke-backup 24、smoke-fork 13、smoke-onboard 26、smoke-sample 14、smoke-char-tags 9；全量 17 套
+  - 调研后**不改**的：`purgeDraftBooks`（草稿书按定义无用户发言，不加快照）；子线删不到父线章（已有校验）
+  - 操作备忘：恢复入口=手机设置页「备份与恢复」；备份文件在数据目录 `%APPDATA%/novel-maker-v2`
+- **D `feat/mobile-polish`**（**开发中**）：失败卡重试钮（`job.state==='failed'`）+计划卡闪「已处理」；
   时间轴「加载更早」；delta 失配 job.get 请求风暴（单在途）；BottomSheet+`useBackHandler` 关弹层
   （现零使用）；统一错误态（全项目无 isError）；整章改稿二次确认；写操作失败 toast；
   草稿书续接入口；切子页复位滚动；输入框自适应高度+键盘贴底；点击目标≥40px；
@@ -130,8 +135,10 @@
 - **候选（未排期）**：生产产物迁出 worktree（现寄生在 opencode worktree 路径）；supervisor 守护
 
 ### 下一步
-线 C：开线 `feat/data-safety`（worktree 默认基于 main，先 `git reset --hard feat/v2-rebuild`）
-→ 亲读 db.ts（migrate/snapshotDb）、config.ts、store.ts 相关段、tools.ts 的 save_character /
-delete_last_chapter、director/onboard.ts、index.ts 启动序列，逐项核实上面 C1–C8
-→ 定稿设计 → 实现 + 冒烟（`npm run verify` 全绿）→ commit+push → 合并 → 主 checkout `npm run deploy`
-→ 更新本板（线 C 已部署，开线 D `feat/mobile-polish`，证据见下方 D 段与审查记录）
+线 D `feat/mobile-polish`：开线（worktree 默认基于 main，先 `git reset --hard feat/v2-rebuild`，`npm ci`）
+→ 逐项亲读 mobile/src 核实上面的 D 证据（行号已被格式化与 BottomSheet 迁移改动，按现象搜）
+→ 按价值排序实现（建议先做：失败卡重试钮+统一错误态+BottomSheet 返回键+delta 补拉请求风暴+切章容错，
+  再做草稿书续接、输入框自适应、点击目标、夜间主题残留、工具中文名）
+→ 验证：mobile tsc + biome + `npx vite build --config mobile/vite.config.ts` + check-tailwind-classes
+→ 按项提交 → push → 主 checkout `git merge --no-ff` → push → 删 worktree → `npm run apk`（纯前端改动，
+  build-apk 自动确认 server 最新）→ 更新本板（线 D 已部署，开线 E `docs/agents-v2`）
