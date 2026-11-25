@@ -7,6 +7,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet'
 import { ErrorBox } from '../components/ErrorBox'
+import { OfflineBanner } from '../components/OfflineBanner'
 
 /** 书脊配色：按书 id 稳定取暖色系之一 */
 const SPINE_COLORS = ['#ea580c', '#d97706', '#c2410c', '#b45309', '#9a3412', '#e11d48']
@@ -166,6 +167,9 @@ export default function Shelf() {
           </button>
         </div>
       </header>
+
+      {/* 刷新失败但手里还有书：照常显示，只提醒一句这些不是最新的；恢复后自动消失 */}
+      {isError && !!books && <OfflineBanner />}
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-safe">
         {(exporting || exportMsg) && (
