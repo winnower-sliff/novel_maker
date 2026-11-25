@@ -50,8 +50,43 @@
 - 移动端体验：ses_deeeae787ffe6zKX3A2mRQX2Lp
 - 数据安全与运维：ses_deeeae784ffeDg8nIdngIcWTAQ
 
-### 需求包（定稿后在此维护：状态 开发中/待合并/已部署）
-- [ ] 待定稿
+### 开线坑（2026-11-25 实锤）
+- `worktree_create` 默认从 **main（v1）** 拉新 worktree，不是 feat/v2-rebuild！开线后必须
+  `git switch -c <branch> && git reset --hard feat/v2-rebuild`（或先 reset 再开分支）。
+- 新 worktree 无 node_modules，`npm ci` 约 6s（218 包）；mobile-app/node_modules 仅 build-apk 需要。
+
+### 需求包（三份审查去重后定稿；状态 待做/开发中/待合并/已部署）
+- **A `chore/hygiene` 工程卫生+部署门禁**（开发线 `…/worktree/754ca1/hygiene`，**开发中**）
+  - A1 biome 覆盖 mobile/src+scripts（已 --write 格式化 50 文件；剩 ~60 条诊断待手修：
+    useExhaustiveDependencies×7、a11y×22、noArrayIndexKey×15、杂项）
+  - A2 删裸 LLM 代理：`llm:chat/abort/poll` 三通道+`src/main/runs.ts`+`llm:delta/done/error/notice`
+    事件+`DonePayload/RunRecordPayload`+`api.llm` 命名空间（mobile 零引用，已核实）
+  - A3 死代码：`src/shared/{wikiLinks,tags}.ts`、`scripts/test-tools-live.mjs`（对真实库写！）、
+    `com/getcapacitor/myapp/Example*Test.java`、孤儿产物 dist 清理
+  - A4 死依赖 vitest、`@capacitor/app`、`@capacitor/local-notifications`；`npm test`→冒烟总入口
+    `scripts/smoke-all.mjs`（合并后主 checkout 需 `cd mobile-app && npm install`）
+  - A5 构建指纹进 `/api/health`；build-apk 发现主进程源码≠生产则自动 deploy；deploy 加固
+    （构建前清 dist、busy 检查、探测校验指纹、PID 定位）
+  - A6 .gitignore 补齐、`engines.node>=24`、README、过时注释
+- **B `fix/job-lifecycle` 后端 P1**：入队即返回（修 30s 超时/导演答两遍）；AbortSignal 贯穿
+  （取消/看门狗真正停 loop，终态带 `WHERE state='running'`，activeJobId 统一，轮内长链路喂狗）；
+  LLM 重试读 `LlmError.status`+retry-after+terminated；上下文压缩切点落到 assistant；
+  工具内异常转 tool_result；队列 FIFO+启动 pump+不饿死
+- **C `feat/data-safety`**：改章写 `chapter_versions`（现全仓零写入）+applyRevisePlan 修字符串
+  replace 陷阱+前端回看入口；备份体系（快照修剪/每日每周/NM_BACKUP_DIR/restore 脚本/quick_check）；
+  save_character 的 state/relations 仅新建生效；onboard 先 ask 后事务落库；delete_last_chapter
+  分叉点保护；settings.json 原子写；message:list 游标分页
+- **D `feat/mobile-polish`**：失败卡重试钮（`job.state==='failed'`）+计划卡闪「已处理」；
+  时间轴「加载更早」；delta 失配 job.get 请求风暴（单在途）；BottomSheet+`useBackHandler` 关弹层
+  （现零使用）；统一错误态（全项目无 isError）；整章改稿二次确认；写操作失败 toast；
+  草稿书续接入口；切子页复位滚动；输入框自适应高度+键盘贴底；点击目标≥40px；
+  离开阅读页恢复状态栏；切章 useQuery+失败重试；夜间主题残留对比度；工具卡 5 个裸英文名+死代码
+  （`RUN_LABEL/useReports/useChapter/lastDone`）
+- **E `docs/agents-v2`**：AGENTS.md 重写（257 行里 v1 遗留约 53%、流水账 37%）→
+  `docs/v2/HISTORY.md`+`docs/v1/LEGACY.md` 拆分
+- **候选（未排期）**：生产产物迁出 worktree（现寄生在 opencode worktree 路径）；supervisor 守护
 
 ### 下一步
-等三份审查报告 → 去重核实 → 按价值排序定稿需求包 → 从第 1 包开始开线。
+线 A：修完剩余 biome 诊断 → A2~A6 → typecheck+lint+全冒烟 → 逐项 commit+push
+→ 回主 checkout `git merge --no-ff chore/hygiene` → push → 删 worktree
+→ 主 checkout deploy + `cd mobile-app && npm install` + `npm run apk`
