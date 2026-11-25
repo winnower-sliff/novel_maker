@@ -1,12 +1,13 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet'
+import { ErrorBox } from '../components/ErrorBox'
 import { qk, useBook } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 
 export default function Lines() {
   const openBookId = useUiStore((s) => s.openBookId) ?? ''
-  const { data } = useBook(openBookId)
+  const { data, error, isError, refetch } = useBook(openBookId)
   const queryClient = useQueryClient()
   const [forkOpen, setForkOpen] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null)
@@ -23,6 +24,10 @@ export default function Lines() {
     queryClient.invalidateQueries({ queryKey: qk.books })
     queryClient.invalidateQueries({ queryKey: qk.cards(book?.activeLineId ?? '') })
     queryClient.invalidateQueries({ queryKey: qk.statusCard(openBookId) })
+  }
+
+  if (isError && !book) {
+    return <ErrorBox error={error} onRetry={() => refetch()} />
   }
 
   if (!book) return <div className="py-20 text-center text-sm text-stone-400">加载中…</div>

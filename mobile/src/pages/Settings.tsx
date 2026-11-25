@@ -2,6 +2,7 @@ import type { ProviderId } from '@shared/providers'
 import type { Book, SampleFileInfo, SampleInfo, SettingsView, UsageStats } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { ErrorBox } from '../components/ErrorBox'
 import { SampleReader } from '../components/SampleReader'
 import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
 import { useConnStore } from '../lib/conn'
@@ -239,11 +240,21 @@ function SampleLib() {
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [reading, setReading] = useState<SampleInfo | null>(null)
 
-  const { data: samples } = useQuery({
+  const {
+    data: samples,
+    isPending: samplesLoading,
+    error: samplesError,
+    isError: samplesFailed
+  } = useQuery({
     queryKey: ['samples'],
     queryFn: async (): Promise<SampleInfo[]> => window.api.sample.list()
   })
-  const { data: files } = useQuery({
+  const {
+    data: files,
+    isPending: filesLoading,
+    error: filesError,
+    isError: filesFailed
+  } = useQuery({
     queryKey: ['importFiles'],
     queryFn: async (): Promise<SampleFileInfo[]> => window.api.sample.listDir()
   })
@@ -297,6 +308,15 @@ function SampleLib() {
     } finally {
       setBusy('')
     }
+  }
+
+  // 两个列表任一拉不到就整段报错：断连时逐条显示「还没有」会让人以为数据没了。
+  // 点重试后会回到加载态（没有数据的重新请求在 TanStack 里算 pending），所以加载态必须先判
+  if (samplesLoading || filesLoading) {
+    return <div className="py-4 text-center text-xs text-stone-400">加载中…</div>
+  }
+  if ((samplesFailed && !samples) || (filesFailed && !files)) {
+    return <ErrorBox error={samplesError ?? filesError} onRetry={refresh} />
   }
 
   return (
@@ -453,7 +473,12 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function ModelForm() {
   const queryClient = useQueryClient()
-  const { data: view } = useQuery({
+  const {
+    data: view,
+    error,
+    isError,
+    refetch: refetchView
+  } = useQuery({
     queryKey: ['settings'],
     queryFn: async (): Promise<SettingsView> => window.api.settings.get()
   })
@@ -479,7 +504,13 @@ function ModelForm() {
     retry: false
   })
 
-  if (!view) return <div className="py-4 text-center text-xs text-stone-400">加载中…</div>
+  if (!view) {
+    return isError ? (
+      <ErrorBox error={error} onRetry={() => refetchView()} />
+    ) : (
+      <div className="py-4 text-center text-xs text-stone-400">加载中…</div>
+    )
+  }
 
   const profile = view.profiles[view.provider]
   const currentModel = model || profile.defaultModel
@@ -705,7 +736,7 @@ function backupTime(at: number): string {
 
 function BackupSection() {
   const queryClient = useQueryClient()
-  const { data: backups } = useBackups()
+  const { data: backups, isPending, error, isError, refetch } = useBackups()
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
   const [confirmName, setConfirmName] = useState('')
@@ -758,7 +789,11 @@ function BackupSection() {
         {busy === 'create' ? '正在备份…' : '立即备份'}
       </button>
 
-      {shown.length > 0 ? (
+      {isPending ? (
+        <div className="mt-3 text-xs text-stone-400">加载中…</div>
+      ) : isError && !backups ? (
+        <ErrorBox error={error} onRetry={() => refetch()} />
+      ) : shown.length > 0 ? (
         <div className="mt-3 space-y-1.5">
           {shown.map((b) => (
             <div

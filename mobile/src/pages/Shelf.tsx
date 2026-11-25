@@ -5,6 +5,7 @@ import type { Book } from '@shared/types'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useMemo, useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet'
+import { ErrorBox } from '../components/ErrorBox'
 
 /** 书脊配色：按书 id 稳定取暖色系之一 */
 const SPINE_COLORS = ['#ea580c', '#d97706', '#c2410c', '#b45309', '#9a3412', '#e11d48']
@@ -28,7 +29,7 @@ function relTime(ts: number): string {
 
 /** 书架：最近的书大卡续写 + 其余列表卡 + 长按 ⋯ 归档（归档不在书架显示，设置里可恢复） */
 export default function Shelf() {
-  const { data: books, isLoading } = useBooks()
+  const { data: books, error, isError, isLoading, refetch } = useBooks()
   const openBook = useUiStore((s) => s.openBook)
   const startOnboard = useUiStore((s) => s.startOnboard)
   const setTab = useUiStore((s) => s.setTab)
@@ -161,7 +162,8 @@ export default function Shelf() {
           </div>
         )}
         {isLoading && <p className="mt-10 text-center text-stone-500">加载中…</p>}
-        {!isLoading && active.length === 0 && (
+        {isError && !books && <ErrorBox error={error} onRetry={() => refetch()} />}
+        {!isLoading && books && active.length === 0 && (
           <div className="mt-24 text-center text-stone-500">
             <div className="text-5xl">✍️</div>
             <p className="mt-4">还没有书</p>
@@ -253,7 +255,7 @@ export default function Shelf() {
         )}
       </div>
 
-      {active.length === 0 && (
+      {books && active.length === 0 && (
         <div className="px-5 pb-safe pt-3">
           <button
             type="button"

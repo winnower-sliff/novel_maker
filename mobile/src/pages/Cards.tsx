@@ -1,5 +1,6 @@
 import type { Card, Character, Foreshadow } from '@shared/types'
 import { useMemo, useState } from 'react'
+import { ErrorBox } from '../components/ErrorBox'
 import { useBook, useCards, useCharacters, useForeshadows } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 
@@ -18,9 +19,13 @@ const kindLabel = (k: string) => KIND_LABEL[k] ?? k
 
 export default function Cards() {
   const openBookId = useUiStore((s) => s.openBookId) ?? ''
-  const { data } = useBook(openBookId)
+  const { data, error, isError, refetch } = useBook(openBookId)
   const [seg, setSeg] = useState<'cards' | 'characters' | 'foreshadows'>('cards')
   const lineId = data?.book.activeLineId ?? ''
+
+  if (isError && !data) {
+    return <ErrorBox error={error} onRetry={() => refetch()} />
+  }
 
   return (
     <div className="px-4 py-4">
@@ -148,9 +153,17 @@ function PinToggle({ on, onToggle }: { on: boolean; onToggle: () => Promise<void
 }
 
 function CardsList({ lineId }: { lineId: string }) {
-  const { data: cards = [], refetch } = useCards(lineId)
+  const { data: cards = [], isPending, error, isError, refetch } = useCards(lineId)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [kind, setKind] = useState<string>('all')
+
+  // 加载态先判：点重试后没有数据的请求会回到 pending，否则会闪一下「还没有」
+  if (isPending) {
+    return <div className="py-16 text-center text-sm text-stone-400">加载中…</div>
+  }
+  if (isError && cards.length === 0) {
+    return <ErrorBox error={error} onRetry={() => refetch()} />
+  }
 
   // 筛选胶囊：全部 + 内置六类 + 数据里出现的自定义类别（保持出现序）
   const extraKinds = Array.from(
@@ -352,7 +365,7 @@ function charTags(ch: Character): string[] {
 }
 
 function CharactersList({ lineId }: { lineId: string }) {
-  const { data: characters = [], refetch } = useCharacters(lineId)
+  const { data: characters = [], isPending, error, isError, refetch } = useCharacters(lineId)
   const [expanded, setExpanded] = useState<string | null>(null)
   const [tagFilter, setTagFilter] = useState<string | null>(null)
 
@@ -362,6 +375,13 @@ function CharactersList({ lineId }: { lineId: string }) {
     for (const c of characters) for (const t of charTags(c)) freq.set(t, (freq.get(t) ?? 0) + 1)
     return [...freq.entries()].sort((a, b) => b[1] - a[1]).map(([t]) => t)
   }, [characters])
+
+  if (isPending) {
+    return <div className="py-16 text-center text-sm text-stone-400">加载中…</div>
+  }
+  if (isError && characters.length === 0) {
+    return <ErrorBox error={error} onRetry={() => refetch()} />
+  }
 
   const shown = tagFilter ? characters.filter((c) => charTags(c).includes(tagFilter)) : characters
   const pinned = shown.filter((c) => c.pinned)
@@ -537,7 +557,15 @@ function ForeshadowsList({
 }) {
   const [status, setStatus] = useState<'open' | 'planned' | 'resolved' | undefined>(undefined)
   const [expanded, setExpanded] = useState<string | null>(null)
-  const { data: all = [] } = useForeshadows(lineId)
+  const { data: all = [], isPending, error, isError, refetch } = useForeshadows(lineId)
+
+  if (isPending) {
+    return <div className="py-16 text-center text-sm text-stone-400">加载中…</div>
+  }
+  if (isError && all.length === 0) {
+    return <ErrorBox error={error} onRetry={() => refetch()} />
+  }
+
   const foreshadows = status ? all.filter((f) => f.status === status) : all
   const open = foreshadows.filter((f) => f.status !== 'resolved')
   const resolved = foreshadows.filter((f) => f.status === 'resolved')

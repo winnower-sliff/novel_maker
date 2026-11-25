@@ -1,6 +1,7 @@
 import type { Chapter } from '@shared/types'
 import { useEffect, useRef, useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet'
+import { ErrorBox } from '../components/ErrorBox'
 import QuickActionsBar from '../components/QuickActionsBar'
 import { loadJson, saveJson } from '../lib/persist'
 import { useBook } from '../lib/queries'
@@ -25,7 +26,7 @@ export default function Read() {
   const openBookId = useUiStore((s) => s.openBookId) ?? ''
   const setBookSub = useUiStore((s) => s.setBookSub)
   const setReaderDark = useUiStore((s) => s.setReaderDark)
-  const { data } = useBook(openBookId)
+  const { data, error, isError, refetch } = useBook(openBookId)
   const [chapterId, setChapterId] = useState<string | null>(null)
   const [chapter, setChapter] = useState<Chapter | null>(null)
   const [fontSize, setFontSize] = useState(17)
@@ -87,6 +88,10 @@ export default function Read() {
   useEffect(() => {
     if (loadedId) boxRef.current?.closest('main')?.scrollTo({ top: 0 })
   }, [loadedId])
+
+  if (isError && !book) {
+    return <ErrorBox error={error} onRetry={() => refetch()} />
+  }
 
   if (!book) return <div className="py-20 text-center text-sm text-stone-400">加载中…</div>
 
