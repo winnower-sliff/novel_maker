@@ -2,7 +2,7 @@ import type { ChatParams } from '../../shared/contract.js'
 import type { ModelSlot } from '../../shared/providers.js'
 import type { ChatResult } from '../../shared/types.js'
 import { resolveAuth } from '../config.js'
-import { chatStream, pickRatelimitHeaders } from '../llm.js'
+import { chatStream, LlmError, pickRatelimitHeaders } from '../llm.js'
 import { appendUsage } from '../usage.js'
 
 /**
@@ -30,21 +30,44 @@ export function isQuotaError(err: unknown): boolean {
   return QUOTA_RE.test(String((err as Error | undefined)?.message ?? err))
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms))
+/** 用户取消/任务被终止（AbortSignal 中止）。这类错误不是故障：不重试、不记 failed */
+export function isAbortError(err: unknown): boolean {
+  if ((err as StepError)?.category === 'aborted') return true
+  if ((err as Error | undefined)?.name === 'AbortError') return true
+  return /aborted/i.test(String((err as Error | undefined)?.message ?? err))
+}
+
+function sleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer)
+      signal?.removeEventListener('abort', finish)
+      resolve()
+    }
+    const timer = setTimeout(finish, ms)
+    if (signal?.aborted) finish()
+    else signal?.addEventListener('abort', finish, { once: true })
+  })
 }
 
 function shouldRetry(err: unknown): { retry: boolean; waitMs: number } {
+  if (isAbortError(err)) return { retry: false, waitMs: 0 }
   const msg = String((err as Error | undefined)?.message ?? err)
-  if (/aborted/i.test(msg)) return { retry: false, waitMs: 0 }
-  const m = msg.match(/HTTP (\d{3})/)
-  const status = m ? Number(m[1]) : null
+  // 状态码优先取结构化字段：错误文案可能已被网关的 JSON 错误体替换，不再含「HTTP 429」
+  const status =
+    err instanceof LlmError ? err.status : Number(msg.match(/HTTP (\d{3})/)?.[1] ?? Number.NaN)
   if (status === 429) {
+    const header = err instanceof LlmError ? err.retryAfterMs : undefined
+    if (header !== undefined) return { retry: true, waitMs: Math.min(Math.max(header, 500), 60000) }
     const ra = msg.match(/retry[- ]after[^\d]*(\d+)/i)
     return { retry: true, waitMs: Math.min((ra ? Number(ra[1]) : 5) * 1000, 60000) }
   }
   if (status && status >= 500) return { retry: true, waitMs: 3000 }
-  if (/网络请求失败|fetch failed|ECONN|ETIMEDOUT|socket/i.test(msg))
+  if (
+    /网络请求失败|fetch failed|ECONN|ETIMEDOUT|socket|terminated|other side closed|输出中断|没有收到新数据/i.test(
+      msg
+    )
+  )
     return { retry: true, waitMs: 2000 }
   return { retry: false, waitMs: 0 }
 }
@@ -98,6 +121,8 @@ export interface CallOptions {
   onThinking?: (text: string) => void
   /** 思考模式（默认 disabled：混合推理模型思考 token 计入 max_tokens 会吃正文预算） */
   thinking?: 'enabled' | 'disabled'
+  /** 流式输出中途失败、即将从头重试：调用方应清掉已累计的增量（上一轮是半截废稿） */
+  onRestart?: () => void
 }
 
 /** 单次流式原始调用（含网络级重试+记账） */
@@ -107,10 +132,12 @@ export async function callRaw(
 ): Promise<ChatResult> {
   let lastErr: unknown = null
   for (let attempt = 0; attempt < 3; attempt++) {
+    if (opts.signal?.aborted) throw new StepError('任务已取消', 'aborted')
     if (attempt > 0) {
       const { waitMs } = shouldRetry(lastErr)
       if (!waitMs) break
-      await sleep(waitMs)
+      await sleep(waitMs, opts.signal)
+      opts.onRestart?.()
     }
     const auth = resolveAuth(opts.slot)
     try {
@@ -142,6 +169,7 @@ export async function callRaw(
       return result
     } catch (err) {
       lastErr = err
+      if (isAbortError(err) || opts.signal?.aborted) throw new StepError('任务已取消', 'aborted')
       if (!shouldRetry(err).retry) break
     }
   }

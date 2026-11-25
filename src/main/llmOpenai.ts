@@ -148,6 +148,33 @@ function emptyUsage(): UsageInfo {
   return { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }
 }
 
+/** 流式响应中连续这么久没有收到新数据就视为卡死。思考型模型首字可能很慢，所以给到 2 分钟 */
+const STREAM_IDLE_TIMEOUT_MS = 120_000
+
+/**
+ * 读一个流分片：读途中连接被掐断 → 包成 LlmError（走网络重试）；取消引起的中止原样上抛。
+ * 长时间没有新数据（网关挂起但不断开）同样转成可重试错误，不必干等任务看门狗。
+ */
+async function readChunk(reader: ReadableStreamDefaultReader<Uint8Array>, signal?: AbortSignal) {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  try {
+    const idle = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        // 取消 reader 以释放底层连接，否则这条挂起的连接会一直占着
+        void reader.cancel().catch(() => {})
+        reject(new LlmError(`模型响应超时（${STREAM_IDLE_TIMEOUT_MS / 1000} 秒没有收到新数据）`))
+      }, STREAM_IDLE_TIMEOUT_MS)
+    })
+    return await Promise.race([reader.read(), idle])
+  } catch (err) {
+    if (signal?.aborted || (err as Error).name === 'AbortError') throw err
+    if (err instanceof LlmError) throw err
+    throw new LlmError(`网络请求失败: ${(err as Error).message}`)
+  } finally {
+    clearTimeout(timer)
+  }
+}
+
 async function fetchSse(
   url: string,
   headers: Record<string, string>,
@@ -158,6 +185,8 @@ async function fetchSse(
   try {
     res = await fetch(url, { method: 'POST', headers, body: JSON.stringify(body), signal })
   } catch (err) {
+    // 取消引起的中止原样上抛，别包成网络错误（调用方靠它识别「用户取消」）
+    if ((err as Error).name === 'AbortError') throw err
     throw new LlmError(`网络请求失败: ${(err as Error).message}`)
   }
   // 老版本网关不认 stream_options 字段直接 400：去掉该字段重试一次
@@ -170,11 +199,21 @@ async function fetchSse(
         signal
       })
       if (retry.ok || retry.status !== 400) return retry
-    } catch {
+    } catch (err) {
+      if ((err as Error).name === 'AbortError') throw err
       /* 重试失败则用原响应报错 */
     }
   }
   return res
+}
+
+/** retry-after 响应头：秒数或 HTTP 日期 → 毫秒（没有/无法识别则 undefined） */
+function retryAfterMs(value: string | null): number | undefined {
+  if (!value) return undefined
+  const secs = Number(value)
+  if (Number.isFinite(secs)) return Math.max(0, secs * 1000)
+  const at = Date.parse(value)
+  return Number.isNaN(at) ? undefined : Math.max(0, at - Date.now())
 }
 
 function parseErrorBody(raw: string): string | null {
@@ -228,7 +267,7 @@ export async function chatStreamOpenai(
     } catch {
       /* ignore non-json error body */
     }
-    throw new LlmError(msg, res.status)
+    throw new LlmError(msg, res.status, retryAfterMs(res.headers.get('retry-after')))
   }
 
   const headers: Record<string, string> = {}
@@ -262,6 +301,9 @@ export async function chatStreamOpenai(
     if (u) {
       usage.inputTokens = u.prompt_tokens ?? 0
       usage.outputTokens = u.completion_tokens ?? 0
+      // 命中前缀缓存的输入 token：DeepSeek 顶层字段 / OpenAI prompt_tokens_details
+      const details = u.prompt_tokens_details as Record<string, number> | undefined
+      usage.cacheReadTokens = u.prompt_cache_hit_tokens ?? details?.cached_tokens ?? 0
     }
     const choices = ev.choices as Array<Record<string, unknown>> | undefined
     const choice = choices?.[0]
@@ -325,9 +367,10 @@ export async function chatStreamOpenai(
 
   const decoder = new TextDecoder()
   let buf = ''
+  let sawDone = false
 
   for (;;) {
-    const { done, value } = await reader.read()
+    const { done, value } = await readChunk(reader, signal)
     if (done) break
     buf += decoder.decode(value, { stream: true })
     for (;;) {
@@ -337,10 +380,21 @@ export async function chatStreamOpenai(
       buf = buf.slice(idx + 1)
       if (!line.startsWith('data:')) continue
       const payload = line.slice(5).trim()
-      if (!payload || payload === '[DONE]') continue
+      if (!payload) continue
+      if (payload === '[DONE]') {
+        sawDone = true
+        continue
+      }
       handleChunk(payload)
     }
   }
+
+  // 既没收到 finish_reason 也没收到 [DONE]：连接被中途掐断（网关超时/代理断流），
+  // 半截内容不能当完整结果交给下游（会被当成写完的正文入库）
+  if (!stopReason && !sawDone) {
+    throw new LlmError(`模型输出中断（已收到 ${text.length} 字，未收到结束标记）`)
+  }
+  if (!stopReason) stopReason = 'end_turn'
 
   const tail = stripper.flush()
   if (tail) {
