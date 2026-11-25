@@ -720,6 +720,14 @@ export function listJobsFor(bookId?: string): Job[] {
   return listJobs(bookId)
 }
 
+/** 时间轴补全用：覆盖最近 200 条消息窗口的任务摘要，不带正文等大字段（job:list 只带最近 20 个） */
+export function listJobBriefs(bookId?: string): Job[] {
+  return listJobs(bookId, 300).map((job) => {
+    const { draftText: _draft, thinkingText: _thinking, answer: _answer, ...payload } = job.payload
+    return { ...job, payload }
+  })
+}
+
 /** 启动时恢复：上个进程遗留的 running 任务标失败（可重试），排队中的继续跑 */
 export function recoverJobsOnBoot(): void {
   for (const id of failInterruptedJobs()) {

@@ -256,6 +256,7 @@ export const invokeContract = {
   'job:cancel': { args: z.tuple([z.string()]), ret: ret<Job>() },
   'job:get': { args: z.tuple([z.string()]), ret: ret<Job | null>() },
   'job:list': { args: z.tuple([z.string().optional()]), ret: ret<Job[]>() },
+  'job:listBriefs': { args: z.tuple([z.string().optional()]), ret: ret<Job[]>() },
 
   // ── 开书引导（B1-B4） ─────────────────────────────────────────────────────
   'onboard:start': {
@@ -395,6 +396,7 @@ export interface Api {
     cancel: InvokeFn<'job:cancel'>
     get: InvokeFn<'job:get'>
     list: InvokeFn<'job:list'>
+    listBriefs: InvokeFn<'job:listBriefs'>
     onUpdate: SubscribeFn<'job:update'>
     onActivity: SubscribeFn<'job:activity'>
     onProgress: SubscribeFn<'job:progress'>

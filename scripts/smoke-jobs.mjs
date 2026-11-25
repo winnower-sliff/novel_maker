@@ -306,6 +306,24 @@ try {
   const bq = await waitJob('job-boot-q', (j) => j.state === 'done')
   ok('⑩ 重启前排队的任务自动跑完', bq.state === 'done')
   ok('⑩ 确实请求了模型', stub.order.includes('BOOT-Q'))
+
+  const briefs = await invoke('job:listBriefs')
+  const full = await invoke('job:list')
+  ok(
+    '⑪ 任务摘要覆盖全部任务且不含正文/思考/回答长文本',
+    Array.isArray(briefs) &&
+      briefs.length >= full.length &&
+      briefs.every(
+        (j) =>
+          !Object.hasOwn(j.payload, 'draftText') &&
+          !Object.hasOwn(j.payload, 'thinkingText') &&
+          !Object.hasOwn(j.payload, 'answer')
+      )
+  )
+  ok(
+    '⑪ 最近的任务列表仍是完整数据',
+    full.some((j) => Object.hasOwn(j.payload, 'answer'))
+  )
 } catch (e) {
   ok(`异常：${e.message}`, false)
 } finally {

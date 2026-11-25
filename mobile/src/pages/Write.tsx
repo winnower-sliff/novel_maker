@@ -1,6 +1,6 @@
 import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { qk, useBook, useJobFlow, useMessages } from '../lib/queries'
+import { qk, useBook, useJobBriefs, useJobFlow, useMessages } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 import InputBar from './write/InputBar'
 import { MessageRow } from './write/MessageRow'
@@ -20,6 +20,7 @@ export default function Write() {
   const { data: messages } = useMessages(bookId, !!active)
   const { data: detail } = useBook(bookId)
   const jobs = flow?.jobs ?? []
+  const { data: briefs } = useJobBriefs(bookId)
 
   // 乐观消息：点发送立刻上墙（半透明+转圈），服务器确认落库后撤掉由真实消息顶上
   const [pending, setPending] = useState<
@@ -60,7 +61,12 @@ export default function Write() {
     void qc.invalidateQueries({ queryKey: qk.statusCard(bookId) })
   }, [qc, bookId, refresh])
 
-  const jobsById = useMemo(() => new Map(jobs.map((j) => [j.id, j])), [jobs])
+  // 时间轴节点卡：最近的任务带完整数据；更早的用不带正文的摘要补全（否则会退化成白话气泡）
+  const jobsById = useMemo(() => {
+    const m = new Map(jobs.map((j) => [j.id, j] as const))
+    for (const b of briefs ?? []) if (!m.has(b.id)) m.set(b.id, b)
+    return m
+  }, [jobs, briefs])
   const chaptersById = useMemo(
     () => new Map((detail?.chapters ?? []).map((c) => [c.id, c])),
     [detail?.chapters]

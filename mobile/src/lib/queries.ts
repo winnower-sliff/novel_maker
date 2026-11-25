@@ -157,3 +157,12 @@ export function useBackups() {
     queryFn: async (): Promise<BackupEntry[]> => window.api.backup.list()
   })
 }
+
+/** 较早任务的摘要（不带正文）：补全时间轴上早于最近 20 个任务的节点卡 */
+export function useJobBriefs(bookId: string) {
+  return useQuery({
+    queryKey: ['job-briefs', bookId],
+    queryFn: async (): Promise<Job[]> => window.api.job.listBriefs(bookId),
+    staleTime: 60_000
+  })
+}
