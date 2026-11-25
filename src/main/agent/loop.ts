@@ -3,6 +3,7 @@ import type {
   ChatMessage,
   ContentBlock,
   LintReport,
+  SampleInfo,
   Scene,
   ToolDef
 } from '../../shared/types.js'
@@ -251,16 +252,18 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
 
 /** agent 系统提示（每轮重建，红线/正负词/文风随库内最新值注入） */
 function sampleBlock(book: Book): string {
+  if (!book.sampleSources.length) return ''
+  // 每轮都重建系统提示：只取摘要，不把范文全文读进内存
+  const byId = new Map(store.listSamples().map((s) => [s.id, s]))
   const bounds = book.sampleSources
-    .map((id) => store.getSample(id))
-    .filter((s): s is NonNullable<typeof s> => Boolean(s))
+    .map((id) => byId.get(id))
+    .filter((s): s is SampleInfo => Boolean(s))
   if (!bounds.length) return ''
   const list = bounds
-    .map((s) => {
-      const secs = store.listSampleSections(s.id)
-      const chN = secs.filter((x) => x.kind === 'chapter').length
-      return `- 《${s.name}》（全文 ${s.chars} 字${chN ? `，${chN} 章` : ''}）`
-    })
+    .map(
+      (s) =>
+        `- 《${s.name}》（全文 ${s.chars} 字${s.chapterCount ? `，${s.chapterCount} 章` : ''}）`
+    )
     .join('\n')
   return `
 

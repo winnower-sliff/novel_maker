@@ -400,7 +400,14 @@ function SampleLib() {
               >
                 <div className="min-w-0">
                   <div className="truncate text-xs text-stone-700">{f.fileName}</div>
-                  <div className="text-[11px] text-stone-400">{f.chars.toLocaleString()} 字</div>
+                  <div className="truncate text-[11px] text-stone-500">
+                    {f.preview.trim() || '（空文件）'}
+                  </div>
+                  <div className="text-[11px] text-stone-400">
+                    {f.sizeBytes < 1048576
+                      ? `${Math.max(1, Math.round(f.sizeBytes / 1024))} KB`
+                      : `${(f.sizeBytes / 1048576).toFixed(1)} MB`}
+                  </div>
                 </div>
                 <button
                   type="button"

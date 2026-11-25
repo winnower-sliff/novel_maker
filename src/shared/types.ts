@@ -155,11 +155,10 @@ export interface SampleInfo {
   chapterCount?: number
 }
 
-/** imports 目录待导入文件 */
+/** imports 目录待导入文件（只 stat + 读文件头，不读全文，故无精确字数） */
 export interface SampleFileInfo {
   fileName: string
   sizeBytes: number
-  chars: number
   preview: string
 }
 
