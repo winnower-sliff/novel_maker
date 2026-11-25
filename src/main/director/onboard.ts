@@ -81,14 +81,19 @@ function historyText(bookId: string): string {
   return msgs.map((m) => `${m.role === 'user' ? '作者' : '导演'}：${m.content}`).join('\n')
 }
 
-async function ask(book: Book, stage: OnboardStage, extra?: string): Promise<OnboardReply> {
+async function ask(
+  book: Book,
+  stage: OnboardStage,
+  extra?: string,
+  confirmed?: string
+): Promise<OnboardReply> {
   const history = historyText(book.id)
   const res = await callJson<OnboardReply>({
     slot: 'director',
     system: `${directorPersona()}
 
 你是开书引导员，与作者一起把一本书从零立起来。分阶段推进，每阶段产出草案请作者拍板。书名暂定：${book.title}。`,
-    user: `${history ? `## 已有对话\n${history}\n\n` : ''}${stageInstruction(stage, book, extra ?? '')}${extra ? `\n## 作者补充\n${extra}` : ''}`,
+    user: `${history ? `## 已有对话\n${history}\n\n` : ''}${stageInstruction(stage, book, extra ?? '')}${confirmed ? `\n## 上一阶段作者已确认的草案（以此为前提，不要推翻）\n${confirmed}` : ''}${extra ? `\n## 作者补充\n${extra}` : ''}`,
     jsonHint: JSON_HINT,
     maxTokens: 3500
   })
@@ -124,8 +129,12 @@ export async function onboardStart(bookId: string): Promise<OnboardReply> {
   return reply
 }
 
-/** 作者作答/确认/改 */
-export async function onboardAnswer(bookId: string, answer: string): Promise<OnboardReply> {
+/** 作者作答/确认/改。expectStage=作者发这句话时看到的是哪个阶段的草案（防重复确认） */
+export async function onboardAnswer(
+  bookId: string,
+  answer: string,
+  expectStage?: string
+): Promise<OnboardReply> {
   const book = getBook(bookId)
   if (!book) throw new Error('书不存在')
   const msgs = listMessages(bookId, { limit: 30 })
@@ -134,7 +143,7 @@ export async function onboardAnswer(bookId: string, answer: string): Promise<Onb
   const stage = (last.meta?.stage as OnboardStage) ?? 'premise'
   const lastDraft = (last.meta?.draft ?? null) as OnboardReply['draft']
 
-  // 待确认草案 + 作者说「就这么定/书名N/直接点书名文本」 → 入库推进
+  // 待确认草案 + 作者说「就这么定/定了/书名N/直接点书名文本」 → 入库推进
   const answerTrim = answer.trim()
   const titleHit =
     lastDraft && 'titles' in lastDraft
@@ -142,9 +151,12 @@ export async function onboardAnswer(bookId: string, answer: string): Promise<Onb
       : -1
   if (
     lastDraft &&
-    (/^(就这么定|确认|定 了|第一个|第二个|第三个|书名[123一二三])/u.test(answerTrim) ||
+    (/^(就这么定|确认|定了|第一个|第二个|第三个|书名[123一二三])/u.test(answerTrim) ||
       titleHit >= 0)
   ) {
+    // 手机端请求超时后作者会再点一次「确认」，而草案此时可能已推进到下一阶段：
+    // 以作者当时看到的那一版为准，重复确认只把最新草案回给他，不再入库
+    if (expectStage && expectStage !== stage) return latestDraft(last, stage, lastDraft)
     return await confirmDraft(book, stage, lastDraft, answerTrim)
   }
 
@@ -153,7 +165,35 @@ export async function onboardAnswer(bookId: string, answer: string): Promise<Onb
   return reply
 }
 
-/** 草案确认入库 + 推进下一阶段 */
+function latestDraft(
+  last: ReturnType<typeof listMessages>[number],
+  stage: OnboardStage,
+  draft: NonNullable<OnboardReply['draft']>
+): OnboardReply {
+  const opts = last.meta?.options
+  return {
+    reply: `这一步你已经确认过了，不用再确认。接着是最新的一步：\n\n${last.content}`,
+    options: Array.isArray(opts) ? (opts as string[]) : [],
+    stage,
+    draft
+  }
+}
+
+/** 已确认草案的要点，作为下一阶段的前提（下一阶段原本看不到上一阶段的草案全文） */
+function confirmedBrief(stage: OnboardStage, draft: NonNullable<OnboardReply['draft']>): string {
+  if (stage === 'world' && 'cards' in draft) {
+    return draft.cards.map((c) => `- ${c.title}：${c.readerText}`).join('\n')
+  }
+  if (stage === 'characters' && 'characters' in draft) {
+    return draft.characters.map((c) => `- ${c.name}（${c.role}）`).join('\n')
+  }
+  return ''
+}
+
+/**
+ * 草案确认入库 + 推进下一阶段。
+ * 先问出下一阶段、再入库：引导调用失败时作者重试，不会把同一批卡/人物存两遍。
+ */
 async function confirmDraft(
   book: Book,
   stage: OnboardStage,
@@ -162,6 +202,7 @@ async function confirmDraft(
 ): Promise<OnboardReply> {
   const bookId = book.id
   if (stage === 'world' && 'cards' in draft) {
+    const reply = await ask(book, 'characters', undefined, confirmedBrief(stage, draft))
     for (const c of draft.cards) {
       saveCard({
         lineId: book.activeLineId,
@@ -172,11 +213,11 @@ async function confirmDraft(
         revealPlan: c.revealPlan
       })
     }
-    const reply = await ask(book, 'characters')
     saveTurn(bookId, answer, reply)
     return reply
   }
   if (stage === 'characters' && 'characters' in draft) {
+    const reply = await ask(book, 'title', undefined, confirmedBrief(stage, draft))
     for (const c of draft.characters) {
       saveCharacter({
         lineId: book.activeLineId,
@@ -188,7 +229,6 @@ async function confirmDraft(
         relations: c.relations
       })
     }
-    const reply = await ask(book, 'title')
     saveTurn(bookId, answer, reply)
     return reply
   }

@@ -256,7 +256,8 @@ export const invokeContract = {
     ret: ret<{ reply: string; options: string[]; stage: string; draft?: unknown; done?: boolean }>()
   },
   'onboard:answer': {
-    args: z.tuple([z.string(), z.string()]),
+    // 第三参=作者发这句话时看到的草案阶段；用于识别超时后的重复确认
+    args: z.tuple([z.string(), z.string(), z.string().optional()]),
     ret: ret<{ reply: string; options: string[]; stage: string; draft?: unknown; done?: boolean }>()
   },
 

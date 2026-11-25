@@ -3,6 +3,7 @@
  * 用法：node scripts/smoke-m3-stub.mjs
  * 每收到一次 /v1/chat/completions 弹出下一个预设；全部弹完后挂起（不返回）以便排查。
  */
+import { appendFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 
 const DRAFT = [
@@ -464,6 +465,8 @@ let callSeq = 0
 const FINAL_QUEUE = process.env.AGENT_MODE ? AGENT_QUEUE : QUEUE
 
 let served = 0
+// 可选钩子（默认关闭，不影响其它冒烟）：STUB_DUMP=把每个请求体追加到文件；STUB_FAIL_TIMES=让第 N 次请求返回 500
+const failTimes = (process.env.STUB_FAIL_TIMES ?? '').split(',').filter(Boolean).map(Number)
 const server = createServer((req, res) => {
   if (req.method === 'GET' && req.url?.endsWith('/models')) {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -479,6 +482,13 @@ const server = createServer((req, res) => {
   req.on('data', (c) => (body += c))
   req.on('end', () => {
     served += 1
+    if (process.env.STUB_DUMP) appendFileSync(process.env.STUB_DUMP, `${body}\n`)
+    if (failTimes.includes(served)) {
+      console.log(`[stub] call #${served} 注入失败`)
+      res.writeHead(500, { 'content-type': 'application/json' })
+      res.end(JSON.stringify({ error: { message: 'stub injected failure' } }))
+      return
+    }
     const item = FINAL_QUEUE.length ? FINAL_QUEUE.shift() : '{}'
     const text = typeof item === 'string' ? item : ''
     console.log(
@@ -531,4 +541,5 @@ const server = createServer((req, res) => {
     res.end()
   })
 })
-server.listen(3923, '127.0.0.1', () => console.log('[stub] M3 联调 stub 就绪 :3923'))
+const PORT = Number(process.env.STUB_PORT ?? 3923)
+server.listen(PORT, '127.0.0.1', () => console.log(`[stub] M3 联调 stub 就绪 :${PORT}`))

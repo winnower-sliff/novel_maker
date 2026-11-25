@@ -81,13 +81,15 @@ export default function Onboard({ bookId }: { bookId: string }) {
     if (!text.trim() || busy) return
     setTurns((t) => [...t, { role: 'author', text }])
     setInput('')
-    setOptions([])
     setBusy(true)
     try {
-      const reply = await window.api.onboard.answer(bookId, text)
+      // 带上此刻看到的阶段：请求超时后再点一次时，后端据此认出「重复确认」
+      const reply = await window.api.onboard.answer(bookId, text, stage)
       await applyReply(reply)
     } catch (err) {
       setTurns((t) => [...t, { role: 'director', text: `出错了：${(err as Error).message}` }])
+      // 手输的话放回输入框，免得作者重打；选项按钮一直留着，可以直接再点
+      if (!options.includes(text)) setInput(text)
     } finally {
       setBusy(false)
     }
@@ -143,7 +145,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
               type="button"
               disabled={busy}
               onClick={() => void answer(opt)}
-              className="shrink-0 rounded-full border border-orange-600/60 px-4 py-2 text-sm text-orange-600 active:bg-orange-700 active:text-white"
+              className="shrink-0 rounded-full border border-orange-600/60 px-4 py-2 text-sm text-orange-600 active:bg-orange-700 active:text-white disabled:opacity-50"
             >
               {opt}
             </button>
