@@ -2,7 +2,7 @@ import type { ChatParams } from '../../shared/contract.js'
 import type { ModelSlot } from '../../shared/providers.js'
 import type { ChatResult } from '../../shared/types.js'
 import { resolveAuth } from '../config.js'
-import { chatStream } from '../llm.js'
+import { chatStream, pickRatelimitHeaders } from '../llm.js'
 import { appendUsage } from '../usage.js'
 
 /**
@@ -136,7 +136,8 @@ export async function callRaw(
         model: result.model,
         purpose: opts.slot,
         ...result.usage,
-        durationMs: result.durationMs
+        durationMs: result.durationMs,
+        ratelimit: pickRatelimitHeaders(result.headers)
       })
       return result
     } catch (err) {
