@@ -3,7 +3,6 @@ import type {
   Book,
   Chapter,
   ChapterOutline,
-  ChapterRecap,
   JobPayload,
   LintReport,
   Scene
@@ -15,85 +14,15 @@ import { buildWriteContext } from './context.js'
 import { bookBasics, directorPersona, redlineBlock, styleBlock, wordListBlock } from './prompts.js'
 
 /**
- * 导演循环各步（W2/W3/W6）：
- * proposal 走向卡片 → outline 章级大纲 → scene 分镜 → draft 正文 → selfcheck/finalize。
- * 每步一次 LLM 调用（结构化 JSON / 流式正文），产物落 JobPayload。
+ * 写作子步骤（供 jobs.ts 编排、agent 工具调用）：
+ * 正文生成（分段续写）/ 自检 / 自动修 / 改章计划 / 计划书 / 审读·审计·诊断。
+ * 每步一到数次 LLM 调用；可取消的入口都收 AbortSignal（任务被取消/看门狗终止时立刻停手）。
  */
 
 const WRITER_SLOT = 'writer' as const
-const DIRECTOR_SLOT = 'director' as const
 
 function base(book: Book, lineId: string): string {
   return `${bookBasics(book)}${redlineBlock(book)}${wordListBlock(book)}${styleBlock(book)}\n\n${buildWriteContext(book, lineId)}`
-}
-
-// ── proposal（走向卡）已废除（用户决策：聊天驱动，agent 自主定走向） ──────────
-
-// ── outline：章级大纲（W3 第一级） ───────────────────────────────────────────
-
-export async function genOutline(
-  book: Book,
-  lineId: string,
-  direction: NonNullable<JobPayload['direction']>
-): Promise<ChapterOutline> {
-  const ctx = base(book, lineId)
-  const choiceText =
-    direction.source === 'card'
-      ? `作者选择了第 ${(direction.cardIndex ?? 0) + 1} 张卡片`
-      : '作者自由输入的走向'
-  const outline = await callJson<ChapterOutline>({
-    slot: DIRECTOR_SLOT,
-    system: directorPersona(),
-    user: `${ctx}
-
-## 任务
-${choiceText}：${direction.text}
-
-请产出下一章的章级大纲：title（章节名）、synopsis（本章梗概，150-300 字，写清楚开篇钩子、中段推进、结尾悬念）、beats（3-6 个情节拍，每个一句话，按时间顺序）。`,
-    jsonHint: `{"title":"...","synopsis":"...","beats":["...","..."]}`,
-    maxTokens: 2500
-  })
-  if (!outline?.title || !Array.isArray(outline.beats)) throw new Error('模型未产出有效大纲')
-  return {
-    title: outline.title,
-    synopsis: outline.synopsis ?? '',
-    beats: outline.beats.filter(Boolean)
-  }
-}
-
-// ── scene：场景级分镜（W3 第二级，可跳过） ───────────────────────────────────
-
-export async function genScenes(
-  book: Book,
-  lineId: string,
-  outline: ChapterOutline,
-  direction: NonNullable<JobPayload['direction']>
-): Promise<Scene[]> {
-  const ctx = base(book, lineId)
-  const res = await callJson<{ scenes: Array<Pick<Scene, 'summary'> & Partial<Scene>> }>({
-    slot: DIRECTOR_SLOT,
-    system: directorPersona(),
-    user: `${ctx}
-
-## 任务
-走向：${direction.text}
-章级大纲《${outline.title}》：${outline.synopsis}
-拍点：${outline.beats.map((b, i) => `${i + 1}. ${b}`).join(' ')}
-
-请产出本章的场景分镜（3-6 幕）：每幕 summary（这场发生什么，一段话）、viewpoint（视点人物，默认主角）、pace（节奏：慢/中/快）。分镜要可直接落笔。`,
-    jsonHint: `{"scenes":[{"summary":"...","viewpoint":"...","pace":"慢|中|快"}]}`,
-    maxTokens: 2500
-  })
-  const scenes = (res.scenes ?? [])
-    .filter((s) => s && typeof s.summary === 'string')
-    .map((s, i) => ({
-      id: `s${i + 1}`,
-      summary: s.summary,
-      viewpoint: s.viewpoint || '',
-      pace: s.pace || '中'
-    }))
-  if (!scenes.length) throw new Error('模型未产出有效分镜')
-  return scenes
 }
 
 // ── draft：流式正文（写手槽） ────────────────────────────────────────────────
@@ -244,42 +173,6 @@ ${draft}`,
   return text
 }
 
-// ── finalize：纪要卡（W4：概要+设定变更清单） ────────────────────────────────
-
-export async function genRecap(
-  book: Book,
-  lineId: string,
-  chapter: Chapter
-): Promise<ChapterRecap> {
-  const ctx = base(book, lineId)
-  const recap = await callJson<ChapterRecap>({
-    slot: DIRECTOR_SLOT,
-    system: directorPersona(),
-    user: `${ctx}
-
-## 任务
-第${chapter.orderNo}章《${chapter.title}》已定稿入库，正文如下：
-${chapter.content.slice(0, 12000)}
-
-请产出本章纪要：
-1. summary：本章内容摘要（100-200 字，供滚动记忆使用，只记读者可见的事实）。
-2. stateChanges：本章结束时人物的活状态变化（只列有变化的人；location/body/mood/items/knows/goal 中只填变化的项）。
-3. cardOps：本章是否引入/更新了值得入库的设定卡（新地点/势力/物品/规则等；没有则空数组）。
-4. foreshadowOps：本章的伏笔操作（plant=埋新伏笔/plan=计划回收/resolve=已回收；没有则空数组）。
-5. quickActions：2-3 个本章专属的修改建议按钮（给作者一键发出改章指令用）。label 是 4-8 字按钮文案（如「补反派视角」「伏笔埋深」），instruction 是完整的改章指令（作者点击后直接发给写手执行，要具体可执行）。建议要贴合本章情境——打斗章可想动作/视角，情感章可想对手戏/留白，埋伏笔的章可想收紧或加厚。没有值得建议的就空数组。`,
-    jsonHint: `{"summary":"...","stateChanges":[{"characterId":"若不知道id则填名字","name":"...","patch":{"location":"...","mood":"..."}}],"cardOps":[{"op":"create|update","kind":"geography|faction|history|power|item|custom","title":"...","readerText":"读者已知","authorText":"作者真相"}],"foreshadowOps":[{"op":"plant|plan|resolve","title":"...","detail":"..."}],"quickActions":[{"label":"补反派视角","instruction":"补写一段反派视角的插叙..."}]}`,
-    maxTokens: 2500
-  })
-  if (!recap?.summary) throw new Error('模型未产出有效纪要')
-  return {
-    summary: recap.summary,
-    stateChanges: Array.isArray(recap.stateChanges) ? recap.stateChanges : [],
-    cardOps: Array.isArray(recap.cardOps) ? recap.cardOps : [],
-    foreshadowOps: Array.isArray(recap.foreshadowOps) ? recap.foreshadowOps : [],
-    quickActions: Array.isArray(recap.quickActions) ? recap.quickActions : []
-  }
-}
-
 /** 滚动记忆压缩（D2：细记层超阈值时把最老一段压进 memories，后台执行） */
 export async function compactMemories(
   _book: Book,
@@ -324,29 +217,58 @@ export interface RevisePlan {
   edits?: Array<{ find: string; replace: string }>
 }
 
-/** 应用改稿计划：返回新全文与统计；edits 全未命中时报 noHit */
+/** 字面量替换全部命中处。不走 String.replace：替换串里的 $& $' 会被当成特殊模式展开 */
+function replaceLiteral(
+  text: string,
+  find: string,
+  replace: string
+): { next: string; hits: number } {
+  const parts: string[] = []
+  let from = 0
+  for (let hits = 0; ; hits++) {
+    const at = text.indexOf(find, from)
+    if (at < 0) return { next: parts.concat(text.slice(from)).join(''), hits }
+    parts.push(text.slice(from, at), replace)
+    from = at + find.length
+  }
+}
+
+export type ReviseApplied = {
+  next: string
+  /** 命中的 edits 条数 / 总条数 */
+  applied: number
+  total: number
+  /** 局部替换实际改动的处数（一条 find 在全文命中多次都算上） */
+  hits: number
+  mode: 'edits' | 'rewrite'
+}
+
+/** 应用改稿计划；edits 全未命中时报 noHit（调用方据此改走整章重写或提示作者） */
 export function applyRevisePlan(
   content: string,
   plan: RevisePlan
-): { next: string; applied: number; total: number; mode: 'edits' | 'rewrite' } | { noHit: true } {
+): ReviseApplied | { noHit: true } {
   const rw = plan.rewrite?.trim()
-  if (rw) return { next: rw, applied: 1, total: 1, mode: 'rewrite' }
+  if (rw) return { next: rw, applied: 1, total: 1, hits: 1, mode: 'rewrite' }
   const edits = (plan.edits ?? []).filter(
     (e) => e && typeof e.find === 'string' && e.find.length > 0
   )
   if (!edits.length) return { noHit: true }
   let next = content
   let applied = 0
+  let hits = 0
   for (const e of edits) {
-    if (!next.includes(e.find)) continue
-    next = next.replace(e.find, e.replace ?? '')
+    const r = replaceLiteral(next, e.find, e.replace ?? '')
+    if (!r.hits) continue
+    next = r.next
     applied++
+    hits += r.hits
   }
   if (!applied) return { noHit: true }
-  return { next, applied, total: edits.length, mode: 'edits' }
+  return { next, applied, total: edits.length, hits, mode: 'edits' }
 }
 
-export async function genRevisePlan(input: ReviseInput): Promise<RevisePlan> {
+export async function genRevisePlan(input: ReviseInput, signal?: AbortSignal): Promise<RevisePlan> {
   const { book, lineId, chapter, instruction, segment } = input
   const ctx = base(book, lineId)
   const segBlock = segment
@@ -371,13 +293,19 @@ ${instruction}${segBlock}
 - 未被点名的部分一个字都不要动。`,
     jsonHint:
       '{"edits":[{"find":"原文精确引文","replace":"改后文本"}]}\n或 {"rewrite":"整章新正文"}',
-    maxTokens: Math.max(Math.ceil(chapter.content.length * 1.6), 4096)
+    maxTokens: Math.max(Math.ceil(chapter.content.length * 1.6), 4096),
+    signal
   })
 }
 
 // ── 计划模式（书级开关：写章前先出计划书，作者过目后才动笔） ──────────────────
 
-export async function genChapterPlan(book: Book, lineId: string, hint: string): Promise<string> {
+export async function genChapterPlan(
+  book: Book,
+  lineId: string,
+  hint: string,
+  signal?: AbortSignal
+): Promise<string> {
   const ctx = base(book, lineId)
   const res = await callJson<{ plan?: string }>({
     slot: 'utility',
@@ -393,7 +321,8 @@ ${hint ? `作者给的倾向：${hint}\n` : '作者没有给倾向，综合现�
 - **伏笔**：要埋/回收哪些伏笔（没有写「无」）
 - **风险**：连续性/文风上要注意的点`,
     jsonHint: '{"plan":"# 下一章计划\\n- **走向**：…"}',
-    maxTokens: 1500
+    maxTokens: 1500,
+    signal
   })
   if (!res?.plan?.trim()) throw new Error('模型未产出计划')
   return res.plan.trim()
@@ -409,7 +338,8 @@ const REVIEWER_PERSONA = `你是独立的审稿编辑（与写手隔离视角）
 export async function genReview(
   book: Book,
   lineId: string,
-  chapter: Chapter
+  chapter: Chapter,
+  signal?: AbortSignal
 ): Promise<AgentReport> {
   const ctx = base(book, lineId)
   const report = await callJson<AgentReport>({
@@ -425,7 +355,8 @@ ${chapter.content.slice(0, 14000)}
 每维一条 finding：level（good=达标/warn=可改进/bad=有问题）、quote（原文引文）、comment（具体判断，不复述剧情）。
 verdict 是 100 字内总评。score 是 1-5 总分。suggestions 给 0-3 条可执行的修改建议。`,
     jsonHint: `{"verdict":"...","score":4,"findings":[{"dimension":"张力","level":"warn","quote":"...","comment":"..."}],"suggestions":["..."]}`,
-    maxTokens: 3000
+    maxTokens: 3000,
+    signal
   })
   if (!report?.verdict) throw new Error('模型未产出有效审读报告')
   return normalizeReport(report, 'review')
@@ -435,7 +366,8 @@ export async function genAudit(
   book: Book,
   lineId: string,
   recent: Array<{ orderNo: number; title: string; summary: string }>,
-  latestTwo: Chapter[]
+  latestTwo: Chapter[],
+  signal?: AbortSignal
 ): Promise<AgentReport> {
   const ctx = base(book, lineId)
   const report = await callJson<AgentReport>({
@@ -457,7 +389,8 @@ ${latestTwo.map((c) => `第${c.orderNo}章《${c.title}》：\n${c.content.slice
 
 findings 每维一条（dimension 用「文风漂移/剧情空转/连续性」），verdict 100 字内总结健康状况，score 1-5，suggestions 给可执行修正方向。`,
     jsonHint: `{"verdict":"...","score":4,"findings":[{"dimension":"文风漂移","level":"good","quote":"...","comment":"..."}],"suggestions":["..."]}`,
-    maxTokens: 3000
+    maxTokens: 3000,
+    signal
   })
   if (!report?.verdict) throw new Error('模型未产出有效审计报告')
   return normalizeReport(report, 'audit')
@@ -466,7 +399,8 @@ findings 每维一条（dimension 用「文风漂移/剧情空转/连续性」�
 export async function genDiagnose(
   book: Book,
   lineId: string,
-  question: string
+  question: string,
+  signal?: AbortSignal
 ): Promise<AgentReport> {
   const ctx = base(book, lineId)
   const report = await callJson<AgentReport>({
@@ -481,50 +415,11 @@ ${question}
 
 verdict 里给出你的回答（300 字内，直接了当，可分点）。findings 里列出支撑你判断的证据（dimension=依据类型如「伏笔」「人物状态」，quote 引章节摘要或原文，comment 说明）。suggestions 给 0-3 条可选的下一步动作。score 填 0。`,
     jsonHint: `{"verdict":"...","score":0,"findings":[{"dimension":"伏笔","level":"warn","quote":"...","comment":"..."}],"suggestions":["..."]}`,
-    maxTokens: 3000
+    maxTokens: 3000,
+    signal
   })
   if (!report?.verdict) throw new Error('模型未产出有效诊断')
   return normalizeReport(report, 'diagnose')
-}
-
-// ── 自由对话（M5 智能体页：跟导演聊，不执行写操作） ─────────────────────────
-
-export async function genChat(
-  book: Book,
-  lineId: string,
-  history: Array<{ role: 'user' | 'assistant'; content: string }>,
-  question: string,
-  onDelta?: (t: string) => void
-): Promise<string> {
-  const ctx = base(book, lineId)
-  const msgs = [
-    ...history.map((m) => ({ role: m.role, content: m.content })),
-    {
-      role: 'user' as const,
-      content: `${ctx}
-
-## 作者说
-${question}`
-    }
-  ]
-  const result = await callRaw(
-    {
-      slot: 'director',
-      system: `${directorPersona()}
-
-当前是自由交流模式：作者在跟你聊天——问剧情、讨论走向、要建议、闲聊都行。纪律：
-- 口语化、直接了当，通常 50-300 字，不用敬语开场（「好的」「当然可以」都省了）
-- 观点要落在本书的具体人物/伏笔/章节上，不空谈写作理论
-- 你不能在这里执行写作动作；作者想让干什么（写下一章/改章/开新线/审读）时，简短回应他的意图并告诉他点界面上的对应操作`,
-      // user 仅为满足签名；实际请求体由 params.messages 整体覆盖（见 callRaw）
-      user: ctx,
-      jsonHint: '',
-      params: { messages: msgs, responseFormat: 'text' },
-      maxTokens: 2000
-    },
-    onDelta
-  )
-  return result.text
 }
 
 function normalizeReport(raw: AgentReport, kind: AgentReport['kind']): AgentReport {

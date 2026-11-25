@@ -6,7 +6,7 @@ import type {
   Scene,
   ToolDef
 } from '../../shared/types.js'
-import { callJson, callRaw } from '../director/callJson.js'
+import { callJson, callRaw, isAbortError, StepError } from '../director/callJson.js'
 import { bookBasics, directorPersona, redlineBlock, wordListBlock } from '../director/prompts.js'
 import {
   applyRevisePlan,
@@ -78,8 +78,12 @@ export interface LoopOpts {
   onThinking?: (t: string) => void
   /** 思考模式：默认 disabled（思考 token 计入 max_tokens 吃工具循环预算）；仅 chat 链路开 */
   thinking?: 'enabled' | 'disabled'
+  /** 取消信号（jobs 层在作者取消/看门狗触发时 abort）：每轮与每个工具执行前检查，并透传给全部 LLM 调用 */
+  signal?: AbortSignal
   /** 每轮回调（jobs 层喂看门狗：有真实进展就续命，挂死不喂→照杀） */
   onTurn?: () => void
+  /** 本轮流式输出中途断线、将从头重试时回调（jobs 层借此清空已推给前端的半截内容） */
+  onRestart?: () => void
   /** 生成进度（正文/改章字数计数，聚合条显示；正文不进聊天流） */
   onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
   /** 落一条 assistant 消息（agent 白话/工具卡） */
@@ -274,7 +278,8 @@ ${list}
  */
 export async function genStyleRefs(
   book: Book,
-  outline: { title: string; synopsis: string; beats: string[] }
+  outline: { title: string; synopsis: string; beats: string[] },
+  signal?: AbortSignal
 ): Promise<string> {
   if (!book.sampleSources.length) return ''
   const samples = book.sampleSources
@@ -302,12 +307,14 @@ ${samples.map((s, i) => `${i + 1}. 《${s.name}》`).join('\n')}
 - 想模仿哪类写法（打斗节奏/对话密度/环境烘托），就检索那类桥段。
 
 输出 JSON：{"queries":[{"sample":"范文名","q":"关键词"}]}，总数不超过 ${Math.min(6, samples.length * 3)} 个。`,
-      jsonHint: '{"queries":[{"sample":"范文名","q":"关键词"}]}'
+      jsonHint: '{"queries":[{"sample":"范文名","q":"关键词"}]}',
+      signal
     })
     queries = (res.queries ?? [])
       .filter((x) => x.sample && x.q)
       .map((x) => ({ sample: x.sample ?? '', q: x.q ?? '' }))
-  } catch {
+  } catch (err) {
+    if (isAbortError(err)) throw err
     return '' // 出词失败静默跳过
   }
   const BUDGET = 2400
@@ -436,24 +443,30 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
 
   const messages: ChatMessage[] = [...opts.history, { role: 'user', content: task }]
   const historyLen = opts.history.length
-  let compacted = false
+  let taskNote = '' // 并入 task 消息尾部的历次〔前情工作纪要〕
+  const signal = opts.signal
+
+  /** 取消检查：jobs 层 abort（作者取消/看门狗）后不再发起任何调用、不再执行任何工具 */
+  function throwIfAborted(): void {
+    if (signal?.aborted) throw new StepError('任务已取消', 'aborted')
+  }
 
   /**
-   * 上下文压缩：一轮对话累计超 60000 字且未压缩过时，
-   * 把 history 之后、末尾 8 条之前的中间段摘要成一条〔前情工作纪要〕。
+   * 上下文压缩：累计超 60000 字时，把 task 之后、末尾 8 条之前的中间段摘要成〔前情工作纪要〕，
+   * 并入 task 消息（任务原文永远保留）。可重复触发——长任务一次压不住，只压一次上下文仍会涨爆。
    * 摘要失败退回逐条截断，保证调用必达。
    */
   async function compactIfNeeded(): Promise<void> {
-    if (compacted) return
     const chars = messages.reduce((n, m) => n + messageChars(m), 0)
     if (chars <= 60000) return
-    const tailStart = Math.max(historyLen + 1, messages.length - 8)
-    if (tailStart - (historyLen + 1) < 4) return // 中段太薄不值得压
-    // 尾段起点前移到安全边界（tool_result 必须紧跟对应 tool_use，不能被切开）
+    const head = historyLen + 2
+    const tailStart = Math.max(head, messages.length - 8)
+    if (tailStart - head < 4) return // 中段太薄不值得压（兼作重复触发的节流）
+    // 尾段必须从 assistant 消息起：tool_use 与其 tool_result 要么一起进纪要、要么一起留在尾段，不能被切开
     let safe = tailStart
-    while (safe > historyLen + 1 && messages[safe]?.role !== 'user') safe--
-    if (safe <= historyLen + 1 || safe === tailStart) safe = tailStart
-    const mid = messages.slice(historyLen + 1, safe)
+    while (safe > head && messages[safe]?.role !== 'assistant') safe--
+    if (safe <= head) return
+    const mid = messages.slice(head, safe)
     const rows = mid.map(messageToBrief).join('\n').slice(0, 12000)
     let digest: string
     try {
@@ -466,22 +479,23 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
 ${rows}
 
 输出 JSON：{"digest":"纪要文本"}`,
-        jsonHint: '{"digest":"纪要文本"}'
+        jsonHint: '{"digest":"纪要文本"}',
+        signal
       })
       digest = (res.digest ?? '').slice(0, 600) || fallbackDigest(mid)
-    } catch {
+    } catch (err) {
+      if (isAbortError(err)) throw err
       digest = fallbackDigest(mid)
     }
-    messages.splice(historyLen + 1, safe - (historyLen + 1), {
-      role: 'user',
-      content: `〔前情工作纪要（${mid.length} 条已压缩）〕\n${digest}`
-    })
-    compacted = true
+    messages.splice(head, safe - head)
+    taskNote += `${N}${N}〔前情工作纪要（${mid.length} 条已压缩）〕${N}${digest}`
+    messages[historyLen + 1] = { role: 'user', content: `${task}${taskNote}` }
   }
 
   let truncNudges = 0 // 思考耗尽输出预算的补救次数（实锤：deepseek thinking 吃满 8192 token，正文/工具全空静默退出）
   let promiseNudges = 0 // 「光说不练」补救次数（实锤：白话承诺「这就改」但本轮无 tool_use，纯文本路径直接结束任务）
   for (let turn = 0; turn < maxTurns; turn++) {
+    throwIfAborted()
     opts.onTurn?.() // 每轮喂狗：有真实进展就续看门狗（挂死/死循环不喂→照杀）
     book = store.getBook(bookId) ?? book // 每轮重读（agent 可能改了配置/切了线）
     await compactIfNeeded()
@@ -507,7 +521,9 @@ ${rows}
                 : 4000
         },
         onThinking: opts.onThinking,
-        thinking: opts.thinking
+        thinking: opts.thinking,
+        signal,
+        onRestart: opts.onRestart
       },
       opts.onDelta
     )
@@ -558,6 +574,8 @@ ${rows}
         console.warn(
           `[agent] jobId=${jobId} 第 ${turn + 1} 轮口头承诺执行但未调工具，第 ${promiseNudges} 次追问`
         )
+        // 承诺原文先进历史，否则模型只看到「你刚才承诺了」却不知道自己承诺了什么
+        messages.push({ role: 'assistant', content: res.text.trim() })
         messages.push({
           role: 'user',
           content:
@@ -572,6 +590,7 @@ ${rows}
     const resultBlocks: ContentBlock[] = []
     let finished = false
     for (const tu of res.toolUses) {
+      throwIfAborted() // 已取消：本轮剩余工具不再执行
       let result: ToolResult
       if (tu.inputError || typeof tu.input !== 'object' || tu.input === null) {
         result = {
@@ -580,7 +599,23 @@ ${rows}
           data: `参数 JSON ${tu.inputError === 'truncated' ? '被截断' : '解析失败'}，请重发完整参数`
         }
       } else {
-        result = await runOne(tu.name, tu.input as Record<string, unknown>)
+        try {
+          result = await runOne(tu.name, tu.input as Record<string, unknown>)
+        } catch (err) {
+          // 额度/网络/取消是整任务层面的失败，上抛由 jobs 层定终态；其余是工具内部异常，转成失败结果让模型自救
+          if (err instanceof StepError) throw err
+          // 中文报错是工具自己抛的业务提示（如「章节不存在」），只回给模型；其余才是内部异常，留堆栈
+          if (!/[\u4e00-\u9fff]/.test(String((err as Error)?.message ?? ''))) {
+            console.error(`[agent] jobId=${jobId} 工具 ${tu.name} 执行异常`, err)
+          }
+          result = {
+            ok: false,
+            summary: `${tu.name} 执行出错`,
+            data: `工具执行时发生内部错误：${
+              err instanceof Error ? err.message : String(err)
+            }。可换个方式完成，或向作者说明。`
+          }
+        }
       }
       // 工具卡（作者可见的工作日志；content 截 2000 字防膨胀，全文走 resultBlocks 给 LLM）
       opts.say(result.data.slice(0, 2000), {
@@ -630,7 +665,7 @@ ${rows}
           synopsis: String(input.synopsis ?? ''),
           beats: (input.beats as string[]) ?? ['']
         }
-        const styleRefs = await genStyleRefs(b, outline)
+        const styleRefs = await genStyleRefs(b, outline, signal)
         const input2 = {
           book: b,
           lineId: line.id,
@@ -639,11 +674,11 @@ ${rows}
           direction: { source: 'free' as const, text: direction },
           styleRefs: styleRefs || undefined
         }
-        let draft = await genDraft(input2, progressSaver('draft'))
+        let draft = await genDraft(input2, progressSaver('draft'), signal)
         let report = selfCheck(b, line.id, draft, tailOf(line.id))
         if (report.issues.some((i) => i.level === 'major')) {
           // 自动修一轮（W6 纪律）
-          draft = await autoFixDraft(input2, draft, report, progressSaver('draft'))
+          draft = await autoFixDraft(input2, draft, report, progressSaver('draft'), signal)
           report = selfCheck(b, line.id, draft, tailOf(line.id))
         }
         lastDraft = {
@@ -720,13 +755,16 @@ ${rows}
         if (!chapter) return { ok: false, summary: '章节不存在', data: `章节 ${chapterId} 不存在` }
         const instruction = String(input.instruction ?? '')
         const segment = typeof input.segment === 'string' ? input.segment : undefined
-        const plan = await genRevisePlan({
-          book: store.getBook(bookId) ?? book,
-          lineId: chapter.lineId,
-          chapter,
-          instruction,
-          segment
-        })
+        const plan = await genRevisePlan(
+          {
+            book: store.getBook(bookId) ?? book,
+            lineId: chapter.lineId,
+            chapter,
+            instruction,
+            segment
+          },
+          signal
+        )
         const applied = applyRevisePlan(chapter.content, plan)
         if ('noHit' in applied) {
           return {
@@ -739,14 +777,20 @@ ${rows}
         const report = lintChapter(clean, {
           bannedWords: (store.getBook(bookId) ?? book).negativeWords
         })
+        throwIfAborted()
         store.replaceChapterContent(chapterId, clean)
+        const missed = applied.total - applied.applied
         return {
           ok: true,
           summary: `改好《${chapter.title}》`,
           data: `《${chapter.title}》已按「${briefOf(instruction)}」${
             applied.mode === 'rewrite'
               ? '整章重写'
-              : `局部修改 ${applied.applied}/${applied.total} 处`
+              : `局部修改 ${applied.applied}/${applied.total} 处${
+                  applied.hits > applied.applied
+                    ? `（引文在全文重复出现，共改动 ${applied.hits} 处）`
+                    : ''
+                }${missed > 0 ? `；${missed} 处引文未在原文中找到` : ''}`
           }并替换。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
         }
       }
@@ -762,7 +806,10 @@ ${rows}
           mode: 'free',
           maxTurns: 12,
           system: SUB_SYSTEM,
-          say: () => {}
+          say: () => {},
+          // 调查可能跑十几轮：取消要能传进去，每轮也要替父循环喂狗
+          signal,
+          onTurn: opts.onTurn
         })
         return {
           ok: true,

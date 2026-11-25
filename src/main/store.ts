@@ -967,17 +967,16 @@ export function listJobs(bookId?: string, limit = 20): Job[] {
   return (db.prepare(sql).all(...vals) as Record<string, unknown>[]).map(rowToJob)
 }
 
-export function updateJob(
-  id: string,
-  patch: {
-    state?: JobState
-    step?: JobStep | ''
-    payload?: Partial<JobPayload>
-    error?: string
-    chapterId?: string
-    watchdogAt?: number
-  }
-): Job | null {
+export type JobPatch = {
+  state?: JobState
+  step?: JobStep | ''
+  payload?: Partial<JobPayload>
+  error?: string
+  chapterId?: string
+  watchdogAt?: number
+}
+
+export function updateJob(id: string, patch: JobPatch): Job | null {
   const db = getDb()
   const job = getJob(id)
   if (!job) return null
@@ -1001,14 +1000,71 @@ export function updateJob(
   return getJob(id)
 }
 
-/** 看门狗（W12）：running 且超时的任务标 failed */
-export function failStuckJobs(timeoutMs = 10 * 60 * 1000): void {
-  getDb()
-    .prepare(
-      `UPDATE jobs SET state = 'failed', error = '看门狗：10 分钟无进展', updated_at = ?
-       WHERE state = 'running' AND watchdog_at > 0 AND watchdog_at < ?`
-    )
-    .run(Date.now(), Date.now() - timeoutMs)
+/**
+ * 任务收尾（条件写入）：仍是 running 才落，已被取消/看门狗先定终态的不覆盖。
+ * 返回任务当前实际状态——调用方据此判断自己是否「跑输了」（如已被取消）。
+ */
+export function finishJob(id: string, patch: JobPatch): Job | null {
+  const db = getDb()
+  const job = getJob(id)
+  if (!job) return null
+  const payload =
+    patch.payload !== undefined
+      ? JSON.stringify({ ...job.payload, ...patch.payload })
+      : JSON.stringify(job.payload)
+  db.prepare(
+    `UPDATE jobs SET state = ?, step = ?, payload = ?, error = ?, chapter_id = ?, watchdog_at = ?, updated_at = ?
+     WHERE id = ? AND state = 'running'`
+  ).run(
+    patch.state ?? job.state,
+    patch.step ?? job.step,
+    payload,
+    patch.error ?? job.error,
+    patch.chapterId ?? job.chapterId,
+    patch.watchdogAt ?? job.watchdogAt,
+    Date.now(),
+    id
+  )
+  return getJob(id)
+}
+
+/** 队列按先来后到取下一个（同毫秒入库的按落库顺序） */
+export function nextQueuedJob(): Job | null {
+  const r = getDb()
+    .prepare(`SELECT * FROM jobs WHERE state = 'queued' ORDER BY created_at ASC, rowid ASC LIMIT 1`)
+    .get()
+  return r ? rowToJob(r) : null
+}
+
+function markJobsFailed(ids: string[], reason: string): void {
+  if (!ids.length) return
+  const db = getDb()
+  const stmt = db.prepare(
+    `UPDATE jobs SET state = 'failed', error = ?, updated_at = ? WHERE id = ? AND state = 'running'`
+  )
+  for (const id of ids) stmt.run(reason, Date.now(), id)
+}
+
+/** 看门狗（W12）：running 且超时无进展的任务标 failed，返回被终止的任务 id */
+export function failStuckJobs(timeoutMs = 10 * 60 * 1000): string[] {
+  const ids = (
+    getDb()
+      .prepare(
+        `SELECT id FROM jobs WHERE state = 'running' AND watchdog_at > 0 AND watchdog_at < ?`
+      )
+      .all(Date.now() - timeoutMs) as { id: string }[]
+  ).map((r) => r.id)
+  markJobsFailed(ids, `超过 ${Math.max(1, Math.round(timeoutMs / 60000))} 分钟没有新进展，已终止`)
+  return ids
+}
+
+/** 服务重启后的恢复：上个进程遗留的 running 任务不可能再完成 */
+export function failInterruptedJobs(): string[] {
+  const ids = (
+    getDb().prepare(`SELECT id FROM jobs WHERE state = 'running'`).all() as { id: string }[]
+  ).map((r) => r.id)
+  markJobsFailed(ids, '电脑端服务重启，任务被打断')
+  return ids
 }
 
 // ── 范文（完整书入库，agent 节选翻阅） ───────────────────────────────────────

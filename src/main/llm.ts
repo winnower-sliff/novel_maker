@@ -5,10 +5,13 @@ import { chatStreamOpenai, openaiHeaders, openaiModelsUrl } from './llmOpenai.js
 
 export class LlmError extends Error {
   status?: number
-  constructor(message: string, status?: number) {
+  /** 429 响应里 retry-after 换算的毫秒数（网关没给则不设） */
+  retryAfterMs?: number
+  constructor(message: string, status?: number, retryAfterMs?: number) {
     super(message)
     this.name = 'LlmError'
     this.status = status
+    this.retryAfterMs = retryAfterMs
   }
 }
 

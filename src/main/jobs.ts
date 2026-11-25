@@ -1,7 +1,13 @@
 import type { ChatMessage, Job, JobPayload } from '../shared/types.js'
 import { interceptorDefs, runAgentLoop } from './agent/loop.js'
 import { toolDefs } from './agent/tools.js'
-import { emitJob, emitJobActivity, emitJobDelta, emitMessageAppend } from './broadcast.js'
+import {
+  emitJob,
+  emitJobActivity,
+  emitJobDelta,
+  emitJobProgress,
+  emitMessageAppend
+} from './broadcast.js'
 import { isQuotaError } from './director/callJson.js'
 import {
   applyRevisePlan,
@@ -18,7 +24,9 @@ import {
   activeLine,
   appendMessage,
   effectiveChapters,
+  failInterruptedJobs,
   failStuckJobs,
+  finishJob,
   getBook,
   getChapter,
   getJob,
@@ -26,6 +34,7 @@ import {
   insertJob,
   listJobs,
   listMessages,
+  nextQueuedJob,
   previousChapter,
   replaceChapterContent,
   updateJob
@@ -33,15 +42,104 @@ import {
 
 /**
  * 任务流水线（W10/W12/W14）：
- * - 全局串行：同一时刻至多一个生成任务在跑，新任务排队自动衔接
+ * - 全局串行：同一时刻至多一个任务在跑，新任务排队（先来后到）自动衔接
+ * - 入队即返回：启动接口同步返回任务快照，不等任务跑完（手机端 HTTP 30s 就超时）
+ * - 取消/看门狗真正中止：AbortSignal 贯穿到每次模型调用，收尾是条件写入——
+ *   已被取消的任务不会被「跑完的执行器」覆盖成 done
  * - 每步落库（jobs.step+payload），waiting_user 等作者操作
- * - 看门狗：running 超 10 分钟标 failed
- * - 写章五步：proposal→outline→scene→draft→selfcheck/finalize
+ * - 看门狗：running 超 10 分钟无进展标 failed
  */
 
 // ── 串行队列 ─────────────────────────────────────────────────────────────────
 
-let activeJobId: string | null = null
+type Runner = (job: Job, signal: AbortSignal) => Promise<Job | null>
+
+/** 在跑任务的取消控制器（全局串行：同一时刻至多一项） */
+const running = new Map<string, AbortController>()
+
+const runners: Partial<Record<Job['kind'], Runner>> = {
+  write: runAgentWriteJob,
+  revise: runReviseJob,
+  review: runReviewJob,
+  audit: runAuditJob,
+  diagnose: runDiagnoseJob,
+  chat: runChatJob
+}
+
+/** 空闲则按先来后到启动下一个排队任务 */
+function pump(): void {
+  if (running.size > 0) return
+  const next = nextQueuedJob()
+  if (!next) return
+  const run = runners[next.kind]
+  if (!run) {
+    // 没有执行器的任务类型（如旧版本遗留）：判失败并留失败卡，不能让它堵死后面的队列
+    const failed = updateJob(next.id, {
+      state: 'failed',
+      error: `未知任务类型：${next.kind}`,
+      watchdogAt: 0
+    })
+    if (failed) {
+      note(next.id, 'failed', `卡住了：不支持这种「${next.kind}」任务，已跳过`)
+      emitJob(failed)
+    }
+    pump()
+    return
+  }
+  launch(next, run)
+}
+
+function launch(job: Job, run: Runner): void {
+  const controller = new AbortController()
+  running.set(job.id, controller)
+  void guarded(job.id, controller, run)
+}
+
+/** 入串行队列：空闲立即启动，忙则留 queued 等 pump 衔接。立即返回任务快照，不等执行 */
+function enqueue(job: Job, run: Runner): Job {
+  if (running.size === 0) launch(job, run)
+  return getJob(job.id) ?? job
+}
+
+/** 执行包装：异常落库+广播；finally 释放队列并衔接下一个 */
+async function guarded(jobId: string, controller: AbortController, run: Runner): Promise<void> {
+  try {
+    const job = getJob(jobId)
+    if (!job) return // 任务已随书删除
+    const result = (await run(job, controller.signal)) ?? getJob(jobId)
+    if (result) emitJob(result)
+  } catch (err) {
+    const current = getJob(jobId)
+    if (!current) return
+    if (controller.signal.aborted || current.state === 'cancelled') {
+      // 被取消或被看门狗终止：终态与时间轴卡片已由 cancelJob/watchdogTick 落好，这里不覆盖
+      emitJob(current)
+      return
+    }
+    const raw = String((err as Error)?.message ?? err)
+    const quota = isQuotaError(err)
+    const failed = finishJob(jobId, {
+      state: 'failed',
+      error: quota
+        ? `额度不足：模型账户余额/额度已耗尽（${raw}）。请到对应平台充值后，回来点「重试」。`
+        : raw,
+      watchdogAt: 0
+    })
+    if (failed?.state === 'failed') {
+      note(jobId, 'failed', quota ? failed.error : `卡住了：${failed.error}`)
+      emitJob(failed)
+    }
+  } finally {
+    running.delete(jobId)
+    pump()
+  }
+}
+
+function requireJob(jobId: string): Job {
+  const job = getJob(jobId)
+  if (!job) throw new Error(`任务 ${jobId} 不存在`)
+  return job
+}
 
 // ── 对话流节点消息（M5 智能体页：写作循环各阶段以消息形式进入对话流） ────────
 
@@ -78,65 +176,19 @@ function pushMessage(input: Parameters<typeof appendMessage>[0]): void {
   if (row) emitMessageAppend(row)
 }
 
-function busy(): boolean {
-  if (!activeJobId) return false
-  const j = getJob(activeJobId)
-  if (!j || j.state === 'done' || j.state === 'failed' || j.state === 'cancelled') {
-    activeJobId = null
-    return false
-  }
-  return true
-}
-
-async function pump(): Promise<void> {
-  if (busy()) return
-  const next = listJobs(undefined, 10).find((j) => j.state === 'queued')
-  if (!next) return
-  const runners: Partial<Record<string, (j: Job) => Promise<Job | null>>> = {
-    write: runAgentWriteJob,
-    revise: runReviseJob,
-    review: runReviewJob,
-    audit: runAuditJob,
-    diagnose: runDiagnoseJob,
-    chat: runChatJob
-  }
-  const run = runners[next.kind]
-  if (!run) return
-  await guarded(next.id, () => run(next))
-}
-
-/** 步骤执行包装：异常落库+广播+释放队列 */
-async function guarded(jobId: string, fn: () => Promise<Job | null>): Promise<Job> {
-  try {
-    const result = await fn()
-    const final = result ?? (getJob(jobId) as Job)
-    emitJob(final)
-    return final
-  } catch (err) {
-    const raw = String((err as Error)?.message ?? err)
-    const quota = isQuotaError(err)
-    const failed = updateJob(jobId, {
-      state: 'failed',
-      error: quota
-        ? `额度不足：模型账户余额/额度已耗尽（${raw}）。请到对应平台充值后，回来点「重试」。`
-        : raw
-    })
-    if (failed) {
-      note(jobId, 'failed', quota ? failed.error : `卡住了：${failed.error}`)
-      emitJob(failed)
-    }
-    return failed as Job
-  } finally {
-    activeJobId = null
-    // 自动衔接队列里的下一个（W14）
-    void pump().catch(() => {})
-  }
-}
-
-function requireJob(jobId: string): Job {
-  const job = getJob(jobId)
-  if (!job) throw new Error(`任务 ${jobId} 不存在`)
-  return job
+/**
+ * 节流落盘（3s）：流式内容中途落库供断网/杀 APP 后恢复显示，
+ * 顺带续看门狗——模型在持续吐字就是有进展，哪怕这一轮还没结束。
+ */
+function persist(
+  jobId: string,
+  payload: Partial<JobPayload> | undefined,
+  lastSave: number
+): number {
+  const now = Date.now()
+  if (now - lastSave <= 3000) return lastSave
+  updateJob(jobId, payload ? { payload, watchdogAt: now } : { watchdogAt: now })
+  return now
 }
 
 /** 导演白话流式（chat 气泡）：delta 带累计长度 total，前端失配即全量补拉（服务端唯一真相源）；
@@ -148,11 +200,7 @@ function chatSaver(jobId: string): Saver {
   const fn = (t: string) => {
     acc += t
     emitJobDelta(jobId, 'text', t, acc.length)
-    const now = Date.now()
-    if (now - lastSave > 3000) {
-      lastSave = now
-      updateJob(jobId, { payload: { answer: acc } })
-    }
+    lastSave = persist(jobId, { answer: acc }, lastSave)
   }
   fn.reset = () => {
     acc = ''
@@ -168,17 +216,22 @@ function thinkSaver(jobId: string): Saver {
   const fn = (t: string) => {
     acc += t
     emitJobDelta(jobId, 'thinking', t, acc.length)
-    const now = Date.now()
-    if (now - lastSave > 3000) {
-      lastSave = now
-      updateJob(jobId, { payload: { thinkingText: acc } })
-    }
+    lastSave = persist(jobId, { thinkingText: acc }, lastSave)
   }
   fn.reset = () => {
     acc = ''
     updateJob(jobId, { payload: { thinkingText: '' } })
   }
   return fn
+}
+
+/** 生成进度（正文/改章字数，聚合条显示）：实时推给前端，并节流喂狗——长章输出期间也算有进展 */
+function progressRelay(jobId: string): (p: { phase: 'draft' | 'revise'; chars: number }) => void {
+  let lastSave = 0
+  return (p) => {
+    emitJobProgress(jobId, p)
+    lastSave = persist(jobId, undefined, lastSave)
+  }
 }
 
 /** agent say 落库工厂：工具卡同时实时广播（job:activity） */
@@ -201,72 +254,69 @@ function agentSay(
 // ── 各步执行 ─────────────────────────────────────────────────────────────────
 
 /** 写章直通入口（走向卡已废除，用户决策：聊天驱动，agent 自主定走向）。 */
-async function runAgentWriteJob(job: Job): Promise<Job | null> {
+async function runAgentWriteJob(job: Job, signal: AbortSignal): Promise<Job | null> {
   const book = getBook(job.bookId)
-  if (book?.planMode) return runPlanJob(job)
+  if (book?.planMode) return runPlanJob(job, signal)
   const direction = job.payload.direction ?? {
     source: 'free' as const,
     text: job.payload.directionHint ?? ''
   }
-  return runAgentChapterJob(job, direction)
+  return runAgentChapterJob(job, direction, signal)
 }
 
 // ── 计划模式（书级开关：先出计划书，作者过目后才动笔；等待期可聊） ────────────
 
-async function runPlanJob(job: Job): Promise<Job | null> {
+async function runPlanJob(job: Job, signal: AbortSignal): Promise<Job | null> {
   const book = getBook(job.bookId)
   if (!book) throw new Error('书不存在')
   updateJob(job.id, { state: 'running', step: 'plan', watchdogAt: Date.now(), error: '' })
-  const plan = await genChapterPlan(book, job.lineId, job.payload.directionHint ?? '')
-  updateJob(job.id, { state: 'waiting_user', step: 'plan', payload: { plan }, watchdogAt: 0 })
-  note(job.id, 'plan', '本章计划已出，等你过目')
-  return getJob(job.id)
+  const plan = await genChapterPlan(book, job.lineId, job.payload.directionHint ?? '', signal)
+  const waiting = finishJob(job.id, {
+    state: 'waiting_user',
+    step: 'plan',
+    payload: { plan },
+    watchdogAt: 0
+  })
+  if (waiting?.state === 'waiting_user') note(job.id, 'plan', '本章计划已出，等你过目')
+  return waiting
 }
 
-/** 作者点「按计划执行」：计划+补充作为走向，进 agent 全流程。 */
-export async function approvePlan(jobId: string, feedback?: string): Promise<Job> {
+/** 作者点「按计划写」：计划+补充作为走向，排进串行队列进 agent 全流程（立即返回，不等写完） */
+export function approvePlan(jobId: string, feedback?: string): Job {
   const job = requireJob(jobId)
   if (job.kind !== 'write' || job.state !== 'waiting_user' || job.step !== 'plan') {
     throw new Error('当前不在计划确认环节')
   }
   const plan = job.payload.plan ?? ''
   userMsg(job.bookId, '按计划写')
-  const direction = {
-    source: 'free' as const,
-    text: `${plan}${feedback ? `；作者补充：${feedback}` : ''}`
-  }
-  return (await runAgentChapterJob(job, direction)) ?? job
+  // 方向落进 payload：排队、重试都沿用它
+  const text = `${plan}${feedback ? `；作者补充：${feedback}` : ''}`
+  const queued =
+    updateJob(jobId, {
+      state: 'queued',
+      step: '',
+      watchdogAt: 0,
+      payload: { direction: { source: 'free', text } }
+    }) ?? job
+  return enqueue(queued, (j, signal) => runAgentChapterJob(j, { source: 'free', text }, signal))
 }
 
-// ── 公开 API（handlers 调用） ────────────────────────────────────────────────
+// ── 公开 API（handlers 调用；全部入队即返回） ────────────────────────────────
 
-export async function startWrite(bookId: string, hint?: string): Promise<Job> {
+export function startWrite(bookId: string, hint?: string): Job {
   const book = getBook(bookId)
   if (!book) throw new Error('书不存在')
   const line = activeLine(book)
   if (!line) throw new Error('书没有激活线')
-  if (busy()) {
-    return insertJob({
-      bookId,
-      lineId: line.id,
-      kind: 'write',
-      payload: hint ? { directionHint: hint.slice(0, 300) } : undefined
-    })
-  }
   const job = insertJob({
     bookId,
     lineId: line.id,
     kind: 'write',
     payload: hint ? { directionHint: hint.slice(0, 300) } : undefined
   })
-  userMsg(
-    bookId,
-    hint
-      ? `写第 ${effectiveChapters(line.id).length + 1} 章（倾向：${hint.slice(0, 80)}）`
-      : `写第 ${effectiveChapters(line.id).length + 1} 章`
-  )
-  activeJobId = job.id
-  return guarded(job.id, () => runAgentWriteJob(job))
+  const n = effectiveChapters(line.id).length + 1
+  userMsg(bookId, hint ? `写第 ${n} 章（倾向：${hint.slice(0, 80)}）` : `写第 ${n} 章`)
+  return enqueue(job, runAgentWriteJob)
 }
 
 /**
@@ -275,7 +325,8 @@ export async function startWrite(bookId: string, hint?: string): Promise<Job> {
  */
 async function runAgentChapterJob(
   job: Job,
-  direction: NonNullable<JobPayload['direction']>
+  direction: NonNullable<JobPayload['direction']>,
+  signal: AbortSignal
 ): Promise<Job | null> {
   const book = getBook(job.bookId)
   if (!book) throw new Error('书不存在')
@@ -291,9 +342,11 @@ async function runAgentChapterJob(
     history: [],
     mode: 'chapter',
     tools: [...toolDefs(), ...interceptorDefs('chapter')],
+    signal,
     onDelta: chatSaver(job.id),
     say: agentSay(job.id, job.bookId),
     onTurn: () => updateJob(job.id, { watchdogAt: Date.now() }),
+    onProgress: progressRelay(job.id),
     onChapterCommitted: (chapter, extra) => {
       note(job.id, 'chapter', `《${chapter.title}》已入书`)
       updateJob(job.id, {
@@ -318,7 +371,7 @@ async function runAgentChapterJob(
       }
     }
   })
-  return updateJob(job.id, {
+  return finishJob(job.id, {
     state: 'done',
     step: '',
     payload: { answer: result.text },
@@ -326,55 +379,29 @@ async function runAgentChapterJob(
   })
 }
 
-/** 重试当前步骤（W6「再试」/中断恢复 W13） */
-export async function retryJob(jobId: string): Promise<Job> {
+/** 重试（W6「再试」/中断恢复 W13）：重新排队，按先来后到衔接 */
+export function retryJob(jobId: string): Job {
   const job = requireJob(jobId)
-  if (
-    job.kind !== 'write' &&
-    job.kind !== 'revise' &&
-    job.kind !== 'review' &&
-    job.kind !== 'audit' &&
-    job.kind !== 'diagnose' &&
-    job.kind !== 'chat'
-  )
-    throw new Error('该任务不支持重试')
-  if (job.state !== 'failed' && job.state !== 'cancelled')
+  const run = runners[job.kind]
+  if (!run) throw new Error('该任务不支持重试')
+  if (job.state !== 'failed' && job.state !== 'cancelled') {
     throw new Error('只有失败/取消的任务可重试')
-  if (busy() && activeJobId !== jobId) throw new Error('有任务在执行中')
-  const book = getBook(job.bookId)
-  if (!book) throw new Error('书不存在')
-  // 子代理类任务：从头重跑（参数在 payload）
-  if (job.kind !== 'write') {
-    const runners: Record<string, (j: Job) => Promise<Job | null>> = {
-      revise: runReviseJob,
-      review: runReviewJob,
-      audit: runAuditJob,
-      diagnose: runDiagnoseJob,
-      chat: runChatJob
-    }
-    const run = runners[job.kind]
-    if (!run) throw new Error('该任务不支持重试')
-    activeJobId = jobId
-    return guarded(jobId, async () => {
-      updateJob(jobId, { state: 'running', watchdogAt: Date.now(), error: '' })
-      return await run(job)
-    })
   }
-  activeJobId = jobId
-  return guarded(jobId, async () => {
-    updateJob(jobId, { state: 'running', watchdogAt: Date.now(), error: '' })
-    // 走向卡已废除：一律从 agent 段重跑（倾向从 payload.direction/directionHint 带上；计划模式重出计划）
-    return await runAgentWriteJob(job)
-  })
+  if (!getBook(job.bookId)) throw new Error('书不存在')
+  // 上次已经入书才失败（多半败在收尾的整理）：重跑等于再写一章，直接按完成处理
+  if (job.kind === 'write' && job.chapterId) {
+    const done = updateJob(jobId, { state: 'done', step: '', error: '', watchdogAt: 0 }) ?? job
+    note(jobId, 'chapter', '这一章已经入书，不再重写；没收尾的整理可以直接再跟我说')
+    emitJob(done)
+    return done
+  }
+  const queued = updateJob(jobId, { state: 'queued', watchdogAt: 0, error: '' }) ?? job
+  return enqueue(queued, run)
 }
 
 // ── 改章 revise（M4 章末快捷钮/自由指令；W9 版本可回看） ─────────────────────
 
-export async function startRevise(
-  chapterId: string,
-  instruction: string,
-  segment?: string
-): Promise<Job> {
+export function startRevise(chapterId: string, instruction: string, segment?: string): Job {
   const chapter = getChapter(chapterId)
   if (!chapter) throw new Error('章节不存在')
   if (!instruction.trim()) throw new Error('修改指令不能为空')
@@ -395,16 +422,15 @@ export async function startRevise(
       : `改《${chapter.title}》：${instruction.trim()}`,
     job.id
   )
-  return enqueueOrRun(job, () => runReviseJob(job))
+  return enqueue(job, runReviseJob)
 }
 
-async function runReviseJob(job: Job): Promise<Job | null> {
+async function runReviseJob(job: Job, signal: AbortSignal): Promise<Job | null> {
   const revise = job.payload.revise
   if (!revise) throw new Error('改章任务缺少参数')
   const chapter = getChapter(revise.chapterId)
   const book = getBook(job.bookId)
   if (!chapter || !book) throw new Error('章节或书不存在')
-  activeJobId = job.id
   updateJob(job.id, {
     state: 'running',
     step: 'draft',
@@ -412,16 +438,22 @@ async function runReviseJob(job: Job): Promise<Job | null> {
     error: '',
     chapterId: revise.chapterId
   })
-  const plan = await genRevisePlan({
-    book,
-    lineId: job.lineId,
-    chapter,
-    instruction: revise.instruction,
-    segment: revise.segment
-  })
+  const plan = await genRevisePlan(
+    {
+      book,
+      lineId: job.lineId,
+      chapter,
+      instruction: revise.instruction,
+      segment: revise.segment
+    },
+    signal
+  )
+  // 改稿方案出来之前被取消：正文一个字都不动
+  if (signal.aborted) return getJob(job.id)
   const applied = applyRevisePlan(chapter.content, plan)
-  if ('noHit' in applied)
+  if ('noHit' in applied) {
     throw new Error('改稿未命中原文：find 引文在原文中找不到，请重新圈定原文逐字片段')
+  }
   // 改章自检只报告不入闸：字数类指令（加长/缩短）天然会偏 targetWords，不参与字数检查；
   // 结果附在 payload.lint 供 UI 展示，问题大由作者再发指令
   const prev = previousChapter(job.lineId)
@@ -434,7 +466,7 @@ async function runReviseJob(job: Job): Promise<Job | null> {
   const clean = stripHtmlComments(applied.next)
   replaceChapterContent(revise.chapterId, clean)
   note(job.id, 'revised', `《${chapter.title}》已按指令改好`)
-  return updateJob(job.id, {
+  return finishJob(job.id, {
     state: 'done',
     step: 'finalize',
     payload: {
@@ -450,7 +482,7 @@ async function runReviseJob(job: Job): Promise<Job | null> {
 
 // ── 子代理审读（M4 四角色中的三个 LLM 隔离视角 + diagnose 吸收分支推演） ─────
 
-export async function startReview(chapterId: string): Promise<Job> {
+export function startReview(chapterId: string): Job {
   const chapter = getChapter(chapterId)
   if (!chapter) throw new Error('章节不存在')
   const line = getLine(chapter.lineId)
@@ -462,15 +494,14 @@ export async function startReview(chapterId: string): Promise<Job> {
     payload: { reviewChapterId: chapterId }
   })
   userMsg(line.bookId, `审读《${chapter.title}》`, job.id)
-  return enqueueOrRun(job, () => runReviewJob(job))
+  return enqueue(job, runReviewJob)
 }
 
-async function runReviewJob(job: Job): Promise<Job | null> {
+async function runReviewJob(job: Job, signal: AbortSignal): Promise<Job | null> {
   const chapterId = job.payload.reviewChapterId
   const chapter = chapterId ? getChapter(chapterId) : null
   const book = getBook(job.bookId)
   if (!chapter || !book) throw new Error('章节或书不存在')
-  activeJobId = job.id
   updateJob(job.id, {
     state: 'running',
     step: 'report',
@@ -478,25 +509,24 @@ async function runReviewJob(job: Job): Promise<Job | null> {
     error: '',
     chapterId: chapter.id
   })
-  const report = await genReview(book, job.lineId, chapter)
+  const report = await genReview(book, job.lineId, chapter, signal)
   note(job.id, 'report', `《${chapter.title}》审读报告已出`)
-  return updateJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
+  return finishJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
 }
 
-export async function startAudit(bookId: string): Promise<Job> {
+export function startAudit(bookId: string): Job {
   const book = getBook(bookId)
   if (!book) throw new Error('书不存在')
   const line = activeLine(book)
   if (!line) throw new Error('书没有激活线')
   const job = insertJob({ bookId, lineId: line.id, kind: 'audit' })
   userMsg(bookId, '跑一次全书审计')
-  return enqueueOrRun(job, () => runAuditJob(job))
+  return enqueue(job, runAuditJob)
 }
 
-async function runAuditJob(job: Job): Promise<Job | null> {
+async function runAuditJob(job: Job, signal: AbortSignal): Promise<Job | null> {
   const book = getBook(job.bookId)
   if (!book) throw new Error('书不存在')
-  activeJobId = job.id
   updateJob(job.id, { state: 'running', step: 'report', watchdogAt: Date.now(), error: '' })
   const chapters = effectiveChapters(job.lineId)
   if (chapters.length < 2) throw new Error('章节太少，无从审计')
@@ -506,12 +536,12 @@ async function runAuditJob(job: Job): Promise<Job | null> {
     summary: c.summary
   }))
   const latestTwo = chapters.slice(-2)
-  const report = await genAudit(book, job.lineId, recent, latestTwo)
+  const report = await genAudit(book, job.lineId, recent, latestTwo, signal)
   note(job.id, 'report', '全书审计报告已出')
-  return updateJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
+  return finishJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
 }
 
-export async function startDiagnose(bookId: string, question: string): Promise<Job> {
+export function startDiagnose(bookId: string, question: string): Job {
   const book = getBook(bookId)
   if (!book) throw new Error('书不存在')
   if (!question.trim()) throw new Error('问题不能为空')
@@ -519,23 +549,22 @@ export async function startDiagnose(bookId: string, question: string): Promise<J
   if (!line) throw new Error('书没有激活线')
   const job = insertJob({ bookId, lineId: line.id, kind: 'diagnose', payload: { question } })
   userMsg(bookId, question.trim(), job.id)
-  return enqueueOrRun(job, () => runDiagnoseJob(job))
+  return enqueue(job, runDiagnoseJob)
 }
 
-async function runDiagnoseJob(job: Job): Promise<Job | null> {
+async function runDiagnoseJob(job: Job, signal: AbortSignal): Promise<Job | null> {
   const book = getBook(job.bookId)
   const question = job.payload.question
   if (!book || !question) throw new Error('诊断任务缺少参数')
-  activeJobId = job.id
   updateJob(job.id, { state: 'running', step: 'report', watchdogAt: Date.now(), error: '' })
-  const report = await genDiagnose(book, job.lineId, question)
+  const report = await genDiagnose(book, job.lineId, question, signal)
   note(job.id, 'report', '导演诊断已出')
-  return updateJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
+  return finishJob(job.id, { state: 'done', step: 'report', payload: { report }, watchdogAt: 0 })
 }
 
 // ── 自由对话（M5 智能体页：跟导演聊剧情/问问题/出主意；进串行队列不抢写作） ──
 
-export async function startChat(bookId: string, text: string): Promise<Job> {
+export function startChat(bookId: string, text: string): Job {
   const book = getBook(bookId)
   if (!book) throw new Error('书不存在')
   const line = activeLine(book)
@@ -544,18 +573,18 @@ export async function startChat(bookId: string, text: string): Promise<Job> {
   if (!t) throw new Error('消息不能为空')
   const job = insertJob({ bookId, lineId: line.id, kind: 'chat', payload: { question: t } })
   userMsg(bookId, t, job.id, 'chat')
-  return enqueueOrRun(job, () => runChatJob(job))
+  return enqueue(job, runChatJob)
 }
 
-async function runChatJob(job: Job): Promise<Job | null> {
+async function runChatJob(job: Job, signal: AbortSignal): Promise<Job | null> {
   const book = getBook(job.bookId)
   const question = job.payload.question
   if (!book || !question) throw new Error('对话任务缺少参数')
-  activeJobId = job.id
   updateJob(job.id, { state: 'running', step: 'agent', watchdogAt: Date.now(), error: '' })
-  // 对话历史投影：只带文本 chat 消息（user+assistant），工具卡/动作不回灌
+  // 对话历史投影：只带文本 chat 消息（user+assistant），工具卡/动作不回灌；
+  // 本次发言已在入队时落库（带本任务 id），按 id 排除——作者说过一模一样的话也要保留
   const history: ChatMessage[] = listMessages(job.bookId, { limit: 40 })
-    .filter((m) => m.meta?.kind === 'chat' && m.content !== question)
+    .filter((m) => m.meta?.kind === 'chat' && m.meta?.jobId !== job.id)
     .slice(-12)
     .map((m) => ({ role: m.role, content: m.content }))
   // 计划模式：同书有等待确认的计划时，让导演看得到计划（等待期可聊）
@@ -575,6 +604,7 @@ async function runChatJob(job: Job): Promise<Job | null> {
     history,
     mode: 'free',
     tools: [...toolDefs(), ...interceptorDefs('free')],
+    signal,
     onDelta: cs,
     onThinking: ts,
     // chat 白话链路开思考（思考折叠区 UI）；写章/改章链路保持默认 disabled
@@ -585,10 +615,15 @@ async function runChatJob(job: Job): Promise<Job | null> {
       cs.reset()
       ts.reset()
     },
+    // 同一轮输出中途断线会从头重试：已推给前端的半截内容必须清掉，否则与新稿拼在一起
+    onRestart: () => {
+      cs.reset()
+      ts.reset()
+    },
     // 意图动作（对话驱动开章/审读/审计）：避免 loop→jobs 循环依赖，经 actions 注入
     actions: {
       startChapter: (hint) => {
-        void startWrite(job.bookId, hint).catch(() => {})
+        startWrite(job.bookId, hint)
         return hint ? `写章任务已排队（方向倾向已带上：${hint.slice(0, 60)}）` : '写章任务已排队'
       },
       review: async (chapterId) => {
@@ -597,7 +632,7 @@ async function runChatJob(job: Job): Promise<Job | null> {
           (chapterId ? getChapter(chapterId) : undefined) ?? previousChapter(line?.id ?? job.lineId)
         if (!ch) return '没有可审读的章节'
         const b = getBook(job.bookId) ?? book
-        const report = await genReview(b, ch.lineId, ch)
+        const report = await genReview(b, ch.lineId, ch, signal)
         return `《${ch.title}》审读报告（${report.score} 分）：${report.verdict}\n维度发现：${report.findings
           .map((f) => `[${f.dimension}/${f.level}] ${f.comment}`)
           .join('；')}\n建议：${report.suggestions.join('；')}`
@@ -611,7 +646,7 @@ async function runChatJob(job: Job): Promise<Job | null> {
           title: c.title,
           summary: c.summary
         }))
-        const report = await genAudit(b, job.lineId, recent, chapters.slice(-2))
+        const report = await genAudit(b, job.lineId, recent, chapters.slice(-2), signal)
         return `全书审计报告（${report.score} 分）：${report.verdict}\n${report.findings
           .map((f) => `[${f.dimension}/${f.level}] ${f.comment}`)
           .join('；')}\n建议：${report.suggestions.join('；')}`
@@ -630,18 +665,12 @@ async function runChatJob(job: Job): Promise<Job | null> {
       meta: { kind: 'chat', jobId: job.id }
     })
   }
-  return updateJob(job.id, {
+  return finishJob(job.id, {
     state: 'done',
     step: '',
     payload: { answer: result.text },
     watchdogAt: 0
   })
-}
-
-/** 空闲立即跑（guarded），忙则排队（pump 自动衔接） */
-function enqueueOrRun(job: Job, run: () => Promise<Job | null>): Promise<Job> {
-  if (busy()) return Promise.resolve(job)
-  return guarded(job.id, run)
 }
 
 /** 每 8 章自动排一次跨章审计（M4；去重：同书已有在途/待跑 audit 不重复排） */
@@ -656,19 +685,31 @@ function maybeQueueAudit(bookId: string, lineId: string): void {
   )
   if (existing) return
   insertJob({ bookId, lineId, kind: 'audit' })
-  void pump().catch(() => {})
+  pump()
 }
 
-/** 取消（W11：主动取消=作废整章；二次确认由 UI 承担） */
+/** 取消（W11：主动取消=作废整章；二次确认由 UI 承担）。已入书的章不动 */
 export function cancelJob(jobId: string): Job {
   const job = requireJob(jobId)
-  if (job.state === 'done') throw new Error('任务已完成，无法取消')
+  if (job.state !== 'queued' && job.state !== 'running' && job.state !== 'waiting_user') {
+    throw new Error('任务已结束，无法取消')
+  }
   const cancelled = updateJob(jobId, { state: 'cancelled', watchdogAt: 0 })
-  if (cancelled) emitJob(cancelled)
-  note(jobId, 'cancelled', '已按你的要求取消')
-  if (activeJobId === jobId) activeJobId = null
-  void pump().catch(() => {})
-  return cancelled as Job
+  if (!cancelled) throw new Error(`任务 ${jobId} 不存在`)
+  emitJob(cancelled)
+  note(
+    jobId,
+    'cancelled',
+    job.chapterId ? '已取消后续整理；这一章已经入书，会保留' : '已按你的要求取消'
+  )
+  if (running.has(jobId)) {
+    // 正在跑：执行器会在下一个检查点（下一轮/下一个工具/下一次模型调用）停下，队列到时再释放
+    running.get(jobId)?.abort()
+  } else {
+    // 还在排队或等作者确认：直接衔接下一个
+    pump()
+  }
+  return cancelled
 }
 
 export function getJobById(jobId: string): Job | null {
@@ -679,16 +720,22 @@ export function listJobsFor(bookId?: string): Job[] {
   return listJobs(bookId)
 }
 
-/** 启动时恢复：把重启前 running 的任务回滚到可重试状态（W13 简版：failed+可 retry） */
+/** 启动时恢复：上个进程遗留的 running 任务标失败（可重试），排队中的继续跑 */
 export function recoverJobsOnBoot(): void {
-  failStuckJobs(0)
+  for (const id of failInterruptedJobs()) {
+    const job = getJob(id)
+    if (job) note(id, 'failed', `卡住了：${job.error}`)
+  }
+  pump()
 }
 
-/** 看门狗 tick（index.ts 定时调用） */
+/** 看门狗 tick（index.ts 每分钟调用）：无进展超时的任务标失败、上时间轴失败卡、并真正中止 */
 export function watchdogTick(): void {
-  failStuckJobs()
-}
-
-export function isBusy(): boolean {
-  return busy()
+  for (const id of failStuckJobs()) {
+    const job = getJob(id)
+    if (!job) continue
+    emitJob(job)
+    note(id, 'failed', `卡住了：${job.error}`)
+    running.get(id)?.abort()
+  }
 }
