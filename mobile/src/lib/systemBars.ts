@@ -13,7 +13,8 @@ export type Appearance = 'sepia' | 'light' | 'dark'
  */
 export function applySystemBars(appearance: Appearance): void {
   try {
-    const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } }).Capacitor
+    const cap = (window as unknown as { Capacitor?: { isNativePlatform?: () => boolean } })
+      .Capacitor
     if (!cap?.isNativePlatform?.()) return
     const s = appearance === 'sepia' ? SEPIA : appearance === 'dark' ? DARK : LIGHT
     void StatusBar.setStyle({ style: s.style }).catch(() => {})

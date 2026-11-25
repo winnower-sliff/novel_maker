@@ -3,7 +3,7 @@
  * 前置：npm run build（dist 最新）。stub 由本脚本 spawn（SKIP_ONBOARD=1，端口 3923）。
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -88,10 +88,11 @@ try {
   }
   ok(up, '服务就绪 /api/health')
 
-  await invoke(
-    'settings:save',
-    { provider: 'custom', profiles: { custom: { baseUrl: 'http://127.0.0.1:3923/v1', defaultModel: 'stub-model' } }, apiKeys: { custom: 'stub-key' } }
-  )
+  await invoke('settings:save', {
+    provider: 'custom',
+    profiles: { custom: { baseUrl: 'http://127.0.0.1:3923/v1', defaultModel: 'stub-model' } },
+    apiKeys: { custom: 'stub-key' }
+  })
   ok(true, '模型配置 → stub')
 
   const book = await invoke('book:create', { title: '冒烟之书', targetWords: 600 })
@@ -117,10 +118,18 @@ try {
 
   // ── 写章 agent 全链路（走向卡已废除：startWrite 直通）──
   let job = await invoke('job:startWrite', book.id)
-  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 全链（工具链+正文+入书+沉淀）', 90_000)
+  job = await waitJob(
+    job.id,
+    (j) => j.state === 'done',
+    'agent 全链（工具链+正文+入书+沉淀）',
+    90_000
+  )
 
   const quick = job.payload.recap?.quickActions ?? []
-  ok(quick.length >= 1 && quick[0].label.length > 0, `recap.quickActions=${quick.length}（agent 动态建议钮）`)
+  ok(
+    quick.length >= 1 && quick[0].label.length > 0,
+    `recap.quickActions=${quick.length}（agent 动态建议钮）`
+  )
 
   const detail = await invoke('book:get', book.id)
   ok(detail.chapters.length === 1, '章节入库')
@@ -129,7 +138,10 @@ try {
 
   // ── 改章 revise（局部替换 plan：一命中一未命中）──
   let rj = await invoke('job:startRevise', ch0.id, '测试改章：收尾再冷一点')
-  ok(rj.kind === 'revise' && rj.payload.revise?.instruction === '测试改章：收尾再冷一点', 'startRevise 落队列')
+  ok(
+    rj.kind === 'revise' && rj.payload.revise?.instruction === '测试改章：收尾再冷一点',
+    'startRevise 落队列'
+  )
   rj = await waitJob(rj.id, (j) => j.state === 'done', '改章')
   ok((rj.payload.reviseMode ?? '').includes('局部修改 1/2'), `reviseMode=${rj.payload.reviseMode}`)
   const ch1 = await invoke('chapter:get', ch0.id)
@@ -143,7 +155,10 @@ try {
   let vj = await invoke('job:startReview', ch0.id)
   vj = await waitJob(vj.id, (j) => j.state === 'done', '章审读')
   ok(vj.payload.report?.kind === 'review', 'report.kind=review')
-  ok((vj.payload.report?.findings ?? []).length >= 2 && vj.payload.report?.score === 82, `审读报告 findings · 82 分`)
+  ok(
+    (vj.payload.report?.findings ?? []).length >= 2 && vj.payload.report?.score === 82,
+    `审读报告 findings · 82 分`
+  )
 
   let aj = await invoke('job:startAudit', book.id)
   aj = await waitJob(aj.id, (j) => j.state === 'failed', '全书审计门槛', 15_000, true)
@@ -151,7 +166,10 @@ try {
 
   let dj = await invoke('job:startDiagnose', book.id, '主角的动机链立得住吗？')
   dj = await waitJob(dj.id, (j) => j.state === 'done', '问导演')
-  ok(dj.payload.report?.kind === 'diagnose' && (dj.payload.report?.verdict ?? '').length > 20, '诊断回答非空')
+  ok(
+    dj.payload.report?.kind === 'diagnose' && (dj.payload.report?.verdict ?? '').length > 20,
+    '诊断回答非空'
+  )
 
   console.log(`\n[M4 冒烟] ${passed} 通过 / ${failed} 失败`)
   killAll()

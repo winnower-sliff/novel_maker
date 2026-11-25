@@ -2,10 +2,10 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { qk, useBook, useJobFlow, useMessages } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
-import StatusHead from './write/StatusHead'
-import StreamRow from './write/StreamRow'
 import InputBar from './write/InputBar'
 import { MessageRow } from './write/MessageRow'
+import StatusHead from './write/StatusHead'
+import StreamRow from './write/StreamRow'
 
 /**
  * 写作页=聊天时间轴。组件按域拆在 ./write/：
@@ -22,7 +22,9 @@ export default function Write() {
   const jobs = flow?.jobs ?? []
 
   // 乐观消息：点发送立刻上墙（半透明+转圈），服务器确认落库后撤掉由真实消息顶上
-  const [pending, setPending] = useState<Array<{ id: string; text: string; at: number; failed?: boolean }>>([])
+  const [pending, setPending] = useState<
+    Array<{ id: string; text: string; at: number; failed?: boolean }>
+  >([])
   const sendPending = async (text: string, replaceId?: string) => {
     if (replaceId) setPending((l) => l.filter((p) => p.id !== replaceId))
     const id = `pend-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`

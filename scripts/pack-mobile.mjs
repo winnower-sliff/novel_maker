@@ -1,39 +1,34 @@
-// APK 更新分发：把构建好的 NovelMaker.apk 部署到 Electron userData/mobile/，
-// 经内嵌服务器 /api/mobile/version|file 下发（manifest 白名单防穿越）。
+// APK 更新分发：把构建好的 NovelMaker.apk 部署到数据目录 mobile/，
+// 经内嵌服务器 /api/mobile/version 与 /api/mobile/apk 下发（manifest 白名单防穿越）。
 // bundle 界面资源已不再单独下发——UI 更新统一走 APK 安装。
-import { execSync } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+import { join } from 'node:path'
+import { resolveDataDir } from './prod-server.mjs'
 
-const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
-
-/** 本次更新说明：自上一个 v* tag 以来的 commit 主题行（version.mjs 已在构建前打好本次 tag） */
+/** 本次更新说明：自最新 v* tag 以来的 commit 主题（build-apk 全部成功后才打本次 tag，所以最新 tag 就是上一版） */
 function gitNotes() {
   try {
-    const tags = execSync('git tag --sort=-creatordate --list v*', { encoding: 'utf8' })
+    const tag = execFileSync('git', ['tag', '--sort=-v:refname', '--list', 'v*'], {
+      encoding: 'utf8'
+    })
       .split('\n')
       .map((s) => s.trim())
-      .filter(Boolean)
-    const range = tags.length >= 2 ? `${tags[1]}..${tags[0]}` : '-20'
-    return execSync(`git log --pretty=%s ${range}`, { encoding: 'utf8' })
-      .split('\n')
-      .map((s) => s.trim())
-      .filter(Boolean)
-      .slice(0, 20)
+      .find(Boolean)
+    return (
+      execFileSync('git', ['log', '--pretty=%s', tag ? `${tag}..HEAD` : '-20'], {
+        encoding: 'utf8'
+      })
+        .split('\n')
+        .map((s) => s.trim())
+        // 交接板与发版自身的提交对读者没有信息量
+        .filter((s) => s && !/^(chore\(release\)|docs\(handoff\))[:：]|^Merge /.test(s))
+        .slice(0, 20)
+    )
   } catch {
     return []
   }
-}
-
-/** 与 src/main/paths.ts dataDir() 保持一致（v2 数据目录，NM_DATA_DIR 可覆盖） */
-function appDataDir() {
-  if (process.env.NM_DATA_DIR) return process.env.NM_DATA_DIR
-  if (process.platform === 'win32') {
-    return join(process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming'), 'novel-maker-v2')
-  }
-  return join(process.env.HOME ?? '', '.novel-maker-v2')
 }
 
 function arg(name) {
@@ -46,13 +41,15 @@ async function main() {
   const version = arg('apk-version')
   const versionCode = Number(arg('apk-code')) || 0
   if (!apkSrc || !version) {
-    console.error('[pack-mobile] 用法: node scripts/pack-mobile.mjs --apk <NovelMaker.apk> --apk-version <version> [--apk-code <int>]')
+    console.error(
+      '[pack-mobile] 用法: node scripts/pack-mobile.mjs --apk <NovelMaker.apk> --apk-version <version> [--apk-code <int>]'
+    )
     process.exit(1)
   }
 
   const buf = await readFile(apkSrc)
   const rel = 'apk/NovelMaker.apk'
-  const target = join(appDataDir(), 'mobile')
+  const target = join(resolveDataDir(), 'mobile')
 
   await rm(join(target, 'files'), { recursive: true, force: true })
   const dest = join(target, 'files', rel)
@@ -63,9 +60,7 @@ async function main() {
     version,
     buildAt: new Date().toISOString(),
     apk: { version, versionCode, path: rel, size: buf.length, notes: gitNotes() },
-    files: [
-      { path: rel, hash: createHash('sha256').update(buf).digest('hex'), size: buf.length }
-    ]
+    files: [{ path: rel, hash: createHash('sha256').update(buf).digest('hex'), size: buf.length }]
   }
   await writeFile(join(target, 'manifest.json'), JSON.stringify(manifest, null, 2))
 

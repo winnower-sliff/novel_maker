@@ -1,10 +1,9 @@
-// Tailwind 源扫描哨兵校验：@source 路径错配 / 构建 cwd 漂移会让整源类静默缺失，
-// 页面按无样式裸奔（实锤案例：mobile/styles.css 的 @source "../../wizard" 相对路径
-// 抄错深度 → 向导类全缺 → APK 白框+样式失效）。本脚本在产物 CSS 里查找每个扫描源
-// 的代表类，缺失即退出非零，把静默失效变成构建失败。
+// Tailwind 源扫描哨兵校验：构建 cwd 漂移或样式入口没被扫到时，整批工具类会静默缺失——
+// 页面按无样式裸奔，而构建照样成功。本脚本在产物 CSS 里查找几个代表类，缺失即退出非零，
+// 把静默失效变成构建失败。
 //
 // 用法：node scripts/check-tailwind-classes.mjs <css 目录> [--mobile]
-//   --mobile  额外校验仅手机端存在的源（mobile/ui、mobile/pages）
+//   --mobile  多校验几个只在高频页面上用到的类
 import { readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
@@ -18,13 +17,13 @@ if (!dir) {
 // 类名为 CSS 内转义字面量（如 sm\:p-6）；每项 [类, 守护的扫描源]
 // v2：唯一 UI 源 = mobile/src（vite root 扫描）；src/ 为主进程无 CSS
 const COMMON = [
-  ['rounded-t-2xl', 'mobile/pages（Write/Lines 底部弹层）'],
-  ['grid-cols-2', 'mobile/pages/Settings（用量统计）'],
-  ['line-clamp-2', 'mobile/pages/Write+Cards（摘要截断）']
+  ['rounded-t-2xl', 'src/pages（底部弹层）'],
+  ['grid-cols-2', 'src/pages/Settings（用量统计）'],
+  ['line-clamp-2', 'src/pages/Write+Cards（摘要截断）']
 ]
 const MOBILE_ONLY = [
-  ['bg-orange-100', 'mobile/pages（浅色橙黄主题：次级按钮/徽标）'],
-  ['bg-\\[\\#fbf6ec\\]', 'mobile（暖米白页面底色，番茄式主题）']
+  ['bg-orange-100', 'src/pages（次级按钮/徽标）'],
+  ['bg-\\[\\#fbf6ec\\]', '全局（暖米白页面底色）']
 ]
 
 async function collectCss(d) {
@@ -45,7 +44,7 @@ if (!all) {
 const sentinels = args.includes('--mobile') ? [...COMMON, ...MOBILE_ONLY] : COMMON
 const missing = sentinels.filter(([cls]) => !all.includes(cls))
 if (missing.length > 0) {
-  console.error('[tailwind-check] 缺失哨兵类（对应源未进扫描，检查 styles.css @source 路径与构建 cwd）：')
+  console.error('[tailwind-check] 缺失哨兵类（样式源没进扫描：检查 vite 构建的 cwd 与 --config）：')
   for (const [cls, src] of missing) console.error(`  - ${cls}  ← ${src}`)
   process.exit(1)
 }

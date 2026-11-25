@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import { QUICK_ACTIONS } from '@shared/types'
+import { useState } from 'react'
 
 /**
  * 章末快捷改章条：固定通用钮 + agent 本章动态建议钮（recap.quickActions）+ 自由输入。

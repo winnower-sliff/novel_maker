@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import type { Job } from '@shared/types'
+import { useState } from 'react'
 import { useKeyboardInset } from '../../lib/useKeyboardInset'
 
 /**
@@ -42,11 +42,18 @@ export default function InputBar({
         <textarea
           rows={1}
           className="min-h-[42px] max-h-28 min-w-0 flex-1 resize-none rounded-2xl border border-orange-100 bg-white px-3.5 py-2.5 text-sm outline-none focus:border-orange-700"
-          placeholder={busyRunning ? '跟导演说…（会排队）' : '跟导演聊剧情、要建议；想写新章直接说…'}
+          placeholder={
+            busyRunning ? '跟导演说…（会排队）' : '跟导演聊剧情、要建议；想写新章直接说…'
+          }
           value={text}
           onChange={(e) => setText(e.target.value)}
           onKeyDown={(e) => {
-            if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing && e.keyCode !== 229) {
+            if (
+              e.key === 'Enter' &&
+              !e.shiftKey &&
+              !e.nativeEvent.isComposing &&
+              e.keyCode !== 229
+            ) {
               e.preventDefault()
               void send()
             }

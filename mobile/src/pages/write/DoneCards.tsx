@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import type { Job } from '@shared/types'
+import { useState } from 'react'
 import QuickActionsBar from '../../components/QuickActionsBar'
 import { useUiStore } from '../../lib/uiStore'
 
@@ -57,7 +57,11 @@ export function ChapterDoneCard({
       )}
       {job.chapterId && (
         <div className="mt-2">
-          <QuickActionsBar chapterId={job.chapterId} quickActions={recap?.quickActions} refresh={refresh} />
+          <QuickActionsBar
+            chapterId={job.chapterId}
+            quickActions={recap?.quickActions}
+            refresh={refresh}
+          />
         </div>
       )}
       <button
@@ -80,7 +84,9 @@ export function RevisedCard({ job }: { job: Job }) {
       <div className="rounded-2xl border border-orange-200 bg-orange-50 p-4">
         <div className="text-sm font-semibold text-orange-700">✓ 改好了（新版本已生效）</div>
         {job.payload.revise && (
-          <div className="mt-1 text-[11px] text-stone-500">指令：{job.payload.revise.instruction}</div>
+          <div className="mt-1 text-[11px] text-stone-500">
+            指令：{job.payload.revise.instruction}
+          </div>
         )}
         <div className="mt-1 text-[11px] text-stone-500">
           {job.payload.draftWordCount ? `${job.payload.draftWordCount} 字 · ` : ''}
@@ -108,7 +114,11 @@ export function RecapCard({ recap }: { recap: NonNullable<Job['payload']['recap'
         <div className="mt-3 border-t border-orange-100/70 pt-2">
           <div className="mb-1 text-[11px] text-stone-500">人物动向</div>
           {recap.stateChanges.map((sc, i) => (
-            <div key={i} className="text-xs text-stone-500">
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+              key={i}
+              className="text-xs text-stone-500"
+            >
               <span className="text-stone-600">{sc.name}</span>
               {typeof sc.patch.location === 'string' && <span> · {sc.patch.location}</span>}
               {typeof sc.patch.mood === 'string' && <span> · {sc.patch.mood}</span>}
@@ -120,7 +130,11 @@ export function RecapCard({ recap }: { recap: NonNullable<Job['payload']['recap'
         <div className="mt-3 border-t border-orange-100/70 pt-2">
           <div className="mb-1 text-[11px] text-stone-500">伏笔</div>
           {recap.foreshadowOps.map((f, i) => (
-            <div key={i} className="text-xs text-orange-700/80">
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+              key={i}
+              className="text-xs text-orange-700/80"
+            >
               {f.op === 'plant' ? '埋下' : f.op === 'plan' ? '计划' : '回收'} · {f.title}
             </div>
           ))}
@@ -130,7 +144,11 @@ export function RecapCard({ recap }: { recap: NonNullable<Job['payload']['recap'
         <div className="mt-3 border-t border-orange-100/70 pt-2">
           <div className="mb-1 text-[11px] text-stone-500">设定沉淀</div>
           {recap.cardOps.map((c, i) => (
-            <div key={i} className="text-xs text-stone-500">
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+              key={i}
+              className="text-xs text-stone-500"
+            >
               {c.op === 'create' ? '新增' : c.op === 'update' ? '更新' : '删除'} · {c.title}
             </div>
           ))}

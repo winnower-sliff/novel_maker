@@ -2,7 +2,7 @@
   "name": "novel-maker-mobile-shell",
   "version": "1.0.0",
   "private": true,
-  "description": "Android 壳：加载本地 web bundle 并支持从电脑端静默更新",
+  "description": "Android 壳：加载本地 web bundle，经 Tailscale 访问电脑端服务；更新走 APK 自更新",
   "scripts": {
     "sync": "node scripts/sync-bundle.mjs && npx cap sync android",
     "open": "npx cap open android",
@@ -13,10 +13,8 @@
   },
   "dependencies": {
     "@capacitor/android": "^7.4.4",
-    "@capacitor/app": "^7.1.2",
     "@capacitor/core": "^7.4.4",
     "@capacitor/keyboard": "^7.0.6",
-    "@capacitor/local-notifications": "^7.0.7",
     "@capacitor/preferences": "^7.0.4",
     "@capacitor/status-bar": "^7.0.6"
   }

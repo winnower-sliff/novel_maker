@@ -1,5 +1,5 @@
-import { memo, useState } from 'react'
 import type { ChatMessageRow, Job } from '@shared/types'
+import { memo, useState } from 'react'
 import { Markdown } from '../../components/Markdown'
 import JobCard from './JobCard'
 import ToolCard from './ToolCard'
@@ -80,13 +80,17 @@ export function ThinkingBubble({ text, live = false }: { text: string; live?: bo
         className="w-full rounded-xl border border-stone-200/80 bg-stone-50/60 px-3 py-1.5 text-left"
         onClick={() => setOpen(!open)}
       >
-        <span className={`text-[11px] ${live ? 'animate-pulse text-orange-400' : 'text-stone-400'}`}>
+        <span
+          className={`text-[11px] ${live ? 'animate-pulse text-orange-400' : 'text-stone-400'}`}
+        >
           ✦ {live ? '思考中…' : '思考'} {open ? '▲' : '▼'}
         </span>
         {open && (
           <div className="mt-1.5 max-h-56 overflow-y-auto no-scrollbar whitespace-pre-wrap text-xs leading-relaxed text-stone-400">
             {text}
-            {live && <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-orange-400 align-middle" />}
+            {live && (
+              <span className="ml-0.5 inline-block h-3 w-0.5 animate-pulse bg-orange-400 align-middle" />
+            )}
           </div>
         )}
       </button>

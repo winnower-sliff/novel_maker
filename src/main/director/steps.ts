@@ -9,6 +9,7 @@ import type {
   Scene
 } from '../../shared/types.js'
 import { lintChapter } from '../lint.js'
+import { listMemories, saveMemory } from '../store.js'
 import { callJson, callRaw } from './callJson.js'
 import { buildWriteContext } from './context.js'
 import { bookBasics, directorPersona, redlineBlock, styleBlock, wordListBlock } from './prompts.js'
@@ -286,7 +287,6 @@ export async function compactMemories(
   chapters: Array<{ orderNo: number; title: string; summary: string }>
 ): Promise<void> {
   if (chapters.length <= 12) return
-  const { saveMemory, listMemories } = await import('../store.js')
   const mems = listMemories(lineId)
   const compactedTo = mems.length ? Math.max(...mems.map((m) => m.toOrder)) : 0
   const from = compactedTo + 1

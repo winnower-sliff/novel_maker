@@ -1,6 +1,6 @@
 // 范文结构化冒烟：导入切节/章号直达/关键词检索/多本绑定/写作检索注入跳过（无绑定不炸）
 import { spawn } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -29,15 +29,17 @@ const SAMPLE_TXT = [
   '',
   '茶楼里说书人拍响醒木。三年前沉船的旧账，被翻出来晒在太阳底下。',
   '满堂茶客伸长脖子，只有角落里那个披蓑衣的老头把茶碗扣在了桌上。',
-  '少年在门外听完这一段，转身没入雨巷。旧账要翻，但不是现在，也不是在这儿。',
+  '少年在门外听完这一段，转身没入雨巷。旧账要翻，但不是现在，也不是在这儿。'
 ].join('\n')
+
 import { mkdirSync } from 'node:fs'
+
 mkdirSync(join(DATA, 'imports'), { recursive: true })
 writeFileSync(join(DATA, 'imports', '测试范文.txt'), SAMPLE_TXT)
 
 const server = spawn(process.execPath, ['dist/main/index.js'], {
   env: { ...process.env, NM_DATA_DIR: DATA },
-  stdio: 'inherit',
+  stdio: 'inherit'
 })
 let failed = 0
 const ok = (name, cond) => {
@@ -48,7 +50,7 @@ const invoke = async (channel, ...args) => {
   const r = await fetch(`${BASE}/api/invoke/${channel}`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ args }),
+    body: JSON.stringify({ args })
   })
   const body = await r.json()
   if (!r.ok) throw new Error(`${channel} ${r.status} ${JSON.stringify(body)}`)
@@ -70,7 +72,10 @@ try {
   ok('服务就绪', true)
 
   const dir = await invoke('sample:listDir')
-  ok('imports 目录识别测试范文', dir.some((f) => f.fileName === '测试范文.txt'))
+  ok(
+    'imports 目录识别测试范文',
+    dir.some((f) => f.fileName === '测试范文.txt')
+  )
 
   const imp = await invoke('sample:import', { fileName: '测试范文.txt' })
   ok(`导入成功（${imp.chars} 字）`, imp.chars === SAMPLE_TXT.length)
@@ -90,7 +95,10 @@ try {
   const tocRes = execTool('read_sample', { toc: true }, { bookId: b.id })
   ok(
     `read_sample toc 出目录（${tocRes.summary}）`,
-    tocRes.ok && tocRes.data.includes('第一章 夜港') && tocRes.data.includes('第三章 旧账') && tocRes.summary.includes('3 章')
+    tocRes.ok &&
+      tocRes.data.includes('第一章 夜港') &&
+      tocRes.data.includes('第三章 旧账') &&
+      tocRes.summary.includes('3 章')
   )
   const noToc = execTool('read_sample', { chapter: 2 }, { bookId: b.id })
   ok('chapter 直达仍正常', noToc.ok && noToc.data.includes('第二章 渡海'))
@@ -98,7 +106,10 @@ try {
   // read_sample chapter 直达：经 agent 工具走不通（无 LLM），这里验证 store 层经 message 不可行——改验证 searchSampleSections 间接产物：
   // 通过 read_sample 的底层 searchSampleSections 由工具暴露，冒烟直接调工具链需 LLM；此处验证 attach 后 list_samples 的 ★ 逻辑（跳过）
   // ——检索直达留给 stub 冒烟/真机。核心断言：切节+多绑+导入链已覆盖。
-  ok('绑定后范文列表含章数', list.every((x) => typeof x.chapterCount === 'number'))
+  ok(
+    '绑定后范文列表含章数',
+    list.every((x) => typeof x.chapterCount === 'number')
+  )
 
   await invoke('sample:attach', b.id, [])
   const b3 = (await invoke('book:get', b.id)).book
@@ -112,7 +123,9 @@ try {
 } finally {
   server.kill()
   await new Promise((r) => setTimeout(r, 500))
-  try { rmSync(DATA, { recursive: true, force: true }) } catch {}
+  try {
+    rmSync(DATA, { recursive: true, force: true })
+  } catch {}
 }
 console.log(`\n[范文冒烟] ${failed ? '失败' : '全部通过'}${failed ? ` ×${failed}` : ''}`)
 process.exit(failed ? 1 : 0)

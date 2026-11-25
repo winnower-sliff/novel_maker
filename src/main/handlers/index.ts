@@ -1,12 +1,11 @@
 import { createRequire } from 'node:module'
-import type { ChatParams } from '../../shared/contract.js'
 import { providerPreset } from '../../shared/providers.js'
-import { apiKey, profile, resolveAuth, saveSettings, viewSettings } from '../config.js'
-import { chatStream, pickRatelimitHeaders, probeModels } from '../llm.js'
+import { buildInfo } from '../buildInfo.js'
+import { apiKey, profile, saveSettings, viewSettings } from '../config.js'
+import { probeModels } from '../llm.js'
 import { dataDir } from '../paths.js'
-import { abortRun, pollRuns, startStreaming } from '../runs.js'
 import { getServerStatus } from '../serverState.js'
-import { appendUsage, computeStats, listUsage } from '../usage.js'
+import { computeStats, listUsage } from '../usage.js'
 import { bookHandlers } from './books.js'
 import { jobHandlers } from './jobs.js'
 import { onboardHandlers } from './onboard.js'
@@ -45,63 +44,6 @@ const settingsHandlers: Pick<HandlerTable, 'settings:get' | 'settings:save' | 'm
   }
 }
 
-// ── llm 流式 ─────────────────────────────────────────────────────────────────
-
-const llmHandlers: Pick<HandlerTable, 'llm:chat' | 'llm:abort' | 'llm:poll'> = {
-  'llm:chat': (ctx, [params]) =>
-    startStreaming(ctx.sink, (requestId, onDelta, signal) =>
-      runChat(requestId, params, onDelta, signal)
-    ),
-  'llm:abort': (_ctx, [requestId]) => abortRun(requestId),
-  'llm:poll': (_ctx, [{ requestIds }]) => pollRuns(requestIds)
-}
-
-async function runChat(
-  requestId: string,
-  params: ChatParams,
-  onDelta: (t: string) => void,
-  signal: AbortSignal
-) {
-  void requestId
-  let auth = resolveAuth(params.slot ?? 'director')
-  if (params.provider) {
-    auth = {
-      ...auth,
-      provider: params.provider,
-      apiKey: params.apiKeyOverride || apiKey(params.provider),
-      baseUrl: profile(params.provider).baseUrl || providerPreset(params.provider).baseUrl,
-      model: params.model || profile(params.provider).defaultModel,
-      contextWindow: providerPreset(params.provider).contextWindow,
-      maxOutputTokens: providerPreset(params.provider).maxOutputTokens
-    }
-  }
-  if (params.model) auth.model = params.model
-  const result = await chatStream(
-    { ...params, model: auth.model },
-    { apiKey: auth.apiKey, baseUrl: auth.baseUrl },
-    { onDelta },
-    signal
-  )
-  appendUsage({
-    ts: Date.now(),
-    model: result.model,
-    purpose: params.slot ?? 'director',
-    inputTokens: result.usage.inputTokens,
-    outputTokens: result.usage.outputTokens,
-    cacheReadTokens: result.usage.cacheReadTokens,
-    cacheCreationTokens: result.usage.cacheCreationTokens,
-    durationMs: result.durationMs,
-    ratelimit: pickRatelimitHeaders(result.headers)
-  })
-  return {
-    text: result.text,
-    usage: { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens },
-    model: result.model,
-    stopReason: result.stopReason,
-    durationMs: result.durationMs
-  }
-}
-
 // ── usage ────────────────────────────────────────────────────────────────────
 
 const usageHandlers: Pick<HandlerTable, 'usage:list' | 'usage:stats'> = {
@@ -114,7 +56,6 @@ const usageHandlers: Pick<HandlerTable, 'usage:list' | 'usage:stats'> = {
 export const sharedHandlers: HandlerTable = {
   ...appHandlers,
   ...settingsHandlers,
-  ...llmHandlers,
   ...usageHandlers,
   ...bookHandlers,
   ...jobHandlers,
@@ -122,6 +63,7 @@ export const sharedHandlers: HandlerTable = {
   ...sampleHandlers
 }
 
+/** 服务版本：取构建指纹里的快照（deploy 时写入）；tsx 开发模式没有构建产物则读 package.json */
 export function appVersion(): string {
-  return pkg.version
+  return buildInfo()?.version ?? pkg.version
 }

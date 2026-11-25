@@ -10,7 +10,6 @@ import type {
   ContentBlock,
   Foreshadow,
   Job,
-  LlmErrorHint,
   ModelProbeResult,
   SampleFileInfo,
   SampleInfo,
@@ -28,7 +27,7 @@ import type {
 
 /**
  * v2 API 契约（单一事实源）。
- * 传输只有一种：手机 APK → HTTP（/api/invoke/:channel，token 鉴权）+ SSE（/api/events）。
+ * 传输只有一种：手机 APK → HTTP（/api/invoke/:channel）+ SSE（/api/events）。
  * - invokeContract：请求通道。args 为 zod tuple schema（HTTP 边界运行时校验），ret 为返回类型标记。
  * - eventContract：服务器 → APP 的事件通道与 payload 元组类型。
  * 服务端 handlers 与 APK TypeScript 客户端全部从本文件派生签名：
@@ -61,9 +60,7 @@ export const ChatParamsSchema = z.object({
   /** 思考模式：默认 disabled（混合推理模型的思考 token 计入 max_tokens，会吃掉正文预算）；仅 chat 白话链路显式开启 */
   thinking: z.enum(['enabled', 'disabled']).optional(),
   /** 结构化输出（GLM/DeepSeek/OpenAI 兼容端点通用） */
-  responseFormat: z.enum(['text', 'json_object']).optional(),
-  /** 测试直连：跳过路由，直接用 provider+model+apiKey（API Key 明文仅本参数一次，不落库） */
-  apiKeyOverride: z.string().optional()
+  responseFormat: z.enum(['text', 'json_object']).optional()
 })
 export type ChatParams = z.output<typeof ChatParamsSchema>
 
@@ -189,13 +186,6 @@ export const invokeContract = {
     args: z.tuple([ModelProbeOptionsSchema.optional()]),
     ret: ret<ModelProbeResult>()
   },
-  /** 流式对话：返回 requestId，delta/done/error 经 SSE 推送，llm:poll 补拉 */
-  'llm:chat': { args: z.tuple([ChatParamsSchema]), ret: ret<string>() },
-  'llm:abort': { args: z.tuple([z.string()]), ret: ret<boolean>() },
-  'llm:poll': {
-    args: z.tuple([z.object({ requestIds: z.array(z.string()) })]),
-    ret: ret<Record<string, RunRecordPayload>>()
-  },
   'usage:list': { args: z.tuple([z.number().optional()]), ret: ret<UsageRecord[]>() },
   'usage:stats': { args: z.tuple([]), ret: ret<UsageStats>() },
 
@@ -297,33 +287,7 @@ export type RetOf<C extends InvokeChannels> = (typeof invokeContract)[C]['ret']
 
 // ── 事件契约 ─────────────────────────────────────────────────────────────────
 
-export interface DonePayload {
-  text: string
-  usage: { inputTokens: number; outputTokens: number }
-  model: string
-  stopReason: string | null
-  durationMs: number
-}
-
-export interface RunRecordPayload {
-  status: 'running' | 'done' | 'error' | 'aborted'
-  requestId: string
-  /** done */
-  text?: string
-  usage?: { inputTokens: number; outputTokens: number }
-  model?: string
-  stopReason?: string | null
-  durationMs?: number
-  /** error */
-  error?: string
-  hint?: LlmErrorHint | null
-}
-
 export interface EventContract {
-  'llm:delta': [requestId: string, text: string]
-  'llm:done': [requestId: string, payload: DonePayload]
-  'llm:error': [requestId: string, message: string, hint?: LlmErrorHint]
-  'llm:notice': [requestId: string, message: string]
   /** 任务状态变化（含 waiting_user 提醒、done/failed 终态） */
   'job:update': [jobId: string, job: Job]
   /** agent 工具卡实时推送（每次工具调用一条） */
@@ -337,10 +301,6 @@ export interface EventContract {
 }
 
 export const EVENT_CHANNELS = [
-  'llm:delta',
-  'llm:done',
-  'llm:error',
-  'llm:notice',
   'job:update',
   'job:activity',
   'job:progress',
@@ -371,15 +331,6 @@ export interface Api {
   }
   models: {
     probe: InvokeFn<'models:probe'>
-  }
-  llm: {
-    chat: InvokeFn<'llm:chat'>
-    abort: InvokeFn<'llm:abort'>
-    poll: InvokeFn<'llm:poll'>
-    onDelta: SubscribeFn<'llm:delta'>
-    onDone: SubscribeFn<'llm:done'>
-    onError: SubscribeFn<'llm:error'>
-    onNotice: SubscribeFn<'llm:notice'>
   }
   usage: {
     list: InvokeFn<'usage:list'>
@@ -482,8 +433,8 @@ export function buildApi(transport: ApiTransport): Api {
   const put = (channel: string, fn: unknown): void => {
     const idx = channel.indexOf(':')
     const ns = channel.slice(0, idx)
-    if (!root[ns]) root[ns] = {}
-    root[ns]![channel.slice(idx + 1)] = fn
+    root[ns] ??= {}
+    root[ns][channel.slice(idx + 1)] = fn
   }
   for (const channel of Object.keys(invokeContract)) {
     put(channel, (...args: unknown[]) => transport.invoke(channel, args))
@@ -491,8 +442,8 @@ export function buildApi(transport: ApiTransport): Api {
   for (const channel of EVENT_CHANNELS) {
     const idx = channel.indexOf(':')
     const ns = channel.slice(0, idx)
-    if (!root[ns]) root[ns] = {}
-    root[ns]![eventMethodName(channel.slice(idx + 1))] = (cb: (...args: never[]) => void) =>
+    root[ns] ??= {}
+    root[ns][eventMethodName(channel.slice(idx + 1))] = (cb: (...args: never[]) => void) =>
       transport.subscribe(channel, cb)
   }
   return root as unknown as Api

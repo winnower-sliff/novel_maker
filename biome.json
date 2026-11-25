@@ -6,7 +6,7 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["src/**"]
+    "includes": ["src/**", "mobile/src/**", "mobile/vite.config.ts", "scripts/**"]
   },
   "formatter": {
     "enabled": true,
@@ -42,7 +42,7 @@
   "linter": {
     "enabled": true,
     "rules": {
-      "recommended": true
+      "preset": "recommended"
     }
   }
 }

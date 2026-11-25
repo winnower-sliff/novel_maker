@@ -572,25 +572,3 @@ export interface StatusCard {
   /** 断更天数>7 时为 true（前端据此展示全量前情简报入口） */
   staleDays: number | null
 }
-
-// ── 错误提示 ─────────────────────────────────────────────────────────────────
-
-export type LlmErrorCategory =
-  | 'network'
-  | 'auth'
-  | 'quota'
-  | 'rate_limited'
-  | 'model_not_found'
-  | 'context_too_long'
-  | 'server_error'
-  | 'content_filter'
-  | 'aborted'
-  | 'unknown'
-
-export interface LlmErrorHint {
-  category: LlmErrorCategory
-  /** 面向用户的可操作提示文案 */
-  friendly: string
-  /** 服务商原始报错（排查用，UI 折叠展示） */
-  raw: string
-}

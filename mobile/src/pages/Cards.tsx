@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
 import type { Card, Character, Foreshadow } from '@shared/types'
+import { useMemo, useState } from 'react'
 import { useBook, useCards, useCharacters, useForeshadows } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 
@@ -36,7 +36,8 @@ export default function Cards() {
             key={k}
             type="button"
             className={
-              'flex-1 rounded-lg py-2 text-xs ' + (seg === k ? 'bg-orange-600 text-white' : 'text-stone-500')
+              'flex-1 rounded-lg py-2 text-xs ' +
+              (seg === k ? 'bg-orange-600 text-white' : 'text-stone-500')
             }
             onClick={() => setSeg(k)}
           >
@@ -58,7 +59,12 @@ export default function Cards() {
 }
 
 async function toggleCardPin(card: Card) {
-  await window.api.card.save({ id: card.id, lineId: card.lineId, title: card.title, pinned: !card.pinned })
+  await window.api.card.save({
+    id: card.id,
+    lineId: card.lineId,
+    title: card.title,
+    pinned: !card.pinned
+  })
 }
 
 /** 详情区底部删除条：两步确认（服务端删前自动快照，误删可从备份库找回） */
@@ -68,7 +74,11 @@ function DeleteBar({ label, onConfirm }: { label: string; onConfirm: () => Promi
   if (!arming)
     return (
       <div className="mt-3 flex justify-end">
-        <button type="button" className="text-[11px] text-stone-400" onClick={() => setArming(true)}>
+        <button
+          type="button"
+          className="text-[11px] text-stone-400"
+          onClick={() => setArming(true)}
+        >
           删除
         </button>
       </div>
@@ -105,10 +115,12 @@ function DeleteBar({ label, onConfirm }: { label: string; onConfirm: () => Promi
 /** 图钉按钮（钉选=每次写作必带）；内嵌可点击父级时靠 stopPropagation 隔离 */
 function PinToggle({ on, onToggle }: { on: boolean; onToggle: () => Promise<void> | void }) {
   return (
+    // biome-ignore lint/a11y/useSemanticElements: 嵌套在可点击行内，button 不能嵌套 button
     <span
       role="button"
       tabIndex={0}
-      className={'shrink-0 rounded-full p-1.5 ' + (on ? 'text-orange-600' : 'text-stone-300')}
+      aria-label={on ? '取消钉选' : '钉选'}
+      className={`shrink-0 rounded-full p-1.5 ${on ? 'text-orange-600' : 'text-stone-300'}`}
       onClick={async (e) => {
         e.stopPropagation()
         await onToggle()
@@ -120,7 +132,15 @@ function PinToggle({ on, onToggle }: { on: boolean; onToggle: () => Promise<void
         }
       }}
     >
-      <svg width="14" height="14" viewBox="0 0 24 24" fill={on ? 'currentColor' : 'none'} stroke="currentColor" strokeWidth="2">
+      <svg
+        aria-hidden="true"
+        width="14"
+        height="14"
+        viewBox="0 0 24 24"
+        fill={on ? 'currentColor' : 'none'}
+        stroke="currentColor"
+        strokeWidth="2"
+      >
         <path d="M12 17v5M9 3h6l1 7 3 3H5l3-3 1-7z" strokeLinecap="round" strokeLinejoin="round" />
       </svg>
     </span>
@@ -153,20 +173,30 @@ function CardsList({ lineId }: { lineId: string }) {
           {kindLabel(c.kind ?? 'custom')}
         </span>
         <span className="min-w-0 flex-1 truncate text-sm">{c.title}</span>
-        <PinToggle on={c.pinned} onToggle={async () => { await toggleCardPin(c); refetch() }} />
+        <PinToggle
+          on={c.pinned}
+          onToggle={async () => {
+            await toggleCardPin(c)
+            refetch()
+          }}
+        />
       </button>
       {expanded === c.id && (
         <div className="border-t border-orange-100/70 px-4 py-3">
           {c.readerText && (
             <div className="mb-2">
               <div className="mb-1 text-[11px] text-stone-400">读者已知</div>
-              <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-500">{c.readerText}</div>
+              <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-500">
+                {c.readerText}
+              </div>
             </div>
           )}
           {c.authorText && (
             <div className="mb-2">
               <div className="mb-1 text-[11px] text-stone-400">作者真相</div>
-              <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-500">{c.authorText}</div>
+              <div className="whitespace-pre-wrap text-xs leading-relaxed text-stone-500">
+                {c.authorText}
+              </div>
             </div>
           )}
           {c.revealPlan && (
@@ -228,7 +258,9 @@ function CardsList({ lineId }: { lineId: string }) {
           <div className="space-y-1.5">{rest.map(item)}</div>
         </>
       )}
-      {filtered.length === 0 && <div className="py-16 text-center text-sm text-stone-400">还没有设定卡</div>}
+      {filtered.length === 0 && (
+        <div className="py-16 text-center text-sm text-stone-400">还没有设定卡</div>
+      )}
     </div>
   )
 }
@@ -237,7 +269,11 @@ function CardsList({ lineId }: { lineId: string }) {
 function JsonView({ value }: { value: unknown }) {
   if (value == null || value === '') return <span className="text-xs text-stone-300">—</span>
   if (typeof value !== 'object') {
-    return <span className="whitespace-pre-wrap text-xs leading-relaxed text-stone-600">{String(value)}</span>
+    return (
+      <span className="whitespace-pre-wrap text-xs leading-relaxed text-stone-600">
+        {String(value)}
+      </span>
+    )
   }
   if (Array.isArray(value)) {
     if (value.length === 0) return <span className="text-xs text-stone-300">—</span>
@@ -261,9 +297,15 @@ function JsonView({ value }: { value: unknown }) {
             </thead>
             <tbody>
               {rows.map((row, i) => (
-                <tr key={i}>
+                <tr
+                  // biome-ignore lint/suspicious/noArrayIndexKey: 表格行纯展示，无行内状态
+                  key={i}
+                >
                   {cols.map((k) => (
-                    <td key={k} className="border border-orange-200 px-1.5 py-1 align-top text-stone-600">
+                    <td
+                      key={k}
+                      className="border border-orange-200 px-1.5 py-1 align-top text-stone-600"
+                    >
                       <JsonView value={row[k]} />
                     </td>
                   ))}
@@ -277,7 +319,11 @@ function JsonView({ value }: { value: unknown }) {
     return (
       <ul className="list-disc space-y-0.5 pl-4">
         {value.map((x, i) => (
-          <li key={i} className="text-xs text-stone-600">
+          <li
+            // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+            key={i}
+            className="text-xs text-stone-600"
+          >
             <JsonView value={x} />
           </li>
         ))}
@@ -333,7 +379,9 @@ function CharactersList({ lineId }: { lineId: string }) {
           >
             <span className="flex items-baseline gap-2">
               <span className="max-w-[60%] shrink-0 truncate text-sm font-medium">{ch.name}</span>
-              {ch.role && <span className="min-w-0 truncate text-xs text-stone-400">{ch.role}</span>}
+              {ch.role && (
+                <span className="min-w-0 truncate text-xs text-stone-400">{ch.role}</span>
+              )}
             </span>
             {tags.length > 0 && (
               <span className="mt-1.5 flex flex-wrap gap-1">
@@ -345,7 +393,9 @@ function CharactersList({ lineId }: { lineId: string }) {
                     {t}
                   </span>
                 ))}
-                {tags.length > 4 && <span className="text-[10px] leading-5 text-stone-400">+{tags.length - 4}</span>}
+                {tags.length > 4 && (
+                  <span className="text-[10px] leading-5 text-stone-400">+{tags.length - 4}</span>
+                )}
               </span>
             )}
           </button>
@@ -376,7 +426,8 @@ function CharactersList({ lineId }: { lineId: string }) {
     )
   }
 
-  if (characters.length === 0) return <div className="py-16 text-center text-sm text-stone-400">还没有人物</div>
+  if (characters.length === 0)
+    return <div className="py-16 text-center text-sm text-stone-400">还没有人物</div>
   return (
     <div>
       {allTags.length > 0 && (
@@ -410,7 +461,11 @@ function CharactersList({ lineId }: { lineId: string }) {
           <div className="space-y-1.5">{rest.map(item)}</div>
         </>
       )}
-      {shown.length === 0 && <div className="py-10 text-center text-sm text-stone-400">没有「{tagFilter}」标签的人物</div>}
+      {shown.length === 0 && (
+        <div className="py-10 text-center text-sm text-stone-400">
+          没有「{tagFilter}」标签的人物
+        </div>
+      )}
     </div>
   )
 }
@@ -446,7 +501,11 @@ function CharacterDetail({ ch }: { ch: Character }) {
         <div className="mb-3">
           <div className="mb-1 text-[11px] text-stone-400">关系</div>
           {ch.relations.map((r, i) => (
-            <div key={i} className="text-xs text-stone-500">
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+              key={i}
+              className="text-xs text-stone-500"
+            >
               {ch.name} —{r.label}— {r.to}
             </div>
           ))}
@@ -492,9 +551,16 @@ function ForeshadowsList({
   const row = (f: Foreshadow, dim: boolean) => (
     <div
       key={f.id}
-      className={'rounded-xl border border-orange-100 bg-white px-3 py-3 ' + (dim && expanded !== f.id ? 'opacity-50' : '')}
+      className={
+        'rounded-xl border border-orange-100 bg-white px-3 py-3 ' +
+        (dim && expanded !== f.id ? 'opacity-50' : '')
+      }
     >
-      <button type="button" className="w-full text-left" onClick={() => setExpanded(expanded === f.id ? null : f.id)}>
+      <button
+        type="button"
+        className="w-full text-left"
+        onClick={() => setExpanded(expanded === f.id ? null : f.id)}
+      >
         <div className="flex items-center gap-2">
           <span
             className={
@@ -509,7 +575,9 @@ function ForeshadowsList({
             {f.status === 'resolved' ? '已回收' : f.status === 'planned' ? '已计划' : '埋设中'}
           </span>
           <span className="min-w-0 flex-1 truncate text-sm">{f.title}</span>
-          <span className="shrink-0 text-[10px] text-stone-300">{expanded === f.id ? '收起' : '详情'}</span>
+          <span className="shrink-0 text-[10px] text-stone-300">
+            {expanded === f.id ? '收起' : '详情'}
+          </span>
         </div>
         {f.detail && <div className="mt-1.5 line-clamp-2 text-xs text-stone-500">{f.detail}</div>}
       </button>
@@ -532,7 +600,8 @@ function ForeshadowsList({
             key={label}
             type="button"
             className={
-              'rounded-full px-3 py-1 text-xs ' + (status === k ? 'bg-orange-600 text-white' : 'bg-white text-stone-500')
+              'rounded-full px-3 py-1 text-xs ' +
+              (status === k ? 'bg-orange-600 text-white' : 'bg-white text-stone-500')
             }
             onClick={() => setStatus(k)}
           >
@@ -547,7 +616,9 @@ function ForeshadowsList({
           <div className="space-y-1.5">{resolved.map((f) => row(f, true))}</div>
         </>
       )}
-      {foreshadows.length === 0 && <div className="py-16 text-center text-sm text-stone-400">没有伏笔</div>}
+      {foreshadows.length === 0 && (
+        <div className="py-16 text-center text-sm text-stone-400">没有伏笔</div>
+      )}
     </div>
   )
 }

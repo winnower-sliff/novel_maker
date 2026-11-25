@@ -1,12 +1,12 @@
+import type { ProviderId } from '@shared/providers'
+import type { Book, SampleFileInfo, SampleInfo, SettingsView, UsageStats } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
-import type { Book, SampleFileInfo, SampleInfo, SettingsView, UsageStats } from '@shared/types'
-import type { ProviderId } from '@shared/providers'
-import { useConnStore } from '../lib/conn'
-import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
-import { useUiStore } from '../lib/uiStore'
-import { useBooks } from '../lib/queries'
 import { SampleReader } from '../components/SampleReader'
+import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
+import { useConnStore } from '../lib/conn'
+import { useBooks } from '../lib/queries'
+import { useUiStore } from '../lib/uiStore'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   glm: '智谱 GLM',
@@ -49,7 +49,9 @@ export default function Settings() {
       {/* 连接 */}
       <Section title="连接">
         <div className="flex items-center justify-between">
-          <span className="min-w-0 flex-1 truncate text-sm text-stone-600">{conn?.baseUrl ?? '-'}</span>
+          <span className="min-w-0 flex-1 truncate text-sm text-stone-600">
+            {conn?.baseUrl ?? '-'}
+          </span>
           <span
             className={
               'ml-3 shrink-0 rounded-full px-2 py-0.5 text-[11px] ' +
@@ -108,7 +110,10 @@ export default function Settings() {
             {stats.byPurpose.length > 0 && (
               <div className="mt-3 flex flex-wrap gap-1.5">
                 {stats.byPurpose.map((g) => (
-                  <span key={g.key} className="rounded-full bg-orange-100 px-2.5 py-1 text-[11px] text-stone-500">
+                  <span
+                    key={g.key}
+                    className="rounded-full bg-orange-100 px-2.5 py-1 text-[11px] text-stone-500"
+                  >
                     {g.key} {g.requests}
                   </span>
                 ))}
@@ -163,7 +168,9 @@ function ArchivedBooks() {
               <div className="min-w-0 flex-1">
                 <div className="truncate text-sm text-stone-700">{b.title || '未命名'}</div>
                 <div className="mt-0.5 text-[11px] text-stone-400">
-                  {confirmDel === b.id ? '删除后无法找回（会自动留一份当日快照）' : '归档于书架，内容保留'}
+                  {confirmDel === b.id
+                    ? '删除后无法找回（会自动留一份当日快照）'
+                    : '归档于书架，内容保留'}
                 </div>
               </div>
               {confirmDel === b.id ? (
@@ -240,9 +247,6 @@ function SampleLib() {
     queryFn: async (): Promise<Book[]> => window.api.book.list()
   })
 
-  const bookTitle = (id: string | null | undefined) =>
-    books?.find((b) => b.id === id)?.title ?? '（书已删除）'
-
   const refresh = () => {
     queryClient.invalidateQueries({ queryKey: ['samples'] })
     queryClient.invalidateQueries({ queryKey: ['importFiles'] })
@@ -299,61 +303,65 @@ function SampleLib() {
             return (
               <div key={s.id} className="rounded-xl bg-orange-50 p-3">
                 <div className="flex items-center justify-between">
-                  <button
-                    type="button"
-                    className="min-w-0 text-left"
-                    onClick={() => setReading(s)}
-                  >
+                  <button type="button" className="min-w-0 text-left" onClick={() => setReading(s)}>
                     <div className="truncate text-sm text-stone-700 underline decoration-orange-300 decoration-dotted underline-offset-4">
                       {s.name}
                     </div>
                     <div className="mt-0.5 text-[11px] text-stone-400">
-                      {s.chars.toLocaleString()} 字
-                      {s.chapterCount ? ` · ${s.chapterCount} 章` : ''}
+                      {s.chars.toLocaleString()} 字{s.chapterCount ? ` · ${s.chapterCount} 章` : ''}
                       {boundCount ? ` · 已绑定 ${boundCount} 本书` : ''}
                       {' · 点看'}
                     </div>
                   </button>
                   {confirmDel === s.id ? null : (
-                    <button type="button" className="shrink-0 text-[11px] text-stone-400" onClick={() => setConfirmDel(s.id)}>
+                    <button
+                      type="button"
+                      className="shrink-0 text-[11px] text-stone-400"
+                      onClick={() => setConfirmDel(s.id)}
+                    >
                       删除
                     </button>
                   )}
                 </div>
-                {(books ?? []).filter((b) => !b.archived && !b.draft).length > 0 && confirmDel !== s.id && (
-                  <div className="mt-2 flex flex-wrap gap-1.5">
-                    {(books ?? [])
-                      .filter((b) => !b.archived && !b.draft)
-                      .map((b) => {
-                        const on = b.sampleSources?.includes(s.id) ?? false
-                        return (
-                          <button
-                            key={b.id}
-                            type="button"
-                            disabled={busy === s.id + b.id}
-                            className={
-                              on
-                                ? 'rounded-full bg-orange-600 px-2.5 py-1 text-[11px] text-white disabled:opacity-50'
-                                : 'rounded-full border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500 disabled:opacity-50'
-                            }
-                            onClick={() =>
-                              doToggle(
-                                b.id,
-                                s.id,
-                                on ? (b.sampleSources ?? []).filter((x) => x !== s.id) : [...(b.sampleSources ?? []), s.id]
-                              )
-                            }
-                          >
-                            {on ? '✓ ' : ''}
-                            {b.title}
-                          </button>
-                        )
-                      })}
-                  </div>
-                )}
+                {(books ?? []).filter((b) => !b.archived && !b.draft).length > 0 &&
+                  confirmDel !== s.id && (
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {(books ?? [])
+                        .filter((b) => !b.archived && !b.draft)
+                        .map((b) => {
+                          const on = b.sampleSources?.includes(s.id) ?? false
+                          return (
+                            <button
+                              key={b.id}
+                              type="button"
+                              disabled={busy === s.id + b.id}
+                              className={
+                                on
+                                  ? 'rounded-full bg-orange-600 px-2.5 py-1 text-[11px] text-white disabled:opacity-50'
+                                  : 'rounded-full border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500 disabled:opacity-50'
+                              }
+                              onClick={() =>
+                                doToggle(
+                                  b.id,
+                                  s.id,
+                                  on
+                                    ? (b.sampleSources ?? []).filter((x) => x !== s.id)
+                                    : [...(b.sampleSources ?? []), s.id]
+                                )
+                              }
+                            >
+                              {on ? '✓ ' : ''}
+                              {b.title}
+                            </button>
+                          )
+                        })}
+                    </div>
+                  )}
                 {confirmDel === s.id ? (
                   <div className="mt-2 flex items-center gap-2">
-                    <span className="flex-1 text-[11px] text-red-600">删除范文？绑定的书会自动解绑</span>
+                    <span className="flex-1 text-[11px] text-red-600">
+                      删除范文？绑定的书会自动解绑
+                    </span>
                     <button
                       type="button"
                       disabled={busy === s.id}
@@ -386,7 +394,10 @@ function SampleLib() {
         {files && files.length > 0 ? (
           <div className="space-y-2">
             {files.map((f) => (
-              <div key={f.fileName} className="flex items-center justify-between rounded-xl bg-orange-50 p-2.5">
+              <div
+                key={f.fileName}
+                className="flex items-center justify-between rounded-xl bg-orange-50 p-2.5"
+              >
                 <div className="min-w-0">
                   <div className="truncate text-xs text-stone-700">{f.fileName}</div>
                   <div className="text-[11px] text-stone-400">{f.chars.toLocaleString()} 字</div>
@@ -441,7 +452,11 @@ function ModelForm() {
   const [busy, setBusy] = useState(false)
   const [msg, setMsg] = useState('')
 
-  const { data: probeResult, isFetching: probing, refetch } = useQuery({
+  const {
+    data: probeResult,
+    isFetching: probing,
+    refetch
+  } = useQuery({
     queryKey: ['models', view?.provider],
     enabled: !!view,
     queryFn: () => {
@@ -602,12 +617,15 @@ function ModelForm() {
           </div>
         ) : (
           <div className="text-xs text-stone-400">
-            填好 API Key{view.provider === 'custom' ? '与 API 地址' : ''}后点「刷新列表」自动获取可选模型
+            填好 API Key{view.provider === 'custom' ? '与 API 地址' : ''}
+            后点「刷新列表」自动获取可选模型
           </div>
         )}
         {probeResult && modelList.length > 0 && (
           <div className="mt-1.5 text-[11px] text-stone-400">
-            {probeResult.source === 'endpoint' ? '在线模型列表' : '内置清单（未连上端点，填 Key 后刷新验证）'}
+            {probeResult.source === 'endpoint'
+              ? '在线模型列表'
+              : '内置清单（未连上端点，填 Key 后刷新验证）'}
           </div>
         )}
         {view.provider === 'custom' && (
@@ -650,9 +668,9 @@ function ModelForm() {
 }
 
 function UpdateRow() {
-  const [state, setState] = useState<'idle' | 'checking' | 'latest' | 'found' | 'downloading' | 'ready' | 'error'>(
-    'idle'
-  )
+  const [state, setState] = useState<
+    'idle' | 'checking' | 'latest' | 'found' | 'downloading' | 'ready' | 'error'
+  >('idle')
   const [note, setNote] = useState('')
   const [apkUrl, setApkUrl] = useState('')
   const [apkSize, setApkSize] = useState(0)
@@ -689,9 +707,9 @@ function UpdateRow() {
     }
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 进设置页只查一次更新，手点按钮走 check()
   useEffect(() => {
     void check()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const download = async () => {
@@ -755,7 +773,11 @@ function UpdateRow() {
           {note}
         </button>
       ) : state === 'downloading' ? (
-        <button type="button" disabled className="w-full rounded-xl border border-orange-100 py-2.5 text-sm text-stone-500">
+        <button
+          type="button"
+          disabled
+          className="w-full rounded-xl border border-orange-100 py-2.5 text-sm text-stone-500"
+        >
           {note}
         </button>
       ) : (

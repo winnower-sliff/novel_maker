@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import type { ChatMessageRow } from '@shared/types'
+import { useState } from 'react'
 import { TOOL_LABEL } from './labels'
 
 /** 工具卡（agent 每次工具调用的工作日志，折叠小卡；详情是结果数据保持纯文本） */
@@ -17,9 +17,13 @@ export default function ToolCard({ msg }: { msg: ChatMessageRow }) {
         onClick={() => setOpen(!open)}
       >
         <div className="flex items-center gap-2">
-          <span className={`text-[10px] ${ok ? 'text-orange-500' : 'text-red-500'}`}>{ok ? '✓' : '✗'}</span>
+          <span className={`text-[10px] ${ok ? 'text-orange-500' : 'text-red-500'}`}>
+            {ok ? '✓' : '✗'}
+          </span>
           <span className="shrink-0 text-[11px] text-stone-400">{TOOL_LABEL[tool] ?? tool}</span>
-          <span className={`min-w-0 flex-1 truncate text-xs ${ok ? 'text-stone-600' : 'text-red-600'}`}>
+          <span
+            className={`min-w-0 flex-1 truncate text-xs ${ok ? 'text-stone-600' : 'text-red-600'}`}
+          >
             {summary}
           </span>
           <span className="shrink-0 text-[10px] text-stone-300">{open ? '▲' : '▼'}</span>

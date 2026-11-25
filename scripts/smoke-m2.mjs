@@ -9,8 +9,8 @@
  */
 import { spawn } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const PORT = 3955
 const BASE = `http://127.0.0.1:${PORT}`
@@ -45,7 +45,9 @@ async function waitFor(jobId, pred, timeoutMs, label) {
     const job = await invoke('job:get', [jobId])
     if (pred(job)) return job
     if (Date.now() - start > timeoutMs) {
-      throw new Error(`等待超时：${label}（state=${job.state} step=${job.step} error=${job.error ?? ''}）`)
+      throw new Error(
+        `等待超时：${label}（state=${job.state} step=${job.step} error=${job.error ?? ''}）`
+      )
     }
     await new Promise((r) => setTimeout(r, 300))
   }
@@ -55,11 +57,7 @@ async function waitFor(jobId, pred, timeoutMs, label) {
 
 rmSync(dataDir, { recursive: true, force: true })
 mkdirSync(dataDir, { recursive: true })
-writeFileSync(
-  join(dataDir, 'settings.json'),
-  JSON.stringify({ server: { port: PORT } }),
-  'utf-8'
-)
+writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ server: { port: PORT } }), 'utf-8')
 
 // ── 起服务 ───────────────────────────────────────────────────────────────────
 
@@ -138,20 +136,29 @@ try {
     90_000,
     'agent 全链（工具链→正文→自检→入书→沉淀）'
   )
-  ok(job.state === 'done', `第 1 章完成（state=${job.state}${job.error ? ` error=${job.error}` : ''}）`)
+  ok(
+    job.state === 'done',
+    `第 1 章完成（state=${job.state}${job.error ? ` error=${job.error}` : ''}）`
+  )
   ok(!!job.payload?.recap?.summary, '纪要卡（commit_chapter summary）')
 
   // ── 落库验证 ───────────────────────────────────────────────────────────────
   const bookAfter = await invoke('book:get', [book.id])
   ok(bookAfter.chapters.length === 1, '章节入库')
   const chapter = bookAfter.chapters[0]
-  ok(chapter.title === '雾夜登船' && chapter.wordCount >= 360, `章名/字数（${chapter.wordCount} 字）`)
+  ok(
+    chapter.title === '雾夜登船' && chapter.wordCount >= 360,
+    `章名/字数（${chapter.wordCount} 字）`
+  )
 
   const full = await invoke('chapter:get', [chapter.id])
   ok(full.content.includes('沈'), '正文含「沈」字伏笔')
 
   const shadows = await invoke('foreshadow:list', [mainLineId])
-  ok(shadows.some((f) => f.title === '断刀的来历' && f.status === 'open'), 'agent save_foreshadow 落库')
+  ok(
+    shadows.some((f) => f.title === '断刀的来历' && f.status === 'open'),
+    'agent save_foreshadow 落库'
+  )
 
   const charAfter = await invoke('character:save', [
     { id: linan.id, lineId: mainLineId, name: '林岸' }
@@ -162,7 +169,10 @@ try {
   )
 
   const cardsAfter = await invoke('card:list', [mainLineId])
-  ok(cardsAfter.some((c) => c.title.includes('雾津港')), 'agent save_card 落库')
+  ok(
+    cardsAfter.some((c) => c.title.includes('雾津港')),
+    'agent save_card 落库'
+  )
 
   // ── 分叉树：设定独立演化 ───────────────────────────────────────────────────
   const fork = await invoke('line:fork', [book.id, chapter.id, '隐退线', '测试分叉'])
@@ -172,14 +182,15 @@ try {
 
   const fogCard = forkCards.find((c) => c.title.includes('雾津港'))
   await invoke('card:save', [
-    { id: fogCard.id, lineId: fork.id, title: fogCard.title, authorText: '【已改】分叉后新线的雾津港真相' }
+    {
+      id: fogCard.id,
+      lineId: fork.id,
+      title: fogCard.title,
+      authorText: '【已改】分叉后新线的雾津港真相'
+    }
   ])
   const mainFog = (await invoke('card:list', [mainLineId])).find((c) => c.id === fogCard.id)
-  ok(
-    mainFog?.authorText !== '【已改】分叉后新线的雾津港真相',
-    '改新线卡不影响原线（独立演化）'
-  )
-
+  ok(mainFog?.authorText !== '【已改】分叉后新线的雾津港真相', '改新线卡不影响原线（独立演化）')
 } catch (err) {
   failed++
   console.error('冒烟中断：', err.message)

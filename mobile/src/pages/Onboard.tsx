@@ -1,6 +1,6 @@
-import { useEffect, useRef, useState } from 'react'
 import { useUiStore } from '@mobile/lib/uiStore'
 import { useKeyboardInset } from '@mobile/lib/useKeyboardInset'
+import { useEffect, useRef, useState } from 'react'
 import { Markdown } from '../components/Markdown'
 
 /** 导演引导回复（契约 onboard:start/answer 的 ret 形态） */
@@ -41,6 +41,7 @@ export default function Onboard({ bookId }: { bookId: string }) {
   const bottomRef = useRef<HTMLDivElement>(null)
   const kbInset = useKeyboardInset()
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: turns/options 是滚动触发器，内容每变一次滚到底
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' })
   }, [turns, options])
@@ -58,13 +59,17 @@ export default function Onboard({ bookId }: { bookId: string }) {
     }
   }
 
+  // biome-ignore lint/correctness/useExhaustiveDependencies: 仅挂载时启动一次引导
   useEffect(() => {
     void (async () => {
       try {
         const reply = await window.api.onboard.start(bookId)
         await applyReply(reply)
       } catch (err) {
-        setTurns((t) => [...t, { role: 'director', text: `引导启动失败：${(err as Error).message}` }])
+        setTurns((t) => [
+          ...t,
+          { role: 'director', text: `引导启动失败：${(err as Error).message}` }
+        ])
       } finally {
         setBusy(false)
       }
@@ -109,11 +114,19 @@ export default function Onboard({ bookId }: { bookId: string }) {
       <div className="no-scrollbar flex-1 space-y-4 overflow-y-auto overscroll-contain px-4 py-4">
         {turns.map((t, i) =>
           t.role === 'director' ? (
-            <div key={i} className="max-w-[85%] rounded-2xl rounded-tl-sm bg-orange-100 px-4 py-3 text-[15px] leading-relaxed">
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+              key={i}
+              className="max-w-[85%] rounded-2xl rounded-tl-sm bg-orange-100 px-4 py-3 text-[15px] leading-relaxed"
+            >
               <Markdown text={t.text} />
             </div>
           ) : (
-            <div key={i} className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-orange-700/80 px-4 py-3 text-[15px]">
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+              key={i}
+              className="ml-auto max-w-[85%] rounded-2xl rounded-tr-sm bg-orange-700/80 px-4 py-3 text-[15px]"
+            >
               {t.text}
             </div>
           )
