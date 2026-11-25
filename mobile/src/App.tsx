@@ -1,6 +1,7 @@
 import type { ChatMessageRow } from '@shared/types'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { ToastHost } from './components/ToastHost'
 import { consumeBack } from './lib/backHandler'
 import { installBridge } from './lib/bridge'
 import { useConnStore } from './lib/conn'
@@ -147,6 +148,7 @@ export default function App() {
       {tab === 'shelf' ? <Shelf /> : <Settings />}
       {onboardBookId && <Onboard bookId={onboardBookId} />}
       {openBookId && <BookWorkspace />}
+<ToastHost />
     </div>
   )
 }
