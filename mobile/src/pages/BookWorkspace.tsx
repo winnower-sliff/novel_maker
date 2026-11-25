@@ -111,7 +111,8 @@ export default function BookWorkspace() {
         </span>
       </header>
 
-      <main className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
+      {/* key=子页：切换时重建滚动容器，上一个子页的滚动位置不带过来 */}
+      <main key={bookSub} className="min-h-0 flex-1 overflow-y-auto no-scrollbar">
         {bookSub === 'write' && <Write />}
         {bookSub === 'read' && <Read />}
         {bookSub === 'cards' && <Cards />}
