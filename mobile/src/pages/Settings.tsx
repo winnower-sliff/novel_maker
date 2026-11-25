@@ -5,7 +5,7 @@ import { useEffect, useState } from 'react'
 import { SampleReader } from '../components/SampleReader'
 import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
 import { useConnStore } from '../lib/conn'
-import { useBooks } from '../lib/queries'
+import { useBackups, useBooks } from '../lib/queries'
 import { useUiStore } from '../lib/uiStore'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
@@ -127,6 +127,11 @@ export default function Settings() {
       <Section title="APP">
         <UpdateRow />
         <div className="mt-2 text-xs text-stone-400">当前版本 {APP_VERSION}</div>
+      </Section>
+
+      {/* 备份与恢复 */}
+      <Section title="备份与恢复">
+        <BackupSection />
       </Section>
     </div>
   )
@@ -670,6 +675,143 @@ function ModelForm() {
       >
         {busy ? '…' : '保存'}
       </button>
+    </div>
+  )
+}
+
+const BACKUP_KIND_LABEL: Array<[RegExp, string]> = [
+  [/^daily$/, '每日备份'],
+  [/^manual$/, '手动备份'],
+  [/^pre-migrate$/, '升级前'],
+  [/^pre-restore$/, '恢复前']
+]
+
+/** 删除类操作前的自动快照 tag 形如 del-chapter / book-1a2b3c4d，统一显示为「删除前」 */
+function backupLabel(tag: string): string {
+  const hit = BACKUP_KIND_LABEL.find(([re]) => re.test(tag))
+  return hit?.[1] ?? '删除前'
+}
+
+function backupSize(size: number): string {
+  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`
+  return `${(size / 1024 / 1024).toFixed(1)} MB`
+}
+
+function backupTime(at: number): string {
+  const d = new Date(at)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+function BackupSection() {
+  const queryClient = useQueryClient()
+  const { data: backups } = useBackups()
+  const [busy, setBusy] = useState('')
+  const [msg, setMsg] = useState('')
+  const [confirmName, setConfirmName] = useState('')
+
+  const errText = (e: unknown) => (e instanceof Error ? e.message : String(e))
+
+  const create = async () => {
+    setBusy('create')
+    setMsg('')
+    try {
+      await window.api.backup.create()
+      setMsg('已备份')
+      void queryClient.invalidateQueries({ queryKey: ['backups'] })
+    } catch (e) {
+      setMsg(`备份失败：${errText(e)}`)
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const restore = async () => {
+    setBusy('restore')
+    setMsg('')
+    try {
+      await window.api.backup.restore(confirmName)
+      location.reload()
+    } catch (e) {
+      setMsg(`恢复失败：${errText(e)}`)
+      setConfirmName('')
+    } finally {
+      setBusy('')
+    }
+  }
+
+  const shown = (backups ?? []).slice(0, 8)
+
+  return (
+    <div>
+      <div className="text-xs leading-relaxed text-stone-500">
+        电脑端每天开着会自动备份一次；删书、删线、删卡之前也会自动留一份快照。
+        换电脑或重装时，把数据目录里的备份文件拷走即可。
+      </div>
+      {msg ? <div className="mt-2 text-xs text-stone-700">{msg}</div> : null}
+      <button
+        type="button"
+        disabled={busy !== ''}
+        className="mt-3 rounded-lg bg-orange-600 px-3 py-2 text-xs text-white disabled:opacity-50"
+        onClick={create}
+      >
+        {busy === 'create' ? '正在备份…' : '立即备份'}
+      </button>
+
+      {shown.length > 0 ? (
+        <div className="mt-3 space-y-1.5">
+          {shown.map((b) => (
+            <div
+              key={b.name}
+              className="flex items-center gap-2 rounded-lg bg-orange-50 px-2.5 py-2"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-xs text-stone-700">
+                  {backupLabel(b.tag)} · {backupTime(b.at)}
+                </div>
+                <div className="mt-0.5 text-[11px] text-stone-400">{backupSize(b.size)}</div>
+              </div>
+              <button
+                type="button"
+                disabled={busy !== ''}
+                className="shrink-0 rounded-lg border border-orange-200 px-2.5 py-1.5 text-xs text-stone-600 disabled:opacity-50"
+                onClick={() => {
+                  setConfirmName(b.name)
+                  setMsg('')
+                }}
+              >
+                恢复
+              </button>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-3 text-xs text-stone-400">还没有备份</div>
+      )}
+
+      {confirmName ? (
+        <div className="mt-2 rounded-lg border border-red-200 bg-red-50 p-2.5 text-xs leading-relaxed text-stone-700">
+          用这份备份覆盖现在的全部数据？恢复前会先给现在的数据留一份。
+          <div className="mt-2 flex gap-2">
+            <button
+              type="button"
+              disabled={busy !== ''}
+              className="rounded-lg bg-red-600 px-2.5 py-1.5 text-white disabled:opacity-50"
+              onClick={restore}
+            >
+              {busy === 'restore' ? '正在恢复…' : '确认恢复'}
+            </button>
+            <button
+              type="button"
+              disabled={busy !== ''}
+              className="rounded-lg border border-red-200 px-2.5 py-1.5 text-stone-600 disabled:opacity-50"
+              onClick={() => setConfirmName('')}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      ) : null}
     </div>
   )
 }

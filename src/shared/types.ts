@@ -142,6 +142,19 @@ export interface UsageStats {
   byPurpose: GroupStats[]
 }
 
+/** 数据目录里的一份备份（操作前快照 / 手动备份 / 每日备份） */
+export interface BackupEntry {
+  name: string
+  kind: 'op' | 'daily'
+  /** 备份由来：daily / manual / pre-migrate / pre-restore / del-chapter / card-<id> … */
+  tag: string
+  size: number
+  /** 备份时间戳 */
+  at: number
+  /** 排序键（时间 + 同秒序号） */
+  key: string
+}
+
 // ── 范文（完整书入库，agent 经工具节选翻阅） ────────────────────────────────
 
 /** 已入库范文（samples 表行，content 全文仅经 getSample/read_sample 工具取） */
