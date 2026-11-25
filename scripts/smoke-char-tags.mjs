@@ -55,6 +55,24 @@ ok(
 const r5 = await execTool('get_character', { name: '林岸' }, { bookId: book.id })
 ok('get_character 按名单查（data 完整）', r5.ok && r5.data.includes('19'))
 
+// 改元信息时带了 state：写作中逐步演进的活状态不能被顺手抹掉
+const c = store.saveCharacter({
+  lineId: line.id,
+  name: '顾三',
+  role: '配角',
+  state: { location: '南屿', mood: '警觉' }
+})
+await execTool(
+  'save_character',
+  { id: c.id, role: '对手', state: { location: '雾津港' } },
+  { bookId: book.id }
+)
+const after = store.listCharacters(line.id).find((x) => x.id === c.id)
+ok(
+  '改元信息不覆盖活状态（role 已改，location 仍是南屿）',
+  after.role === '对手' && after.state.location === '南屿' && after.state.mood === '警觉'
+)
+
 try {
   rmSync(process.env.NM_DATA_DIR, { recursive: true, force: true })
 } catch {}
