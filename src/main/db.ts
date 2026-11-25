@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS lines (
   book_id TEXT NOT NULL REFERENCES books(id) ON DELETE CASCADE,
   parent_line_id TEXT DEFAULT '',
   fork_chapter_id TEXT DEFAULT '',
+  fork_order INTEGER NOT NULL DEFAULT -1,
   name TEXT NOT NULL,
   note TEXT DEFAULT '',
   created_at INTEGER NOT NULL
@@ -220,6 +221,13 @@ function migrate(d: DatabaseSync): void {
   if (charCols.has('card') && !charCols.has('data'))
     d.exec('ALTER TABLE characters RENAME COLUMN card TO data')
   if (!charCols.has('tags')) d.exec("ALTER TABLE characters ADD COLUMN tags TEXT DEFAULT '[]'")
+  // 分叉点序号（-1=未记录）：分叉点章日后被删时，子线靠它保住更早的祖先章
+  if (!tableCols('lines').has('fork_order'))
+    d.exec('ALTER TABLE lines ADD COLUMN fork_order INTEGER NOT NULL DEFAULT -1')
+  d.exec(
+    `UPDATE lines SET fork_order = COALESCE((SELECT order_no FROM chapters WHERE id = lines.fork_chapter_id), fork_order)
+     WHERE fork_order = -1 AND fork_chapter_id != ''`
+  )
 }
 
 /** 灾难恢复快照（删书/删线前调用，D4）。VACUUM INTO 不覆盖已存在文件——文件名带时分秒，同秒冲突加序号 */

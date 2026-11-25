@@ -1047,6 +1047,14 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
           data: `末章《${last.title}》不是当前故事序列的最后一章（分叉线上有后续章节），不能删`
         }
       }
+      const fork = store.forkPointOf(last.id)
+      if (fork) {
+        return {
+          ok: false,
+          summary: '这一章是分叉线的起点',
+          data: `《${last.title}》是分叉线「${fork.name}」的起点，不能删；要删请先删那条分叉线`
+        }
+      }
       snapshotDb(`del-chapter`)
       const removed = store.deleteLastChapter(lineId)
       if (!removed) return { ok: false, summary: '删除失败', data: '删除失败' }

@@ -55,6 +55,7 @@ function rowToLine(r: Record<string, unknown>): StoryLine {
     bookId: r.book_id as string,
     parentLineId: (r.parent_line_id as string) ?? '',
     forkChapterId: (r.fork_chapter_id as string) ?? '',
+    forkOrder: Number(r.fork_order ?? -1),
     name: r.name as string,
     note: (r.note as string) ?? '',
     createdAt: r.created_at as number
@@ -340,9 +341,9 @@ export function forkLine(
   db.exec('BEGIN')
   try {
     db.prepare(
-      `INSERT INTO lines (id, book_id, parent_line_id, fork_chapter_id, name, note, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(lineId, bookId, parentLine.id, forkChapterId, name, note, now)
+      `INSERT INTO lines (id, book_id, parent_line_id, fork_chapter_id, fork_order, name, note, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(lineId, bookId, parentLine.id, forkChapterId, forkChapter.orderNo, name, note, now)
 
     // 设定深拷贝（新 id，挂新线；created_at 保留原值）
     for (const t of ['cards', 'characters', 'foreshadows'] as const) {
@@ -475,9 +476,14 @@ export function effectiveChapters(lineId: string): Chapter[] {
   const line = getLineThrow(lineId)
   const own = listChapters(lineId)
   if (!line.parentLineId) return own
+  // 分叉点章还在：以它为准；已被删（历史遗留）：按建线时记下的序号切，
+  // 保住更早的祖先章，而不是把整条祖先线丢掉
   const fork = getChapter(line.forkChapterId)
-  if (!fork) return own
-  const parentPart = effectiveChapters(fork.lineId).filter((c) => c.orderNo <= fork.orderNo)
+  const cut = fork ? fork.orderNo : line.forkOrder
+  if (!fork && cut < 0) return own
+  const parentPart = effectiveChapters(fork ? fork.lineId : line.parentLineId).filter(
+    (c) => c.orderNo <= cut
+  )
   return [...parentPart, ...own]
 }
 
@@ -543,6 +549,14 @@ export function updateChapterSummary(chapterId: string, summary: string): void {
     .run(summary, Date.now(), chapterId)
 }
 
+/** 以该章为起点、仍然存在的分叉线（删章前的保护检查） */
+export function forkPointOf(chapterId: string): { id: string; name: string } | null {
+  const r = getDb()
+    .prepare('SELECT id, name FROM lines WHERE fork_chapter_id = ?')
+    .get(chapterId) as { id: string; name: string } | undefined
+  return r ? { id: r.id, name: r.name || '未命名线' } : null
+}
+
 /**
  * 删章（agent 写作回退用）：只允许删本线最后一章，保持 order_no 稠密。
  */
@@ -551,6 +565,10 @@ export function deleteLastChapter(lineId: string): Chapter | null {
   const chapters = listChapters(lineId)
   const last = chapters[chapters.length - 1]
   if (!last) return null
+  const fork = forkPointOf(last.id)
+  if (fork) {
+    throw new Error(`《${last.title}》是分叉线「${fork.name}」的起点，不能删；要删请先删那条分叉线`)
+  }
   db.prepare('DELETE FROM chapter_versions WHERE chapter_id = ?').run(last.id)
   db.prepare('DELETE FROM chapters WHERE id = ?').run(last.id)
   return last

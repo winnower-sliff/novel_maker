@@ -225,6 +225,8 @@ export interface StoryLine {
   parentLineId: string
   /** 分叉点的章（主线为空串；跨线引用） */
   forkChapterId: string
+  /** 分叉点章的序号（主线/未知为 -1）：分叉点章被删后的兜底切点 */
+  forkOrder: number
   /** agent 自动起（如「复仇线」）；主线固定「主线」 */
   name: string
   note: string
