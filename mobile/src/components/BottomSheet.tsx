@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react'
+import { useBackHandler } from '../lib/backHandler'
 
 /**
  * 底部弹层：遮罩是语义化的关闭按钮（键盘/读屏可达），点面板内部不会关闭。
@@ -14,6 +15,9 @@ export function BottomSheet({
   bodyClass?: string
   children: ReactNode
 }) {
+  // 弹层是条件渲染：挂载即注册、卸载即注销，返回键只会关最上层的那一个
+  useBackHandler(onClose)
+
   return (
     <div className="fixed inset-0 z-40 flex items-end">
       <button
