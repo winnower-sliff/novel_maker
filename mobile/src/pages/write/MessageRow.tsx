@@ -14,14 +14,12 @@ export const MessageRow = memo(function MessageRow({
   msg,
   jobsById,
   chaptersById,
-  active,
   refresh,
   refreshAll
 }: {
   msg: ChatMessageRow
   jobsById: Map<string, Job>
   chaptersById: Map<string, { id: string; orderNo: number; title: string; wordCount: number }>
-  active: Job | null
   refresh: () => void
   refreshAll: () => void
 }) {
@@ -49,7 +47,6 @@ export const MessageRow = memo(function MessageRow({
         <JobCard
           job={job}
           step={typeof meta.step === 'string' ? meta.step : ''}
-          active={active}
           chaptersById={chaptersById}
           refresh={refresh}
           refreshAll={refreshAll}

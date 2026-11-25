@@ -104,7 +104,6 @@ export default function Write() {
               msg={m}
               jobsById={jobsById}
               chaptersById={chaptersById}
-              active={active}
               refresh={refresh}
               refreshAll={refreshAll}
             />
