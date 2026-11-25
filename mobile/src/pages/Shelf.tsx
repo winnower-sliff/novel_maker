@@ -1,5 +1,6 @@
 import { exportBookZip } from '@mobile/lib/exportPlugin'
 import { useBooks, useShelfStatus } from '@mobile/lib/queries'
+import { toastError } from '@mobile/lib/toastStore'
 import { useUiStore } from '@mobile/lib/uiStore'
 import type { Book } from '@shared/types'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
@@ -77,12 +78,20 @@ export default function Shelf() {
       setCreating(false)
       startOnboard(book.id)
     },
-    onError: () => setCreating(false)
+    onError: (e) => {
+      setCreating(false)
+      toastError(e, '开新书失败')
+    }
   })
 
   const archive = async (b: Book) => {
     setMenuFor(null)
-    await window.api.book.update(b.id, { archived: true })
+    try {
+      await window.api.book.update(b.id, { archived: true })
+    } catch (e) {
+      toastError(e, '归档失败')
+      return
+    }
     void qc.invalidateQueries({ queryKey: ['books'] })
     void qc.invalidateQueries({ queryKey: ['shelfStatus'] })
   }
@@ -90,7 +99,12 @@ export default function Shelf() {
   const wipe = async (b: Book) => {
     setMenuFor(null)
     setConfirmWipe(false)
-    await window.api.book.delete(b.id, true)
+    try {
+      await window.api.book.delete(b.id, true)
+    } catch (e) {
+      toastError(e, '删除失败')
+      return
+    }
     void qc.invalidateQueries({ queryKey: ['books'] })
     void qc.invalidateQueries({ queryKey: ['shelfStatus'] })
   }

@@ -7,6 +7,7 @@ import { SampleReader } from '../components/SampleReader'
 import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
 import { useConnStore } from '../lib/conn'
 import { useBackups, useBooks } from '../lib/queries'
+import { errorText, toastError } from '../lib/toastStore'
 import { useUiStore } from '../lib/uiStore'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
@@ -151,6 +152,8 @@ function ArchivedBooks() {
     try {
       await window.api.book.update(id, { archived: false })
       await qc.invalidateQueries({ queryKey: ['books'] })
+    } catch (e) {
+      toastError(e, '恢复失败')
     } finally {
       setBusy('')
     }
@@ -161,6 +164,8 @@ function ArchivedBooks() {
       await window.api.book.delete(id, true)
       setConfirmDel(null)
       await qc.invalidateQueries({ queryKey: ['books'] })
+    } catch (e) {
+      toastError(e, '删除失败')
     } finally {
       setBusy('')
     }
@@ -577,6 +582,8 @@ function ModelForm() {
       const list = r.data?.models ?? []
       if (list.length === 0) setMsg('没拉到模型列表：检查 Key 与地址')
       else if (!model && !profile.defaultModel) await pickModel(list[0] ?? '')
+    } catch (e) {
+      setMsg(`连接失败：${errorText(e)}`)
     } finally {
       setBusy(false)
     }
@@ -594,7 +601,12 @@ function ModelForm() {
               (view.provider === p ? 'bg-orange-600 text-white' : 'bg-orange-100 text-stone-500')
             }
             onClick={async () => {
-              await window.api.settings.save({ provider: p })
+              try {
+                await window.api.settings.save({ provider: p })
+              } catch (e) {
+                toastError(e, '切换失败')
+                return
+              }
               setModel('')
               setBaseUrl('')
               queryClient.invalidateQueries({ queryKey: ['settings'] })

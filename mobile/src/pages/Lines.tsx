@@ -3,6 +3,7 @@ import { useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet'
 import { ErrorBox } from '../components/ErrorBox'
 import { qk, useBook } from '../lib/queries'
+import { toastError } from '../lib/toastStore'
 import { useUiStore } from '../lib/uiStore'
 
 export default function Lines() {
@@ -44,11 +45,13 @@ export default function Lines() {
     return chain
   }
 
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = async (fn: () => Promise<unknown>, failText = '操作失败') => {
     setBusy(true)
     try {
       await fn()
       refresh()
+    } catch (e) {
+      toastError(e, failText)
     } finally {
       setBusy(false)
     }
@@ -96,7 +99,7 @@ export default function Lines() {
                     type="button"
                     disabled={busy}
                     className="rounded-lg border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500 disabled:opacity-50"
-                    onClick={() => act(() => window.api.line.activate(book.id, l.id))}
+                    onClick={() => act(() => window.api.line.activate(book.id, l.id), '切换失败')}
                   >
                     切到这条线
                   </button>
@@ -179,7 +182,7 @@ export default function Lines() {
               onClick={() => {
                 const id = confirmDelete
                 setConfirmDelete(null)
-                act(() => window.api.line.delete(id, true))
+                act(() => window.api.line.delete(id, true), '删除失败')
               }}
             >
               删除
@@ -256,8 +259,12 @@ function ForkSheet({
           disabled={busy || !chapterId}
           className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium disabled:opacity-50"
           onClick={async () => {
-            await window.api.line.fork(bookId, chapterId, name.trim() || undefined)
-            onDone()
+            try {
+              await window.api.line.fork(bookId, chapterId, name.trim() || undefined)
+              onDone()
+            } catch (e) {
+              toastError(e, '开新线失败')
+            }
           }}
         >
           开线并切入

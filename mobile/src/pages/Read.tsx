@@ -6,6 +6,7 @@ import QuickActionsBar from '../components/QuickActionsBar'
 import { loadJson, saveJson } from '../lib/persist'
 import { useBook } from '../lib/queries'
 import { type Appearance, applySystemBars } from '../lib/systemBars'
+import { toastError } from '../lib/toastStore'
 import { useUiStore } from '../lib/uiStore'
 
 const THEME_BG: Record<Appearance, string> = {
@@ -60,11 +61,20 @@ export default function Read() {
   useEffect(() => {
     if (!chapterId) return
     let alive = true
-    window.api.chapter.get(chapterId).then((c) => {
-      if (!alive) return
-      if (c) setChapter(c)
-      else setListOpen(true)
-    })
+    window.api.chapter
+      .get(chapterId)
+      .then((c) => {
+        if (!alive) return
+        if (c) setChapter(c)
+        else setListOpen(true)
+      })
+      .catch((e) => {
+        if (!alive) return
+        toastError(e, '正文加载失败')
+        // 清掉内存里的当前章、退回目录：留着会一直停在「正在打开上一回读到的章节…」，
+        // 而且再点同一章 chapterId 没变、不会重新拉取。已保存的阅读进度不动，下次进来还会续上
+        setChapterId(null)
+      })
     return () => {
       alive = false
     }
@@ -141,12 +151,18 @@ export default function Read() {
   const lineChapters = (data?.chapters ?? []).filter((c) => c.lineId === activeLineId)
   const chIdx = lineChapters.findIndex((c) => c.id === chapter.id)
   const isLast = chIdx === lineChapters.length - 1
+  // 切章拉不到正文时停在原章并提示，不能没反应
+  const loadChapter = (id: string) =>
+    window.api.chapter.get(id).then(
+      (c) => setChapter(c),
+      (e) => toastError(e, '正文加载失败')
+    )
   const prev = () => {
     const p = lineChapters[chIdx - 1]
     if (p) {
       setChapterId(p.id)
       persist({ chapterId: p.id })
-      window.api.chapter.get(p.id).then(setChapter)
+      loadChapter(p.id)
     }
   }
   const next = () => {
@@ -154,7 +170,7 @@ export default function Read() {
     if (n) {
       setChapterId(n.id)
       persist({ chapterId: n.id })
-      window.api.chapter.get(n.id).then(setChapter)
+      loadChapter(n.id)
     } else {
       setListOpen(true)
       setChapter(null)
@@ -347,8 +363,12 @@ export default function Read() {
                 const instruction = segText.trim()
                 setSegTarget(null)
                 setSegmentMode(false)
-                await window.api.job.startRevise(chapter.id, instruction, target)
-                setBookSub('write')
+                try {
+                  await window.api.job.startRevise(chapter.id, instruction, target)
+                  setBookSub('write')
+                } catch (e) {
+                  toastError(e, '修改失败')
+                }
               }}
             >
               改这段
