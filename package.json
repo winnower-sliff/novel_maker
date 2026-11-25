@@ -13,9 +13,10 @@
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p mobile/tsconfig.json --noEmit",
     "lint": "biome check src mobile/src mobile/vite.config.ts scripts",
     "lint:fix": "biome check --write src mobile/src mobile/vite.config.ts scripts",
-    "test": "vitest run",
+    "test": "npm run build && node scripts/smoke-all.mjs",
     "deploy": "node scripts/deploy.mjs",
-    "apk": "node scripts/build-apk.mjs"
+    "apk": "node scripts/build-apk.mjs",
+    "verify": "npm run typecheck && npm run lint && npm test"
   },
   "dependencies": {
     "@capacitor/core": "^7.4.4",
@@ -42,7 +43,6 @@
     "tailwindcss": "^4.1.16",
     "tsx": "^4.20.0",
     "typescript": "^7.0.2",
-    "vite": "^7.3.0",
-    "vitest": "^5.0.5"
+    "vite": "^7.3.0"
   }
 }
