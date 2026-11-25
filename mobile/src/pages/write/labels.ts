@@ -7,6 +7,8 @@ export const TOOL_LABEL: Record<string, string> = {
   read_chapter: '读章',
   list_cards: '翻设定',
   get_card: '看设定',
+  list_card_kinds: '看设定类别',
+  rename_card_kind: '改设定类别',
   list_characters: '翻人物',
   list_foreshadows: '翻伏笔',
   get_write_context: '备上下文',
@@ -32,6 +34,9 @@ export const TOOL_LABEL: Record<string, string> = {
   commit_chapter: '定稿入书',
   revise_chapter: '改章',
   spawn_subagent: '派调查员',
+  propose_chapter: '排队写新章',
+  request_review: '申请审读',
+  request_audit: '申请审计',
   finish: '收工'
 }
 
