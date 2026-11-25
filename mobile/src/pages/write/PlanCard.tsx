@@ -1,5 +1,5 @@
-import { useState } from 'react'
 import type { Job } from '@shared/types'
+import { useState } from 'react'
 import { Markdown } from '../../components/Markdown'
 
 /** 计划模式卡：计划书 Markdown + 按计划执行（可带补充）/算了；等待期聊天框照常可用（导演看得到计划） */
@@ -93,7 +93,9 @@ export default function PlanCard({ job, refresh }: { job: Job; refresh: () => vo
             </button>
           </div>
         )}
-        <div className="mt-2 text-[10px] text-stone-400">拿不准可以在下面聊天框先跟导演聊聊这份计划</div>
+        <div className="mt-2 text-[10px] text-stone-400">
+          拿不准可以在下面聊天框先跟导演聊聊这份计划
+        </div>
       </div>
     </div>
   )

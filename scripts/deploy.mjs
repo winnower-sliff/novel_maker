@@ -57,10 +57,14 @@ function killPids(pids) {
 console.log('[deploy] 1/4 构建…')
 // 注意：Node ≥18.20 安全补丁禁止无 shell 直接 spawn .cmd（EINVAL），npm.cmd 不可用；
 // tsc（typescript 7）bin 是纯 Node ESM 脚本，直接用当前 node 跑
-const build = spawnSync(process.execPath, [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'tsconfig.json'], {
-  cwd: root,
-  stdio: 'inherit',
-})
+const build = spawnSync(
+  process.execPath,
+  [join(root, 'node_modules', 'typescript', 'bin', 'tsc'), '-p', 'tsconfig.json'],
+  {
+    cwd: root,
+    stdio: 'inherit'
+  }
+)
 if (build.status !== 0) {
   console.error('[deploy] 构建失败，中止')
   process.exit(1)
@@ -83,7 +87,7 @@ const child = spawn(process.execPath, [entry], {
   cwd: root,
   detached: true,
   stdio: ['ignore', fd, fd],
-  env: { ...process.env, NM_DATA_DIR: dataDir },
+  env: { ...process.env, NM_DATA_DIR: dataDir }
 })
 child.unref()
 console.log(`  PID ${child.pid}，日志：${logFile}`)

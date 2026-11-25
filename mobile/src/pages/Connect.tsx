@@ -1,5 +1,5 @@
+import { DEFAULT_BASE_URL, useConnStore } from '@mobile/lib/conn'
 import { useState } from 'react'
-import { useConnStore, DEFAULT_BASE_URL } from '@mobile/lib/conn'
 
 /** 连接页：地址输入 + 测试连接（v2 无鉴权，Tailscale 直连） */
 export default function Connect() {

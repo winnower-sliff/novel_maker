@@ -6,8 +6,8 @@
  */
 import { spawn } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 
 const PORT = 3961
 const BASE = `http://127.0.0.1:${PORT}`
@@ -40,7 +40,9 @@ async function waitFor(jobId, pred, timeoutMs, label) {
     const job = await invoke('job:get', [jobId])
     if (pred(job)) return job
     if (Date.now() - start > timeoutMs) {
-      throw new Error(`等待超时：${label}（state=${job.state} step=${job.step} error=${job.error ?? ''}）`)
+      throw new Error(
+        `等待超时：${label}（state=${job.state} step=${job.step} error=${job.error ?? ''}）`
+      )
     }
     await new Promise((r) => setTimeout(r, 300))
   }
@@ -78,7 +80,9 @@ try {
     }
   ])
 
-  const book = await invoke('book:create', [{ title: '计划模式测试书', genre: '悬疑', targetWords: 600 }])
+  const book = await invoke('book:create', [
+    { title: '计划模式测试书', genre: '悬疑', targetWords: 600 }
+  ])
   // 负向词触发 autoFix 轮（对齐 AGENT_MODE 队列）
   await invoke('book:update', [book.id, { negativeWords: ['忽然'] }])
   // 计划模式开启
@@ -93,11 +97,20 @@ try {
     60_000,
     '计划书生成'
   )
-  ok(job.state === 'waiting_user' && job.step === 'plan', `停在计划确认（state=${job.state} step=${job.step}）`)
-  ok((job.payload?.plan ?? '').includes('走向'), `计划书落 payload.plan（${job.payload?.plan?.length ?? 0} 字）`)
+  ok(
+    job.state === 'waiting_user' && job.step === 'plan',
+    `停在计划确认（state=${job.state} step=${job.step}）`
+  )
+  ok(
+    (job.payload?.plan ?? '').includes('走向'),
+    `计划书落 payload.plan（${job.payload?.plan?.length ?? 0} 字）`
+  )
 
   const msgs1 = await invoke('message:list', [book.id])
-  ok(msgs1.some((m) => m.meta?.kind === 'job' && m.meta?.step === 'plan'), '计划节点消息上墙')
+  ok(
+    msgs1.some((m) => m.meta?.kind === 'job' && m.meta?.step === 'plan'),
+    '计划节点消息上墙'
+  )
 
   // 等待期聊天：chat job 不炸（导演带计划上下文；stub 队列 CHAT_IN_QUEUE=0 无 chat 响应也该容错落 done）
   const chatJob = await invoke('job:startChat', [book.id, '这份计划我觉得可以'])
@@ -112,7 +125,10 @@ try {
     90_000,
     '按计划执行全链'
   )
-  ok(job.state === 'done', `按计划写完（state=${job.state}${job.error ? ` error=${job.error}` : ''}）`)
+  ok(
+    job.state === 'done',
+    `按计划写完（state=${job.state}${job.error ? ` error=${job.error}` : ''}）`
+  )
 
   const after = await invoke('book:get', [book.id])
   ok(after.chapters.length === 1, '章节入库（1 章）')

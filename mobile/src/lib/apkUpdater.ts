@@ -9,7 +9,7 @@ interface ApkUpdaterPlugin {
   getVersion(): Promise<{ version: string; versionCode: number }>
   download(opts: { url: string; versionCode?: number }): Promise<{ path: string; size: number }>
   status(opts?: { versionCode?: number }): Promise<DownloadStatus>
-  install(opts?: { versionCode?: number }): Promise<void | { needsGrant?: boolean }>
+  install(opts?: { versionCode?: number }): Promise<{ needsGrant?: boolean } | undefined>
   addListener(
     event: 'progress',
     cb: (data: { done: number; total: number }) => void
@@ -68,14 +68,14 @@ export async function checkUpdate(): Promise<UpdateCheck> {
       version: m.apk.version,
       versionCode: m.apk.versionCode ?? 0,
       url: `${base}/api/mobile/apk`,
-      size: m.apk.size,
+      size: m.apk.size
     }
   } catch (e) {
     return { state: 'error', error: e instanceof Error ? e.message : String(e) }
   }
 }
 
-/** 原生下载状态快照：downloading 进行中；size=cacheDir 里该 versionCode 文件字节数（跨进程重启仍准确） */export interface DownloadStatus {
+/** 原生下载状态快照：downloading 进行中；size=cacheDir 里该 versionCode 文件字节数（跨进程重启仍准确） */ export interface DownloadStatus {
   downloading: boolean
   done: number
   total: number

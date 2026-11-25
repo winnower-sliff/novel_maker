@@ -45,7 +45,9 @@ if (!all) {
 const sentinels = args.includes('--mobile') ? [...COMMON, ...MOBILE_ONLY] : COMMON
 const missing = sentinels.filter(([cls]) => !all.includes(cls))
 if (missing.length > 0) {
-  console.error('[tailwind-check] 缺失哨兵类（对应源未进扫描，检查 styles.css @source 路径与构建 cwd）：')
+  console.error(
+    '[tailwind-check] 缺失哨兵类（对应源未进扫描，检查 styles.css @source 路径与构建 cwd）：'
+  )
   for (const [cls, src] of missing) console.error(`  - ${cls}  ← ${src}`)
   process.exit(1)
 }

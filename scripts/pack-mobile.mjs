@@ -4,10 +4,7 @@
 import { execSync } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { copyFile, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
-
-const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
+import { join } from 'node:path'
 
 /** 本次更新说明：自上一个 v* tag 以来的 commit 主题行（version.mjs 已在构建前打好本次 tag） */
 function gitNotes() {
@@ -31,7 +28,10 @@ function gitNotes() {
 function appDataDir() {
   if (process.env.NM_DATA_DIR) return process.env.NM_DATA_DIR
   if (process.platform === 'win32') {
-    return join(process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming'), 'novel-maker-v2')
+    return join(
+      process.env.APPDATA ?? join(process.env.USERPROFILE ?? '', 'AppData', 'Roaming'),
+      'novel-maker-v2'
+    )
   }
   return join(process.env.HOME ?? '', '.novel-maker-v2')
 }
@@ -46,7 +46,9 @@ async function main() {
   const version = arg('apk-version')
   const versionCode = Number(arg('apk-code')) || 0
   if (!apkSrc || !version) {
-    console.error('[pack-mobile] 用法: node scripts/pack-mobile.mjs --apk <NovelMaker.apk> --apk-version <version> [--apk-code <int>]')
+    console.error(
+      '[pack-mobile] 用法: node scripts/pack-mobile.mjs --apk <NovelMaker.apk> --apk-version <version> [--apk-code <int>]'
+    )
     process.exit(1)
   }
 
@@ -63,9 +65,7 @@ async function main() {
     version,
     buildAt: new Date().toISOString(),
     apk: { version, versionCode, path: rel, size: buf.length, notes: gitNotes() },
-    files: [
-      { path: rel, hash: createHash('sha256').update(buf).digest('hex'), size: buf.length }
-    ]
+    files: [{ path: rel, hash: createHash('sha256').update(buf).digest('hex'), size: buf.length }]
   }
   await writeFile(join(target, 'manifest.json'), JSON.stringify(manifest, null, 2))
 

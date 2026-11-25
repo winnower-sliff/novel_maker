@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import type { Book } from '@shared/types'
 import { exportBookZip } from '@mobile/lib/exportPlugin'
 import { useBooks, useShelfStatus } from '@mobile/lib/queries'
 import { useUiStore } from '@mobile/lib/uiStore'
+import type { Book } from '@shared/types'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import { useMemo, useState } from 'react'
+import { BottomSheet } from '../components/BottomSheet'
 
 /** 书脊配色：按书 id 稳定取暖色系之一 */
 const SPINE_COLORS = ['#ea580c', '#d97706', '#c2410c', '#b45309', '#9a3412', '#e11d48']
@@ -55,7 +56,10 @@ export default function Shelf() {
   }
 
   const active = useMemo(
-    () => (books ?? []).filter((b) => !b.archived && !b.draft).sort((a, b) => b.updatedAt - a.updatedAt),
+    () =>
+      (books ?? [])
+        .filter((b) => !b.archived && !b.draft)
+        .sort((a, b) => b.updatedAt - a.updatedAt),
     [books]
   )
   const { data: statuses } = useShelfStatus(active.map((b) => b.id))
@@ -105,7 +109,7 @@ export default function Shelf() {
     const s = statusById.get(b.id)
     const parts: string[] = []
     if (s && s.chapterCount > 0) parts.push(`已写 ${s.chapterCount} 章`)
-    if (s && s.lastChapter) parts.push(s.lastChapter.title)
+    if (s?.lastChapter) parts.push(s.lastChapter.title)
     return parts.join(' · ') || b.intro || '尚未完成开书引导'
   }
 
@@ -114,9 +118,15 @@ export default function Shelf() {
       <header className="flex items-baseline justify-between px-5 pb-2 pt-safe">
         <h1 className="pt-3 text-2xl font-bold">书架</h1>
         <div className="flex items-center gap-3 pt-3">
-          {active.length > 0 && <span className="text-xs text-stone-400">共 {active.length} 本</span>}
+          {active.length > 0 && (
+            <span className="text-xs text-stone-400">共 {active.length} 本</span>
+          )}
           {archivedCount > 0 && (
-            <button type="button" className="text-xs text-stone-400 underline underline-offset-2" onClick={() => setTab('settings')}>
+            <button
+              type="button"
+              className="text-xs text-stone-400 underline underline-offset-2"
+              onClick={() => setTab('settings')}
+            >
               已归档 {archivedCount}
             </button>
           )}
@@ -132,7 +142,11 @@ export default function Shelf() {
           >
             ＋
           </button>
-          <button type="button" className="text-2xl text-stone-500" onClick={() => setTab('settings')}>
+          <button
+            type="button"
+            className="text-2xl text-stone-500"
+            onClick={() => setTab('settings')}
+          >
             ⚙️
           </button>
         </div>
@@ -160,16 +174,24 @@ export default function Shelf() {
             <button
               type="button"
               className="block w-full overflow-hidden rounded-2xl p-4 pl-5 text-left active:brightness-95"
-              style={{ background: `linear-gradient(135deg, ${spineColor(recent.id)} 0%, #f59e0b 130%)` }}
+              style={{
+                background: `linear-gradient(135deg, ${spineColor(recent.id)} 0%, #f59e0b 130%)`
+              }}
               onClick={() => openBook(recent.id)}
             >
               <span className="absolute left-0 top-0 h-full w-1.5 bg-white/25" />
               <div className="text-[11px] font-medium tracking-wide text-white/75">上次打开</div>
-              <div className="mt-1 line-clamp-1 text-lg font-bold text-white">{recent.title || '未命名'}</div>
-              <div className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-white/85">{metaOf(recent)}</div>
+              <div className="mt-1 line-clamp-1 text-lg font-bold text-white">
+                {recent.title || '未命名'}
+              </div>
+              <div className="mt-1 line-clamp-2 text-[13px] leading-relaxed text-white/85">
+                {metaOf(recent)}
+              </div>
               <div className="mt-2.5 flex items-center justify-between">
                 <span className="text-[11px] text-white/70">{relTime(recent.updatedAt)}</span>
-                <span className="rounded-full bg-white/20 px-3 py-1 text-[11px] font-medium text-white">继续 →</span>
+                <span className="rounded-full bg-white/20 px-3 py-1 text-[11px] font-medium text-white">
+                  继续 →
+                </span>
               </div>
             </button>
             <button
@@ -196,9 +218,14 @@ export default function Shelf() {
                   onClick={() => openBook(b.id)}
                 >
                   <span style={{ position: 'absolute', left: 0, top: 0, bottom: 0 }}>
-                    <span className="block h-full w-1 rounded-l-2xl" style={{ background: spineColor(b.id) }} />
+                    <span
+                      className="block h-full w-1 rounded-l-2xl"
+                      style={{ background: spineColor(b.id) }}
+                    />
                   </span>
-                  <div className="line-clamp-1 text-[15px] font-semibold">{b.title || '未命名'}</div>
+                  <div className="line-clamp-1 text-[15px] font-semibold">
+                    {b.title || '未命名'}
+                  </div>
                   <div className="mt-1 line-clamp-1 text-xs text-stone-500">{metaOf(b)}</div>
                   <div className="mt-1.5 text-[11px] text-stone-400">{relTime(b.updatedAt)}</div>
                 </button>
@@ -243,78 +270,72 @@ export default function Shelf() {
       )}
 
       {menuFor && (
-        <div
-          className="fixed inset-0 z-40 flex items-end bg-black/60"
-          onClick={() => {
+        <BottomSheet
+          onClose={() => {
             setMenuFor(null)
             setConfirmWipe(false)
           }}
         >
-          <div
-            className="w-full rounded-t-2xl border-t border-orange-100 bg-white p-5 pb-safe"
-            onClick={(e) => e.stopPropagation()}
+          <div className="mb-3 min-w-0">
+            <div className="truncate text-sm font-medium">{menuFor.title || '未命名'}</div>
+            <div className="mt-0.5 text-[11px] text-stone-400">{metaOf(menuFor)}</div>
+          </div>
+          <button
+            type="button"
+            className="w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600"
+            onClick={() => {
+              openBook(menuFor.id)
+              setMenuFor(null)
+            }}
           >
-            <div className="mb-3 min-w-0">
-              <div className="truncate text-sm font-medium">{menuFor.title || '未命名'}</div>
-              <div className="mt-0.5 text-[11px] text-stone-400">{metaOf(menuFor)}</div>
-            </div>
-            <button
-              type="button"
-              className="w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600"
-              onClick={() => {
-                openBook(menuFor.id)
-                setMenuFor(null)
-              }}
-            >
-              打开这本书
-            </button>
-            <button
-              type="button"
-              disabled={exporting !== null}
-              className="mt-2.5 w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600 disabled:opacity-50"
-              onClick={() => void doExport(menuFor)}
-            >
-              {exporting === menuFor.id ? '导出中…' : '导出压缩包（每章一个 TXT）'}
-            </button>
-            <button
-              type="button"
-              className="mt-2.5 w-full rounded-xl bg-red-50 py-2.5 text-sm font-medium text-red-600"
-              onClick={() => void archive(menuFor)}
-            >
-              归档（不再显示在书架）
-            </button>
-            {confirmWipe ? (
-              <div className="mt-2.5 flex gap-2.5">
-                <button
-                  type="button"
-                  disabled={creating}
-                  className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-medium text-white disabled:opacity-50"
-                  onClick={() => void wipe(menuFor)}
-                >
-                  确认彻底删除
-                </button>
-                <button
-                  type="button"
-                  className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500"
-                  onClick={() => setConfirmWipe(false)}
-                >
-                  取消
-                </button>
-              </div>
-            ) : (
+            打开这本书
+          </button>
+          <button
+            type="button"
+            disabled={exporting !== null}
+            className="mt-2.5 w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600 disabled:opacity-50"
+            onClick={() => void doExport(menuFor)}
+          >
+            {exporting === menuFor.id ? '导出中…' : '导出压缩包（每章一个 TXT）'}
+          </button>
+          <button
+            type="button"
+            className="mt-2.5 w-full rounded-xl bg-red-50 py-2.5 text-sm font-medium text-red-600"
+            onClick={() => void archive(menuFor)}
+          >
+            归档（不再显示在书架）
+          </button>
+          {confirmWipe ? (
+            <div className="mt-2.5 flex gap-2.5">
               <button
                 type="button"
-                className="mt-2.5 w-full py-1.5 text-xs text-stone-400 active:text-red-600"
-                onClick={() => setConfirmWipe(true)}
+                disabled={creating}
+                className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-medium text-white disabled:opacity-50"
+                onClick={() => void wipe(menuFor)}
               >
-                彻底删除这本书…
+                确认彻底删除
               </button>
-            )}
-            <div className="mt-2 text-center text-[11px] text-stone-400">
-              归档后可在 设置 → 已归档的书 恢复；彻底删除无法找回
+              <button
+                type="button"
+                className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500"
+                onClick={() => setConfirmWipe(false)}
+              >
+                取消
+              </button>
             </div>
+          ) : (
+            <button
+              type="button"
+              className="mt-2.5 w-full py-1.5 text-xs text-stone-400 active:text-red-600"
+              onClick={() => setConfirmWipe(true)}
+            >
+              彻底删除这本书…
+            </button>
+          )}
+          <div className="mt-2 text-center text-[11px] text-stone-400">
+            归档后可在 设置 → 已归档的书 恢复；彻底删除无法找回
           </div>
-        </div>
+        </BottomSheet>
       )}
     </div>
   )

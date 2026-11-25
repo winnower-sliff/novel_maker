@@ -1,6 +1,7 @@
 // 一键出 APK：构建 mobile web → 打进 APK（semver 版本）→ 部署 APK 到电脑端（更新源）→ 拷到项目根
-import { copyFile, writeFile } from 'node:fs/promises'
+
 import { execSync } from 'node:child_process'
+import { copyFile, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { bumpVersion, ensureVersionTag } from './version.mjs'
@@ -41,10 +42,23 @@ try {
   sh('node scripts/sync-bundle.mjs', join(root, 'mobile-app'))
   sh('npx cap sync android', join(root, 'mobile-app'))
   sh('gradlew.bat assembleDebug --console=plain -q', join(root, 'mobile-app', 'android'))
-  const apk = join(root, 'mobile-app', 'android', 'app', 'build', 'outputs', 'apk', 'debug', 'app-debug.apk')
+  const apk = join(
+    root,
+    'mobile-app',
+    'android',
+    'app',
+    'build',
+    'outputs',
+    'apk',
+    'debug',
+    'app-debug.apk'
+  )
   await copyFile(apk, join(root, 'NovelMaker.apk'))
   // APK 部署为电脑端更新源（manifest.apk），手机端「APP 更新」自动下载安装
-  sh(`node scripts/pack-mobile.mjs --apk "${apk}" --apk-version ${versionName} --apk-code ${versionCode}`, root)
+  sh(
+    `node scripts/pack-mobile.mjs --apk "${apk}" --apk-version ${versionName} --apk-code ${versionCode}`,
+    root
+  )
   console.log(`\n[apk] 完成 v${versionName} → NovelMaker.apk（项目根目录），并已部署为更新源`)
 } catch (err) {
   console.error('[apk] failed:', err.message)

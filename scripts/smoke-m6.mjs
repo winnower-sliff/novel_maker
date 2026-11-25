@@ -4,7 +4,7 @@
  * 前置：npm run build（dist 最新）。stub 由本脚本 spawn（AGENT_MODE=1，端口 3923）。
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -127,8 +127,13 @@ try {
       'get_write_context,write_chapter_draft,commit_chapter,patch_character_state,save_foreshadow,save_card,finish',
     `工具卡序列（${tools.join(',')}）`
   )
-  const draftCard = msgs.find((m) => m.meta?.kind === 'tool' && m.meta.tool === 'write_chapter_draft')
-  ok((draftCard?.meta?.summary ?? '').includes('字'), `write_chapter_draft 卡带字数（${draftCard?.meta?.summary}）`)
+  const draftCard = msgs.find(
+    (m) => m.meta?.kind === 'tool' && m.meta.tool === 'write_chapter_draft'
+  )
+  ok(
+    (draftCard?.meta?.summary ?? '').includes('字'),
+    `write_chapter_draft 卡带字数（${draftCard?.meta?.summary}）`
+  )
 
   // 节点消息：chapter（走向卡已废除，无 cards 节点）
   const steps = msgs.filter((m) => m.meta?.kind === 'job').map((m) => m.meta.step)
@@ -139,7 +144,10 @@ try {
   // 沉淀：人物状态被 agent patch（name 兜底路径）
   const chars = await invoke('character:list', book.activeLineId)
   const lin = chars.find((c) => c.name === '林岸')
-  ok((lin?.state?.location ?? '') === '南屿货船·蔗糖舱', `人物状态被 patch（location=${lin?.state?.location}）`)
+  ok(
+    (lin?.state?.location ?? '') === '南屿货船·蔗糖舱',
+    `人物状态被 patch（location=${lin?.state?.location}）`
+  )
 
   // recap quickActions（commit_chapter 传入）
   ok((job.payload.recap?.quickActions ?? []).length === 1, 'recap.quickActions 来自 commit_chapter')
@@ -147,11 +155,17 @@ try {
   // ── chat free agent（带工具调用）──
   let cj = await invoke('job:startChat', book.id, '现在写到哪了？伏笔怎么安排？')
   cj = await waitJob(cj.id, (j) => j.state === 'done', 'chat free agent')
-  ok((cj.payload.answer ?? '').includes('沈') || (cj.payload.answer ?? '').length > 20, 'chat agent 回答非空')
+  ok(
+    (cj.payload.answer ?? '').includes('沈') || (cj.payload.answer ?? '').length > 20,
+    'chat agent 回答非空'
+  )
 
   msgs = await invoke('message:list', book.id)
   const chatTools = msgs.filter((m) => m.meta?.kind === 'tool' && m.meta.jobId === cj.id)
-  ok(chatTools.length >= 1 && chatTools[0].meta.tool === 'list_chapters', 'chat agent 用了 list_chapters 工具')
+  ok(
+    chatTools.length >= 1 && chatTools[0].meta.tool === 'list_chapters',
+    'chat agent 用了 list_chapters 工具'
+  )
 
   // 用户动作消息（role=user）触发草稿转正：写章+chat 后书必须是正书
   const bookNow = await invoke('book:get', book.id)
@@ -168,7 +182,10 @@ try {
       !sCards.some((m) => m.meta.tool === 'list_chapters'),
       `子代理工具调用没落卡（实际 ${sCards.map((m) => m.meta.tool).join(',')}）`
     )
-    ok((sCards[0].meta.summary ?? '').includes('调查员回报'), `spawn_subagent 卡带回合数（${sCards[0].meta.summary}）`)
+    ok(
+      (sCards[0].meta.summary ?? '').includes('调查员回报'),
+      `spawn_subagent 卡带回合数（${sCards[0].meta.summary}）`
+    )
   }
 
   console.log(`\n[M6 冒烟] ${passed} 通过 / ${failed} 失败`)

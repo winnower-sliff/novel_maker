@@ -1,8 +1,8 @@
-import { useState } from 'react'
 import type { Job } from '@shared/types'
 import { useQueryClient } from '@tanstack/react-query'
-import { useBook, useStatusCard } from '../../lib/queries'
-import { qk } from '../../lib/queries'
+import { useState } from 'react'
+import { BottomSheet } from '../../components/BottomSheet'
+import { qk, useBook, useStatusCard } from '../../lib/queries'
 
 /** 顶部现状摘要（一行胶囊，点开展开；随流滚走）。任务运行中变体：状态+取消入口。 */
 export default function StatusHead({ bookId, active }: { bookId: string; active?: Job | null }) {
@@ -40,43 +40,40 @@ export default function StatusHead({ bookId, active }: { bookId: string; active?
           <button
             type="button"
             className="shrink-0 text-[11px] text-stone-400 underline underline-offset-2"
-            onClick={() =>
-              active.kind === 'chat' ? void cancel() : setCancelConfirm(true)
-            }
+            onClick={() => (active.kind === 'chat' ? void cancel() : setCancelConfirm(true))}
           >
             取消
           </button>
         </div>
         {cancelConfirm && (
-          <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setCancelConfirm(false)}>
-            <div
-              className="w-full rounded-t-2xl border-t border-orange-100 bg-white p-5 pb-safe"
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div className="mb-1 text-sm font-medium text-red-600">
-                {active.kind === 'write' ? '取消将中断本次写作' : '取消将作废本次改章（原章不受影响）'}
-              </div>
-              {active.kind === 'write' && (
-                <div className="mb-4 text-xs text-stone-500">未定稿的内容不会入书；已入书的章节不受影响。</div>
-              )}
-              <div className="flex gap-3">
-                <button
-                  type="button"
-                  className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500"
-                  onClick={() => setCancelConfirm(false)}
-                >
-                  继续写
-                </button>
-                <button
-                  type="button"
-                  className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-medium"
-                  onClick={() => void cancel()}
-                >
-                  作废
-                </button>
-              </div>
+          <BottomSheet onClose={() => setCancelConfirm(false)}>
+            <div className="mb-1 text-sm font-medium text-red-600">
+              {active.kind === 'write'
+                ? '取消将中断本次写作'
+                : '取消将作废本次改章（原章不受影响）'}
             </div>
-          </div>
+            {active.kind === 'write' && (
+              <div className="mb-4 text-xs text-stone-500">
+                未定稿的内容不会入书；已入书的章节不受影响。
+              </div>
+            )}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500"
+                onClick={() => setCancelConfirm(false)}
+              >
+                继续写
+              </button>
+              <button
+                type="button"
+                className="flex-1 rounded-xl bg-red-600 py-2.5 text-sm font-medium"
+                onClick={() => void cancel()}
+              >
+                作废
+              </button>
+            </div>
+          </BottomSheet>
         )}
       </div>
     )
@@ -93,7 +90,11 @@ export default function StatusHead({ bookId, active }: { bookId: string; active?
         <span className="h-1.5 w-1.5 shrink-0 rounded-full bg-orange-400" />
         <span className="min-w-0 flex-1 truncate text-[11px] text-stone-500">
           {card.lineName} · 第 {card.chapterCount + 1} 章
-          {card.characters.length > 0 && ` · ${card.characters.slice(0, 3).map((c) => c.name).join('/')}`}
+          {card.characters.length > 0 &&
+            ` · ${card.characters
+              .slice(0, 3)
+              .map((c) => c.name)
+              .join('/')}`}
           {card.openForeshadows.length > 0 && ` · 未闭合伏笔 ${card.openForeshadows.length}`}
         </span>
         <span className="shrink-0 text-[10px] text-stone-300">{open ? '▲' : '▼'}</span>
@@ -114,7 +115,10 @@ export default function StatusHead({ bookId, active }: { bookId: string; active?
           {card.characters.length > 0 && (
             <div className="flex flex-wrap gap-1.5">
               {card.characters.slice(0, 6).map((c) => (
-                <span key={c.name} className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-stone-600">
+                <span
+                  key={c.name}
+                  className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-stone-600"
+                >
                   {c.name}
                 </span>
               ))}

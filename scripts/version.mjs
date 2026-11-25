@@ -1,8 +1,9 @@
 // 版本号自动推进：按 Conventional Commits，自最新 v* git tag 以来算 semver 增量。
 // breaking(! 或 BREAKING CHANGE) → major；feat → minor；fix/perf → patch；其余不升。
 // 基线用 git tag（vX.Y.Z），每次推进自动打新 tag；无 tag 时首跑在当前 HEAD 建基线、不升版。
-import { readFile, writeFile } from 'node:fs/promises'
+
 import { execFileSync } from 'node:child_process'
+import { readFile, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 
@@ -22,7 +23,12 @@ const parseSemver = (v) => {
 function latestVersionTag(cwd) {
   const out = git(['tag', '--list', 'v*', '--sort=-v:refname'], cwd)
   if (!out) return null
-  return out.split('\n').map((s) => s.trim()).filter((t) => parseSemver(t.slice(1)))[0] ?? null
+  return (
+    out
+      .split('\n')
+      .map((s) => s.trim())
+      .filter((t) => parseSemver(t.slice(1)))[0] ?? null
+  )
 }
 
 const tagExists = (cwd, name) => Boolean(git(['tag', '--list', name], cwd))
@@ -79,12 +85,19 @@ export async function bumpVersion(cwd, { dry = false } = {}) {
   const tag = latestVersionTag(cwd)
   if (!tag) {
     if (!dry) ensureVersionTag(cwd, current)
-    console.log(`[version] 无历史 tag：在 HEAD 建基线 v${current}${dry ? '（dry-run）' : ''}，本次不升版`)
+    console.log(
+      `[version] 无历史 tag：在 HEAD 建基线 v${current}${dry ? '（dry-run）' : ''}，本次不升版`
+    )
     return current
   }
 
   const raw = git(['log', `${tag}..HEAD`, '--format=%s%x1f%b%x1e'], cwd)
-  const recs = raw ? raw.split('\x1e').map((r) => r.trim()).filter(Boolean) : []
+  const recs = raw
+    ? raw
+        .split('\x1e')
+        .map((r) => r.trim())
+        .filter(Boolean)
+    : []
   const rank = { patch: 1, minor: 2, major: 3 }
   const counts = { major: 0, minor: 0, patch: 0 }
   let kind = null

@@ -11,8 +11,8 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p mobile/tsconfig.json --noEmit",
-    "lint": "biome check src mobile/src",
-    "lint:fix": "biome check --write src mobile/src",
+    "lint": "biome check src mobile/src mobile/vite.config.ts scripts",
+    "lint:fix": "biome check --write src mobile/src mobile/vite.config.ts scripts",
     "test": "vitest run",
     "deploy": "node scripts/deploy.mjs",
     "apk": "node scripts/build-apk.mjs"

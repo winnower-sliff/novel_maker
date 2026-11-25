@@ -1,9 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
 import type { Chapter } from '@shared/types'
+import { useEffect, useRef, useState } from 'react'
+import { BottomSheet } from '../components/BottomSheet'
 import QuickActionsBar from '../components/QuickActionsBar'
-import { useBook } from '../lib/queries'
 import { loadJson, saveJson } from '../lib/persist'
-import { applySystemBars, type Appearance } from '../lib/systemBars'
+import { useBook } from '../lib/queries'
+import { type Appearance, applySystemBars } from '../lib/systemBars'
 import { useUiStore } from '../lib/uiStore'
 
 const THEME_BG: Record<Appearance, string> = {
@@ -35,9 +36,6 @@ export default function Read() {
   const [segTarget, setSegTarget] = useState<string | null>(null)
   const [segText, setSegText] = useState('')
   const boxRef = useRef<HTMLDivElement>(null)
-
-  /** 滚动容器是 BookWorkspace 的 <main>（正文 div 自身不滚），章切换后回到顶部 */
-  const scrollTop = () => boxRef.current?.closest('main')?.scrollTo({ top: 0 })
 
   const book = data?.book
   const activeLineId = book?.activeLineId ?? ''
@@ -82,12 +80,13 @@ export default function Read() {
   useEffect(() => {
     applySystemBars(theme)
     setReaderDark(theme === 'dark')
-  }, [theme])
+  }, [theme, setReaderDark])
 
-  // 切章自动回顶（章内容渲染后滚外层 main）
+  // 切章自动回顶：滚动容器是 BookWorkspace 的 <main>（正文 div 自身不滚），章内容渲染后滚它
+  const loadedId = chapter?.id
   useEffect(() => {
-    if (chapter) scrollTop()
-  }, [chapter?.id])
+    if (loadedId) boxRef.current?.closest('main')?.scrollTo({ top: 0 })
+  }, [loadedId])
 
   if (!book) return <div className="py-20 text-center text-sm text-stone-400">加载中…</div>
 
@@ -103,7 +102,10 @@ export default function Read() {
     return (
       <div className="px-4 py-4">
         <div className="mb-3 text-sm font-semibold text-stone-600">
-          目录 <span className="ml-1 text-xs font-normal text-stone-400">{lineNames.get(activeLineId)}</span>
+          目录{' '}
+          <span className="ml-1 text-xs font-normal text-stone-400">
+            {lineNames.get(activeLineId)}
+          </span>
         </div>
         <div className="space-y-1.5">
           {chapters.map((c) => (
@@ -170,7 +172,11 @@ export default function Read() {
         <span className="min-w-0 flex-1 truncate px-2 text-center text-xs opacity-50">
           {chIdx + 1}/{lineChapters.length} · 第 {chapter.orderNo} 章 · {chapter.title}
         </span>
-        <button type="button" className="rounded-lg px-2 py-1 text-xs opacity-60" onClick={() => setShowSettings((v) => !v)}>
+        <button
+          type="button"
+          className="rounded-lg px-2 py-1 text-xs opacity-60"
+          onClick={() => setShowSettings((v) => !v)}
+        >
           Aa
         </button>
       </div>
@@ -224,6 +230,7 @@ export default function Read() {
           {splitParagraphs(chapter.content).map((p, i) =>
             segmentMode ? (
               <button
+                // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
                 key={i}
                 type="button"
                 className="mb-4 w-full rounded-lg px-2 py-1 text-left indent-8 ring-1 ring-transparent active:ring-orange-500/60"
@@ -235,7 +242,11 @@ export default function Read() {
                 {p}
               </button>
             ) : (
-              <p key={i} className="mb-4 whitespace-pre-wrap indent-8">
+              <p
+                // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+                key={i}
+                className="mb-4 whitespace-pre-wrap indent-8"
+              >
                 {p}
               </p>
             )
@@ -303,47 +314,42 @@ export default function Read() {
 
       {/* 选段修改弹层 */}
       {segTarget && (
-        <div className="fixed inset-0 z-40 flex items-end bg-black/60" onClick={() => setSegTarget(null)}>
-          <div
-            className="max-h-[70vh] w-full overflow-y-auto rounded-t-2xl border-t border-orange-100 bg-white p-5 pb-safe"
-            onClick={(e) => e.stopPropagation()}
-          >
-            <div className="mb-2 text-xs text-stone-500">选中段落：</div>
-            <div className="mb-3 line-clamp-3 rounded-lg bg-orange-100 p-2.5 text-xs leading-relaxed text-stone-500">
-              {segTarget}
-            </div>
-            <textarea
-              className="mb-3 min-h-20 w-full resize-none rounded-xl border border-orange-100 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-700"
-              placeholder="这一段要怎么改？"
-              value={segText}
-              onChange={(e) => setSegText(e.target.value)}
-            />
-            <div className="flex gap-3">
-              <button
-                type="button"
-                className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500"
-                onClick={() => setSegTarget(null)}
-              >
-                取消
-              </button>
-              <button
-                type="button"
-                disabled={!segText.trim()}
-                className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium disabled:opacity-40"
-                onClick={async () => {
-                  const target = segTarget
-                  const instruction = segText.trim()
-                  setSegTarget(null)
-                  setSegmentMode(false)
-                  await window.api.job.startRevise(chapter.id, instruction, target)
-                  setBookSub('write')
-                }}
-              >
-                改这段
-              </button>
-            </div>
+        <BottomSheet onClose={() => setSegTarget(null)} bodyClass="max-h-[70vh] overflow-y-auto">
+          <div className="mb-2 text-xs text-stone-500">选中段落：</div>
+          <div className="mb-3 line-clamp-3 rounded-lg bg-orange-100 p-2.5 text-xs leading-relaxed text-stone-500">
+            {segTarget}
           </div>
-        </div>
+          <textarea
+            className="mb-3 min-h-20 w-full resize-none rounded-xl border border-orange-100 bg-white px-3 py-2.5 text-sm outline-none focus:border-orange-700"
+            placeholder="这一段要怎么改？"
+            value={segText}
+            onChange={(e) => setSegText(e.target.value)}
+          />
+          <div className="flex gap-3">
+            <button
+              type="button"
+              className="flex-1 rounded-xl border border-orange-200 py-2.5 text-sm text-stone-500"
+              onClick={() => setSegTarget(null)}
+            >
+              取消
+            </button>
+            <button
+              type="button"
+              disabled={!segText.trim()}
+              className="flex-1 rounded-xl bg-orange-600 py-2.5 text-sm font-medium disabled:opacity-40"
+              onClick={async () => {
+                const target = segTarget
+                const instruction = segText.trim()
+                setSegTarget(null)
+                setSegmentMode(false)
+                await window.api.job.startRevise(chapter.id, instruction, target)
+                setBookSub('write')
+              }}
+            >
+              改这段
+            </button>
+          </div>
+        </BottomSheet>
       )}
 
       {/* 版本回看已随「改章不留档」拆除 */}

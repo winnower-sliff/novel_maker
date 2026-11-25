@@ -30,9 +30,15 @@ export default function ReportCard({ report }: { report: AgentReport }) {
       {report.findings.length > 0 && (
         <div className="mt-3 space-y-2">
           {report.findings.map((f, i) => (
-            <div key={i} className="rounded-xl bg-orange-50 p-2.5">
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+              key={i}
+              className="rounded-xl bg-orange-50 p-2.5"
+            >
               <div className="mb-1 flex items-center gap-2">
-                <span className={`rounded-full px-2 py-0.5 text-[11px] ${LEVEL_COLOR[f.level] ?? ''}`}>
+                <span
+                  className={`rounded-full px-2 py-0.5 text-[11px] ${LEVEL_COLOR[f.level] ?? ''}`}
+                >
                   {f.dimension}
                 </span>
               </div>
@@ -48,7 +54,11 @@ export default function ReportCard({ report }: { report: AgentReport }) {
         <div className="mt-3 border-t border-orange-100/70 pt-2">
           <div className="mb-1 text-[11px] text-stone-500">建议</div>
           {report.suggestions.map((s, i) => (
-            <div key={i} className="text-xs leading-relaxed text-stone-500">
+            <div
+              // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+              key={i}
+              className="text-xs leading-relaxed text-stone-500"
+            >
               · {s}
             </div>
           ))}

@@ -1,5 +1,5 @@
-import { useEffect, useState } from 'react'
 import type { SampleSearchHit, SampleSectionView } from '@shared/types'
+import { useEffect, useState } from 'react'
 
 /** 阅读窗口大小（8k 字一屏，前后翻页步长） */
 const WINDOW = 8000
@@ -92,7 +92,10 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
     // 有意轻微重叠，绝不在句子中间接续
     const nl = delta > 0 ? view.text.lastIndexOf('\n') : view.text.indexOf('\n')
     const anchor = nl >= 0 ? nl + 1 : 0
-    const from = Math.max(0, Math.min(view.from + (delta > 0 ? anchor : anchor - WINDOW), sample.chars - 500))
+    const from = Math.max(
+      0,
+      Math.min(view.from + (delta > 0 ? anchor : anchor - WINDOW), sample.chars - 500)
+    )
     void openText(view.label, from, view.secIdx)
   }
 
@@ -170,6 +173,7 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
             ) : null}
             {cleanParas(view.text).map((para, i) => (
               <p
+                // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
                 key={i}
                 className="mb-2.5 indent-[2em] text-[15.5px] [text-justify:inter-ideograph] leading-[1.95] tracking-[0.01em] text-stone-800"
               >
@@ -250,6 +254,7 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
               <div className="space-y-2">
                 {hits.map((h, i) => (
                   <button
+                    // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
                     key={i}
                     type="button"
                     className="block w-full rounded-xl border border-orange-100 bg-white p-3 text-left"
@@ -260,57 +265,54 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
                   </button>
                 ))}
               </div>
-            ) : (
-              <>
-                {sections && sections.length > 0 ? (
-                  <div className="space-y-1.5">
-                    {sections.map((s, i) => (
-                      <button
-                        key={i}
-                        type="button"
+            ) : sections && sections.length > 0 ? (
+              <div className="space-y-1.5">
+                {sections.map((s, i) => (
+                  <button
+                    // biome-ignore lint/suspicious/noArrayIndexKey: 静态展示片段，无行内状态
+                    key={i}
+                    type="button"
+                    className={
+                      'block w-full rounded-xl border p-3 text-left ' +
+                      (s.kind === 'chapter'
+                        ? 'border-orange-100 bg-white'
+                        : 'border-transparent bg-orange-50')
+                    }
+                    onClick={() => openSection(i)}
+                  >
+                    <div className="flex items-baseline justify-between gap-2">
+                      <span
                         className={
-                          'block w-full rounded-xl border p-3 text-left ' +
-                          (s.kind === 'chapter'
-                            ? 'border-orange-100 bg-white'
-                            : 'border-transparent bg-orange-50')
+                          'min-w-0 flex-1 truncate text-sm ' +
+                          (s.kind === 'chapter' ? 'font-medium text-stone-700' : 'text-stone-500')
                         }
-                        onClick={() => openSection(i)}
                       >
-                        <div className="flex items-baseline justify-between gap-2">
-                          <span
-                            className={
-                              'min-w-0 flex-1 truncate text-sm ' +
-                              (s.kind === 'chapter' ? 'font-medium text-stone-700' : 'text-stone-500')
-                            }
-                          >
-                            {s.kind === 'chapter' ? '' : '§ '}
-                            {s.label}
-                          </span>
-                          <span className="shrink-0 text-[10px] text-stone-400">{s.chars} 字</span>
-                        </div>
-                      </button>
-                    ))}
-                  </div>
-                ) : sections && sections.length === 0 ? (
-                  <div className="text-center text-xs text-stone-400">
-                    这本范文没解析出章节结构（可能是连续文本）。
-                    <div className="mt-3 flex justify-center gap-2">
-                      {[0, 25, 50, 75, 100].map((p) => (
-                        <button
-                          key={p}
-                          type="button"
-                          className="rounded-full border border-orange-200 px-3 py-1 text-xs text-stone-600"
-                          onClick={() => pctJump(p)}
-                        >
-                          {p}%
-                        </button>
-                      ))}
+                        {s.kind === 'chapter' ? '' : '§ '}
+                        {s.label}
+                      </span>
+                      <span className="shrink-0 text-[10px] text-stone-400">{s.chars} 字</span>
                     </div>
-                  </div>
-                ) : (
-                  <div className="text-center text-xs text-stone-400">目录加载中…</div>
-                )}
-              </>
+                  </button>
+                ))}
+              </div>
+            ) : sections && sections.length === 0 ? (
+              <div className="text-center text-xs text-stone-400">
+                这本范文没解析出章节结构（可能是连续文本）。
+                <div className="mt-3 flex justify-center gap-2">
+                  {[0, 25, 50, 75, 100].map((p) => (
+                    <button
+                      key={p}
+                      type="button"
+                      className="rounded-full border border-orange-200 px-3 py-1 text-xs text-stone-600"
+                      onClick={() => pctJump(p)}
+                    >
+                      {p}%
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="text-center text-xs text-stone-400">目录加载中…</div>
             )}
           </div>
         </>

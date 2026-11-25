@@ -1,18 +1,18 @@
-import { useEffect, useState } from 'react'
-import { useQueryClient } from '@tanstack/react-query'
 import type { ChatMessageRow } from '@shared/types'
+import { useQueryClient } from '@tanstack/react-query'
+import { useEffect, useState } from 'react'
+import { consumeBack } from './lib/backHandler'
 import { installBridge } from './lib/bridge'
 import { useConnStore } from './lib/conn'
-import { consumeBack } from './lib/backHandler'
 import { nativeApp } from './lib/nativeApp'
 import { qk } from './lib/queries'
 import { tickerStore } from './lib/tickerStore'
 import { useUiStore } from './lib/uiStore'
-import Connect from './pages/Connect'
-import Shelf from './pages/Shelf'
-import Settings from './pages/Settings'
-import Onboard from './pages/Onboard'
 import BookWorkspace from './pages/BookWorkspace'
+import Connect from './pages/Connect'
+import Onboard from './pages/Onboard'
+import Settings from './pages/Settings'
+import Shelf from './pages/Shelf'
 
 export default function App() {
   const { conn, ready } = useConnStore()
@@ -53,7 +53,9 @@ export default function App() {
     })
     // 聚合条事件 → 全局 ticker store（切页不丢、回放即读）
     const unActivity = window.api.job.onActivity((jobId, act) => {
-      tickerStore(jobId).getState().pushAct({ ...act, ts: Date.now() })
+      tickerStore(jobId)
+        .getState()
+        .pushAct({ ...act, ts: Date.now() })
     })
     const unProgress = window.api.job.onProgress((jobId, p) => {
       tickerStore(jobId).getState().setProgress(p)
@@ -108,25 +110,27 @@ export default function App() {
     const app = nativeApp()
     if (!app) return
     let remove: (() => void) | null = null
-    void app.addListener('backButton', () => {
-      const s = useUiStore.getState()
-      if (consumeBack()) return
-      if (s.onboardBookId) {
-        s.finishOnboard()
-        return
-      }
-      if (s.openBookId) {
-        s.closeBook()
-        return
-      }
-      if (s.tab !== 'shelf') {
-        s.setTab('shelf')
-        return
-      }
-      void app.exitApp()
-    }).then((h) => {
-      remove = h.remove
-    })
+    void app
+      .addListener('backButton', () => {
+        const s = useUiStore.getState()
+        if (consumeBack()) return
+        if (s.onboardBookId) {
+          s.finishOnboard()
+          return
+        }
+        if (s.openBookId) {
+          s.closeBook()
+          return
+        }
+        if (s.tab !== 'shelf') {
+          s.setTab('shelf')
+          return
+        }
+        void app.exitApp()
+      })
+      .then((h) => {
+        remove = h.remove
+      })
     return () => remove?.()
   }, [])
 

@@ -3,7 +3,7 @@
  * 前置：npm run build（dist 最新）。stub 由本脚本 spawn（SKIP_ONBOARD=1，端口 3923）。
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, writeFileSync, rmSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -87,10 +87,11 @@ try {
   }
   ok(up, '服务就绪 /api/health')
 
-  await invoke(
-    'settings:save',
-    { provider: 'custom', profiles: { custom: { baseUrl: 'http://127.0.0.1:3923/v1', defaultModel: 'stub-model' } }, apiKeys: { custom: 'stub-key' } }
-  )
+  await invoke('settings:save', {
+    provider: 'custom',
+    profiles: { custom: { baseUrl: 'http://127.0.0.1:3923/v1', defaultModel: 'stub-model' } },
+    apiKeys: { custom: 'stub-key' }
+  })
   ok(true, '模型配置 → stub')
 
   const book = await invoke('book:create', { title: '冒烟之书', targetWords: 600 })
@@ -113,13 +114,16 @@ try {
 
   // ── 写章 agent 全链路（走向卡已废除：startWrite 直通；节点消息序列）──
   let job = await invoke('job:startWrite', book.id)
-  job = await waitJob(job.id, (j) => j.state === 'done', 'agent 全链（工具链+正文+入书+沉淀）', 90_000)
+  job = await waitJob(
+    job.id,
+    (j) => j.state === 'done',
+    'agent 全链（工具链+正文+入书+沉淀）',
+    90_000
+  )
   ok(job.payload.recap != null, '写作 job done + recap')
 
   let msgs = await invoke('message:list', book.id)
-  const steps = msgs
-    .filter((m) => m.meta?.kind === 'job')
-    .map((m) => m.meta.step)
+  const steps = msgs.filter((m) => m.meta?.kind === 'job').map((m) => m.meta.step)
   ok(steps.join(',') === 'chapter', `节点消息序列（${steps.join(',')}）`)
   const chapterMsg = msgs.find((m) => m.meta?.kind === 'job' && m.meta.step === 'chapter')
   ok((chapterMsg?.content ?? '').includes('已入书'), `入书节点文案（${chapterMsg?.content}）`)
@@ -135,7 +139,10 @@ try {
   let cj = await invoke('job:startChat', book.id, '断刀上的「沈」字伏笔你是怎么设计的？')
   ok(cj.kind === 'chat' && cj.state !== 'failed', 'startChat 落队列')
   cj = await waitJob(cj.id, (j) => j.state === 'done', 'chat 第 1 轮')
-  ok((cj.payload.answer ?? '').includes('沈'), `chat 回答非空（${(cj.payload.answer ?? '').slice(0, 24)}…）`)
+  ok(
+    (cj.payload.answer ?? '').includes('沈'),
+    `chat 回答非空（${(cj.payload.answer ?? '').slice(0, 24)}…）`
+  )
 
   msgs = await invoke('message:list', book.id)
   const chatUser = msgs.find((m) => m.role === 'user' && m.content.includes('沈'))

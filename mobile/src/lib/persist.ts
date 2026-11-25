@@ -14,9 +14,8 @@ interface PrefsPlugin {
 
 /** 经 window.Capacitor 取原生 Preferences 插件（native 侧已装 @capacitor/preferences），浏览器返回 null */
 function getPrefs(): Promise<PrefsPlugin | null> {
-  const plugins = (
-    window as unknown as { Capacitor?: { Plugins?: { Preferences?: PrefsPlugin } } }
-  ).Capacitor?.Plugins
+  const plugins = (window as unknown as { Capacitor?: { Plugins?: { Preferences?: PrefsPlugin } } })
+    .Capacitor?.Plugins
   return Promise.resolve(plugins?.Preferences ?? null)
 }
 

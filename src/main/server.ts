@@ -282,7 +282,7 @@ function handleApkDownload(req: IncomingMessage, res: ServerResponse): void {
     return
   }
   res.writeHead(200, {
-    'content-type': MIME['.apk']!,
+    'content-type': MIME['.apk'] ?? 'application/octet-stream',
     'content-length': statSync(full).size,
     'x-content-type-options': 'nosniff',
     ...corsHeaders(req)

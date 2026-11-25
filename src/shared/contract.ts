@@ -482,8 +482,8 @@ export function buildApi(transport: ApiTransport): Api {
   const put = (channel: string, fn: unknown): void => {
     const idx = channel.indexOf(':')
     const ns = channel.slice(0, idx)
-    if (!root[ns]) root[ns] = {}
-    root[ns]![channel.slice(idx + 1)] = fn
+    root[ns] ??= {}
+    root[ns][channel.slice(idx + 1)] = fn
   }
   for (const channel of Object.keys(invokeContract)) {
     put(channel, (...args: unknown[]) => transport.invoke(channel, args))
@@ -491,8 +491,8 @@ export function buildApi(transport: ApiTransport): Api {
   for (const channel of EVENT_CHANNELS) {
     const idx = channel.indexOf(':')
     const ns = channel.slice(0, idx)
-    if (!root[ns]) root[ns] = {}
-    root[ns]![eventMethodName(channel.slice(idx + 1))] = (cb: (...args: never[]) => void) =>
+    root[ns] ??= {}
+    root[ns][eventMethodName(channel.slice(idx + 1))] = (cb: (...args: never[]) => void) =>
       transport.subscribe(channel, cb)
   }
   return root as unknown as Api

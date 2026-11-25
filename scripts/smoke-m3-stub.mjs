@@ -22,7 +22,7 @@ const CHAT_REPLIES = [
   // M5：chat 第二轮
   '可以。你说的「船上还有第三个人」可以和蔗糖舱的印记并成一条线：那批糖是七号泊位连夜装的，收货人写的却是个死人名字。下一章走向卡里我会给一个「查收货人」的纵深选项。'
 ]
-const QUEUE_RAW = ([
+const QUEUE_RAW = [
   // onboard 1：premise 选择题
   // onboard 1：premise 选择题
   JSON.stringify({
@@ -33,7 +33,8 @@ const QUEUE_RAW = ([
   }),
   // onboard 2：直接升 world 带草案
   JSON.stringify({
-    reply: '冷峻悬疑，好品味。我搭了一套港口世界观：雾津港明面上是渔港，暗地里是盐帮走私枢纽。读者第一章只看到雾与灯笼，底层设定先压着。',
+    reply:
+      '冷峻悬疑，好品味。我搭了一套港口世界观：雾津港明面上是渔港，暗地里是盐帮走私枢纽。读者第一章只看到雾与灯笼，底层设定先压着。',
     options: ['就这么定', '重来一套', '我要改（选此项后在下方输入）'],
     stage: 'world',
     draft: {
@@ -67,7 +68,11 @@ const QUEUE_RAW = ([
           name: '林岸',
           role: '主角',
           tags: ['逃亡者', '断刀'],
-          data: { 背景: '前水手，父亲留下断刀后病故', 外貌: '精瘦，手上全是缆绳勒痕', 性格: '能忍，出手狠' },
+          data: {
+            背景: '前水手，父亲留下断刀后病故',
+            外貌: '精瘦，手上全是缆绳勒痕',
+            性格: '能忍，出手狠'
+          },
           state: { location: '雾津港七号泊位', mood: '紧绷', goal: '离开雾津港，查明断刀来历' },
           relations: [{ to: '蓑衣老船工', label: '警惕的同行者' }]
         },
@@ -99,7 +104,8 @@ const QUEUE_RAW = ([
       targetWords: 2000,
       redlines: ['主角林岸不能死', '不写无意义酷刑'],
       skeleton: {
-        ending: '断刀「沈」字的真相与盐帮内乱相连，林岸最终在漩涡中心做出自己的选择——方向感，不是结局。',
+        ending:
+          '断刀「沈」字的真相与盐帮内乱相连，林岸最终在漩涡中心做出自己的选择——方向感，不是结局。',
         firstThree: ['雾夜登船逃离雾津港', '海上与老船工的博弈', '抵达南屿，悬赏画像贴满码头']
       }
     },
@@ -154,17 +160,20 @@ const QUEUE_RAW = ([
   JSON.stringify({
     scenes: [
       {
-        summary: '七号泊位深夜：林岸抱断刀藏身缆桩后，盐帮两人提灯巡查逼近，一条狗嗅到他手背，码头另一头铁器砸落声骤起，巡逻被引开。',
+        summary:
+          '七号泊位深夜：林岸抱断刀藏身缆桩后，盐帮两人提灯巡查逼近，一条狗嗅到他手背，码头另一头铁器砸落声骤起，巡逻被引开。',
         viewpoint: '林岸',
         pace: '慢'
       },
       {
-        summary: '潮水转向的泊位：林岸趁隙冲上只放一半的跳板，贴船舷摸进舱底，把断刀塞进蔗糖筐夹层，自己在黑暗里蜷成一团。',
+        summary:
+          '潮水转向的泊位：林岸趁隙冲上只放一半的跳板，贴船舷摸进舱底，把断刀塞进蔗糖筐夹层，自己在黑暗里蜷成一团。',
         viewpoint: '林岸',
         pace: '快'
       },
       {
-        summary: '起锚后的舱底：绞盘声碾过头顶，林岸摸到刀柄内侧磨掉一半的「沈」字；蓑衣老船工提灯下舱，站在蔗糖筐前报出盐帮悬赏。',
+        summary:
+          '起锚后的舱底：绞盘声碾过头顶，林岸摸到刀柄内侧磨掉一半的「沈」字；蓑衣老船工提灯下舱，站在蔗糖筐前报出盐帮悬赏。',
         viewpoint: '林岸',
         pace: '中'
       }
@@ -187,10 +196,17 @@ const QUEUE_RAW = ([
       }
     ],
     foreshadowOps: [
-      { op: 'plant', title: '断刀的来历', detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。' }
+      {
+        op: 'plant',
+        title: '断刀的来历',
+        detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。'
+      }
     ],
     quickActions: [
-      { label: '补老船工视角', instruction: '在结尾加一小段老船工视角，暗示他早就知道蔗糖筐里有人。' },
+      {
+        label: '补老船工视角',
+        instruction: '在结尾加一小段老船工视角，暗示他早就知道蔗糖筐里有人。'
+      },
       { label: '伏笔埋深', instruction: '把「沈」字刻痕的发现写得更隐蔽，不要直接点出刻痕含义。' }
     ]
   }),
@@ -203,37 +219,80 @@ const QUEUE_RAW = ([
   ].join('\n\n'),
   // M4：review（七维章审读）
   JSON.stringify({
-    verdict: '悬念铺设扎实，逃亡段落的紧迫感立得住；结尾老船工的亮相是全章最好的钩子。对话可以再省，部分说明性台词削弱了冷硬质感。',
+    verdict:
+      '悬念铺设扎实，逃亡段落的紧迫感立得住；结尾老船工的亮相是全章最好的钩子。对话可以再省，部分说明性台词削弱了冷硬质感。',
     findings: [
-      { dimension: '张力', level: 'good', quote: '湿鼻子几乎碰到林岸的手背', comment: '用触觉替代视觉写危机，紧张感到位。' },
-      { dimension: '对话', level: 'warn', quote: '「担保过的人，现在就沉在泊位底下。」', comment: '信息给得太直白，可以留一半让读者拼。' },
-      { dimension: '钩子', level: 'good', quote: '从下舱那一刻起就没有迟疑过', comment: '收尾补的这一笔让老船工的威胁感翻倍。' }
+      {
+        dimension: '张力',
+        level: 'good',
+        quote: '湿鼻子几乎碰到林岸的手背',
+        comment: '用触觉替代视觉写危机，紧张感到位。'
+      },
+      {
+        dimension: '对话',
+        level: 'warn',
+        quote: '「担保过的人，现在就沉在泊位底下。」',
+        comment: '信息给得太直白，可以留一半让读者拼。'
+      },
+      {
+        dimension: '钩子',
+        level: 'good',
+        quote: '从下舱那一刻起就没有迟疑过',
+        comment: '收尾补的这一笔让老船工的威胁感翻倍。'
+      }
     ],
     suggestions: ['下一章让老船工先开口试探，林岸装傻', '巡逻对话里的信息砍掉一半'],
     score: 82
   }),
   // M4：audit（全书审计）
   JSON.stringify({
-    verdict: '整体节奏健康，「沈」字伏笔的埋设频率合适。需要留意：连续两章都是「藏身—被察觉」的同构场景，有剧情空转的风险。',
+    verdict:
+      '整体节奏健康，「沈」字伏笔的埋设频率合适。需要留意：连续两章都是「藏身—被察觉」的同构场景，有剧情空转的风险。',
     findings: [
-      { dimension: '文风漂移', level: 'good', quote: '光晕被雾泡开，像化在水里的蛋黄', comment: '冷硬短句风格保持一致。' },
-      { dimension: '剧情空转', level: 'warn', quote: '藏身蔗糖筐夹层', comment: '与上一章缆桩藏身同构，下一章应换场景形态。' },
-      { dimension: '连续性', level: 'good', quote: '盐帮悬赏你的画像', comment: '与第 1 章悬赏设定呼应，无矛盾。' }
+      {
+        dimension: '文风漂移',
+        level: 'good',
+        quote: '光晕被雾泡开，像化在水里的蛋黄',
+        comment: '冷硬短句风格保持一致。'
+      },
+      {
+        dimension: '剧情空转',
+        level: 'warn',
+        quote: '藏身蔗糖筐夹层',
+        comment: '与上一章缆桩藏身同构，下一章应换场景形态。'
+      },
+      {
+        dimension: '连续性',
+        level: 'good',
+        quote: '盐帮悬赏你的画像',
+        comment: '与第 1 章悬赏设定呼应，无矛盾。'
+      }
     ],
     suggestions: ['下一章切到南屿码头的新场景', '老船工的身份至少再压两章'],
     score: 78
   }),
   // M4：diagnose（问导演）
   JSON.stringify({
-    verdict: '林岸的行动动机链是完整的：断刀→父亲之死→逃离雾津港。但目前「查明断刀来历」这个目标还没有第一个可执行的线索动作，连续两章都在「被动逃」，读者会开始问「他到底要做什么」。建议下一章给他一个主动选择：比如冒险向老船工试探「沈」字。',
+    verdict:
+      '林岸的行动动机链是完整的：断刀→父亲之死→逃离雾津港。但目前「查明断刀来历」这个目标还没有第一个可执行的线索动作，连续两章都在「被动逃」，读者会开始问「他到底要做什么」。建议下一章给他一个主动选择：比如冒险向老船工试探「沈」字。',
     findings: [
-      { dimension: '动机链', level: 'good', quote: '父亲留下断刀后病故', comment: '身世与目标绑定清晰。' },
-      { dimension: '主动性', level: 'warn', quote: '盐帮悬赏你的画像', comment: '主角连续被动应对，缺主动决策。' }
+      {
+        dimension: '动机链',
+        level: 'good',
+        quote: '父亲留下断刀后病故',
+        comment: '身世与目标绑定清晰。'
+      },
+      {
+        dimension: '主动性',
+        level: 'warn',
+        quote: '盐帮悬赏你的画像',
+        comment: '主角连续被动应对，缺主动决策。'
+      }
     ],
     suggestions: ['下一章走向卡优先考虑主角主动试探的方向'],
     score: 0
   })
-])
+]
 const MAIN_QUEUE = QUEUE_RAW.slice(process.env.SKIP_ONBOARD ? 4 : 0)
 const QUEUE = process.env.CHAT_FIRST
   ? [...CHAT_REPLIES, ...MAIN_QUEUE]
@@ -255,12 +314,29 @@ const PLAN_JSON = JSON.stringify({
 })
 // SUBAGENT=1：追加一次「父→spawn_subagent→子读→子 finish→父 finish」交换（排 chat 后、revise 前）
 const SUB_QUEUE = [
-  { tool_calls: [{ name: 'spawn_subagent', arguments: { task: '查一下当前写到第几章，最新章的标题是什么。' } }] },
+  {
+    tool_calls: [
+      { name: 'spawn_subagent', arguments: { task: '查一下当前写到第几章，最新章的标题是什么。' } }
+    ]
+  },
   // 子代理轮（静默，不落工具卡）：list_chapters → finish 结论
   { tool_calls: [{ name: 'list_chapters', arguments: {} }] },
-  { tool_calls: [{ name: 'finish', arguments: { message: '调查结论：目前共 1 章，最新章《雾夜登船》。' } }] },
+  {
+    tool_calls: [
+      { name: 'finish', arguments: { message: '调查结论：目前共 1 章，最新章《雾夜登船》。' } }
+    ]
+  },
   // 父代理拿到结论直接收尾
-  { tool_calls: [{ name: 'finish', arguments: { message: '调查员回报：写到第 1 章《雾夜登船》，断刀伏笔已埋。建议下一章写船上试探。' } }] }
+  {
+    tool_calls: [
+      {
+        name: 'finish',
+        arguments: {
+          message: '调查员回报：写到第 1 章《雾夜登船》，断刀伏笔已埋。建议下一章写船上试探。'
+        }
+      }
+    ]
+  }
 ]
 // revise（独立 job kind=revise，genRevisePlan 吃 JSON plan：局部替换，一命中一未命中）
 const REVISE_PLAN = JSON.stringify({
@@ -272,15 +348,27 @@ const REVISE_PLAN = JSON.stringify({
 const REVIEW_JSON = JSON.stringify({
   verdict: '悬念铺设扎实，逃亡段落的紧迫感立得住；结尾老船工的亮相是全章最好的钩子。',
   findings: [
-    { dimension: '张力', level: 'good', quote: '湿鼻子几乎碰到林岸的手背', comment: '用触觉替代视觉写危机。' },
-    { dimension: '对话', level: 'warn', quote: '「担保过的人，现在就沉在泊位底下。」', comment: '信息给得太直白。' }
+    {
+      dimension: '张力',
+      level: 'good',
+      quote: '湿鼻子几乎碰到林岸的手背',
+      comment: '用触觉替代视觉写危机。'
+    },
+    {
+      dimension: '对话',
+      level: 'warn',
+      quote: '「担保过的人，现在就沉在泊位底下。」',
+      comment: '信息给得太直白。'
+    }
   ],
   suggestions: ['下一章让老船工先开口试探'],
   score: 82
 })
 const DIAGNOSE_JSON = JSON.stringify({
   verdict: '林岸的行动动机链完整：断刀→父亲之死→逃离雾津港。建议下一章给他一个主动选择。',
-  findings: [{ dimension: '主动性', level: 'warn', quote: '盐帮悬赏你的画像', comment: '主角连续被动应对。' }],
+  findings: [
+    { dimension: '主动性', level: 'warn', quote: '盐帮悬赏你的画像', comment: '主角连续被动应对。' }
+  ],
   suggestions: ['下一章走向卡优先考虑主角主动试探的方向'],
   score: 0
 })
@@ -328,7 +416,10 @@ const AGENT_QUEUE = [
     tool_calls: [
       {
         name: 'save_foreshadow',
-        arguments: { title: '断刀的来历', detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。' }
+        arguments: {
+          title: '断刀的来历',
+          detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。'
+        }
       }
     ]
   },
@@ -345,7 +436,14 @@ const AGENT_QUEUE = [
       }
     ]
   },
-  { tool_calls: [{ name: 'finish', arguments: { message: '第 1 章已入书，人物状态已更新。建议下一章写船上试探。' } }] },
+  {
+    tool_calls: [
+      {
+        name: 'finish',
+        arguments: { message: '第 1 章已入书，人物状态已更新。建议下一章写船上试探。' }
+      }
+    ]
+  },
   // chat（free agent）：一轮工具 + 两轮纯文本（CHAT_IN_QUEUE=0 时跳过，供 m4 直接 revise）
   // SUBAGENT=1 时截掉尾条纯文本（首条 chat 固定吃 2 项，防止子代理交换错位），后接父→查员交换
   ...(process.env.CHAT_IN_QUEUE === '0'
@@ -364,7 +462,6 @@ const AGENT_QUEUE = [
 ]
 let callSeq = 0
 const FINAL_QUEUE = process.env.AGENT_MODE ? AGENT_QUEUE : QUEUE
-
 
 let served = 0
 const server = createServer((req, res) => {

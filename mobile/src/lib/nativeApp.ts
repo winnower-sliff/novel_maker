@@ -9,7 +9,10 @@ interface BackButtonEvent {
 }
 
 interface NativeAppPlugin {
-  addListener(event: 'backButton', cb: (e: BackButtonEvent) => void): Promise<{ remove: () => void }>
+  addListener(
+    event: 'backButton',
+    cb: (e: BackButtonEvent) => void
+  ): Promise<{ remove: () => void }>
   exitApp(): Promise<void>
 }
 

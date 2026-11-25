@@ -1,6 +1,6 @@
 import type { Job } from '@shared/types'
-import ReportCard from '../../components/ReportCard'
 import { Markdown } from '../../components/Markdown'
+import ReportCard from '../../components/ReportCard'
 import { ChapterDoneCard, RevisedCard } from './DoneCards'
 import PlanCard from './PlanCard'
 
@@ -42,7 +42,8 @@ export default function JobCard({
     }
     return <StaticBubble text="本章计划（已处理）" />
   }
-  if (step === 'chapter') return <ChapterDoneCard job={job} chaptersById={chaptersById} refresh={refreshAll} />
+  if (step === 'chapter')
+    return <ChapterDoneCard job={job} chaptersById={chaptersById} refresh={refreshAll} />
   if (step === 'revised') return <RevisedCard job={job} />
   if (step === 'report') {
     return job.payload.report ? (
@@ -56,7 +57,9 @@ export default function JobCard({
       <div className="px-4 py-2">
         <div className="rounded-2xl border border-red-200 bg-red-50 p-3.5">
           <div className="mb-1 text-xs font-semibold text-red-600">卡住了</div>
-          <div className="text-xs leading-relaxed break-all text-stone-500">{job.error || '未知错误'}</div>
+          <div className="text-xs leading-relaxed break-all text-stone-500">
+            {job.error || '未知错误'}
+          </div>
           {active && active.id === job.id && (
             <div className="mt-3 flex gap-2">
               <button

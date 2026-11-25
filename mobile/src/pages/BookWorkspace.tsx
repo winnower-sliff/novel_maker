@@ -13,7 +13,11 @@ const SUBS = [
     icon: (
       <g>
         <path d="M12 20h9" strokeLinecap="round" />
-        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" strokeLinecap="round" strokeLinejoin="round" />
+        <path
+          d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </g>
     )
   },
@@ -22,8 +26,16 @@ const SUBS = [
     label: '阅读',
     icon: (
       <g>
-        <path d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z" strokeLinecap="round" strokeLinejoin="round" />
-        <path d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z" strokeLinecap="round" strokeLinejoin="round" />
+        <path
+          d="M2 3h6a4 4 0 0 1 4 4v14a3 3 0 0 0-3-3H2z"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M22 3h-6a4 4 0 0 0-4 4v14a3 3 0 0 1 3-3h7z"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
       </g>
     )
   },
@@ -76,7 +88,15 @@ export default function BookWorkspace() {
             closeBook()
           }}
         >
-          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <svg
+            aria-hidden="true"
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          >
             <path d="M15 18l-6-6 6-6" strokeLinecap="round" strokeLinejoin="round" />
           </svg>
         </button>
@@ -128,7 +148,15 @@ export default function BookWorkspace() {
               onClick={() => setBookSub(s.key)}
             >
               <span className="relative">
-                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={on ? 2.2 : 1.8}>
+                <svg
+                  aria-hidden="true"
+                  width="20"
+                  height="20"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth={on ? 2.2 : 1.8}
+                >
                   {s.icon}
                 </svg>
                 {/* 写作任务运行中：写作 tab 亮橙点，其他页也能看见导演在干活 */}

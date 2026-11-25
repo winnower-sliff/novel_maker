@@ -1,4 +1,4 @@
-import { buildApi, type Api, type ApiTransport } from '@shared/contract'
+import { type Api, type ApiTransport, buildApi } from '@shared/contract'
 import { loadConn } from './conn'
 
 declare global {

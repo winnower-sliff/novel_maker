@@ -18,8 +18,14 @@ const book = store.createBook({ title: 'T' })
 const line = store.getLine(book.activeLineId)
 
 // 新库直建 data/tags 列（旧库 RENAME 路径由生产迁移验证）
-const cols = getDb().prepare("PRAGMA table_info('characters')").all().map((c) => c.name)
-ok('characters 平铺列 data+tags（无 card）', cols.includes('data') && cols.includes('tags') && !cols.includes('card'))
+const cols = getDb()
+  .prepare("PRAGMA table_info('characters')")
+  .all()
+  .map((c) => c.name)
+ok(
+  'characters 平铺列 data+tags（无 card）',
+  cols.includes('data') && cols.includes('tags') && !cols.includes('card')
+)
 
 const c1 = store.saveCharacter({ lineId: line.id, name: '菲林', role: '主角' })
 const c2 = store.saveCharacter({ id: c1.id, lineId: line.id, state: { location: '码头' } })
@@ -38,10 +44,19 @@ ok('建档带三件套（tags+data）', c3?.tags.length === 2 && c3?.data?.age =
 const c4 = store.updateCharacterTags(c3.id, { add: ['盐帮悬赏'], delete: ['断刀'] })
 ok('tags 增量（add+delete）', JSON.stringify(c4?.tags) === JSON.stringify(['逃亡者', '盐帮悬赏']))
 const c5 = store.updateCharacterData(c3.id, { location: '蔗糖舱' })
-ok('data 浅合并（兄弟键 age 保留）', c5?.data?.location === '蔗糖舱' && c5?.data?.age === 19 && c5?.data?.trait === '隐忍')
-ok('data 合并不碰 state/tags', c5?.state && Object.keys(c5.state).length === 0 && c5?.tags.length === 2)
+ok(
+  'data 浅合并（兄弟键 age 保留）',
+  c5?.data?.location === '蔗糖舱' && c5?.data?.age === 19 && c5?.data?.trait === '隐忍'
+)
+ok(
+  'data 合并不碰 state/tags',
+  c5?.state && Object.keys(c5.state).length === 0 && c5?.tags.length === 2
+)
 const c6 = store.saveCharacter({ id: c3.id, lineId: line.id, state: { mood: '紧绷' } })
-ok('save_character 改 state 不覆盖 data/tags', c6?.data?.age === 19 && c6?.tags.length === 2 && c6?.state?.mood === '紧绷')
+ok(
+  'save_character 改 state 不覆盖 data/tags',
+  c6?.data?.age === 19 && c6?.tags.length === 2 && c6?.state?.mood === '紧绷'
+)
 
 const f1 = store.saveForeshadow({ lineId: line.id, title: '断刀刻痕', synopsis: 'x' })
 const f2 = store.saveForeshadow({ id: f1.id, lineId: line.id, synopsis: 'y' })
@@ -56,5 +71,5 @@ try {
 } catch {
   // Windows 下 sqlite 句柄未释放时删不掉，留临时目录无害
 }
-console.log(`\n[部分更新冒烟] ${failed ? '失败 ×' + failed : '全部通过'}`)
+console.log(`\n[部分更新冒烟] ${failed ? `失败 ×${failed}` : '全部通过'}`)
 process.exit(failed ? 1 : 0)

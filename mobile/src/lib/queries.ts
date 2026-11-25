@@ -1,4 +1,3 @@
-import { useQuery } from '@tanstack/react-query'
 import type {
   Book,
   Card,
@@ -10,6 +9,7 @@ import type {
   StatusCard,
   StoryLine
 } from '@shared/types'
+import { useQuery } from '@tanstack/react-query'
 
 /**
  * 数据层：全部经 window.api（bridge 装配的契约客户端，多参展开形态）。
@@ -37,9 +37,7 @@ export function useBooks() {
 export interface BookDetail {
   book: Book
   lines: StoryLine[]
-  chapters: Array<
-    Pick<Chapter, 'id' | 'lineId' | 'orderNo' | 'title' | 'wordCount' | 'updatedAt'>
-  >
+  chapters: Array<Pick<Chapter, 'id' | 'lineId' | 'orderNo' | 'title' | 'wordCount' | 'updatedAt'>>
 }
 
 export function useBook(bookId: string | null) {
@@ -111,9 +109,8 @@ export function useJobFlow(bookId: string | null) {
       const jobs = await window.api.job.list(bookId as string)
       return {
         active:
-          jobs.find(
-            (j) => j.state !== 'done' && j.state !== 'failed' && j.state !== 'cancelled'
-          ) ?? null,
+          jobs.find((j) => j.state !== 'done' && j.state !== 'failed' && j.state !== 'cancelled') ??
+          null,
         // listJobs 按 created_at DESC，首个 done 的写作任务即最近完成的一章
         lastDone: jobs.find((j) => j.kind === 'write' && j.state === 'done') ?? null,
         jobs
@@ -121,8 +118,7 @@ export function useJobFlow(bookId: string | null) {
     },
     enabled: !!bookId,
     // 有任务在跑时加快兜底轮询（SSE 之外的保险）
-    refetchInterval: (query) =>
-      query.state.data?.active ? 5_000 : 20_000
+    refetchInterval: (query) => (query.state.data?.active ? 5_000 : 20_000)
   })
 }
 

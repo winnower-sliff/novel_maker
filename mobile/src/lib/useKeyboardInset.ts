@@ -1,6 +1,6 @@
+import type { PluginListenerHandle } from '@capacitor/core'
 import { Keyboard } from '@capacitor/keyboard'
 import { useEffect, useState } from 'react'
-import type { PluginListenerHandle } from '@capacitor/core'
 
 /**
  * 软键盘避让 inset（px），供底部输入栏 paddingBottom。
