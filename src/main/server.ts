@@ -5,6 +5,7 @@ import { join, normalize, resolve } from 'node:path'
 import { strToU8, zipSync } from 'fflate'
 import { invokeContract } from '../shared/contract.js'
 import { setGlobalSink } from './broadcast.js'
+import { buildInfo } from './buildInfo.js'
 import { getPort } from './config.js'
 import type { EventSink } from './eventSink.js'
 import { appVersion, sharedHandlers } from './handlers/index.js'
@@ -300,7 +301,8 @@ async function handleApi(req: IncomingMessage, res: ServerResponse, url: URL): P
     return
   }
   if (path === '/api/health') {
-    json(res, 200, { ok: true, version: appVersion() }, req)
+    // build=构建指纹快照（版本/commit/源码哈希），pid=应答进程——deploy 据此确认「跑的就是本次构建」
+    json(res, 200, { ok: true, version: appVersion(), build: buildInfo(), pid: process.pid }, req)
     return
   }
   if (path === '/api/events' && req.method === 'GET') return handleEvents(req, res)

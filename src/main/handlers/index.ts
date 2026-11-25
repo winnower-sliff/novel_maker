@@ -1,5 +1,6 @@
 import { createRequire } from 'node:module'
 import { providerPreset } from '../../shared/providers.js'
+import { buildInfo } from '../buildInfo.js'
 import { apiKey, profile, saveSettings, viewSettings } from '../config.js'
 import { probeModels } from '../llm.js'
 import { dataDir } from '../paths.js'
@@ -62,6 +63,7 @@ export const sharedHandlers: HandlerTable = {
   ...sampleHandlers
 }
 
+/** 服务版本：取构建指纹里的快照（deploy 时写入）；tsx 开发模式没有构建产物则读 package.json */
 export function appVersion(): string {
-  return pkg.version
+  return buildInfo()?.version ?? pkg.version
 }

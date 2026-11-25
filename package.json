@@ -8,7 +8,7 @@
   "main": "dist/main/index.js",
   "scripts": {
     "dev": "tsx watch src/main/index.ts",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && node scripts/build-info.mjs",
     "start": "node dist/main/index.js",
     "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p mobile/tsconfig.json --noEmit",
     "lint": "biome check src mobile/src mobile/vite.config.ts scripts",
