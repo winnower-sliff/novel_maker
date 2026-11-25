@@ -25,12 +25,13 @@
 - **生产 server 跑的就是主 checkout 的 `dist/main/index.js`**（deploy.mjs `cwd: root`）——
   **开发线里绝不 deploy / 绝不 build-apk**（会让生产寄生在待删的 worktree 上、且会打 tag 推版本）；
   开发线只靠冒烟脚本验证主进程改动。合并回主 checkout 后再 deploy。
-- `npm run apk` = `build-apk.mjs`，开头会 `bumpVersion`（按 Conventional Commits 升版+打 tag）——
-  只在合并后、所有待发包都就绪时跑一次（多个需求包可合并成一个 APK 版本）。
-- 冒烟回归全集：smoke-m2 / m4 / m5 / m6 / sample / archive / char-tags / export / http-patch /
-  partial-update / plan（m2·m4·m5·m6 依赖 smoke-m3-stub 队列桩，**队列顺序敏感**）。
-- 2026-11-25 基线：HEAD=645815b，工作区干净，与 origin 同步；生产 health 4.1.0（=4494bc2 时的
-  版本号，export 路由已验证 200），即生产主进程与 HEAD 一致（其后两个提交均纯前端）。
+- `npm run apk` = `build-apk.mjs`（v4.5 起两阶段）：先 `deploy.mjs --if-stale` 确保生产 server
+  是当前源码的构建 → 出包 → **全部成功才**提交 `chore(release): vX` + 打 tag（失败回滚版本号）。
+- 冒烟回归全集：`npm test`（=build+`scripts/smoke-all.mjs`，13 套串行，约 15s）；`npm run verify`
+  = typecheck+lint+test。输出很长——后台跑+重定向到文件+只看尾部。
+- 2026-11-25 基线：HEAD=0b6395d（chore(release): v4.5.0），与 origin 同步；生产 health
+  `build.commit=65df5f2`。**判断生产是否落后：比对 `/api/health` 的 `build.sourceHash` 与
+  `node scripts/build-info.mjs --print`**（`npm run apk` 会自动 deploy，有任务在跑时拒绝重启）。
 
 ### 已确认的问题/机会（开工前调研）
 1. **部署一致性无机器保证**：health 的 version 是 deploy 时的 package.json 版本，而 build-apk 之后
@@ -56,22 +57,22 @@
 - 新 worktree 无 node_modules，`npm ci` 约 6s（218 包）；mobile-app/node_modules 仅 build-apk 需要。
 
 ### 需求包（三份审查去重后定稿；状态 待做/开发中/待合并/已部署）
-- **A `chore/hygiene` 工程卫生+部署门禁**（开发线 `…/worktree/754ca1/hygiene`，**开发中**）
-  - A1 biome 覆盖 mobile/src+scripts（已 --write 格式化 50 文件；剩 ~60 条诊断待手修：
-    useExhaustiveDependencies×7、a11y×22、noArrayIndexKey×15、杂项）
-  - A2 删裸 LLM 代理：`llm:chat/abort/poll` 三通道+`src/main/runs.ts`+`llm:delta/done/error/notice`
-    事件+`DonePayload/RunRecordPayload`+`api.llm` 命名空间（mobile 零引用，已核实）
-  - A3 死代码：`src/shared/{wikiLinks,tags}.ts`、`scripts/test-tools-live.mjs`（对真实库写！）、
-    `com/getcapacitor/myapp/Example*Test.java`、孤儿产物 dist 清理
-  - A4 死依赖 vitest、`@capacitor/app`、`@capacitor/local-notifications`；`npm test`→冒烟总入口
-    `scripts/smoke-all.mjs`（合并后主 checkout 需 `cd mobile-app && npm install`）
-  - A5 构建指纹进 `/api/health`；build-apk 发现主进程源码≠生产则自动 deploy；deploy 加固
-    （构建前清 dist、busy 检查、探测校验指纹、PID 定位）
-  - A6 .gitignore 补齐、`engines.node>=24`、README、过时注释
-- **B `fix/job-lifecycle` 后端 P1**：入队即返回（修 30s 超时/导演答两遍）；AbortSignal 贯穿
-  （取消/看门狗真正停 loop，终态带 `WHERE state='running'`，activeJobId 统一，轮内长链路喂狗）；
-  LLM 重试读 `LlmError.status`+retry-after+terminated；上下文压缩切点落到 assistant；
-  工具内异常转 tool_result；队列 FIFO+启动 pump+不饿死
+- **A `chore/hygiene` 工程卫生+部署门禁**（**已部署** 2026-11-25，合并提交 65df5f2，APK v4.5.0）
+  - b027707 死代码 / 45d0e93 biome 纳管 mobile+scripts（BottomSheet 统一弹层）/ aee1226 删裸 LLM
+    代理 / 22016f8 死依赖+`npm test` 冒烟总入口 / 862051e 构建指纹+deploy 加固 / 926ce9d 仓库卫生
+  - 遗留给线 D：BottomSheet 尚未接返回键；离开阅读页未恢复状态栏
+- **B `fix/job-lifecycle` 后端 P1**（**开发中**）——步骤：
+  - [ ] B3 入队即返回（`enqueueOrRun` 现等整轮跑完 → 手机端 30s 超时「发送失败」、重发致导演答两遍）
+  - [ ] B1 AbortSignal 贯穿：取消/看门狗真正停 loop；终态写入带 `WHERE state='running'`；
+        activeJobId 统一；轮内长链路（写章多段/子代理）喂狗
+  - [ ] B2 approvePlan/pump 起的任务不设 activeJobId（busy 恒 false）；approvePlan 无 try/catch
+  - [ ] B4 LLM 重试读 `LlmError.status`（429/5xx 现不重试）+retry-after
+  - [ ] B5 上下文压缩切点落到 assistant（现以 role:'tool' 开头会被网关拒）
+  - [ ] B7 工具内异常转 tool 结果（现炸整个 job）
+  - [ ] B8 队列 FIFO+启动 pump+不饿死（现 `listJobs(…,10)` LIFO）
+  - [ ] 附：handleInvoke 内部异常与参数错误区分（现一律 400 且不打日志）；
+        启动恢复的 job 文案不是「看门狗」；LLM 错误对用户的友好文案
+  - 验证：扩冒烟（取消/超时/队列顺序/入队响应时间），`npm run verify` 全绿
 - **C `feat/data-safety`**：改章写 `chapter_versions`（现全仓零写入）+applyRevisePlan 修字符串
   replace 陷阱+前端回看入口；备份体系（快照修剪/每日每周/NM_BACKUP_DIR/restore 脚本/quick_check）；
   save_character 的 state/relations 仅新建生效；onboard 先 ask 后事务落库；delete_last_chapter
@@ -87,6 +88,7 @@
 - **候选（未排期）**：生产产物迁出 worktree（现寄生在 opencode worktree 路径）；supervisor 守护
 
 ### 下一步
-线 A：修完剩余 biome 诊断 → A2~A6 → typecheck+lint+全冒烟 → 逐项 commit+push
-→ 回主 checkout `git merge --no-ff chore/hygiene` → push → 删 worktree
-→ 主 checkout deploy + `cd mobile-app && npm install` + `npm run apk`
+线 B：开线 `fix/job-lifecycle`（worktree 默认基于 main，先 `git reset --hard feat/v2-rebuild`）
+→ 亲读 jobs.ts / agent/loop.ts / director/callJson.ts / llmOpenai.ts / store.ts 的 job 段核实证据
+→ 逐项修+补冒烟 → `npm run verify` → commit+push → 合并 → 主 checkout deploy + `npm run apk`
+→ 更新本板（线 B 已部署，开线 C）
