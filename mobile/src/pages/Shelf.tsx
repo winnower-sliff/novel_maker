@@ -5,7 +5,7 @@ import { toastError } from '@mobile/lib/toastStore'
 import { useUiStore } from '@mobile/lib/uiStore'
 import type { Book } from '@shared/types'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet'
 import { ErrorBox } from '../components/ErrorBox'
 import { OfflineBanner } from '../components/OfflineBanner'
@@ -49,6 +49,14 @@ export default function Shelf() {
   const [confirmWipe, setConfirmWipe] = useState(false)
   const [exporting, setExporting] = useState<string | null>(null)
   const [exportMsg, setExportMsg] = useState('')
+
+  // 断网期间每隔几秒自己试一次：连上后刷新成功，顶部提示自动消失。
+  // 不依赖事件连接的恢复通知——桌面浏览器的事件连接是静默自动重连的，不会通知
+  useEffect(() => {
+    if (!(isError && books)) return
+    const timer = setInterval(() => void refetch({ cancelRefetch: false }), 5000)
+    return () => clearInterval(timer)
+  }, [isError, books, refetch])
 
   const doExport = async (b: Book) => {
     setMenuFor(null)
