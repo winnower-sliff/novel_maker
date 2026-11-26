@@ -91,6 +91,9 @@ export default function Read() {
   useEffect(() => {
     applySystemBars(theme)
     setReaderDark(theme === 'dark')
+    // 离开阅读页（切子页 / 退回书架）把系统栏还给应用主界面，
+    // 否则纸色 / 夜间的状态栏会一直带到别的页面
+    return () => applySystemBars('light')
   }, [theme, setReaderDark])
 
   // 切章自动回顶：滚动容器是 BookWorkspace 的 <main>（正文 div 自身不滚），章内容渲染后滚它
