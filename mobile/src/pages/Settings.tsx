@@ -18,13 +18,20 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
 
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''
 
+/** 「连接」一栏的状态胶囊：探测中不下结论，拿到结果或确实连不上才显示已连接 / 未连接 */
+const LINK: Record<'ok' | 'down' | 'probing', { label: string; cls: string }> = {
+  ok: { label: '已连接', cls: 'bg-orange-100 text-orange-700' },
+  down: { label: '未连接', cls: 'bg-red-100 text-red-600' },
+  probing: { label: '正在连接…', cls: 'bg-stone-100 text-stone-500' }
+}
+
 export default function Settings() {
   const conn = useConnStore((s) => s.conn)
   const setConn = useConnStore((s) => s.setConn)
   const setTab = useUiStore((s) => s.setTab)
   const queryClient = useQueryClient()
 
-  const { data: server } = useQuery({
+  const { data: server, isError: serverFailed } = useQuery({
     queryKey: ['serverStatus'],
     queryFn: () => window.api.server.status(),
     refetchInterval: 30_000
@@ -34,6 +41,8 @@ export default function Settings() {
     queryFn: async (): Promise<UsageStats> => window.api.usage.stats(),
     refetchInterval: 60_000
   })
+  // 探测还没回来（既没结果也没报错）时 server 是 undefined，不能当成「未连接」
+  const link = serverFailed ? 'down' : server ? (server.running ? 'ok' : 'down') : 'probing'
 
   return (
     <div className="px-4 py-5 pb-10">
@@ -54,13 +63,8 @@ export default function Settings() {
           <span className="min-w-0 flex-1 truncate text-sm text-stone-600">
             {conn?.baseUrl ?? '-'}
           </span>
-          <span
-            className={
-              'ml-3 shrink-0 rounded-full px-2 py-0.5 text-[11px] ' +
-              (server?.running ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-600')
-            }
-          >
-            {server?.running ? '已连接' : '未连接'}
+          <span className={`ml-3 shrink-0 rounded-full px-2 py-0.5 text-[11px] ${LINK[link].cls}`}>
+            {LINK[link].label}
           </span>
         </div>
         {server && (
