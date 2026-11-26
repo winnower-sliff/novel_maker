@@ -40,6 +40,15 @@ const ports = candidatePorts(readBasePort(dataDir))
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * 失败退出：process.exit 紧跟在几次 fetch 之后会以 libuv 断言崩溃收场，退出码不是 1（AGENTS.md 踩坑 13），
+ * 先等句柄收尾再退。
+ */
+async function exitFail() {
+  await sleep(200)
+  process.exit(1)
+}
+
 /** 未到终态的任务（queued/running/waiting_user）——重启会打断它们 */
 async function activeJobs(port) {
   try {
@@ -139,7 +148,7 @@ if (live) {
       `[deploy] 有 ${jobs.length} 个任务进行中（${jobs.map((j) => j.kind).join('、')}），重启会打断它们。` +
         '等任务结束再部署，或加 --force 强行重启。'
     )
-    process.exit(1)
+    await exitFail()
   }
 }
 
@@ -158,7 +167,7 @@ const build = spawnSync(
 if (build.status !== 0 || !existsSync(join(next, 'main', 'index.js'))) {
   rmSync(next, { recursive: true, force: true })
   console.error('[deploy] 构建失败，中止（运行中的旧服务不受影响）')
-  process.exit(1)
+  await exitFail()
 }
 const info = writeBuildInfo(root, next)
 
@@ -236,33 +245,33 @@ for (let i = 0; i < 40 && !served && exited === null; i++) {
 }
 
 // 没在正确端口上服务的新进程就是残留：占着别的端口、手机端却连不上它，必须收掉
-const fail = (msg) => {
+const fail = async (msg) => {
   if (exited === null) {
     child.kill()
     console.error('[deploy] 已终止本次拉起的进程')
   }
   console.error(`[deploy] ${msg}`)
-  process.exit(1)
+  await exitFail()
 }
 
 if (!served) {
-  if (exited !== null) fail(`服务启动后即退出（code ${exited}），请查看 ${logFile}`)
+  if (exited !== null) await fail(`服务启动后即退出（code ${exited}），请查看 ${logFile}`)
   else if (foreign) {
-    fail(
+    await fail(
       `旧实例仍在应答（PID ${foreign.pid}，端口 ${foreign.port}），未被终止；` +
         '新服务多半漂到了别的端口，手机端按固定端口会连不上。'
     )
-  } else fail('探测超时（服务可能仍在启动），请查看 server.log')
+  } else await fail('探测超时（服务可能仍在启动），请查看 server.log')
 }
 if (served.port !== ports[0]) {
-  fail(
+  await fail(
     `新服务漂到了 ${served.port}（应为 ${ports[0]}）：起始端口被别的进程占着，手机端按固定端口会连不上`
   )
 }
 if (served.version !== info.version)
-  fail(`版本不符：应答 ${served.version}，本次构建 ${info.version}`)
+  await fail(`版本不符：应答 ${served.version}，本次构建 ${info.version}`)
 if (served.build?.sourceHash !== info.sourceHash) {
-  fail(`指纹不符：应答 ${served.build?.sourceHash}，本次构建 ${info.sourceHash}`)
+  await fail(`指纹不符：应答 ${served.build?.sourceHash}，本次构建 ${info.sourceHash}`)
 }
 console.log(
   `[deploy] 完成：http://127.0.0.1:${served.port}（${info.version} ${info.commit}，指纹 ${info.sourceHash}）`
