@@ -1,3 +1,4 @@
+import { spineColor } from '@mobile/lib/cover'
 import { exportBookZip } from '@mobile/lib/exportPlugin'
 import { onboardProgressKey, readOnboardProgress } from '@mobile/lib/onboard'
 import { useBooks, useShelfStatus } from '@mobile/lib/queries'
@@ -13,15 +14,6 @@ import { OfflineBanner } from '../components/OfflineBanner'
 /** 点「开新书」时先占位的书名；真正的书名在引导最后一步才定 */
 const NEW_BOOK_TITLE = '新书'
 const UNTITLED = '未命名新书'
-
-/** 书脊配色：按书 id 稳定取暖色系之一 */
-const SPINE_COLORS = ['#ea580c', '#d97706', '#c2410c', '#b45309', '#9a3412', '#e11d48']
-
-function spineColor(id: string): string {
-  let h = 0
-  for (const c of id) h = (h * 31 + c.charCodeAt(0)) >>> 0
-  return SPINE_COLORS[h % SPINE_COLORS.length] ?? '#ea580c'
-}
 
 function relTime(ts: number): string {
   const m = Math.floor((Date.now() - ts) / 60_000)

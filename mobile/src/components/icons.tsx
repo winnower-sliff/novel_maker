@@ -53,6 +53,19 @@ export function IconLibrary({ className }: { className?: string }) {
   )
 }
 
+/** 文档：待导入的 txt */
+export function IconFileText({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+      <path d="M14 2v6h6" />
+      <path d="M16 13H8" />
+      <path d="M16 17H8" />
+      <path d="M10 9H8" />
+    </Svg>
+  )
+}
+
 /** 齿轮：设置 */
 export function IconGear({ className }: { className?: string }) {
   return (
