@@ -1,7 +1,8 @@
 // 部署链路冒烟：在临时数据目录上跑 scripts/deploy.mjs——首启 / 构建失败不伤旧服务 / 升级 / 幂等 / 忙时拒绝 / --force。
 // 不碰生产：--data-dir 指向临时目录、端口 3979；deploy 只终止「本 checkout 拉起的」进程。
-import { spawnSync } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -36,6 +37,39 @@ const deploy = (...flags) =>
     encoding: 'utf8'
   })
 const output = (r) => `${r.stdout ?? ''}${r.stderr ?? ''}`
+/** 端口上已经没人监听（进程退出后端口释放有延迟，抢跑会让服务漂到下一个端口） */
+async function waitPortFree() {
+  for (let i = 0; i < 40; i++) {
+    const busy = await new Promise((done) => {
+      const s = net.connect(PORT, '127.0.0.1')
+      s.setTimeout(500)
+      s.on('connect', () => {
+        s.destroy()
+        done(true)
+      })
+      s.on('error', () => done(false))
+      s.on('timeout', () => {
+        s.destroy()
+        done(false)
+      })
+    })
+    if (!busy) return
+    await sleep(250)
+  }
+}
+/** 不经 deploy、不重新构建，直接拉起 dist 里的服务（与 deploy 一样脱离本进程树）——
+ *  用来造「启动时读到的构建指纹就是旧的」的进程 */
+async function startBare() {
+  await waitPortFree()
+  spawn(process.execPath, [join(root, 'dist', 'main', 'index.js')], {
+    env: { ...process.env, NM_DATA_DIR: DATA },
+    detached: true,
+    stdio: 'ignore',
+    windowsHide: true
+  }).unref()
+  for (let i = 0; i < 60 && !(await probeHealth(PORT)); i++) await sleep(250)
+  return probeHealth(PORT)
+}
 /** server.pid 里记的 PID；部署没走到拉起那步时文件不存在，返回 NaN（与任何真实 PID 都不相等） */
 const recordedPid = () => {
   try {
@@ -44,7 +78,7 @@ const recordedPid = () => {
     return Number.NaN
   }
 }
-/** 改写构建指纹文件：server 每次请求都读它，改完 /api/health 立刻变——用来伪造「产物与源码不一致」 */
+/** 改写构建指纹文件。进程只在启动时读它一次——改完 /api/health 不会立刻变，要影响某个进程得在它启动前改 */
 const tamperBuildInfo = (patch) => {
   const file = join(root, 'dist', 'build-info.json')
   writeFileSync(file, `${JSON.stringify({ ...readBuildInfo(root), ...patch }, null, 2)}\n`)
@@ -94,15 +128,21 @@ try {
     unlinkSync(broken)
   }
 
-  // ③ 升级：删掉 PID 文件，模拟「老版本部署的服务」（只能靠端口扫描找到它）
-  unlinkSync(join(DATA, 'server.pid'))
+  // ③ 升级：进程只认自己启动时读到的构建指纹（磁盘上的 build-info.json 后来被改写也骗不了它），
+  //    所以要造一个「启动时指纹就是旧的」的进程：先改指纹文件，再不经 deploy 直接拉起
+  await kill(h1?.pid)
+  unlinkSync(join(DATA, 'server.pid')) // 模拟「老版本部署的服务」：只能靠端口扫描找到它
   tamperBuildInfo({ sourceHash: 'tampered' })
+  const staleProc = await startBare()
+  livePid = staleProc?.pid ?? livePid
+  tamperBuildInfo({ sourceHash: fp }) // 磁盘上的产物换成了新的，旧进程不受影响
+  ok('旧构建的进程如实报自己启动时的指纹', staleProc?.build?.sourceHash === 'tampered')
   const upgrade = deploy('--if-stale')
   ok('产物落后时 --if-stale 重新部署', upgrade.status === 0)
   const h2 = await probeHealth(PORT)
   livePid = h2?.pid ?? livePid
-  ok('换了新进程', h2?.pid !== h1?.pid && h2?.pid === recordedPid())
-  ok('旧进程已终止（靠端口扫描找到的）', !alive(h1?.pid))
+  ok('换了新进程', h2?.pid !== staleProc?.pid && h2?.pid === recordedPid())
+  ok('旧进程已终止（靠端口扫描找到的）', !alive(staleProc?.pid))
   ok('产物恢复为当前源码', h2?.build?.sourceHash === fp)
 
   // ④ 幂等
