@@ -22,11 +22,11 @@
 ## 常用命令（Windows，Node ≥ 24）
 
 ```sh
-npm install
+npm ci
 npm run verify     # 类型检查 + lint + 构建 + 全部冒烟
 npm run dev        # 开发模式
 npm run deploy     # 构建并重启电脑端服务（有写作任务在跑时会拒绝）
-(cd mobile-app && npm ci)  # 出 APK 前先装一次 Android 壳的依赖（独立的 npm 包，根目录 npm install 装不到）
+(cd mobile-app && npm ci)  # 出 APK 前先装一次 Android 壳的依赖（独立的 npm 包，根目录 npm ci 装不到）
 npm run apk        # 出 APK 并部署为更新源；主进程有改动会先自动部署服务
 ```
 
