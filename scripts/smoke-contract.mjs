@@ -1,8 +1,9 @@
 // 接口边界冒烟：未知通道 / 已拆除的通道 / 参数不符 / 请求体损坏——手机端靠这些状态码区分「调用错了」和「服务挂了」
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3981
 const BASE = `http://127.0.0.1:${PORT}`
@@ -59,11 +60,8 @@ try {
 } catch (e) {
   ok(`异常：${e.message}`, false)
 } finally {
-  server.kill()
-  await new Promise((r) => setTimeout(r, 500))
-  try {
-    rmSync(DATA, { recursive: true, force: true })
-  } catch {}
+  await stopChild(server)
+  await removeTempDir(DATA)
 }
 console.log(`\n[接口边界冒烟] ${failed ? `失败 ×${failed}` : '全部通过'}`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

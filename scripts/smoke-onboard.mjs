@@ -1,8 +1,9 @@
 // 开书引导冒烟：确认草案「先问后存」不重复入库、重复确认幂等、下一阶段看得到已确认草案
 import { spawn } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3982
 const STUB_PORT = 3984
@@ -175,12 +176,8 @@ try {
 } catch (e) {
   ok(false, `异常：${e.message}`)
 } finally {
-  server.kill()
-  stub.kill()
-  await sleep(500)
-  try {
-    rmSync(DATA, { recursive: true, force: true })
-  } catch {}
+  await Promise.all([stopChild(server), stopChild(stub)])
+  await removeTempDir(DATA)
 }
 console.log(`\n[开书引导冒烟] ${passed} 通过 / ${failed} 失败`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

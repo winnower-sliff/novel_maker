@@ -19,7 +19,7 @@
   - `src/shared/`：`contract.ts`（zod 契约，单一事实源）、`types.ts`、`providers.ts`（provider 预设与模型槽）
   - `mobile/`：手机端独立 vite 应用（React 19 + Tailwind v4 + TanStack Query + zustand），产物 `dist-mobile/`
   - `mobile-app/`：Capacitor 壳 + Android 工程（原生插件 `ApkUpdaterPlugin`、`ExportPlugin`、`AppRestartPlugin`）
-  - `scripts/`：`deploy.mjs`、`build-apk.mjs`、`version.mjs`、`build-info.mjs`、`pack-mobile.mjs`、`prod-server.mjs`、`check-tailwind-classes.mjs`、`smoke-*.mjs`
+  - `scripts/`：`deploy.mjs`、`build-apk.mjs`、`version.mjs`、`build-info.mjs`、`pack-mobile.mjs`、`prod-server.mjs`、`check-tailwind-classes.mjs`、`smoke-*.mjs`、`temp-dir.mjs`（冒烟的公共收尾：等子进程退出、删临时目录）
   - `docs/v2/`：`DECISIONS.md`（需求决策单一事实源）、`HANDOFF.md`、`HISTORY.md`；`docs/v1/LEGACY.md`
 - **数据目录**：`%APPDATA%\novel-maker-v2`（其他平台 `~/.novel-maker-v2`；环境变量 `NM_DATA_DIR` 覆盖）。`novel.db` 是全部数据，`settings.json` 是配置与模型密钥，
   `imports\` 放待导入范文，备份与 APK 更新包也在这里。**与 v1 的 Electron userData 目录隔离**（v1 settings 含 safeStorage 密文与旧 schema，混读必炸）。
@@ -28,6 +28,7 @@
   | 命令 | 作用 |
   |---|---|
   | `npm run dev` | tsx watch 起 `src/main/index.ts` |
+  | `npm run start` | 跑构建产物 `node dist/main/index.js`，前台常驻，Ctrl+C 退出。**先 `npm run build`**；只配临时数据目录用（`NM_DATA_DIR` 指到别处）——在跑着生产服务的 checkout 里直接运行，等于对生产数据目录再起一个实例：端口漂到 3911 看着没事，启动序列却照样清空草稿书、把运行中的任务标失败，还多出一个托盘图标 |
   | `npm run typecheck` | 两套 tsconfig：根（主进程，NodeNext）+ `mobile/tsconfig.json` |
   | `npm run lint` / `npm run lint:fix` | Biome 检查 / 修复（lint + format 一体），范围 = `src`、`mobile/src`、`mobile/vite.config.ts`、`scripts` |
   | `npm run build` | tsc → `dist/`，并写构建指纹 `dist/build-info.json` |
@@ -92,12 +93,17 @@
 - **判断生产是否落后**：比对 `GET /api/health` 的 `build.sourceHash` 与 `node scripts/build-info.mjs --print`（指纹 = `src/main` + `src/shared` 全部 .ts 的内容哈希）。
   不要拿 health 的 version 跟 `package.json` 比——出包后才 bump 版本号，那个判据恒成立。
 - `npm run deploy`：有写作任务在跑时拒绝重启（`--force` 强行，任务会被标 failed）；`--if-stale` 指纹一致则不动；仅支持 Windows。
+- **停止服务没有命令**，三条路：① 托盘菜单「退出」——关 HTTP、关托盘、exit 0，最干净；② 前台起的（`npm run start` / `npm run dev`）按 Ctrl+C，走同一条 SIGINT 收尾；③ `npm run deploy` 拉起的实例没有控制台，只能按 PID 强杀——PID 在数据目录的 `server.pid`（deploy 写的）或 `GET /api/health` 的 `pid`，`taskkill /F /T /PID <pid>`（Git Bash 里加 `MSYS_NO_PATHCONV=1`）。
+  强杀没有收尾，下次启动时 `recoverJobsOnBoot` 把被打断的任务标 failed（可重试）。升级不用手动停：`npm run deploy` 自带停旧服务。
 - `npm run apk`（`build-apk.mjs`）：先 `deploy --if-stale` 再出包（`--skip-deploy` 跳过），只能在跑生产 server 的 checkout 里执行。链路 = vite build → Tailwind 哨兵 → `sync-bundle` → `cap sync` → `gradlew assembleDebug` → 根目录 `NovelMaker.apk` → `pack-mobile` 部署为更新源。
+  **出包前先装 `mobile-app` 的依赖**：`cd mobile-app && npm ci`。Android 壳是独立的 npm 包（有自己的 `package.json` / `package-lock.json`），根目录 `npm ci` 装不到，`build-apk.mjs` 也不代劳——`npx cap sync android` 与 gradle 都在 `mobile-app` 下跑，读的是那里的 `node_modules`，没装就在 `cap sync` 这步失败。
   **只改主进程的提交不出 APK**（内容相同的包只会白白打断用户安装）；手机端有改动才出包。
 - **版本号**：根 `package.json` 的 `version` 是 semver 单一事实源。`scripts/version.mjs` 按 Conventional Commits 自最新 `v*` tag 推进（breaking → major、feat → minor、fix / perf → patch，其余不升），出包全部成功才提交 `chore(release): vX` 并打 tag。
   APK 的 `versionCode` = 分钟级 epoch 的 int（单调递增，手机端判新只看它），`versionName` = `<semver>-<yyyymmddHHMM>`。
 - **门禁** = `npm run verify` 全绿。改主进程代码后必须部署才生效。
 - **冒烟**（`scripts/smoke-*.mjs`，打的是 `dist`，须先 build）：每套自带临时数据目录（`NM_DATA_DIR`）与测试端口（3955–3986），**不碰 3910 上的生产服务**；总入口串行、单套 6 分钟超时；输出很长，后台跑并重定向后只看尾部。
+  临时目录建在 `%LOCALAPPDATA%\Temp`（`nm-` 前缀），每套用完自己删——公共收尾在 `scripts/temp-dir.mjs`（先等子进程退出、关本进程的 sqlite 句柄，再删；被占用就重试）。
+  总入口每套跑前 / 跑后比对 Temp 下的 `nm-*` 目录，留下没删的点名并判该套失败。
   - LLM 桩（`smoke-m3-stub.mjs` 端口 3923、`smoke-llm-stub.mjs` 端口 3922）是**队列式**的：每来一次 `/v1/chat/completions` 弹出下一个预设响应，调用顺序一变就全盘错位。改 prompt 步数或增减工具调用轮，都要同步改队列。
   - 桩开关：`SKIP_ONBOARD=1`（已开书续写）、`CHAT_FIRST=1`、`CHAT_IN_QUEUE=0`、`AGENT_MODE=1`、`PLAN_MODE=1`、`SUBAGENT=1`。带 LLM 的冒烟脚本要设 `negativeWords`（如 `['忽然']`）触发自动修轮，否则队列错位。
 
@@ -115,7 +121,9 @@
 10. **hooks 必须在所有 early return 之前**：条件渲染后少声明 hook，React 报 “Rendered fewer hooks than expected”，Android WebView 表现为整页黑屏卡死且无任何报错。
 11. **SSE 断连与 invoke 超时**：WebView 里 `EventSource` 到 CLOSED 不会自动重连——invoke 照常成功但事件永远收不到，表象是「一直生成中」；无超时的 fetch 在响应丢失时永久悬挂。`bridge.ts` 已有退避重连 + 30s 超时，不要绕开 bridge 直接 fetch。
 12. **新增顶层目录要同步 tsconfig include**：根 tsconfig 只含 `src`，`mobile/tsconfig.json` 只含 `src`、`vite.config.ts`、`../src/shared`。不在 include 里的文件完全脱离 typecheck，坏 import 假绿。
-13. **Windows / Git Bash**：`taskkill /F /T` 从 Git Bash 调用要加 `MSYS_NO_PATHCONV=1`（参数会被误转成路径）；`spawn` 的管道 stdio 在子进程 `process.exit` 时会触发 libuv 断言崩溃——冒烟与部署脚本用 `stdio: 'inherit'`。
+13. **Windows / Git Bash**：`taskkill /F /T` 从 Git Bash 调用要加 `MSYS_NO_PATHCONV=1`（参数会被误转成路径）。
+    **`process.exit()` 不要紧跟在几次 `fetch` 之后**：会以 libuv 断言崩溃收场（`Assertion failed: !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 76`，退出码 3221226505）。实测连续 6 次请求后 10ms 内 exit 必崩、20ms 约三成、50ms 以上不崩；只发一两次不崩。`stdio: 'inherit'` 挡不住，与有没有子进程无关，`setImmediate` 让一轮也不够。
+    冒烟脚本原先靠 kill 后 sleep 300–800ms 再 exit 躲过，是个竞态——现在收尾后一律设 `process.exitCode` 自然退出。冒烟与部署脚本的子进程仍用 `stdio: 'inherit'`（输出直接透传）。
 14. **新增或改名 agent 工具**：同步 `mobile/src/pages/write/labels.ts` 的 `TOOL_LABEL` 中文名（缺失只显示裸英文名，不报错）。
 15. **版本号 tag 边界**：`version.mjs` 用 `git log <tag>..HEAD` 算增量，最新 tag 不在当前分支祖先链（从 main = v1 拉的 worktree、浅克隆）时会纳入无关提交而过度升版；tag 已存在时严格抛错，不会静默写坏 package.json。
 16. **开线坑**：`worktree_create` 默认从 main（v1）拉新 worktree，不是 feat/v2-rebuild——开线后先 `git switch -c <branch> && git reset --hard feat/v2-rebuild`，再 `npm ci`。

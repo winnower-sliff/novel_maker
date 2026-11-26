@@ -1,8 +1,10 @@
 // 范文结构化冒烟：导入切节/章号直达/关键词检索/多本绑定/写作检索注入跳过（无绑定不炸）
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { closeDb } from '../dist/main/db.js'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3971
 const BASE = `http://127.0.0.1:${PORT}`
@@ -148,11 +150,10 @@ try {
 } catch (e) {
   ok(`异常：${e.message}`, false)
 } finally {
-  server.kill()
-  await new Promise((r) => setTimeout(r, 500))
-  try {
-    rmSync(DATA, { recursive: true, force: true })
-  } catch {}
+  await stopChild(server)
+  // 上面进程内直调工具时，本进程也开着 novel.db——不关，目录删不掉
+  closeDb()
+  await removeTempDir(DATA)
 }
 console.log(`\n[范文冒烟] ${failed ? '失败' : '全部通过'}${failed ? ` ×${failed}` : ''}`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

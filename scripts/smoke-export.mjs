@@ -1,10 +1,11 @@
 // 全书导出冒烟：建书→node:sqlite 直插 2 章→GET /api/export/:bookId→zip magic+解包文件数+文件名序号+空书 400
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { unzipSync } from 'fflate'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3977
 const BASE = `http://127.0.0.1:${PORT}`
@@ -98,11 +99,8 @@ try {
 } catch (e) {
   ok(`异常：${e.message}`, false)
 } finally {
-  server.kill()
-  await new Promise((r) => setTimeout(r, 500))
-  try {
-    rmSync(DATA, { recursive: true, force: true })
-  } catch {}
+  await stopChild(server)
+  await removeTempDir(DATA)
 }
 console.log(`\n[导出冒烟] ${failed ? `失败 ×${failed}` : '全部通过'}`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

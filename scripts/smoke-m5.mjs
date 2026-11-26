@@ -3,9 +3,10 @@
  * 前置：npm run build（dist 最新）。stub 由本脚本 spawn（SKIP_ONBOARD=1，端口 3923）。
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3968
 const BASE = `http://127.0.0.1:${PORT}`
@@ -60,17 +61,10 @@ const server = spawn(process.execPath, ['dist/main/index.js'], {
   stdio: 'inherit'
 })
 
-function killAll() {
-  for (const p of [server, stub]) {
-    try {
-      p.kill('SIGTERM')
-    } catch {}
-  }
-  setTimeout(() => {
-    try {
-      rmSync(dataDir, { recursive: true, force: true })
-    } catch {}
-  }, 500)
+/** 收尾：等 server 与桩真正退出，再删临时目录（它们没退出时 novel.db 删不掉） */
+async function killAll() {
+  await Promise.all([stopChild(server), stopChild(stub)])
+  await removeTempDir(dataDir)
 }
 
 try {
@@ -161,10 +155,10 @@ try {
   ok(chatCount === 4, `chat 消息共 4 条（user×2+assistant×2，实际 ${chatCount}）`)
 
   console.log(`\n[M5 冒烟] ${passed} 通过 / ${failed} 失败`)
-  killAll()
-  process.exit(failed ? 1 : 0)
 } catch (err) {
   console.error('\n[M5 冒烟] 异常:', err.message)
-  killAll()
-  process.exit(1)
+  failed++
+} finally {
+  await killAll()
 }
+process.exitCode = failed ? 1 : 0
