@@ -5,8 +5,8 @@
 - 用户指令（原话）：「继续自己检查问题并修复。在APP中取消使用glm的能力。在该APP使用dpsk的时候幻觉和遗忘很严重。
   参考最新的功能为APP提供更复杂高效的长期记忆能力，以维持更好的风格统一与逻辑一致。」
 - ① APK 安装故障——**已完成**（见下方「APK 自更新故障修复」）。
-- ② 移除 GLM 能力——**已完成并合并进主分支**（2026-11-27，合并提交 `1b1e9c1`，worktree 已移除；
-  **尚未部署出包**，等 ③ 阶段一合并后一次出包）。分支上四个提交：`37db83b fix(config)` 加载时清洗旧配置
+- ② 移除 GLM 能力——**已完成并上线**（2026-11-27，合并提交 `1b1e9c1`；随 APK **v4.9.0-202611270122** 出包，
+  电脑端 4.9.0 已部署，worktree 已移除）。分支上四个提交：`37db83b fix(config)` 加载时清洗旧配置
   （`config.ts` 的 `sanitize()`：仅内存、不改名、不落盘，合并一条 `[config]` 日志）、`07b109a refactor(provider)`
   删 GLM 预设、默认 DeepSeek、设置页只剩 DeepSeek / 自定义、`5a12eba test(config)` 新增
   `scripts/smoke-config.mjs`、`644abd0 docs`（AGENTS.md、DECISIONS A7-R）；子代理跑过 `npm test` 20 套全过。
@@ -24,8 +24,17 @@
     剔除——顺带清掉明文残留 Key；`routing` 中指向不存在 provider 的槽删除并写日志）→
     `Settings.tsx` 供应商按钮改两项（手机端有改动要出新 APK；旧 APK 点「智谱 GLM」只会 toast
     「切换失败」，属可接受的一次性过渡）→ 文档同步。GLM 仍可经 custom 接入（填地址、手填模型名）。
-- ③ 长期记忆——**调查完成，方案已定；阶段一「堵漏」开发线实施中**（分支 `feat/memory-stage1`，worktree
-  `C:\Users\14270\.local\share\opencode\worktree\754ca1\memory1`，基于 d6e9014；与 ② 并行，文件不重叠）。
+- ③ 长期记忆——**阶段一「堵漏」已合并并上线**（合并提交 `0d80373`，分支上 11 个提交，随 APK
+  **v4.9.0-202611270122** 出包，电脑端 4.9.0 已部署；worktree memory1 已移除、本地分支已删；
+  `npm run verify` 21 套全过）。落地内容：合并式前情梗概（`director/storyRecap.ts`；`memories` 加
+  `kind` / `last_chapter_id`，`SCHEMA_VERSION` 1→2）；导演与写手共用写作简报（`buildStoryBrief`）+ 文风范例
+  进写手提示；聊天先查再答、长期偏好与终局方向落库为钉选卡；`callJson` 重试保留原消息；改稿后重写
+  纪要并重并梗概；沉淀须附原句（`agent/evidence.ts`）；思考模式回传 `reasoning_content`（真实 DeepSeek
+  探测通过）；新增 `scripts/smoke-memory.mjs`。
+  实施中的八项口径裁决（均接受）：①落后于章也后台补建梗概 ②合并失败冷却 60 秒 ③证据 ≥6 字、引号
+  变体与首尾省略号视为相同 ④证据章默认最新一章 ⑤没点名时补钉选人物再带前两位、相关卡按标题和标签
+  匹配 ⑥任何改稿都刷新纪要 ⑦聊天历史仍取末 12 条 ⑧改祖先线共享章只更新该线梗概。
+  **阶段二、三未开工**（设计见下）。
   目标：风格统一 + 逻辑一致；
   缓解 DeepSeek 的幻觉与遗忘。
 - ③ 调查结论（已核实代码）：
@@ -63,12 +72,27 @@
     设定卡；不一致只作为建议报给作者，作者保留最终决定权）；风格一致性检查进审读。
   - 硬约束：已有数据不删（只增量迁移）；作者保留最终决定权；向量/图谱暂缓。决策记录见
     `docs/v2/DECISIONS.md` §14。
-- 下一步：等 ③ 阶段一子代理完成 → 验收（提交、`npm test` 结果、与 origin 同步）→ 主 checkout
-  `git merge --no-ff feat/memory-stage1`（`AGENTS.md` 两边都动过，可能要手工解）→ `npm run verify`
-  （预期 21 套：19 + smoke-config + smoke-memory）→ push → `worktree_remove` memory1 →
-  `git branch -d feat/memory-stage1` → `npm run apk`（②③ 一起出包，自动 deploy）→ push 分支与 tag。
-  若本文件停在这里，新会话从这里接着做：② 已合并不要重做；③ 阶段一不要从头调查；子代理若因额度中断，
-  先核 memory1 worktree 的磁盘现状（`git status -sb` / `git log --oneline`）再续做。
+- v4.9.0 升级时生产库已自动留升级前快照 `backup-pre-migrate-20261127-012222.db`（`user_version` 1→2）；
+  升级后核对通过：范文两本（254165 字/19 章、535677 字/67 章）、两本书各绑 2 本、章数 6 / 1 均未变。
+- 待线上观察（v4.9.0 用一段时间再看）：合并梗概的实际质量与长度（目标 1500 字）；证据校验的真实退回率
+  （写章任务里 `save_card` / `save_foreshadow` 被拒重提的次数）；聊天先查再答是否变慢；
+  `reasoning_content` 回传（已用真实 DeepSeek 探测通过，线上再看 chat 任务有无 failed）。
+- **进行中：嵌套分叉丢祖先章的修复线**（阶段一验收时读码发现的既有缺陷，与长期记忆无关）。
+  现象：`effectiveChapters` 用分叉点的 `order_no` 去截祖先线的有效章列表，而各线章序号从 1 重排、跨线不可比
+  （`store.ts` ~:502）。复现：主线 10 章 → B 分叉于第 6 章后、B 写 2 章 → C 分叉于 B 第 2 章后 →
+  `effectiveChapters(C)` 只剩 A1、A2、B1、B2（丢 A3–A6）。生产两本书都只有主线，现有数据不受影响。
+  开发线：分支 `fix/fork-tree`（基于 0d80373），worktree
+  `C:\Users\14270\.local\share\opencode\worktree\754ca1\forktree`，子代理 session `ses_de71f8050fferb9m7a35XStF36`。
+  两个提交：①`fix(store)` 按分叉点章在其所属线有效章列表里的位置取前缀（分叉点章已删的兜底只比直接
+  父线自己的章、继承的祖先章全保留；不改表结构；扩 `smoke-fork.mjs`；同步 AGENTS.md「分叉树」）
+  ②`fix(memory)` 改到子线也继承的章时，安排子线的前情梗概重建（删 `running` 行，交给已有补建机制懒
+  重建；`legacy` 不动；扩 `smoke-memory.mjs`）。
+- 下一步：等修复线子代理完成 → 验收（两个提交、`npm test` 21 套、与 origin 同步）→ 主 checkout
+  `git merge --no-ff fix/fork-tree` → `npm run verify` → push → `worktree_remove` forktree →
+  `git branch -d fix/fork-tree` → `npm run deploy`（本修复不动手机端，按 AGENTS 约定不出 APK；
+  版本号与 tag 留到下次出包时一并推进）。
+  若本文件停在这里，新会话从这里接着做：②③ 已上线不要重做；修复线若因子代理额度中断，先核 forktree
+  worktree 的磁盘现状（`git status -sb` / `git log --oneline`）再续做。
 
 ### APK 自更新故障修复（已完成，v4.8.1）
 
@@ -100,11 +124,12 @@
 
 - 自主优化长跑（需求包 A–E、全新克隆自检 Q、部署漏洞修复）与「首页重设计 + 底部导航 + 范文功能重做」
   均已合并、push、部署、出包；APK 自更新故障已修（v4.8.1）。
-- **未完成**：用户指令 ②移除 GLM 能力、③为 DeepSeek 做更强的长期记忆——见顶部「进行中」段，
-  新会话先续做它，不接新需求。
-- 生产现状：电脑端 4.8.0 / `build.sourceHash=4db9ee339e606552`（PID 不固定，需要时查 health）；
-  手机端更新源 APK **v4.8.1-202611270010**（versionCode 29928490；用户这一次需用浏览器打开
-  `http://100.100.62.8:3910/api/mobile/apk?vc=29928490` 安装，之后应用内更新才可靠）。
+- 用户指令 ②移除 GLM、③长期记忆阶段一 **已上线 v4.9.0**；③ 阶段二、三未开工（设计已定，见顶部）。
+- **进行中**：嵌套分叉丢祖先章的修复线（见顶部「下一步」），新会话先续做它，不接新需求。
+- 生产现状：电脑端 4.9.0 / `build.sourceHash=7473120975aea4bc`（PID 不固定，需要时查 health）；
+  手机端更新源 APK **v4.9.0-202611270122**（versionCode 29928562）。用户若仍停在 4.7.0，这一次需用
+  浏览器打开 `http://100.100.62.8:3910/api/mobile/apk?vc=29928562` 安装；已装 4.8.1 的可在应用内
+  「设置 → APP 更新」。
 - 「候选清单」里的项均未排期，要做先逐项重新核实证据。
 
 ## 授权与规则
@@ -126,11 +151,12 @@
   开发线只靠冒烟脚本验证主进程改动。合并回主 checkout 后再 deploy。
 - `npm run apk` = `build-apk.mjs`（v4.5 起两阶段）：先 `deploy.mjs --if-stale` 确保生产 server
   是当前源码的构建 → 出包 → **全部成功才**提交 `chore(release): vX` + 打 tag（失败回滚版本号）。
-- 冒烟回归全集：`npm test`（=build+`scripts/smoke-all.mjs`，19 套串行）；`npm run verify`
+- 冒烟回归全集：`npm test`（=build+`scripts/smoke-all.mjs`，21 套串行）；`npm run verify`
   = typecheck+lint+test，即完整门禁。输出很长——后台跑+重定向到文件+只看尾部。
-- 2026-11-26 基线：HEAD=0eaefde（`chore(release): v4.8.0`，tag v4.8.0 已推送），与 origin 同步；
-  生产 health `build.commit=0eaefde`、`build.sourceHash=4db9ee339e606552`；
-  手机端更新源 APK v4.8.0-202611262112（含首页重设计 + 底部导航 + 范文功能重做）。
+- 2026-11-27 基线：HEAD=dec5f7a（`chore(release): v4.9.0`，tag v4.9.0 已推送），与 origin 同步；
+  生产 health `build.commit=dec5f7a`、`build.sourceHash=7473120975aea4bc`；
+  手机端更新源 APK v4.9.0-202611270122（versionCode 29928562；含移除 GLM + 长期记忆阶段一；
+  此前的 v4.8.0 含首页重设计 + 底部导航 + 范文功能重做）。`SCHEMA_VERSION` 现为 2。
 - **判断生产是否落后：比对 `/api/health` 的 `build.sourceHash` 与
   `node scripts/build-info.mjs --print`**（`npm run apk` 会自动 deploy，有任务在跑时拒绝重启）。
 - **在主 checkout 跑过 `npm test` / `npm run verify` 之后要记得部署**：两者都会重新 build、改写
