@@ -5,10 +5,12 @@
 - 用户指令（原话）：「继续自己检查问题并修复。在APP中取消使用glm的能力。在该APP使用dpsk的时候幻觉和遗忘很严重。
   参考最新的功能为APP提供更复杂高效的长期记忆能力，以维持更好的风格统一与逻辑一致。」
 - ① APK 安装故障——**已完成**（见下方「APK 自更新故障修复」）。
-- ② 移除 GLM 能力——**开发线实施中**（2026-11-27）：分支 `fix/remove-glm`，worktree
-  `C:\Users\14270\.local\share\opencode\worktree\754ca1\noglm`，基于 154f026，子代理实施
-  `ses_de75eb4f0ffe1Jiry10VfNWmtp`；完成标准 = 门禁绿 + `npm test` 20 套（新增 `smoke-config.mjs`）
-  + 已推送 → 主 checkout 合并 → `npm run verify` → `npm run apk`（主进程与手机端都有改动，自动 deploy）。
+- ② 移除 GLM 能力——**已完成并合并进主分支**（2026-11-27，合并提交 `1b1e9c1`，worktree 已移除；
+  **尚未部署出包**，等 ③ 阶段一合并后一次出包）。分支上四个提交：`37db83b fix(config)` 加载时清洗旧配置
+  （`config.ts` 的 `sanitize()`：仅内存、不改名、不落盘，合并一条 `[config]` 日志）、`07b109a refactor(provider)`
+  删 GLM 预设、默认 DeepSeek、设置页只剩 DeepSeek / 自定义、`5a12eba test(config)` 新增
+  `scripts/smoke-config.mjs`、`644abd0 docs`（AGENTS.md、DECISIONS A7-R）；子代理跑过 `npm test` 20 套全过。
+  以下是实施前的调查结论与做法（留档）：
   生产 `settings.json`：provider=deepseek
   （模型 `deepseek-v4-pro`），只存了 DeepSeek 的 Key，`routing` 为空，`profiles.glm` 残留。
   调查结论（已核实代码）：
@@ -61,11 +63,12 @@
     设定卡；不一致只作为建议报给作者，作者保留最终决定权）；风格一致性检查进审读。
   - 硬约束：已有数据不删（只增量迁移）；作者保留最终决定权；向量/图谱暂缓。决策记录见
     `docs/v2/DECISIONS.md` §14。
-- 下一步：两条线各自验收（看提交、`npm test` 结果、与 origin 同步；先完成的先等，不必单独出包）→
-  主 checkout 依次 `git merge --no-ff fix/remove-glm` → `git merge --no-ff feat/memory-stage1`（都动
-  `AGENTS.md`，可能要手工解）→ `npm run verify`（预期 21 套：19 + smoke-config + smoke-memory）→ 一次
-  出包。若本文件停在这里，新会话从这里接着做：② 与 ③ 阶段一都不要重做，③ 不要从头调查；子代理若因
-  额度中断，先核对应 worktree 的磁盘现状（`git status -sb` / `git log --oneline`）再续做。
+- 下一步：等 ③ 阶段一子代理完成 → 验收（提交、`npm test` 结果、与 origin 同步）→ 主 checkout
+  `git merge --no-ff feat/memory-stage1`（`AGENTS.md` 两边都动过，可能要手工解）→ `npm run verify`
+  （预期 21 套：19 + smoke-config + smoke-memory）→ push → `worktree_remove` memory1 →
+  `git branch -d feat/memory-stage1` → `npm run apk`（②③ 一起出包，自动 deploy）→ push 分支与 tag。
+  若本文件停在这里，新会话从这里接着做：② 已合并不要重做；③ 阶段一不要从头调查；子代理若因额度中断，
+  先核 memory1 worktree 的磁盘现状（`git status -sb` / `git log --oneline`）再续做。
 
 ### APK 自更新故障修复（已完成，v4.8.1）
 
