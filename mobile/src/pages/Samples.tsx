@@ -149,8 +149,13 @@ export default function Samples() {
                           <span className="mt-1 block text-xs text-stone-400">
                             {fmtChars(s.chars)}
                             {s.chapterCount ? ` · ${s.chapterCount} 章` : ''}
-                            {boundCount ? ` · 已绑定 ${boundCount} 本书` : ''}
                           </span>
+                          {/* 绑定数另起一行：挤在同一行时窄屏会把「本书」拆到下一行 */}
+                          {boundCount > 0 && (
+                            <span className="block text-xs text-stone-400">
+                              已绑定 {boundCount} 本书
+                            </span>
+                          )}
                         </span>
                       </button>
                       {confirming ? null : (
