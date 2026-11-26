@@ -190,6 +190,19 @@ try {
   // recap quickActions（commit_chapter 传入）
   ok((job.payload.recap?.quickActions ?? []).length === 1, 'recap.quickActions 来自 commit_chapter')
 
+  // 沉淀带证据（M5）：桩给的 evidence 是本章原句才通过校验；伏笔默认埋在这一章，save_card 不再丢标签
+  const wharf = (await invoke('card:list', book.activeLineId)).find(
+    (c) => c.title === '雾津港七号泊位'
+  )
+  ok(!!wharf && (wharf.tags ?? []).includes('港口'), 'save_card 带原句证据落库，标签不丢')
+  const knife = (await invoke('foreshadow:list', book.activeLineId)).find(
+    (f) => f.title === '断刀的来历'
+  )
+  ok(
+    !!knife && knife.plantedChapterId === detail.chapters[0].id,
+    'save_foreshadow 带原句证据落库，埋设章默认记为原句所在章'
+  )
+
   // ── chat free agent（带工具调用）──
   let cj = await invoke('job:startChat', book.id, '现在写到哪了？伏笔怎么安排？')
   cj = await waitJob(cj.id, (j) => j.state === 'done', 'chat free agent')

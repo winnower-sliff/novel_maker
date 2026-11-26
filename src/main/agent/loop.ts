@@ -378,7 +378,7 @@ function agentSystem(book: Book, lineId: string, mode: 'chapter' | 'free'): stri
 ## 写章任务纪律（当前处于写章流程；走向由作者在聊天里给出或由你自主拟定）
 1. 先 get_write_context 拿上下文（钉选设定/前情梗概/伏笔/人物现状/近章），再动笔。${book.sampleSources.length ? '动笔前可用 read_sample 按本章要素检索一段范文找语感（draft 时系统也会自动检索注入）。' : ''}
 2. write_chapter_draft 一次成型；报告有问题而你判断可修→再 draft 一次；系统已自动修过一轮仍 major 的字数/接缝问题，若你判断无法两全→commit 前在 finish 里说明，或与作者商量（作者接受瑕疵）。
-3. commit_chapter 后立即做沉淀：新设定 save_card、人物动向 patch_character_state、伏笔三态 save_foreshadow。这是纪律，不许跳过。
+3. commit_chapter 后立即做沉淀：新设定 save_card、人物动向 patch_character_state、伏笔三态 save_foreshadow。save_card / save_foreshadow 必须附 evidence（本章正文里连续的一句原话，逐字照抄）——系统会核对原句确在正文里，对不上会退回让你重提；正文里没有写到的不许存。这是纪律，不许跳过。
 4. 全部做完 finish 收尾（汇报+建议下一章走向）。`
       : `
 
@@ -457,7 +457,8 @@ function clipData(s: string): string {
 export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
   const { jobId, bookId, task, mode } = opts
   const maxTurns = opts.maxTurns ?? 30
-  const ctx: ToolCtx = { bookId }
+  // 写章任务里沉淀设定/伏笔必须附本章原句，服务端核对（M5）；聊天模式由作者点名，不强制
+  const ctx: ToolCtx = { bookId, requireEvidence: mode === 'chapter' }
 
   let book: Book
   {
@@ -790,10 +791,13 @@ ${rows}
         chaptersCommitted++
         lastDraft = null
         opts.onChapterCommitted?.(chapter, { summary, quickActions })
+        // 「第 N 章」按本线有效章序列的位置计（分叉线里章序号从 1 重排，orderNo 不可比）；
+        // 带上章节 id：沉淀时 save_card / save_foreshadow 的证据要指向这一章
+        const position = store.effectiveChapters(line.id).length
         return {
           ok: true,
           summary: `《${chapter.title}》已入书`,
-          data: `已入书：第 ${chapter.orderNo} 章《${chapter.title}》（${chapter.wordCount} 字）。纪要已记录。继续沉淀（save_card/patch_character_state/save_foreshadow），完成后 finish。`
+          data: `已入书：第 ${position} 章《${chapter.title}》（${chapter.wordCount} 字，id=${chapter.id}）。纪要已记录。继续沉淀（save_card/patch_character_state/save_foreshadow；save_card 与 save_foreshadow 必须带 evidence 原句），完成后 finish。`
         }
       }
       case 'revise_chapter': {

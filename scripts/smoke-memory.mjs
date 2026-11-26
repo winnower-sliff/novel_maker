@@ -529,6 +529,110 @@ try {
     said.some((s) => s.meta?.tool === 'revise_chapter' && s.content.includes('后台按新正文刷新'))
   )
 
+  // ── ⑤ 沉淀证据校验：写章任务里 save_card / save_foreshadow 必须附本章原句 ──
+  // 此刻 main 上：第 1 章原样，第 2 章已改稿，第 4 章是最新一章（正文「老船工提灯下舱」）
+  store.activateLine(book.id, main)
+  const writing = { bookId: book.id, requireEvidence: true }
+  const cardTitles = () => store.listCards(main).map((c) => c.title)
+  const foreTitles = () => store.listForeshadows(main).map((f) => f.title)
+  const forged = execTool(
+    'save_card',
+    {
+      kind: 'custom',
+      title: '伪造的卡',
+      authorText: '正文里没有的事',
+      evidence: '这句原话正文里根本没有'
+    },
+    writing
+  )
+  ok(
+    '伪造的原句被拒',
+    forged.ok === false && forged.summary.includes('原句') && !cardTitles().includes('伪造的卡')
+  )
+  const bare = execTool('save_card', { kind: 'custom', title: '没带证据的卡' }, writing)
+  ok(
+    '没附原句被拒并说明要补 evidence',
+    bare.ok === false && bare.data.includes('evidence') && !cardTitles().includes('没带证据的卡')
+  )
+  const spliced = execTool(
+    'save_card',
+    { kind: 'custom', title: '拼接的卡', evidence: '第4章的正文……老船工提灯下舱' },
+    writing
+  )
+  ok('用省略号拼接的两处不算连续原句', spliced.ok === false && !cardTitles().includes('拼接的卡'))
+  const tiny = execTool(
+    'save_card',
+    { kind: 'custom', title: '太短的卡', evidence: '提灯' },
+    writing
+  )
+  ok('过短的片语被拒', tiny.ok === false && tiny.data.includes('6 个字'))
+  const wrongChapter = execTool(
+    'save_card',
+    { kind: 'custom', title: '章号点错的卡', evidence: '断刀上刻着被磨掉一半的', chapterNo: 1 },
+    writing
+  )
+  ok(
+    '原句不在所指定的那一章 → 拒',
+    wrongChapter.ok === false && !cardTitles().includes('章号点错的卡')
+  )
+  const quoted = execTool(
+    'save_card',
+    {
+      kind: 'custom',
+      title: '引号变体的卡',
+      evidence: '断刀上刻着被磨掉一半的“沈”字',
+      chapterId: 'old-ch2'
+    },
+    writing
+  )
+  ok(
+    '引号写法不同（“”↔「」）仍算原句；chapterId 指到对应章',
+    quoted.ok === true && cardTitles().includes('引号变体的卡')
+  )
+  const real = execTool(
+    'save_card',
+    {
+      kind: 'custom',
+      title: '真设定',
+      authorText: '老船工夜里下舱',
+      evidence: '……老船工提灯下舱……',
+      tags: ['夜航'],
+      data: { 下舱: [{ 时间: '夜', 地点: '蔗糖舱' }] }
+    },
+    writing
+  )
+  const saved = store.listCards(main).find((c) => c.title === '真设定')
+  ok('真实原句通过（不传章=最新一章，首尾省略号不影响）', real.ok === true && !!saved)
+  ok(
+    'save_card 不再丢 data / tags',
+    !!saved && saved.tags.includes('夜航') && JSON.stringify(saved.data).includes('蔗糖舱')
+  )
+  const noEvidence = execTool(
+    'save_card',
+    { kind: 'custom', title: '聊天里点名要存的卡' },
+    { bookId: book.id }
+  )
+  ok(
+    '聊天模式（作者点名）不要求证据',
+    noEvidence.ok === true && cardTitles().includes('聊天里点名要存的卡')
+  )
+  const fore = execTool(
+    'save_foreshadow',
+    { title: '悬赏画像', detail: '老船工点破悬赏已送南屿', evidence: '老船工提灯下舱' },
+    writing
+  )
+  const planted = store.listForeshadows(main).find((f) => f.title === '悬赏画像')
+  ok(
+    'save_foreshadow 带原句通过，埋设章默认记为原句所在章',
+    fore.ok === true && !!planted && planted.plantedChapterId === ch4.id
+  )
+  const fakeFore = execTool(
+    'save_foreshadow',
+    { title: '假伏笔', detail: 'x', evidence: '不存在的原话' },
+    writing
+  )
+  ok('save_foreshadow 原句对不上 → 拒', fakeFore.ok === false && !foreTitles().includes('假伏笔'))
+
   console.log(`\n[长期记忆冒烟] ${passed} 通过 / ${failed} 失败`)
 } catch (e) {
   ok(`异常：${e instanceof Error ? (e.stack ?? e.message) : String(e)}`, false)

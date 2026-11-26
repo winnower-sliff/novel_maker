@@ -12,6 +12,7 @@ import { buildWriteContext } from '../director/context.js'
 import { scheduleStoryRecap } from '../director/storyRecap.js'
 import { chapterNoOfLabel } from '../sampleParse.js'
 import * as store from '../store.js'
+import { evidenceInText } from './evidence.js'
 
 /**
  * M6 agent 工具集：绑定 store 的全 CRUD（用户拍板「全都给，crud权限都给」）。
@@ -22,6 +23,8 @@ import * as store from '../store.js'
 
 export interface ToolCtx {
   bookId: string
+  /** 写章任务：沉淀类工具（save_card / save_foreshadow）必须附本章原句，服务端核对（M5） */
+  requireEvidence?: boolean
 }
 
 export interface ToolResult {
@@ -47,6 +50,20 @@ function ctxLine(ctx: ToolCtx): { book: Book; lineId: string } {
 }
 
 const N = '\n'
+
+/** 沉淀证据参数（save_card / save_foreshadow 共用）：写章任务里必填 evidence，服务端核对原句确在正文里 */
+const EVIDENCE_PROPS = {
+  evidence: {
+    type: 'string',
+    description:
+      '原句佐证：本章正文里连续的一句原话（逐字照抄，至少 6 个字），证明这条内容确实写在正文里。写章任务里必填，系统会核对，对不上退回重提；作者在聊天里点名要求维护设定时可省'
+  },
+  chapterId: {
+    type: 'string',
+    description: '原句所在的章 id（commit_chapter 返回里有）；不传=本线最新一章'
+  },
+  chapterNo: { type: 'number', description: '原句在第几章（本线章序）；没有 id 时可用' }
+} as const
 
 // ── 工具定义（input_schema 精简，描述里带使用纪律） ──────────────────────────
 
@@ -236,9 +253,11 @@ export function toolDefs(): ToolDef[] {
           data: {
             type: 'object',
             description:
-              '结构化数据：键名=表名，值为对象数组即渲染成表格。如 {"成员":[{"姓名":"老船工","立场":"摇摆"}]}。表内行级增删改=读旧 data 改数组后整键写回'
+              '结构化数据（整体替换）：键名=表名，值为对象数组即渲染成表格。如 {"成员":[{"姓名":"老船工","立场":"摇摆"}]}。改之前先 get_card 读旧 data，改完整体传回'
           },
-          pinned: { type: 'boolean', description: 'true=钉选（每章上下文必带）' }
+          tags: { type: 'array', items: { type: 'string' }, description: '标签（整体替换）' },
+          pinned: { type: 'boolean', description: 'true=钉选（每章上下文必带）' },
+          ...EVIDENCE_PROPS
         }
       }
     },
@@ -356,10 +375,15 @@ export function toolDefs(): ToolDef[] {
           id: { type: 'string', description: '改伏笔时传' },
           title: { type: 'string' },
           detail: { type: 'string', description: '伏笔内容与回收思路' },
+          plantedChapterId: {
+            type: 'string',
+            description: '埋设章 id；写章任务里新建伏笔不传则默认为原句所在的章'
+          },
           plannedChapterId: { type: 'string', description: '计划在哪章回收' },
           resolvedChapterId: { type: 'string', description: '实际在哪章回收' },
           status: { type: 'string', enum: ['open', 'planned', 'resolved'] },
-          priority: { type: 'number' }
+          priority: { type: 'number' },
+          ...EVIDENCE_PROPS
         },
         required: ['title']
       }
@@ -456,6 +480,79 @@ function brief(s: string, n = 80): string {
 function chapterLine(c: Chapter, i: number): string {
   const sum = c.summary ? ` —— ${brief(c.summary, 60)}` : ''
   return `${i + 1}. 《${c.title}》(${c.wordCount}字, id=${c.id})${sum}`
+}
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v)
+}
+
+/**
+ * 沉淀证据校验（M5）：写章任务里 save_card / save_foreshadow 必须附本章原句——
+ * 原句得是该章正文里连续的一段（去空白、引号变体归一后核对）。对不上把失败结果回给 LLM 重提，不抛异常。
+ * 通过时返回原句所在的章（没指定就用本线最新一章）；聊天模式不要求证据，直接放行。
+ */
+function checkEvidence(
+  ctx: ToolCtx,
+  input: Record<string, unknown>,
+  lineId: string
+): { chapter: Chapter | null; label: string; failure?: ToolResult } {
+  const none = { chapter: null, label: '' }
+  if (!ctx.requireEvidence) return none
+  const chapters = store.effectiveChapters(lineId)
+  const idGiven = typeof input.chapterId === 'string' ? input.chapterId : ''
+  const byId = idGiven ? chapters.find((c) => c.id === idGiven) : undefined
+  const byNo =
+    typeof input.chapterNo === 'number' ? chapters[Math.trunc(input.chapterNo) - 1] : undefined
+  const chapter = byId ?? byNo ?? chapters.at(-1) ?? null
+  if (idGiven && !byId)
+    return {
+      ...none,
+      failure: refuse(
+        '章节对不上',
+        'chapterId 在本线的有效章里找不到。用 commit_chapter 返回的章节 id，或不传（默认最新一章）。'
+      )
+    }
+  if (!chapter)
+    return {
+      ...none,
+      failure: refuse(
+        '找不到这一章',
+        '这本书还没有章节，没有可作佐证的正文；设定等正文入书之后再沉淀。'
+      )
+    }
+  const label = `第 ${chapters.indexOf(chapter) + 1} 章《${chapter.title}》`
+  const evidence = typeof input.evidence === 'string' ? input.evidence : ''
+  if (!evidence.trim())
+    return {
+      ...none,
+      failure: refuse(
+        '沉淀缺少原句',
+        `写章任务里 save_card / save_foreshadow 必须附 evidence：${label} 正文里连续的一句原话（逐字照抄），证明这条内容确实写在正文里；正文没有写到的不许存。`
+      )
+    }
+  const verdict = evidenceInText(evidence, chapter.content)
+  if (verdict === 'too_short')
+    return {
+      ...none,
+      failure: refuse(
+        '原句太短',
+        `evidence 去掉空白后不足 6 个字，证明不了出处。从${label}正文里抄一句完整的话。`
+      )
+    }
+  if (verdict === 'not_found')
+    return {
+      ...none,
+      failure: refuse(
+        '原句对不上正文',
+        `evidence 在${label}正文里找不到。要求：逐字照抄正文里连续的一段（不要改字，不要用省略号拼接两处，至少 6 个字）。先 read_chapter 核对，再重新提交。`
+      )
+    }
+  return { chapter, label }
+}
+
+/** 退回给 LLM 的失败结果（不是异常）：说清哪里不合规，并点明这条内容没有保存 */
+function refuse(summary: string, data: string): ToolResult {
+  return { ok: false, summary, data: `${data}（这条内容没有保存，修正后重新调用）` }
 }
 
 export function execTool(name: string, input: Record<string, unknown>, ctx: ToolCtx): ToolResult {
@@ -813,6 +910,8 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
     }
     case 'save_card': {
       const { lineId } = ctxLine(ctx)
+      const checked = checkEvidence(ctx, input, lineId)
+      if (checked.failure) return checked.failure
       const card = store.saveCard({
         id: typeof input.id === 'string' && input.id ? input.id : undefined,
         lineId,
@@ -821,7 +920,10 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
         readerText: typeof input.readerText === 'string' ? input.readerText : undefined,
         authorText: typeof input.authorText === 'string' ? input.authorText : undefined,
         revealPlan: typeof input.revealPlan === 'string' ? input.revealPlan : undefined,
-        pinned: typeof input.pinned === 'boolean' ? input.pinned : undefined
+        // 结构化数据与标签：传了就整体替换（store 层未传保留原值）
+        data: isRecord(input.data) ? input.data : undefined,
+        pinned: typeof input.pinned === 'boolean' ? input.pinned : undefined,
+        tags: Array.isArray(input.tags) ? (input.tags as string[]) : undefined
       })
       if (!card)
         return { ok: false, summary: '保存设定卡失败', data: '保存失败：卡不存在或参数无效' }
@@ -912,11 +1014,18 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
     }
     case 'save_foreshadow': {
       const { lineId } = ctxLine(ctx)
+      const checked = checkEvidence(ctx, input, lineId)
+      if (checked.failure) return checked.failure
+      const isNew = !(typeof input.id === 'string' && input.id)
+      const planted =
+        typeof input.plantedChapterId === 'string' ? input.plantedChapterId : undefined
       const f = store.saveForeshadow({
-        id: typeof input.id === 'string' && input.id ? input.id : undefined,
+        id: isNew ? undefined : (input.id as string),
         lineId,
         title: typeof input.title === 'string' && input.title ? input.title : undefined,
         detail: typeof input.detail === 'string' ? input.detail : undefined,
+        // 写章任务里沉淀的新伏笔：没指定埋设章时，默认埋在原句所在的这一章
+        plantedChapterId: planted ?? (isNew ? checked.chapter?.id : undefined),
         plannedChapterId:
           typeof input.plannedChapterId === 'string' ? input.plannedChapterId : undefined,
         resolvedChapterId:
@@ -931,7 +1040,9 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       return {
         ok: true,
         summary: `${input.id ? '改' : '埋'}伏笔「${f.title}」（${f.status}）`,
-        data: `已保存伏笔 [${f.status}] ${f.title} (id=${f.id})`
+        data: `已保存伏笔 [${f.status}] ${f.title} (id=${f.id})${
+          !planted && isNew && checked.chapter ? `，埋设章记为${checked.label}` : ''
+        }`
       }
     }
     case 'update_book_config': {

@@ -414,13 +414,15 @@ const AGENT_QUEUE = [
       }
     ]
   },
+  // 沉淀带证据（M5）：evidence 必须是本章正文（DRAFT 去掉「忽然」后）里连续的一句，服务端会核对
   {
     tool_calls: [
       {
         name: 'save_foreshadow',
         arguments: {
           title: '断刀的来历',
-          detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。'
+          detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。',
+          evidence: '刀柄内侧那道刻痕——一个被磨掉一半的「沈」字'
         }
       }
     ]
@@ -433,7 +435,9 @@ const AGENT_QUEUE = [
           kind: 'geography',
           title: '雾津港七号泊位',
           readerText: '常年大雾的深水泊位，夜里潮水定时辰。',
-          authorText: '七号泊位专走南屿的私货船。'
+          authorText: '七号泊位专走南屿的私货船。',
+          tags: ['港口'],
+          evidence: '盐帮悬赏你的画像，今早已经送到了南屿'
         }
       }
     ]
