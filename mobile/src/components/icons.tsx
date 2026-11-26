@@ -143,3 +143,36 @@ export function IconGear({ className }: { className?: string }) {
     </Svg>
   )
 }
+
+/** 放大镜：搜索 */
+export function IconSearch({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <circle cx="11" cy="11" r="7" />
+      <path d="m21 21-4.35-4.35" />
+    </Svg>
+  )
+}
+
+/** 列表：目录 */
+export function IconList({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M8 6h13" />
+      <path d="M8 12h13" />
+      <path d="M8 18h13" />
+      <path d="M3 6h.01" />
+      <path d="M3 12h.01" />
+      <path d="M3 18h.01" />
+    </Svg>
+  )
+}
+
+/** 左尖括号：返回 */
+export function IconChevronLeft({ size = 20, className }: { size?: number; className?: string }) {
+  return (
+    <Svg size={size} className={className}>
+      <path d="m15 18-6-6 6-6" />
+    </Svg>
+  )
+}
