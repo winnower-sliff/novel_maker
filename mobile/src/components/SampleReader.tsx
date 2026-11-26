@@ -136,7 +136,10 @@ export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose:
     queryFn: async (): Promise<Book[]> => window.api.book.list()
   })
   /** 与范文页一致：归档书和还没开完的书不参与绑定 */
-  const bindable = (books ?? []).filter((b) => !b.archived && !b.draft)
+  // 按书名排序：绑定会刷新 books，接口按最近更新排，不排的话点一本书它自己跳到最前
+  const bindable = (books ?? [])
+    .filter((b) => !b.archived && !b.draft)
+    .sort((a, b) => a.title.localeCompare(b.title, 'zh'))
   const boundCount = bindable.filter((b) => b.sampleSources?.includes(sample.id)).length
 
   /** 勾一下就立即保存（与范文页的绑定胶囊同一套语义，多本可同时绑） */

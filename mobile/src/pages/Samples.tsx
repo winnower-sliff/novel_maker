@@ -136,7 +136,10 @@ export default function Samples() {
     }
   }
 
-  const bindable = (books ?? []).filter((b) => !b.archived && !b.draft)
+  // 按书名排序：绑定会刷新 books，接口按最近更新排，不排的话点一本书它自己跳到最前
+  const bindable = (books ?? [])
+    .filter((b) => !b.archived && !b.draft)
+    .sort((a, b) => a.title.localeCompare(b.title, 'zh'))
   const totalChars = samples?.reduce((n, s) => n + s.chars, 0) ?? 0
 
   return (
