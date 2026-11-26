@@ -77,7 +77,7 @@ export default function Lines() {
               key={l.id}
               className={
                 'rounded-xl border p-3 ' +
-                (active ? 'border-orange-800 bg-orange-950/20' : 'border-orange-100 bg-white')
+                (active ? 'border-orange-300 bg-orange-50' : 'border-orange-100 bg-white')
               }
               style={{ marginLeft: depth * 16 }}
             >
@@ -91,7 +91,7 @@ export default function Lines() {
                   {l.name}
                 </span>
                 {active ? (
-                  <span className="rounded-full bg-orange-900/60 px-2 py-0.5 text-[11px] text-orange-700">
+                  <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] text-orange-700">
                     写作中
                   </span>
                 ) : (
@@ -228,9 +228,7 @@ function ForkSheet({
             type="button"
             className={
               'min-h-10 -my-0.5 flex w-full items-baseline gap-2 rounded-lg px-3 py-2 text-left text-sm ' +
-              (chapterId === c.id
-                ? 'bg-orange-900/40 text-orange-800'
-                : 'bg-orange-50 text-stone-600')
+              (chapterId === c.id ? 'bg-orange-100 text-orange-800' : 'bg-orange-50 text-stone-600')
             }
             onClick={() => setChapterId(c.id)}
           >

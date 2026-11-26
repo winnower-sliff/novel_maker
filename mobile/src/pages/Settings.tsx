@@ -57,7 +57,7 @@ export default function Settings() {
           <span
             className={
               'ml-3 shrink-0 rounded-full px-2 py-0.5 text-[11px] ' +
-              (server?.running ? 'bg-orange-900/60 text-orange-700' : 'bg-red-100 text-red-600')
+              (server?.running ? 'bg-orange-100 text-orange-700' : 'bg-red-100 text-red-600')
             }
           >
             {server?.running ? '已连接' : '未连接'}
