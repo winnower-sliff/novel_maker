@@ -211,7 +211,7 @@ console.log(JSON.stringify({ files: readdirSync(process.env.NM_DATA_DIR), versio
     '旧库升级前自动留快照',
     Array.isArray(pOld?.files) && pOld.files.some((f) => f.startsWith('backup-pre-migrate-'))
   )
-  ok('升级后记录结构版本号', (pOld?.version?.user_version ?? pOld?.version) === 1)
+  ok('升级后记录结构版本号', (pOld?.version?.user_version ?? pOld?.version) === 2)
   const pFresh = jsonLines(probe(FRESH_DIR).stdout)[0]
   ok(
     '全新库不留升级前快照',

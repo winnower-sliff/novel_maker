@@ -31,6 +31,8 @@ export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string | ContentBlock[]
+  /** assistant 的思考链：思考模式带工具的续轮必须原样回传（DeepSeek 文档要求）；思考关闭时不带 */
+  reasoning?: string
 }
 
 export interface ToolDef {
@@ -272,7 +274,7 @@ export interface Chapter {
   title: string
   content: string
   wordCount: number
-  /** 本章摘要（滚动记忆的细记层） */
+  /** 本章摘要（章纪要：并进前情梗概，也作近章细记；改稿后后台按新正文重写） */
   summary: string
   meta: ChapterMeta
   createdAt: number
@@ -361,13 +363,19 @@ export interface Foreshadow {
   updatedAt: number
 }
 
-/** 滚动分层记忆的远端压缩层（D2）：最近章细记在 chapters.summary */
+/** running=前情梗概（每线一行，新章入书后合并更新）；legacy=旧的逐章压缩块（只读保留，首次合并时当参考材料） */
+export type MemoryKind = 'legacy' | 'running'
+
 export interface MemoryBlock {
   id: string
   lineId: string
   fromOrder: number
+  /** running：梗概覆盖到第几章（本线有效章序列里的位置）；legacy：旧压缩块的章区间终点 */
   toOrder: number
   content: string
+  kind: MemoryKind
+  /** running：覆盖到的最后一章 id（按 id 定位，分叉线里章序号会从 1 重排） */
+  lastChapterId: string
   createdAt: number
 }
 

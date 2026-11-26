@@ -160,6 +160,11 @@ try {
     shadows.some((f) => f.title === '断刀的来历' && f.status === 'open'),
     'agent save_foreshadow 落库'
   )
+  // 沉淀带证据：桩给的 evidence 是本章原句才落库；埋设章默认记为原句所在的这一章
+  ok(
+    shadows.some((f) => f.title === '断刀的来历' && f.plantedChapterId === chapter.id),
+    '伏笔带原句证据落库，埋设章=原句所在章'
+  )
 
   const charAfter = await invoke('character:save', [
     { id: linan.id, lineId: mainLineId, name: '林岸' }

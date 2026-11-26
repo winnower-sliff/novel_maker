@@ -145,6 +145,14 @@ try {
   ok(ab.styleName === '冷硬短句' && ab.targetWords === 2000, '文风与单章目标写入')
   ok(Array.isArray(ab.redlines) && ab.redlines.length === 2, '红线写入（2 条）')
   ok(!ab.draft, '开书完成后不再是草稿书')
+  // 开书时定下的终局方向感落库为钉选卡（每章写作必带，不再只是回显一次）
+  const endingCards = (await invoke('card:list', aLine)).filter((c) => c.title === '终局方向')
+  ok(
+    endingCards.length === 1 &&
+      endingCards[0].pinned === true &&
+      endingCards[0].authorText.includes('盐帮内乱'),
+    '终局方向落库为钉选卡'
+  )
 
   // ── 书 B：确认时模型连续失败 → 草案不入库；再确认只入库一次 ──
   stub.kill()

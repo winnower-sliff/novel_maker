@@ -14,8 +14,8 @@
 - **产品**：Tailscale 局域网内的私人小说工坊。电脑端 = 纯 Node 常驻服务 + 系统托盘（无 Electron、无桌面窗口、无浏览器版），手机 APK 是唯一入口。
   「写小说」= 和导演 agent 聊天、做选择；正文等一切内容由 agent 调工具落库。版本号从 v3.0.0 起，v1 旧数据不迁移。
 - **目录**：
-  - `src/main/` 电脑端：`index.ts`（启动序列）、`server.ts`（HTTP + SSE）、`tray.ts`、`jobs.ts`（任务队列）、`db.ts` + `store.ts`（分叉树数据层）、`agent/`（`loop.ts` 循环与拦截工具、`tools.ts` CRUD 工具）、
-    `director/`（`callJson.ts` LLM 调用与重试、`prompts.ts`、`context.ts`、`steps.ts`、`onboard.ts`）、`handlers/`（invoke handler 按域拆）、`backup.ts`、`lint.ts`、`config.ts`、`usage.ts`、`samples.ts`、`sampleParse.ts`（范文切节）、`llm.ts`、`llmOpenai.ts`、`broadcast.ts`、`eventSink.ts`（事件出口）、`connect.ts`（连接地址）、`paths.ts`（数据目录）、`serverState.ts`（服务状态）、`autostart.ts`（开机自启）、`buildInfo.ts`（构建指纹）
+  - `src/main/` 电脑端：`index.ts`（启动序列）、`server.ts`（HTTP + SSE）、`tray.ts`、`jobs.ts`（任务队列）、`db.ts` + `store.ts`（分叉树数据层）、`agent/`（`loop.ts` 循环与拦截工具、`tools.ts` CRUD 工具、`evidence.ts` 沉淀证据校验）、
+    `director/`（`callJson.ts` LLM 调用与重试、`prompts.ts`、`context.ts` 写作简报、`storyRecap.ts` 前情梗概合并、`steps.ts`、`onboard.ts`）、`handlers/`（invoke handler 按域拆）、`backup.ts`、`lint.ts`、`config.ts`、`usage.ts`、`samples.ts`、`sampleParse.ts`（范文切节）、`llm.ts`、`llmOpenai.ts`、`broadcast.ts`、`eventSink.ts`（事件出口）、`connect.ts`（连接地址）、`paths.ts`（数据目录）、`serverState.ts`（服务状态）、`autostart.ts`（开机自启）、`buildInfo.ts`（构建指纹）
   - `src/shared/`：`contract.ts`（zod 契约，单一事实源）、`types.ts`、`providers.ts`（provider 预设与模型槽）
   - `mobile/`：手机端独立 vite 应用（React 19 + Tailwind v4 + TanStack Query + zustand），产物 `dist-mobile/`
   - `mobile-app/`：Capacitor 壳 + Android 工程（原生插件 `ApkUpdaterPlugin`、`ExportPlugin`、`AppRestartPlugin`）
@@ -52,10 +52,11 @@
   `settings.json` 不经 zod：旧配置里已移除 provider 的残段（`profiles` / `apiKeys` 的键、`routing` 槽）由 `config.ts` 的 `sanitize()` 在加载时于内存中清洗并写一条 `[config]` 日志——不改名、不落盘，下次保存设置才写回。
 - **模块纪律**：tsc 直出 ESM、无 bundler，`module=NodeNext`——相对 import 必须带 `.js`，目录导入要写到文件（`./handlers/index.js`）。两套 tsconfig 都是 `strict` + `noUncheckedIndexedAccess` + `erasableSyntaxOnly`（不写 enum、参数属性这类不可擦除语法）。
 - **数据层**（`db.ts` + `store.ts`）：内置 `node:sqlite`，**一律不用原生模块**。表：books / lines / chapters / chapter_versions / cards / characters / foreshadows / memories / messages / jobs / samples / sample_sections。
-  `SCHEMA_VERSION`（`PRAGMA user_version`）——改表结构或 migrate 时 +1，老库升级前自动留快照。
+  `SCHEMA_VERSION`（`PRAGMA user_version`，现为 2）——改表结构或 migrate 时 +1，老库升级前自动留快照。
 - **分叉树**：每本书一条激活线，可从任意章之后开新线；不分卷、不合并、无状态机、无真删除（一切重来 = 分叉）。
   - `effectiveChapters(lineId)` = 祖先线 fork 点前的章节 + 本线章节按序拼接，是分叉树的核心读操作。`lines.fork_order` 记录分叉点序号，分叉点章不在时子线仍保住更早的祖先章；起点章不可删。
-  - `forkLine` 在事务里深拷贝 cards / characters / foreshadows，设定各线独立演化。
+  - **「第 N 章」= 本线有效章序列里的位置**：本线自己的章序号（`order_no`）从 1 重排，跨线不可比——要定位一章用章节 id。
+  - `forkLine` 在事务里深拷贝 cards / characters / foreshadows，设定各线独立演化；前情梗概在覆盖范围没越过分叉点时一并带过去，各线此后独立演化。
   - 删除（删书 / 线 / 卡 / 人物 / 伏笔）前自动 `snapshotDb` 留快照；归档 = `book:update {archived:true}`（内容全保留），彻底删除走 `book:delete`（带确认参数）。
 - **数据安全**（`backup.ts`）：每日一份 gzip 备份（近 7 天全留，更早每周 1 份共 8 桶）；删除前快照只留最新 30 份，manual / pre-migrate / pre-restore 永不自动清。
   `backup:list / create / restore`——恢复是进程内换库，先留 pre-restore 快照，失败自动换回；手机入口在设置页「备份与恢复」。`settings.json` 原子写（tmp → rename），损坏时改名 `settings.json.corrupt-<时间>` 保全后用默认值。
@@ -69,10 +70,20 @@
   **正文、改章等一切生成内容不进聊天流**——agent 一律调工具产出，聊天里只有对话、思考、工具卡和成品卡（入书卡）。流式内容周期落进 job 的 `payload.answer` / `payload.draftText`，服务端是唯一真相源。
 - **写章**（走向卡已废除，用户决策：聊天驱动、agent 自主定走向）：`job:startWrite [bookId, hint?]` → 若书开了 `planMode`，先出本章计划书并停在 `waiting_user`（step = `plan`），
   `job:approvePlan [jobId, feedback?]` 后入队 → `runAgentLoop(mode:'chapter')`：`get_write_context` → `write_chapter_draft` → lint 自检（major 自动修一轮）→ `commit_chapter` → 沉淀（`save_card` / `patch_character_state` / `save_foreshadow`）→ `finish`。
-  入书后压缩记忆；有效章数每满 8 章自动排一次后台审计（章数 < 2 不审计）。**写完停手**，agent 不自动续写。
-- **agent 循环**（`agent/loop.ts`）：`maxTurns` 30；每轮重建系统提示，注入书的基础信息、红线、正负词、文风，防长程遗忘。流式拦截工具 `finish` / `write_chapter_draft` / `commit_chapter` / `revise_chapter` / `spawn_subagent` 内联在 loop.ts；
+  沉淀必须带证据：写章任务里 `save_card` / `save_foreshadow` 要附本章原句（`evidence`），服务端核对原句确在正文里才落库（见 `agent/evidence.ts`）；聊天模式由作者点名，不强制。
+  有效章数每满 8 章自动排一次后台审计（章数 < 2 不审计）。**写完停手**，agent 不自动续写。
+- **前情梗概（长期记忆）**（`director/storyRecap.ts`）：每条线一行 `running` 梗概（`memories.kind`），新章入书后把新章纪要并进去、**原地更新**，
+  固定四段（主线脉络 / 伏笔状态·已埋已回收 / 人物关系 / 时间地点），目标 1500 字、超 2200 字先让模型压一次、仍超硬截。
+  全部 fire-and-forget：失败只记日志并冷却 60 秒，绝不让写章任务失败；同一条线同时只跑一个合并循环。
+  没有梗概（或落后于章）时，`get_write_context` / `delete_last_chapter` 之后在后台补建；删末章盖到梗概时删行待重建，不做「反合并」。
+  旧的逐章压缩块（`kind=legacy`）只读保留、不再新增，仅在首次合并时当参考材料、没有 `running` 时回退注入。
+  改稿（`revise_chapter` / `job:startRevise`）成功后同样走后台：按新正文重写该章纪要，再对梗概做增量合并。
+- **写作简报**（`director/context.ts` 的 `buildStoryBrief`）：导演与写手共用同一份上下文——钉选设定 → 前情梗概 → 人物现状 → 未闭合伏笔 → 本章出场人物人设 → 相关设定卡 → 近 8 章纪要 → 已批准的本章计划。
+  写手动笔前传本章大纲作 focus，会多带出场人物的人设（`characters.data`，最多 6 人）与相关设定卡（非钉选里本章提到的，带完整 `data`，最多 5 张）；`books.styleSample` 作「文风范例」放在写手提示末尾。
+- **agent 循环**（`agent/loop.ts`）：`maxTurns` 30；每轮重建系统提示，注入书的基础信息、红线、正负词、文风与记忆简报（前情梗概 + 主要人物名单），稳定内容在前、动态在后（DeepSeek 前缀缓存按前缀命中），防长程遗忘。流式拦截工具 `finish` / `write_chapter_draft` / `commit_chapter` / `revise_chapter` / `spawn_subagent` 内联在 loop.ts；
   普通 CRUD 工具在 `agent/tools.ts`（读 / 写 / 删 / 线操作四类），返回 `{ok, summary, data}`——summary 给作者的工具卡，data 给 LLM（上限 30000 字）。
   - free 模式（`job:startChat`，历史取最近 12 条 chat 消息）没有写章权限：意图工具 `propose_chapter` / `request_review` / `request_audit` 转成排队任务或文本回报。
+    纪律：涉及书里已发生的事先查再答，查不到就明说不确定；作者表达的长期偏好当轮存成钉选卡；开书引导定下的终局方向也落库为钉选卡「终局方向」。
   - `revise_chapter` 默认局部替换（未点名处一字不动），直接替换旧版、不留档；作者明确要求才整章重写。
   - `spawn_subagent` 是只读调查员（只带读工具、最多 12 轮、只回报结论）。要翻大量资料但只要结论时派它去。
 - **自检与落库语义**（`lint.ts`）：书级负向词（`books.negative_words`）命中即 major，正向词只提示。save_* 工具按**部分更新**语义工作：未传的字段保持原值（详见踩坑 3）。
@@ -106,6 +117,8 @@
   临时目录建在 `%LOCALAPPDATA%\Temp`（`nm-` 前缀），每套用完自己删——公共收尾在 `scripts/temp-dir.mjs`（先等子进程退出、关本进程的 sqlite 句柄，再删；被占用就重试）。
   总入口每套跑前 / 跑后比对 Temp 下的 `nm-*` 目录，留下没删的点名并判该套失败。
   - LLM 桩（`smoke-m3-stub.mjs` 端口 3923、`smoke-llm-stub.mjs` 端口 3922）是**队列式**的：每来一次 `/v1/chat/completions` 弹出下一个预设响应，调用顺序一变就全盘错位。改 prompt 步数或增减工具调用轮，都要同步改队列。
+    后台记忆调用（前情梗概合并 / 改稿后重写章纪要，身份行在 `director/storyRecap.ts`）与主链路并发到达、顺序不定，走桩的**旁路应答**（按系统提示的身份行识别，不吃队列）；新增后台模型调用照此办理，不要去关功能迁就队列。
+  - `smoke-memory.mjs` 不起 dist 服务：直接调 dist 模块，模型请求打到脚本内的桩（端口 3980），合并是否落库靠 `storyRecapSettled()` 等待。
   - 桩开关：`SKIP_ONBOARD=1`（已开书续写）、`CHAT_FIRST=1`、`CHAT_IN_QUEUE=0`、`AGENT_MODE=1`、`PLAN_MODE=1`、`SUBAGENT=1`。带 LLM 的冒烟脚本要设 `negativeWords`（如 `['忽然']`）触发自动修轮，否则队列错位。
 
 ## 踩坑记录（v2 仍会踩）
@@ -129,6 +142,7 @@
 15. **版本号 tag 边界**：`version.mjs` 用 `git log <tag>..HEAD` 算增量，最新 tag 不在当前分支祖先链（从 main = v1 拉的 worktree、浅克隆）时会纳入无关提交而过度升版；tag 已存在时严格抛错，不会静默写坏 package.json。
 16. **开线坑**：`worktree_create` 默认从 main（v1）拉新 worktree，不是 feat/v2-rebuild——开线后先 `git switch -c <branch> && git reset --hard feat/v2-rebuild`，再 `npm ci`。
 17. **Capacitor `PluginCall.getLong` / `getInt` 只认精确类型**：JS 传来的整数经 JSON 到原生是 `Integer`，`getLong` 只认 `Long`，类型不符一律返回默认值——APK 自更新的 versionCode 曾因此永远读成 0，所有版本都落到固定文件名、反复安装旧包（`-25 无法降级安装`）。原生取数值参数一律 `call.getData().opt(name)` 后按 `Number` 自己转；APK 交给系统安装器前先用 `getPackageArchiveInfo` 核对包内真实 versionCode。
+18. **DeepSeek 思考模式带工具的续轮必须回传 `reasoning_content`**：官方文档写明带 `tools` 的请求要把之前各轮 assistant 的思考链原样传回，否则 400。但线上实测：只要工具调用 id 是模型真实签发的，不回传也是 200，伪造 id 才 400——所以冒烟桩（自己编 `call_x` id、不校验消息体）测不出这个回归。`ChatMessage.reasoning` → `llmOpenai.ts` 转 `reasoning_content` → `loop.ts` 回灌 assistant 历史时挂上 `res.thinking`，改这条链只能靠真实 DeepSeek 验证；思考关闭时不带。
 
 ## 入口
 

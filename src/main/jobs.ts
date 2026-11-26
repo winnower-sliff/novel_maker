@@ -11,7 +11,6 @@ import {
 import { isQuotaError } from './director/callJson.js'
 import {
   applyRevisePlan,
-  compactMemories,
   genAudit,
   genChapterPlan,
   genDiagnose,
@@ -19,6 +18,7 @@ import {
   genRevisePlan,
   selfCheck
 } from './director/steps.js'
+import { noteRevisedChapter, scheduleStoryRecap } from './director/storyRecap.js'
 import { stripHtmlComments } from './lint.js'
 import {
   activeLine,
@@ -335,12 +335,16 @@ async function runAgentChapterJob(
   const task = direction.text
     ? `写第 ${chapterNo} 章。作者给出的倾向：${direction.text}。据此定具体走向，按写章任务纪律自主完成全流程。`
     : `写第 ${chapterNo} 章。作者没有给倾向：综合现状卡、伏笔与前文自主定走向，按写章任务纪律自主完成全流程。`
+  // 计划模式下 direction.text = 已批准的计划 + 作者补充：作为「本章计划」交给写手；否则是作者对本章的倾向
+  const planMode = Boolean(book.planMode)
   const result = await runAgentLoop({
     jobId: job.id,
     bookId: job.bookId,
     task,
     history: [],
     mode: 'chapter',
+    chapterDirection: planMode ? '' : direction.text,
+    chapterPlan: planMode ? direction.text : undefined,
     tools: [...toolDefs(), ...interceptorDefs('chapter')],
     signal,
     onDelta: chatSaver(job.id),
@@ -365,7 +369,8 @@ async function runAgentChapterJob(
       })
       const b2 = getBook(job.bookId)
       if (b2) {
-        void compactMemories(b2, job.lineId, effectiveChapters(job.lineId)).catch(() => {})
+        // 前情梗概后台合并（fire-and-forget：失败只记日志，绝不让写章任务受影响）
+        scheduleStoryRecap(job.lineId)
         const n = effectiveChapters(job.lineId).length
         if (n > 0 && n % 8 === 0) maybeQueueAudit(job.bookId, job.lineId)
       }
@@ -465,6 +470,8 @@ async function runReviseJob(job: Job, signal: AbortSignal): Promise<Job | null> 
   )
   const clean = stripHtmlComments(applied.next)
   replaceChapterContent(revise.chapterId, clean)
+  // 后台按新正文重写该章纪要，并把前情梗概里涉及本章的说法更正（fire-and-forget，失败只记日志）
+  noteRevisedChapter(revise.chapterId)
   note(job.id, 'revised', `《${chapter.title}》已按指令改好`)
   return finishJob(job.id, {
     state: 'done',

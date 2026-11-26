@@ -11,13 +11,15 @@ import { dataDir } from './paths.js'
  * - lines: 主线 parent/fork 均空；分叉线 parent_line_id+fork_chapter_id
  * - cards/characters/foreshadows 挂 line——开新线时深拷贝，之后各线独立演化
  * - chapters: 线内 order_no 连续；parent_chapter_id 链到分叉点（跨线）
- * - memories: 滚动分层记忆的远端压缩层（最近章细记在 chapters.summary）
+ * - memories: 前情梗概（kind=running，每线一行，新章入书后合并更新，last_chapter_id 记覆盖到的最后一章）；
+ *   kind=legacy 是旧的逐章压缩块，只读保留；最近章细记在 chapters.summary
  */
 
 let db: DatabaseSync | null = null
 
 /** 表结构版本（PRAGMA user_version）：改 SCHEMA 或 migrate 时 +1，老库升级前会自动留快照 */
-const SCHEMA_VERSION = 1
+// 2：memories 加 kind / last_chapter_id（前情梗概改为合并式）
+const SCHEMA_VERSION = 2
 
 const SCHEMA = `
 CREATE TABLE IF NOT EXISTS books (
@@ -126,7 +128,9 @@ CREATE TABLE IF NOT EXISTS memories (
   from_order INTEGER NOT NULL,
   to_order INTEGER NOT NULL,
   content TEXT NOT NULL,
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'legacy',
+  last_chapter_id TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS messages (
@@ -210,7 +214,15 @@ export function closeDb(): void {
     db?.close()
   } finally {
     db = null
+    epoch++
   }
+}
+
+let epoch = 0
+
+/** 库被换过几次（恢复备份会 closeDb 再重开）：后台任务写库前比对，别把换库前算出的结果写进换库后的库 */
+export function dbEpoch(): number {
+  return epoch
 }
 
 function schemaIsOlder(d: DatabaseSync): boolean {
@@ -259,6 +271,13 @@ function migrate(d: DatabaseSync): void {
     `UPDATE lines SET fork_order = COALESCE((SELECT order_no FROM chapters WHERE id = lines.fork_chapter_id), fork_order)
      WHERE fork_order = -1 AND fork_chapter_id != ''`
   )
+  // 前情梗概改为合并式：kind 区分旧的逐章压缩块（legacy，存量行默认值，只读保留）与每线一行的合并梗概（running）；
+  // last_chapter_id 记梗概覆盖到的最后一章——按 id 定位，分叉线里章序号从 1 重排，不能用 order_no 当锚
+  const memCols = tableCols('memories')
+  if (!memCols.has('kind'))
+    d.exec("ALTER TABLE memories ADD COLUMN kind TEXT NOT NULL DEFAULT 'legacy'")
+  if (!memCols.has('last_chapter_id'))
+    d.exec("ALTER TABLE memories ADD COLUMN last_chapter_id TEXT NOT NULL DEFAULT ''")
 }
 
 /** 灾难恢复快照（删书/删线前调用，D4）。VACUUM INTO 不覆盖已存在文件——文件名带时分秒，同秒冲突加序号 */

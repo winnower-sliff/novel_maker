@@ -1,6 +1,6 @@
 import type { ChatParams } from '../../shared/contract.js'
 import type { ModelSlot } from '../../shared/providers.js'
-import type { ChatResult } from '../../shared/types.js'
+import type { ChatMessage, ChatResult } from '../../shared/types.js'
 import { resolveAuth } from '../config.js'
 import { chatStream, LlmError, pickRatelimitHeaders } from '../llm.js'
 import { appendUsage } from '../usage.js'
@@ -8,7 +8,7 @@ import { appendUsage } from '../usage.js'
 /**
  * LLM 调用封装（G9 技术性失败重试 + JSON 提取 + 记账）。
  * - 网络/5xx：指数退避重试 2 次；429：读 retry-after（≤60s）重试 1 次
- * - JSON 解析失败：把错误喂回模型重试 1 次
+ * - JSON 解析失败：把错误喂回模型重试 1 次（原消息保留，纠错说明追加在后面）
  * - 每次调用 appendUsage（purpose=slot）
  */
 
@@ -179,21 +179,41 @@ export async function callRaw(
   throw new StepError(`模型调用失败：${String((lastErr as Error)?.message ?? lastErr)}`, 'network')
 }
 
-/** 结构化 JSON 调用：解析失败把错误喂回模型重试一次 */
+/**
+ * 结构化 JSON 调用：解析失败把错误喂回模型重试一次。
+ * 重试不丢上下文：原 user 消息原样保留，后面追加「上次的输出 + 纠错说明」。
+ * 不能用纠错说明整段替换原消息——模型看不到原材料，只能凭空编。
+ */
 export async function callJson<T>(opts: CallOptions): Promise<T> {
-  let user = `${opts.user}\n\n（只输出一个 JSON 对象，不要输出其他内容。形状：${opts.jsonHint}）`
+  const messages: ChatMessage[] = [
+    {
+      role: 'user',
+      content: `${opts.user}\n\n（只输出一个 JSON 对象，不要输出其他内容。形状：${opts.jsonHint}）`
+    }
+  ]
   let lastErr: unknown = null
   for (let round = 0; round < 2; round++) {
-    const res = await callRaw({ ...opts, user })
+    const res = await callRaw({ ...opts, params: { messages } })
     try {
       return extractJson(res.text) as T
     } catch (err) {
       lastErr = err
-      user = `你上次的输出不是合法 JSON（${(err as Error).message}）。重新输出，只输出一个 JSON 对象。形状：${opts.jsonHint}\n\n上次输出开头：${res.text.slice(0, 200)}`
+      if (res.text.trim()) messages.push({ role: 'assistant', content: res.text })
+      messages.push({ role: 'user', content: retryNote(err, res, opts.jsonHint) })
     }
   }
   throw new StepError(
     `模型两次未产出合法 JSON：${String((lastErr as Error)?.message ?? lastErr)}`,
     'bad_output'
   )
+}
+
+/** 纠错说明：指出哪里不合规，并带上上次输出开头供模型对照（原材料仍在前面的原消息里） */
+function retryNote(err: unknown, res: ChatResult, jsonHint: string): string {
+  const why =
+    res.stopReason === 'max_tokens'
+      ? '你上次的输出在长度上限处被截断，JSON 不完整。请精简内容，保证这次能完整输出整个 JSON 对象'
+      : `你上次的输出不是合法 JSON（${(err as Error).message}）。常见原因：JSON 前后夹了别的文字、字符串里的英文双引号没转义（改用中文引号）、括号没配对`
+  const head = res.text.trim() ? `\n\n你上次输出的开头（供对照）：${res.text.slice(0, 200)}` : ''
+  return `${why}。\n任务不变，按上面原有的材料重新输出：只输出一个完整的 JSON 对象，不要代码围栏，不要解释。形状：${jsonHint}${head}`
 }

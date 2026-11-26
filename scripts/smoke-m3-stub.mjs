@@ -1,7 +1,8 @@
 /**
  * M3 联调 LLM stub（独立进程，端口 3923）：队列 = 开书引导 4 轮 + 写作循环 5 步。
  * 用法：node scripts/smoke-m3-stub.mjs
- * 每收到一次 /v1/chat/completions 弹出下一个预设；全部弹完后挂起（不返回）以便排查。
+ * 每收到一次 /v1/chat/completions 弹出下一个预设；队列空了回空 JSON。
+ * 后台记忆调用（前情梗概合并 / 改稿后重写章纪要）与主链路并发到达，走旁路应答、不吃队列（见 SIDE_ROUTES）。
  */
 import { appendFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -413,13 +414,15 @@ const AGENT_QUEUE = [
       }
     ]
   },
+  // 沉淀带证据（M5）：evidence 必须是本章正文（DRAFT 去掉「忽然」后）里连续的一句，服务端会核对
   {
     tool_calls: [
       {
         name: 'save_foreshadow',
         arguments: {
           title: '断刀的来历',
-          detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。'
+          detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。',
+          evidence: '刀柄内侧那道刻痕——一个被磨掉一半的「沈」字'
         }
       }
     ]
@@ -432,7 +435,9 @@ const AGENT_QUEUE = [
           kind: 'geography',
           title: '雾津港七号泊位',
           readerText: '常年大雾的深水泊位，夜里潮水定时辰。',
-          authorText: '七号泊位专走南屿的私货船。'
+          authorText: '七号泊位专走南屿的私货船。',
+          tags: ['港口'],
+          evidence: '盐帮悬赏你的画像，今早已经送到了南屿'
         }
       }
     ]
@@ -467,6 +472,38 @@ const FINAL_QUEUE = process.env.AGENT_MODE ? AGENT_QUEUE : QUEUE
 let served = 0
 // 可选钩子（默认关闭，不影响其它冒烟）：STUB_DUMP=把每个请求体追加到文件；STUB_FAIL_TIMES=让第 N 次请求返回 500
 const failTimes = (process.env.STUB_FAIL_TIMES ?? '').split(',').filter(Boolean).map(Number)
+// 旁路：后台记忆调用（章后合并前情梗概 / 改稿后重写章纪要）与 agent 主链路并发到达，
+// 不能吃队列——按系统提示首行的身份直接应答，不占队列、不计调用序号。
+// 身份行定义在 src/main/director/storyRecap.ts，改了要同步这里。
+const SIDE_ROUTES = [
+  {
+    mark: '你是前情梗概维护员',
+    text: JSON.stringify({
+      plot: '林岸雾夜藏身雾津港七号泊位，借码头异响引开盐帮巡逻，藏进蔗糖筐随货船离港。',
+      foreshadowsOpen: '断刀的来历——刀柄上被磨掉一半的「沈」字，父亲至死不解释。',
+      foreshadowsResolved: '',
+      relations: '林岸与蓑衣老船工：同行但互相警惕。',
+      timePlace: '夜，离港的货船蔗糖舱。'
+    })
+  },
+  {
+    mark: '你是章纪要维护员',
+    // 与队列里 commit_chapter 的纪要故意不同：冒烟靠「纪要变了」判断改稿后确实刷新了
+    text: JSON.stringify({
+      summary: '【改稿后】林岸借码头异响脱身，藏进蔗糖筐随船离港；老船工下舱点破悬赏。'
+    })
+  }
+]
+/** 命中旁路返回应答文本，否则 null（照常吃队列） */
+const sideRoute = (body) => {
+  try {
+    const system = JSON.parse(body).messages?.find((m) => m.role === 'system')?.content
+    if (typeof system !== 'string') return null
+    return SIDE_ROUTES.find((r) => system.includes(r.mark))?.text ?? null
+  } catch {
+    return null
+  }
+}
 const server = createServer((req, res) => {
   if (req.method === 'GET' && req.url?.endsWith('/models')) {
     res.writeHead(200, { 'content-type': 'application/json' })
@@ -487,6 +524,28 @@ const server = createServer((req, res) => {
       console.log(`[stub] call #${served} 注入失败`)
       res.writeHead(500, { 'content-type': 'application/json' })
       res.end(JSON.stringify({ error: { message: 'stub injected failure' } }))
+      return
+    }
+    const side = sideRoute(body)
+    if (side !== null) {
+      console.log(`[stub] 旁路应答（剩余 ${FINAL_QUEUE.length} 不变）`)
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+      for (let i = 0; i < side.length; i += 40)
+        res.write(
+          `data: ${JSON.stringify({
+            model: 'stub-model',
+            choices: [{ delta: { content: side.slice(i, i + 40) } }]
+          })}\n\n`
+        )
+      res.write(
+        `data: ${JSON.stringify({
+          model: 'stub-model',
+          choices: [{ delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 100, completion_tokens: 300 }
+        })}\n\n`
+      )
+      res.write('data: [DONE]\n\n')
+      res.end()
       return
     }
     const item = FINAL_QUEUE.length ? FINAL_QUEUE.shift() : '{}'

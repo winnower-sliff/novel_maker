@@ -252,6 +252,17 @@ async function confirmDraft(
       targetWords: draft.targetWords,
       redlines: draft.redlines
     })
+    // 开书时定下的终局方向感落库为钉选卡：每章写作必带，写到几十章后也不忘要去哪（原来只在回显里出现一次）
+    const ending = draft.skeleton.ending.trim()
+    if (ending) {
+      saveCard({
+        lineId: book.activeLineId,
+        kind: 'custom',
+        title: '终局方向',
+        authorText: ending,
+        pinned: true
+      })
+    }
     const reply: OnboardReply = {
       reply: `书已立好：《${picked.title}》\n\n文风：${draft.styleName}\n红线：${draft.redlines.join('；') || '无'}\n单章目标：${draft.targetWords} 字\n\n【终局方向感】${draft.skeleton.ending}\n\n【前 3 章概要】\n${draft.skeleton.firstThree.map((s, i) => `${i + 1}. ${s}`).join('\n')}\n\n去写第一章吧。`,
       options: [],
