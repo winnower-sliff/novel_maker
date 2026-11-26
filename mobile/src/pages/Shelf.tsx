@@ -1,10 +1,18 @@
 import { exportBookZip } from '@mobile/lib/exportPlugin'
+import { onboardProgressKey, readOnboardProgress } from '@mobile/lib/onboard'
 import { useBooks, useShelfStatus } from '@mobile/lib/queries'
+import { toastError } from '@mobile/lib/toastStore'
 import { useUiStore } from '@mobile/lib/uiStore'
 import type { Book } from '@shared/types'
-import { useMutation, useQueryClient } from '@tanstack/react-query'
-import { useMemo, useState } from 'react'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
 import { BottomSheet } from '../components/BottomSheet'
+import { ErrorBox } from '../components/ErrorBox'
+import { OfflineBanner } from '../components/OfflineBanner'
+
+/** 点「开新书」时先占位的书名；真正的书名在引导最后一步才定 */
+const NEW_BOOK_TITLE = '新书'
+const UNTITLED = '未命名新书'
 
 /** 书脊配色：按书 id 稳定取暖色系之一 */
 const SPINE_COLORS = ['#ea580c', '#d97706', '#c2410c', '#b45309', '#9a3412', '#e11d48']
@@ -26,9 +34,12 @@ function relTime(ts: number): string {
   return `${Math.floor(d / 30)} 个月前`
 }
 
-/** 书架：最近的书大卡续写 + 其余列表卡 + 长按 ⋯ 归档（归档不在书架显示，设置里可恢复） */
+/**
+ * 书架：开书中途退出的书置顶为虚线卡（接着聊）+ 最近的书大卡续写 + 其余列表卡
+ * + ⋯ 菜单归档（归档不在书架显示，设置里可恢复）。
+ */
 export default function Shelf() {
-  const { data: books, isLoading } = useBooks()
+  const { data: books, error, isError, isLoading, refetch } = useBooks()
   const openBook = useUiStore((s) => s.openBook)
   const startOnboard = useUiStore((s) => s.startOnboard)
   const setTab = useUiStore((s) => s.setTab)
@@ -38,6 +49,14 @@ export default function Shelf() {
   const [confirmWipe, setConfirmWipe] = useState(false)
   const [exporting, setExporting] = useState<string | null>(null)
   const [exportMsg, setExportMsg] = useState('')
+
+  // 断网期间每隔几秒自己试一次：连上后刷新成功，顶部提示自动消失。
+  // 不依赖事件连接的恢复通知——桌面浏览器的事件连接是静默自动重连的，不会通知
+  useEffect(() => {
+    if (!(isError && books)) return
+    const timer = setInterval(() => void refetch({ cancelRefetch: false }), 5000)
+    return () => clearInterval(timer)
+  }, [isError, books, refetch])
 
   const doExport = async (b: Book) => {
     setMenuFor(null)
@@ -55,13 +74,36 @@ export default function Shelf() {
     }
   }
 
-  const active = useMemo(
-    () =>
-      (books ?? [])
-        .filter((b) => !b.archived && !b.draft)
-        .sort((a, b) => b.updatedAt - a.updatedAt),
-    [books]
-  )
+  // 开书没聊完的书要能接着开：
+  // ① draft 书（作者还没说过话）一定没开完，直接算「开书中」；
+  // ② 说过话、但简介还没写进书里的（书名/简介在引导最后一步才落库），要查对话记录确认没走到最后一步
+  const toCheck = (books ?? []).filter((b) => !b.archived && !b.draft && !b.intro).map((b) => b.id)
+  const {
+    data: unfinished,
+    isError: checkError,
+    isSuccess: checkDone
+  } = useQuery({
+    queryKey: onboardProgressKey(toCheck),
+    queryFn: async (): Promise<string[]> => {
+      const rows = await Promise.all(toCheck.map((id) => window.api.message.list(id)))
+      return toCheck.filter((_, i) => {
+        const progress = readOnboardProgress(rows[i] ?? [])
+        return progress !== null && !progress.done
+      })
+    },
+    enabled: toCheck.length > 0,
+    staleTime: 30_000
+  })
+  // 查询出结论前先把待查的书摘出正式书架，免得它先按正式书出现、再跳进「开书中」；
+  // 查不了（出错）就按正式书照旧显示
+  const pendingIds = new Set(!checkDone && !checkError ? toCheck : [])
+  const unfinishedIds = new Set(unfinished ?? [])
+  const isOpening = (b: Book): boolean => !b.archived && (b.draft || unfinishedIds.has(b.id))
+  // 开书中途退出的书：接回引导，而不是当正式书打开
+  const opening = (books ?? []).filter(isOpening)
+  const active = (books ?? [])
+    .filter((b) => !b.archived && !b.draft && !unfinishedIds.has(b.id) && !pendingIds.has(b.id))
+    .sort((a, b) => b.updatedAt - a.updatedAt)
   const { data: statuses } = useShelfStatus(active.map((b) => b.id))
   const statusById = useMemo(() => {
     const m = new Map<string, NonNullable<typeof statuses>[number]>()
@@ -76,12 +118,20 @@ export default function Shelf() {
       setCreating(false)
       startOnboard(book.id)
     },
-    onError: () => setCreating(false)
+    onError: (e) => {
+      setCreating(false)
+      toastError(e, '开新书失败')
+    }
   })
 
   const archive = async (b: Book) => {
     setMenuFor(null)
-    await window.api.book.update(b.id, { archived: true })
+    try {
+      await window.api.book.update(b.id, { archived: true })
+    } catch (e) {
+      toastError(e, '归档失败')
+      return
+    }
     void qc.invalidateQueries({ queryKey: ['books'] })
     void qc.invalidateQueries({ queryKey: ['shelfStatus'] })
   }
@@ -89,7 +139,12 @@ export default function Shelf() {
   const wipe = async (b: Book) => {
     setMenuFor(null)
     setConfirmWipe(false)
-    await window.api.book.delete(b.id, true)
+    try {
+      await window.api.book.delete(b.id, true)
+    } catch (e) {
+      toastError(e, '删除失败')
+      return
+    }
     void qc.invalidateQueries({ queryKey: ['books'] })
     void qc.invalidateQueries({ queryKey: ['shelfStatus'] })
   }
@@ -124,33 +179,40 @@ export default function Shelf() {
           {archivedCount > 0 && (
             <button
               type="button"
-              className="text-xs text-stone-400 underline underline-offset-2"
+              className="-my-3 py-3 text-xs text-stone-400 underline underline-offset-2"
               onClick={() => setTab('settings')}
             >
               已归档 {archivedCount}
             </button>
           )}
+          {/* 小图标按钮：视觉保持 32px，命中区域用外层撑到 40px（负 margin 抵消多出的占位） */}
           <button
             type="button"
             disabled={creating}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-orange-200 text-lg font-light text-orange-600 active:bg-orange-50 disabled:opacity-50"
+            className="group -m-1 flex h-10 w-10 items-center justify-center disabled:opacity-50"
             aria-label="开新书"
             onClick={() => {
               setCreating(true)
-              createBook.mutate('新书')
+              createBook.mutate(NEW_BOOK_TITLE)
             }}
           >
-            ＋
+            <span className="flex h-8 w-8 items-center justify-center rounded-full border border-orange-200 text-lg font-light text-orange-600 group-active:bg-orange-50">
+              ＋
+            </span>
           </button>
           <button
             type="button"
-            className="text-2xl text-stone-500"
+            className="-my-1 -ml-1 -mr-2 flex h-10 w-10 items-center justify-center text-2xl text-stone-500"
+            aria-label="设置"
             onClick={() => setTab('settings')}
           >
             ⚙️
           </button>
         </div>
       </header>
+
+      {/* 刷新失败但手里还有书：照常显示，只提醒一句这些不是最新的；恢复后自动消失 */}
+      {isError && !!books && <OfflineBanner />}
 
       <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-safe">
         {(exporting || exportMsg) && (
@@ -161,7 +223,8 @@ export default function Shelf() {
           </div>
         )}
         {isLoading && <p className="mt-10 text-center text-stone-500">加载中…</p>}
-        {!isLoading && active.length === 0 && (
+        {isError && !books && <ErrorBox error={error} onRetry={() => refetch()} />}
+        {!isLoading && books && active.length === 0 && opening.length === 0 && (
           <div className="mt-24 text-center text-stone-500">
             <div className="text-5xl">✍️</div>
             <p className="mt-4">还没有书</p>
@@ -169,8 +232,48 @@ export default function Shelf() {
           </div>
         )}
 
+        {opening.length > 0 && (
+          <div className="mt-2 space-y-2.5">
+            {opening.map((b) => (
+              <div
+                key={b.id}
+                className="relative flex items-stretch rounded-2xl border border-dashed border-orange-300 bg-orange-50/60"
+              >
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-center gap-3 py-3.5 pl-4 pr-12 text-left active:bg-orange-100/60"
+                  onClick={() => startOnboard(b.id)}
+                >
+                  <span className="min-w-0 flex-1">
+                    <span className="rounded-full bg-orange-100 px-2 py-0.5 text-[11px] font-medium text-orange-700">
+                      开书中
+                    </span>
+                    <span className="mt-1.5 block truncate text-[15px] font-semibold text-stone-700">
+                      {b.title && b.title !== NEW_BOOK_TITLE ? b.title : UNTITLED}
+                    </span>
+                    <span className="mt-1 block text-[11px] text-stone-400">
+                      还没聊完 · {relTime(b.createdAt)}开的
+                    </span>
+                  </span>
+                  <span className="shrink-0 rounded-full bg-orange-600 px-3 py-1.5 text-xs font-medium text-white">
+                    继续开书 →
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  className="absolute right-1 top-1/2 flex h-10 w-10 -translate-y-1/2 items-center justify-center rounded-full text-stone-400 active:bg-orange-100 active:text-stone-600"
+                  onClick={() => setMenuFor(b)}
+                  aria-label="书操作"
+                >
+                  ⋯
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+
         {recent && (
-          <div className="relative mt-2">
+          <div className={opening.length > 0 ? 'relative mt-4' : 'relative mt-2'}>
             <button
               type="button"
               className="block w-full overflow-hidden rounded-2xl p-4 pl-5 text-left active:brightness-95"
@@ -196,11 +299,13 @@ export default function Shelf() {
             </button>
             <button
               type="button"
-              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/25 text-lg font-light text-white active:bg-white/40"
+              className="group absolute right-2 top-2 flex h-10 w-10 items-center justify-center"
               onClick={() => setMenuFor(recent)}
               aria-label="书操作"
             >
-              ⋯
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/25 text-lg font-light text-white group-active:bg-white/40">
+                ⋯
+              </span>
             </button>
           </div>
         )}
@@ -231,7 +336,7 @@ export default function Shelf() {
                 </button>
                 <button
                   type="button"
-                  className="my-auto ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-stone-400 active:bg-orange-100 active:text-stone-600"
+                  className="-mx-0.5 my-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-stone-400 active:bg-orange-100 active:text-stone-600"
                   onClick={() => setMenuFor(b)}
                   aria-label="书操作"
                 >
@@ -245,7 +350,7 @@ export default function Shelf() {
         {archivedCount > 0 && (
           <button
             type="button"
-            className="mt-4 w-full py-1 text-center text-xs text-stone-400 active:text-stone-600"
+            className="-mb-4 mt-4 w-full py-3 text-center text-xs text-stone-400 active:text-stone-600"
             onClick={() => setTab('settings')}
           >
             已归档 {archivedCount} 本 · 归档管理 →
@@ -253,14 +358,14 @@ export default function Shelf() {
         )}
       </div>
 
-      {active.length === 0 && (
+      {books && active.length === 0 && opening.length === 0 && (
         <div className="px-5 pb-safe pt-3">
           <button
             type="button"
             disabled={creating}
             onClick={() => {
               setCreating(true)
-              createBook.mutate('新书')
+              createBook.mutate(NEW_BOOK_TITLE)
             }}
             className="w-full rounded-xl bg-orange-600 py-3.5 font-semibold text-white active:bg-orange-700 disabled:opacity-50"
           >
@@ -277,27 +382,48 @@ export default function Shelf() {
           }}
         >
           <div className="mb-3 min-w-0">
-            <div className="truncate text-sm font-medium">{menuFor.title || '未命名'}</div>
+            <div className="truncate text-sm font-medium">
+              {isOpening(menuFor)
+                ? menuFor.title && menuFor.title !== NEW_BOOK_TITLE
+                  ? menuFor.title
+                  : UNTITLED
+                : menuFor.title || '未命名'}
+            </div>
             <div className="mt-0.5 text-[11px] text-stone-400">{metaOf(menuFor)}</div>
           </div>
-          <button
-            type="button"
-            className="w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600"
-            onClick={() => {
-              openBook(menuFor.id)
-              setMenuFor(null)
-            }}
-          >
-            打开这本书
-          </button>
-          <button
-            type="button"
-            disabled={exporting !== null}
-            className="mt-2.5 w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600 disabled:opacity-50"
-            onClick={() => void doExport(menuFor)}
-          >
-            {exporting === menuFor.id ? '导出中…' : '导出压缩包（每章一个 TXT）'}
-          </button>
+          {isOpening(menuFor) ? (
+            <button
+              type="button"
+              className="w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600"
+              onClick={() => {
+                startOnboard(menuFor.id)
+                setMenuFor(null)
+              }}
+            >
+              继续开书
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                className="w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600"
+                onClick={() => {
+                  openBook(menuFor.id)
+                  setMenuFor(null)
+                }}
+              >
+                打开这本书
+              </button>
+              <button
+                type="button"
+                disabled={exporting !== null}
+                className="mt-2.5 w-full rounded-xl border border-orange-200 py-2.5 text-sm text-stone-600 disabled:opacity-50"
+                onClick={() => void doExport(menuFor)}
+              >
+                {exporting === menuFor.id ? '导出中…' : '导出压缩包（每章一个 TXT）'}
+              </button>
+            </>
+          )}
           <button
             type="button"
             className="mt-2.5 w-full rounded-xl bg-red-50 py-2.5 text-sm font-medium text-red-600"
@@ -326,7 +452,7 @@ export default function Shelf() {
           ) : (
             <button
               type="button"
-              className="mt-2.5 w-full py-1.5 text-xs text-stone-400 active:text-red-600"
+              className="-mb-3 mt-2.5 w-full py-3 text-xs text-stone-400 active:text-red-600"
               onClick={() => setConfirmWipe(true)}
             >
               彻底删除这本书…

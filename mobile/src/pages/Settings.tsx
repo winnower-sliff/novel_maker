@@ -2,10 +2,12 @@ import type { ProviderId } from '@shared/providers'
 import type { Book, SampleFileInfo, SampleInfo, SettingsView, UsageStats } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { ErrorBox } from '../components/ErrorBox'
 import { SampleReader } from '../components/SampleReader'
 import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
 import { useConnStore } from '../lib/conn'
 import { useBackups, useBooks } from '../lib/queries'
+import { errorText, toastError } from '../lib/toastStore'
 import { useUiStore } from '../lib/uiStore'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
@@ -16,13 +18,20 @@ const PROVIDER_LABEL: Record<ProviderId, string> = {
 
 const APP_VERSION = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''
 
+/** 「连接」一栏的状态胶囊：探测中不下结论，拿到结果或确实连不上才显示已连接 / 未连接 */
+const LINK: Record<'ok' | 'down' | 'probing', { label: string; cls: string }> = {
+  ok: { label: '已连接', cls: 'bg-orange-100 text-orange-700' },
+  down: { label: '未连接', cls: 'bg-red-100 text-red-600' },
+  probing: { label: '正在连接…', cls: 'bg-stone-100 text-stone-500' }
+}
+
 export default function Settings() {
   const conn = useConnStore((s) => s.conn)
   const setConn = useConnStore((s) => s.setConn)
   const setTab = useUiStore((s) => s.setTab)
   const queryClient = useQueryClient()
 
-  const { data: server } = useQuery({
+  const { data: server, isError: serverFailed } = useQuery({
     queryKey: ['serverStatus'],
     queryFn: () => window.api.server.status(),
     refetchInterval: 30_000
@@ -32,6 +41,8 @@ export default function Settings() {
     queryFn: async (): Promise<UsageStats> => window.api.usage.stats(),
     refetchInterval: 60_000
   })
+  // 探测还没回来（既没结果也没报错）时 server 是 undefined，不能当成「未连接」
+  const link = serverFailed ? 'down' : server ? (server.running ? 'ok' : 'down') : 'probing'
 
   return (
     <div className="px-4 py-5 pb-10">
@@ -52,13 +63,8 @@ export default function Settings() {
           <span className="min-w-0 flex-1 truncate text-sm text-stone-600">
             {conn?.baseUrl ?? '-'}
           </span>
-          <span
-            className={
-              'ml-3 shrink-0 rounded-full px-2 py-0.5 text-[11px] ' +
-              (server?.running ? 'bg-orange-900/60 text-orange-700' : 'bg-red-100 text-red-600')
-            }
-          >
-            {server?.running ? '已连接' : '未连接'}
+          <span className={`ml-3 shrink-0 rounded-full px-2 py-0.5 text-[11px] ${LINK[link].cls}`}>
+            {LINK[link].label}
           </span>
         </div>
         {server && (
@@ -150,6 +156,8 @@ function ArchivedBooks() {
     try {
       await window.api.book.update(id, { archived: false })
       await qc.invalidateQueries({ queryKey: ['books'] })
+    } catch (e) {
+      toastError(e, '恢复失败')
     } finally {
       setBusy('')
     }
@@ -160,6 +168,8 @@ function ArchivedBooks() {
       await window.api.book.delete(id, true)
       setConfirmDel(null)
       await qc.invalidateQueries({ queryKey: ['books'] })
+    } catch (e) {
+      toastError(e, '删除失败')
     } finally {
       setBusy('')
     }
@@ -239,11 +249,21 @@ function SampleLib() {
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [reading, setReading] = useState<SampleInfo | null>(null)
 
-  const { data: samples } = useQuery({
+  const {
+    data: samples,
+    isPending: samplesLoading,
+    error: samplesError,
+    isError: samplesFailed
+  } = useQuery({
     queryKey: ['samples'],
     queryFn: async (): Promise<SampleInfo[]> => window.api.sample.list()
   })
-  const { data: files } = useQuery({
+  const {
+    data: files,
+    isPending: filesLoading,
+    error: filesError,
+    isError: filesFailed
+  } = useQuery({
     queryKey: ['importFiles'],
     queryFn: async (): Promise<SampleFileInfo[]> => window.api.sample.listDir()
   })
@@ -297,6 +317,15 @@ function SampleLib() {
     } finally {
       setBusy('')
     }
+  }
+
+  // 两个列表任一拉不到就整段报错：断连时逐条显示「还没有」会让人以为数据没了。
+  // 点重试后会回到加载态（没有数据的重新请求在 TanStack 里算 pending），所以加载态必须先判
+  if (samplesLoading || filesLoading) {
+    return <div className="py-4 text-center text-xs text-stone-400">加载中…</div>
+  }
+  if ((samplesFailed && !samples) || (filesFailed && !files)) {
+    return <ErrorBox error={samplesError ?? filesError} onRetry={refresh} />
   }
 
   return (
@@ -453,7 +482,12 @@ function Stat({ label, value }: { label: string; value: string }) {
 
 function ModelForm() {
   const queryClient = useQueryClient()
-  const { data: view } = useQuery({
+  const {
+    data: view,
+    error,
+    isError,
+    refetch: refetchView
+  } = useQuery({
     queryKey: ['settings'],
     queryFn: async (): Promise<SettingsView> => window.api.settings.get()
   })
@@ -479,7 +513,13 @@ function ModelForm() {
     retry: false
   })
 
-  if (!view) return <div className="py-4 text-center text-xs text-stone-400">加载中…</div>
+  if (!view) {
+    return isError ? (
+      <ErrorBox error={error} onRetry={() => refetchView()} />
+    ) : (
+      <div className="py-4 text-center text-xs text-stone-400">加载中…</div>
+    )
+  }
 
   const profile = view.profiles[view.provider]
   const currentModel = model || profile.defaultModel
@@ -546,6 +586,8 @@ function ModelForm() {
       const list = r.data?.models ?? []
       if (list.length === 0) setMsg('没拉到模型列表：检查 Key 与地址')
       else if (!model && !profile.defaultModel) await pickModel(list[0] ?? '')
+    } catch (e) {
+      setMsg(`连接失败：${errorText(e)}`)
     } finally {
       setBusy(false)
     }
@@ -563,7 +605,12 @@ function ModelForm() {
               (view.provider === p ? 'bg-orange-600 text-white' : 'bg-orange-100 text-stone-500')
             }
             onClick={async () => {
-              await window.api.settings.save({ provider: p })
+              try {
+                await window.api.settings.save({ provider: p })
+              } catch (e) {
+                toastError(e, '切换失败')
+                return
+              }
               setModel('')
               setBaseUrl('')
               queryClient.invalidateQueries({ queryKey: ['settings'] })
@@ -705,7 +752,7 @@ function backupTime(at: number): string {
 
 function BackupSection() {
   const queryClient = useQueryClient()
-  const { data: backups } = useBackups()
+  const { data: backups, isPending, error, isError, refetch } = useBackups()
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')
   const [confirmName, setConfirmName] = useState('')
@@ -758,7 +805,11 @@ function BackupSection() {
         {busy === 'create' ? '正在备份…' : '立即备份'}
       </button>
 
-      {shown.length > 0 ? (
+      {isPending ? (
+        <div className="mt-3 text-xs text-stone-400">加载中…</div>
+      ) : isError && !backups ? (
+        <ErrorBox error={error} onRetry={() => refetch()} />
+      ) : shown.length > 0 ? (
         <div className="mt-3 space-y-1.5">
           {shown.map((b) => (
             <div

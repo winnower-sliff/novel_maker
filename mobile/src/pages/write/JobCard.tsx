@@ -1,28 +1,33 @@
 import type { Job } from '@shared/types'
+import { useState } from 'react'
 import { Markdown } from '../../components/Markdown'
 import ReportCard from '../../components/ReportCard'
+import { useJobFlow } from '../../lib/queries'
+import { toastError } from '../../lib/toastStore'
 import { ChapterDoneCard, RevisedCard } from './DoneCards'
 import PlanCard from './PlanCard'
 
 /**
- * 节点卡（按消息 step 分派）。interactive 判定只看「这是当前活跃 job 且在等作者」，
- * 不再绑定具体 step——未来任何等待确认的节点都自动可交互（通用选择）。
+ * 节点卡（按消息 step 分派）。是否可交互只看任务自身状态（等作者/失败），
+ * 不绑定具体 step，也不依赖「当前活跃任务」是否同步到位。
  */
 export default function JobCard({
   job,
   step,
-  active,
   chaptersById,
   refresh,
   refreshAll
 }: {
   job: Job
   step: string
-  active: Job | null
   chaptersById: Map<string, { id: string; orderNo: number; title: string; wordCount: number }>
   refresh: () => void
   refreshAll: () => void
 }) {
+  const [busy, setBusy] = useState(false)
+  const [dismissed, setDismissed] = useState(false)
+  // 任务列表新→旧，首个即这本书最新的任务
+  const newestId = useJobFlow(job.bookId).data?.jobs[0]?.id
   if (step === 'cards') {
     // 走向卡已废除（聊天驱动开章）；历史消息走通用展示
     return (
@@ -36,11 +41,14 @@ export default function JobCard({
     )
   }
   if (step === 'plan') {
-    // 计划模式：计划书等作者过目（interactive 时可执行/取消，历史消息只读展示）
-    if (active && active.id === job.id && active.state === 'waiting_user' && job.payload.plan) {
+    // 计划书等作者过目：是否可操作只看任务自身状态（节点消息可能先于任务状态到达，不能提前说「已处理」）
+    if (job.state === 'waiting_user' && job.payload.plan) {
       return <PlanCard job={job} refresh={refresh} />
     }
-    return <StaticBubble text="本章计划（已处理）" />
+    if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') {
+      return <StaticBubble text="本章计划（已处理）" />
+    }
+    return <StaticBubble text="正在拟本章计划…" />
   }
   if (step === 'chapter')
     return <ChapterDoneCard job={job} chaptersById={chaptersById} refresh={refreshAll} />
@@ -53,6 +61,9 @@ export default function JobCard({
     ) : null
   }
   if (step === 'failed') {
+    if (dismissed) return <StaticBubble text="（这次失败已忽略）" />
+    // 只有这本书最新的那个失败任务给重试钮：更早的失败早已时过境迁，重试会按旧指令写出不相干的章节
+    const retryable = job.state === 'failed' && newestId === job.id
     return (
       <div className="px-4 py-2">
         <div className="rounded-2xl border border-red-200 bg-red-50 p-3.5">
@@ -60,27 +71,40 @@ export default function JobCard({
           <div className="text-xs leading-relaxed break-all text-stone-500">
             {job.error || '未知错误'}
           </div>
-          {active && active.id === job.id && (
+          {retryable ? (
             <div className="mt-3 flex gap-2">
               <button
                 type="button"
-                className="flex-1 rounded-xl bg-orange-600 py-2 text-xs font-medium"
+                disabled={busy}
+                className="flex-1 rounded-xl bg-orange-600 py-2 text-xs font-medium text-white disabled:opacity-50"
                 onClick={async () => {
-                  await window.api.job.retry(job.id)
-                  refresh()
+                  setBusy(true)
+                  try {
+                    await window.api.job.retry(job.id)
+                    refresh()
+                  } catch (e) {
+                    toastError(e, '重试失败')
+                  } finally {
+                    setBusy(false)
+                  }
                 }}
               >
-                重试
+                {busy ? '正在重试…' : '重试'}
               </button>
               <button
                 type="button"
-                className="flex-1 rounded-xl border border-orange-200 py-2 text-xs text-stone-500"
-                onClick={refresh}
+                disabled={busy}
+                className="flex-1 rounded-xl border border-orange-200 py-2 text-xs text-stone-500 disabled:opacity-50"
+                onClick={() => setDismissed(true)}
               >
-                算了
+                忽略
               </button>
             </div>
-          )}
+          ) : job.state !== 'failed' ? (
+            <div className="mt-2 text-xs text-stone-500">
+              {job.state === 'done' ? '后来已重试成功' : '正在重试…'}
+            </div>
+          ) : null}
         </div>
       </div>
     )

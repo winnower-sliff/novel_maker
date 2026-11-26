@@ -1,5 +1,6 @@
 import type { SampleSearchHit, SampleSectionView } from '@shared/types'
 import { useEffect, useState } from 'react'
+import { useBackHandler } from '../lib/backHandler'
 
 /** 阅读窗口大小（8k 字一屏，前后翻页步长） */
 const WINDOW = 8000
@@ -29,6 +30,9 @@ interface TextView {
 
 /** 范文阅读层：目录 / 正文翻页 / 关键词检索（全屏覆盖层） */
 export function SampleReader({ sample, onClose }: { sample: SampleLite; onClose: () => void }) {
+  // 全屏层不走 BottomSheet，返回键要自己接：否则返回会落到底下的页面（关书 / 回书架），
+  // 这一层还盖在最上面
+  useBackHandler(onClose)
   const [sections, setSections] = useState<SampleSectionView[] | null>(null)
   const [err, setErr] = useState('')
   const [view, setView] = useState<TextView | null>(null)

@@ -2,6 +2,7 @@ import {
   approvePlan,
   cancelJob,
   getJobById,
+  listJobBriefs,
   listJobsFor,
   retryJob,
   startAudit,
@@ -28,6 +29,7 @@ type Domain = Pick<
   | 'job:cancel'
   | 'job:get'
   | 'job:list'
+  | 'job:listBriefs'
 >
 
 export const jobHandlers: Domain = {
@@ -42,5 +44,6 @@ export const jobHandlers: Domain = {
   'job:retry': (_ctx, [jobId]) => retryJob(jobId),
   'job:cancel': (_ctx, [jobId]) => cancelJob(jobId),
   'job:get': (_ctx, [jobId]) => getJobById(jobId),
-  'job:list': (_ctx, [bookId]) => listJobsFor(bookId)
+  'job:list': (_ctx, [bookId]) => listJobsFor(bookId),
+  'job:listBriefs': (_ctx, [bookId]) => listJobBriefs(bookId)
 }

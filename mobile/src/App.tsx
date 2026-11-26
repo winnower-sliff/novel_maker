@@ -1,6 +1,7 @@
 import type { ChatMessageRow } from '@shared/types'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { ToastHost } from './components/ToastHost'
 import { consumeBack } from './lib/backHandler'
 import { installBridge } from './lib/bridge'
 import { useConnStore } from './lib/conn'
@@ -60,26 +61,38 @@ export default function App() {
     const unProgress = window.api.job.onProgress((jobId, p) => {
       tickerStore(jobId).getState().setProgress(p)
     })
-    // chat 流式：thinking 折叠区 + 正文白话；total 失配时 job.get 兜底（服务端真相源）
-    const unDelta = window.api.job.onDelta((jobId, kind, chunk, total) => {
+    // chat 流式：thinking 折叠区 + 正文白话。长度对不上时按服务端快照（真相源）校正——
+    // 快照几秒才落一次盘，所以只允许一个在途、至多 500ms 一次；过期/重复的增量直接丢弃
+    let pulling = false
+    let lastPull = 0
+    const onStream = (jobId: string, kind: 'thinking' | 'chat', chunk: string, total: number) => {
       const ts = tickerStore(jobId)
-      if (kind === 'thinking') {
-        const st = ts.getState()
-        if (st.thinking.length !== total - chunk.length) {
-          void window.api.job.get(jobId).then((j) => {
-            const t = j?.payload.thinkingText ?? ''
-            ts.getState().setThinking(t)
-          })
-        } else ts.getState().appendThink(chunk, total)
-      } else {
-        const st = ts.getState()
-        if (st.chatText.length !== total - chunk.length) {
-          void window.api.job.get(jobId).then((j) => {
-            const t = j?.payload.answer ?? ''
-            ts.getState().setChatText(t)
-          })
-        } else ts.getState().appendDelta(chunk, total)
-      }
+      const st = ts.getState()
+      const isThink = kind === 'thinking'
+      const cur = isThink ? st.thinking : st.chatText
+      const seen = isThink ? st.thinkTotal : st.chatTotal
+      const at = total - chunk.length
+      const append = () => (isThink ? st.appendThink(chunk, total) : st.appendDelta(chunk, total))
+      if (cur.length === at) return append()
+      // at===0 是模型重试后从头重发，要接住；其余比已记录位置旧的是过期/重复增量
+      if (total <= seen && at > 0) return
+      if (pulling || Date.now() - lastPull < 500) return
+      pulling = true
+      lastPull = Date.now()
+      void window.api.job
+        .get(jobId)
+        .then((j) => {
+          const text = isThink ? (j?.payload.thinkingText ?? '') : (j?.payload.answer ?? '')
+          if (isThink) ts.getState().setThinking(text)
+          else ts.getState().setChatText(text)
+        })
+        .catch(() => {})
+        .finally(() => {
+          pulling = false
+        })
+    }
+    const unDelta = window.api.job.onDelta((jobId, kind, chunk, total) => {
+      onStream(jobId, kind === 'thinking' ? 'thinking' : 'chat', chunk, total)
     })
     return () => {
       unAppend()
@@ -147,6 +160,7 @@ export default function App() {
       {tab === 'shelf' ? <Shelf /> : <Settings />}
       {onboardBookId && <Onboard bookId={onboardBookId} />}
       {openBookId && <BookWorkspace />}
+      <ToastHost />
     </div>
   )
 }
