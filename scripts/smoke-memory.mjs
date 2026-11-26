@@ -84,6 +84,7 @@ let recapCalls = 0
 let summaryCalls = 0
 let badJsonPending = false
 let callSeq = 0
+let holdNext = null
 const userText = (messages) =>
   (messages ?? [])
     .filter((m) => m.role === 'user' && typeof m.content === 'string')
@@ -97,7 +98,7 @@ const llm = createServer((req, res) => {
   }
   let body = ''
   req.on('data', (c) => (body += c))
-  req.on('end', () => {
+  req.on('end', async () => {
     const parsed = JSON.parse(body)
     const system = parsed.messages?.find((m) => m.role === 'system')?.content ?? ''
     const user = userText(parsed.messages)
@@ -129,6 +130,13 @@ const llm = createServer((req, res) => {
       const item = queue.shift() ?? {}
       if (item.toolCalls) toolCalls = item.toolCalls
       else text = item.text ?? '{}'
+    }
+    // 「扣住下一次合并应答」：测试在合并进行中去换库，验证换库前算出的结果不会落库
+    if (holdNext && system.includes('你是前情梗概维护员')) {
+      const hold = holdNext
+      holdNext = null
+      hold.arrived()
+      await hold.release
     }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
     if (toolCalls) {
@@ -653,6 +661,30 @@ try {
     writing
   )
   ok('save_foreshadow 原句对不上 → 拒', fakeFore.ok === false && !foreTitles().includes('假伏笔'))
+
+  // ── 合并进行中恢复备份（库被换掉）：换库前算出的结果不落库，之后重新触发才追平 ──
+  const beforeSwap = store.getRunningMemory(main)
+  addChapter(main, '第5章', '第5章的纪要：船靠南屿。')
+  let release = () => {}
+  const gate = new Promise((r) => (release = r))
+  let announce = () => {}
+  const held = new Promise((r) => (announce = r))
+  holdNext = { arrived: announce, release: gate }
+  recap.scheduleStoryRecap(main)
+  await held
+  dbMod.closeDb() // 恢复备份的实质：关连接、换库文件、下次用到再打开
+  release()
+  await recap.storyRecapSettled()
+  const afterSwap = store.getRunningMemory(main)
+  ok(
+    '合并进行中换库：换库前算出的梗概不落库',
+    afterSwap.id === beforeSwap.id &&
+      afterSwap.content === beforeSwap.content &&
+      afterSwap.toOrder === beforeSwap.toOrder
+  )
+  recap.scheduleStoryRecap(main)
+  await recap.storyRecapSettled()
+  ok('换库稳定后再触发才追平', store.getRunningMemory(main).toOrder === 5)
 
   console.log(`\n[长期记忆冒烟] ${passed} 通过 / ${failed} 失败`)
 } catch (e) {

@@ -214,7 +214,15 @@ export function closeDb(): void {
     db?.close()
   } finally {
     db = null
+    epoch++
   }
+}
+
+let epoch = 0
+
+/** 库被换过几次（恢复备份会 closeDb 再重开）：后台任务写库前比对，别把换库前算出的结果写进换库后的库 */
+export function dbEpoch(): number {
+  return epoch
 }
 
 function schemaIsOlder(d: DatabaseSync): boolean {

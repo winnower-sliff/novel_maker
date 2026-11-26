@@ -1,4 +1,5 @@
 import type { Chapter, MemoryBlock } from '../../shared/types.js'
+import { dbEpoch } from '../db.js'
 import * as store from '../store.js'
 import { callJson } from './callJson.js'
 
@@ -145,7 +146,10 @@ async function run(lineId: string): Promise<void> {
         )
         return
       }
-      await runStep(work)
+      const epoch = dbEpoch()
+      await runStep(work, epoch)
+      // 调模型期间恢复过备份（库被换掉）：后面的步骤都基于旧库，整轮作罢
+      if (epoch !== dbEpoch()) return
     }
   } catch (err) {
     failedAt.set(lineId, Date.now())
@@ -207,14 +211,14 @@ function takeWork(lineId: string): RecapWork | null {
   }
 }
 
-async function runStep(work: RecapWork): Promise<void> {
-  for (const c of [...work.revised, ...work.resummarize]) await summarizeChapter(c)
+async function runStep(work: RecapWork, epoch: number): Promise<void> {
+  for (const c of [...work.revised, ...work.resummarize]) await summarizeChapter(c, epoch)
   const res = await callJson<RecapJson>(mergeCall(work))
   const text = renderRecap(res)
   if (!text) throw new Error('模型没有产出有效的梗概')
   const content = await fitRecap(text)
   // 调模型期间章可能被删、线被删、恢复过备份：这批章已不在本线里，结果作废，下一步重算
-  if (!stillInLine(work.lineId, work.covers.id)) return
+  if (epoch !== dbEpoch() || !stillInLine(work.lineId, work.covers.id)) return
   store.upsertRunningMemory({
     lineId: work.lineId,
     content,
@@ -236,8 +240,8 @@ function stillInLine(lineId: string, chapterId: string): boolean {
   }
 }
 
-/** 按正文重写一章纪要（改稿后用）。调用期间正文又变了就按最新正文重来 */
-async function summarizeChapter(at: ChapterAt): Promise<void> {
+/** 按正文重写一章纪要（改稿后用）。调用期间正文又变了就按最新正文重来；库被换过（恢复备份）就不写 */
+async function summarizeChapter(at: ChapterAt, epoch: number): Promise<void> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const current = store.getChapter(at.id)
     if (!current) return
@@ -254,7 +258,7 @@ ${clip(current.content, 12000)}
     const summary = str(res?.summary)
     if (!summary) throw new Error(`第${at.pos}章没有产出纪要`)
     const latest = store.getChapter(at.id)
-    if (!latest) return
+    if (!latest || epoch !== dbEpoch()) return
     if (latest.content !== current.content) continue
     store.updateChapterSummary(at.id, summary)
     at.summary = summary
