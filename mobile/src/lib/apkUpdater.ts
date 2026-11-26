@@ -2,14 +2,19 @@ import { registerPlugin } from '@capacitor/core'
 import { useConnStore } from './conn'
 
 /**
- * APK 自更新原生桥（仅 APK 内可用；纯浏览器下 isAvailable() 返回 false）。
- * 下载/安装均由原生执行：下载到 cacheDir/NovelMaker.apk，完成后调起系统安装器。
+ * APK 自更新原生桥（仅 APK 内可用；纯浏览器下返回 null）。
+ * 下载/安装均由原生执行：下载到 cacheDir/nm-<versionCode>.apk（原生校验过完整性
+ * 与包内真实版本号才算下载好），完成后调起系统安装器。
  */
 interface ApkUpdaterPlugin {
   getVersion(): Promise<{ version: string; versionCode: number }>
-  download(opts: { url: string; versionCode?: number }): Promise<{ path: string; size: number }>
-  status(opts?: { versionCode?: number }): Promise<DownloadStatus>
-  install(opts?: { versionCode?: number }): Promise<{ needsGrant?: boolean } | undefined>
+  download(opts: {
+    url: string
+    versionCode: number
+    expectedSize?: number
+  }): Promise<{ path: string; size: number }>
+  status(opts: { versionCode: number }): Promise<DownloadStatus>
+  install(opts: { versionCode: number }): Promise<{ needsGrant?: boolean } | undefined>
   addListener(
     event: 'progress',
     cb: (data: { done: number; total: number }) => void
@@ -24,9 +29,14 @@ export function apkUpdater(): ApkUpdaterPlugin | null {
   return cap?.isNativePlatform?.() ? apk : null
 }
 
-export interface ApkProgress {
+/** 原生下载状态快照：complete=该 versionCode 的安装包已下载并校验通过（跨进程重启仍准确） */
+export interface DownloadStatus {
+  downloading: boolean
   done: number
   total: number
+  size: number
+  complete: boolean
+  error?: string
 }
 
 /** install() 的结果：needsGrant=true 表示已跳转「安装未知应用」授权页 */
@@ -34,7 +44,7 @@ export interface InstallResult {
   needsGrant?: boolean
 }
 
-// ── 高层封装：检查→下载→安装 ────────────────────────────────────────────────
+// ── 高层封装：检查→下载→安装 ──────────────────────────────────
 
 interface MobileManifest {
   version: string | null
@@ -57,30 +67,23 @@ export async function checkUpdate(): Promise<UpdateCheck> {
     const [r, cur] = await Promise.all([fetch(`${base}/api/mobile/version`), plugin.getVersion()])
     const m = (await r.json()) as MobileManifest
     if (!m.apk) return { state: 'latest' }
-    // manifest 缺 versionCode（旧部署链）时回退标签不等比较，宁多提示不漏更新
-    const isNewer =
-      m.apk.versionCode != null
-        ? m.apk.versionCode > cur.versionCode
-        : m.apk.version !== cur.version
-    if (!isNewer) return { state: 'latest' }
+    const vc = m.apk.versionCode
+    // 下载文件按 versionCode 隔离，没有它原生就无法区分新旧包——宁可报错也不下载
+    if (vc == null || !Number.isInteger(vc) || vc <= 0) {
+      return { state: 'error', error: '更新信息缺少版本号，请先升级电脑端' }
+    }
+    if (vc <= cur.versionCode) return { state: 'latest' }
     return {
       state: 'found',
       version: m.apk.version,
-      versionCode: m.apk.versionCode ?? 0,
-      url: `${base}/api/mobile/apk`,
+      versionCode: vc,
+      // 带上版本号：下载地址随版本变化，中间缓存不会交出旧包
+      url: `${base}/api/mobile/apk?vc=${vc}`,
       size: m.apk.size
     }
   } catch (e) {
     return { state: 'error', error: e instanceof Error ? e.message : String(e) }
   }
-}
-
-/** 原生下载状态快照：downloading 进行中；size=cacheDir 里该 versionCode 文件字节数（跨进程重启仍准确） */ export interface DownloadStatus {
-  downloading: boolean
-  done: number
-  total: number
-  size: number
-  error?: string
 }
 
 /** versionCode 必传：下载文件按版本隔离（nm-<vc>.apk），旧版本残留永不误判 */
@@ -93,11 +96,19 @@ export async function getDownloadStatus(versionCode: number): Promise<DownloadSt
 /**
  * 触发下载（原生后台线程执行，立即返回，不等待完成）。
  * 进度/完成/失败一律经 getDownloadStatus() 轮询——切走再回来、甚至 WebView 重载后状态都不丢。
+ * expectedSize 是服务端声明的字节数，原生下载完会比对。
  */
-export async function startDownload(url: string, versionCode: number): Promise<void> {
+export async function startDownload(
+  url: string,
+  versionCode: number,
+  expectedSize = 0
+): Promise<void> {
   const plugin = apkUpdater()
   if (!plugin) throw new Error('仅 APP 内可用')
-  await plugin.download({ url, versionCode })
+  if (!Number.isInteger(versionCode) || versionCode <= 0) {
+    throw new Error('更新信息缺少版本号，请先升级电脑端')
+  }
+  await plugin.download({ url, versionCode, expectedSize })
 }
 
 /** 调起系统安装器（API 26+ 未授权时跳授权页，返回 needsGrant）；versionCode 指定装哪个文件 */

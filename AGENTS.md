@@ -127,6 +127,7 @@
 14. **新增或改名 agent 工具**：同步 `mobile/src/pages/write/labels.ts` 的 `TOOL_LABEL` 中文名（缺失只显示裸英文名，不报错）。
 15. **版本号 tag 边界**：`version.mjs` 用 `git log <tag>..HEAD` 算增量，最新 tag 不在当前分支祖先链（从 main = v1 拉的 worktree、浅克隆）时会纳入无关提交而过度升版；tag 已存在时严格抛错，不会静默写坏 package.json。
 16. **开线坑**：`worktree_create` 默认从 main（v1）拉新 worktree，不是 feat/v2-rebuild——开线后先 `git switch -c <branch> && git reset --hard feat/v2-rebuild`，再 `npm ci`。
+17. **Capacitor `PluginCall.getLong` / `getInt` 只认精确类型**：JS 传来的整数经 JSON 到原生是 `Integer`，`getLong` 只认 `Long`，类型不符一律返回默认值——APK 自更新的 versionCode 曾因此永远读成 0，所有版本都落到固定文件名、反复安装旧包（`-25 无法降级安装`）。原生取数值参数一律 `call.getData().opt(name)` 后按 `Number` 自己转；APK 交给系统安装器前先用 `getPackageArchiveInfo` 核对包内真实 versionCode。
 
 ## 入口
 

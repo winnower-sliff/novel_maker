@@ -683,7 +683,8 @@ function UpdateRow() {
       setApkSize(r.size)
       setApkVc(r.versionCode)
       const s = await getDownloadStatus(r.versionCode)
-      if (s && !s.downloading && r.size > 0 && s.size >= r.size) {
+      // 只认原生校验过的「已下载好」，不拿字节数猜
+      if (s?.complete) {
         setState('ready')
         setNote(`新版 ${r.version} 已下载，点击安装`)
         return
@@ -713,7 +714,7 @@ function UpdateRow() {
     setState('downloading')
     setNote('下载中…')
     try {
-      await startDownload(apkUrl, apkVc)
+      await startDownload(apkUrl, apkVc, apkSize)
     } catch (e) {
       setState('error')
       setNote(e instanceof Error ? e.message : String(e))
@@ -734,7 +735,7 @@ function UpdateRow() {
         )
         return
       }
-      if (apkSize > 0 && s.size >= apkSize) {
+      if (s.complete) {
         setState('ready')
         setNote('下载完成，点击安装')
       } else if (s.error) {
@@ -743,11 +744,18 @@ function UpdateRow() {
       }
     }, 800)
     return () => clearInterval(t)
-  }, [state, apkSize, apkVc])
+  }, [state, apkVc])
 
   const install = async () => {
-    const r = await installUpdate(apkVc)
-    if (r.needsGrant) setNote('请先在系统里允许本应用安装未知应用，再回来点安装')
+    try {
+      const r = await installUpdate(apkVc)
+      if (r.needsGrant) setNote('请先在系统里允许本应用安装未知应用，再回来点安装')
+    } catch (e) {
+      // 原生校验不通过会删掉文件：回到「发现新版」，点一下重新下载
+      const msg = e instanceof Error ? e.message : String(e)
+      setState('found')
+      setNote(`${msg}，点此重新下载`)
+    }
   }
 
   return (
