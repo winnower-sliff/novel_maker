@@ -15,7 +15,7 @@
   「写小说」= 和导演 agent 聊天、做选择；正文等一切内容由 agent 调工具落库。版本号从 v3.0.0 起，v1 旧数据不迁移。
 - **目录**：
   - `src/main/` 电脑端：`index.ts`（启动序列）、`server.ts`（HTTP + SSE）、`tray.ts`、`jobs.ts`（任务队列）、`db.ts` + `store.ts`（分叉树数据层）、`agent/`（`loop.ts` 循环与拦截工具、`tools.ts` CRUD 工具）、
-    `director/`（`callJson.ts` LLM 调用与重试、`prompts.ts`、`context.ts`、`steps.ts`、`onboard.ts`）、`handlers/`（invoke handler 按域拆）、`backup.ts`、`lint.ts`、`config.ts`、`usage.ts`、`samples.ts`、`llm.ts`、`llmOpenai.ts`、`broadcast.ts`
+    `director/`（`callJson.ts` LLM 调用与重试、`prompts.ts`、`context.ts`、`steps.ts`、`onboard.ts`）、`handlers/`（invoke handler 按域拆）、`backup.ts`、`lint.ts`、`config.ts`、`usage.ts`、`samples.ts`、`sampleParse.ts`（范文切节）、`llm.ts`、`llmOpenai.ts`、`broadcast.ts`、`eventSink.ts`（事件出口）、`connect.ts`（连接地址）、`paths.ts`（数据目录）、`serverState.ts`（服务状态）、`autostart.ts`（开机自启）、`buildInfo.ts`（构建指纹）
   - `src/shared/`：`contract.ts`（zod 契约，单一事实源）、`types.ts`、`providers.ts`（provider 预设与模型槽）
   - `mobile/`：手机端独立 vite 应用（React 19 + Tailwind v4 + TanStack Query + zustand），产物 `dist-mobile/`
   - `mobile-app/`：Capacitor 壳 + Android 工程（原生插件 `ApkUpdaterPlugin`、`ExportPlugin`、`AppRestartPlugin`）
