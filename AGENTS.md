@@ -46,9 +46,10 @@
   `GET /api/mobile/version` + `/api/mobile/apk`（APK 更新源）、`GET /api/export/:bookId`（整书 zip）。
 - **无鉴权**（用户决策）：Tailscale 网络即信任边界，无密码 / token / 二维码。不要重新引入登录层。
 - **invoke 形态**：body = `{"args":[元组]}`，zod 校验后 `handler(ctx, args)`——**元组整体传，绝不 spread**（`ArgsOf<C>` 是 zod 派生的元组，handler 统一收单元组再解构）。成功响应 `{result}`，失败 `{error}`（400）。`HandlerTable` 全部从契约派生。
-- **LLM**：统一 OpenAI 协议（`llmOpenai.ts`，`/v1/chat/completions` 流式）。provider 预设 glm / deepseek / custom，模型槽 director / writer / reviewer / utility（`src/shared/providers.ts`）。
+- **LLM**：统一 OpenAI 协议（`llmOpenai.ts`，`/v1/chat/completions` 流式）。provider 预设 deepseek / custom（GLM 已按用户决策移除，要接 GLM 或别的端点走 custom），模型槽 director / writer / reviewer / utility（`src/shared/providers.ts`）。
   结构化调用走 `director/callJson.ts`（`callRaw` / `callJson`）：网络与 5xx 指数退避重试 2 次，429 读 retry-after（≤60s）重试 1 次，流 120s 无新数据视为中断、可重试；**每次请求都经它 `appendUsage` 记账**。
   思考模式默认关闭（思考 token 计入 max_tokens），仅 chat 链路开启。API Key 存 `settings.json`，`settings:save` 只写不读、回读掩码。
+  `settings.json` 不经 zod：旧配置里已移除 provider 的残段（`profiles` / `apiKeys` 的键、`routing` 槽）由 `config.ts` 的 `sanitize()` 在加载时于内存中清洗并写一条 `[config]` 日志——不改名、不落盘，下次保存设置才写回。
 - **模块纪律**：tsc 直出 ESM、无 bundler，`module=NodeNext`——相对 import 必须带 `.js`，目录导入要写到文件（`./handlers/index.js`）。两套 tsconfig 都是 `strict` + `noUncheckedIndexedAccess` + `erasableSyntaxOnly`（不写 enum、参数属性这类不可擦除语法）。
 - **数据层**（`db.ts` + `store.ts`）：内置 `node:sqlite`，**一律不用原生模块**。表：books / lines / chapters / chapter_versions / cards / characters / foreshadows / memories / messages / jobs / samples / sample_sections。
   `SCHEMA_VERSION`（`PRAGMA user_version`）——改表结构或 migrate 时 +1，老库升级前自动留快照。
