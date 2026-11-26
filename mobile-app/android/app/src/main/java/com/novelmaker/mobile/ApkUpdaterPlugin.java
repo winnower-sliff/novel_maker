@@ -69,8 +69,10 @@ public class ApkUpdaterPlugin extends Plugin {
         return vc;
     }
 
+    /** 只用 int 形式：versionCode 是分钟级时间戳（约三千万），远在 int 范围内；longVersionCode 在当前编译环境解析不到 */
+    @SuppressWarnings("deprecation")
     private static long versionCodeOf(PackageInfo info) {
-        return Build.VERSION.SDK_INT >= Build.VERSION_CODES.P ? info.longVersionCode : info.versionCode;
+        return Integer.toUnsignedLong(info.versionCode);
     }
 
     /** 下载文件按 versionCode 隔离（nm-<vc>.apk）：不同版本的文件天然不同名 */
