@@ -153,7 +153,10 @@ try {
       if (String(refreshed?.summary ?? '').startsWith('【改稿后】')) break
       await sleep(300)
     }
-    ok('改稿后章纪要按新正文重写', String(refreshed?.summary ?? '').startsWith('【改稿后】'))
+    ok(
+      String(refreshed?.summary ?? '').startsWith('【改稿后】'),
+      `改稿后章纪要按新正文重写（${String(refreshed?.summary ?? '').slice(0, 12)}…）`
+    )
   }
 
   // ── 审读 / 审计 / 诊断 ──

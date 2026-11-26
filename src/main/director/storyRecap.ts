@@ -172,7 +172,8 @@ function takeWork(lineId: string): RecapWork | null {
   const isPending = (c: ChapterAt): boolean => Boolean(pending?.has(c.id))
 
   const fresh = chapters.slice(anchorPos + 1, anchorPos + 1 + BATCH_CHAPTERS)
-  const revised = trusted ? chapters.filter((c) => c.pos <= anchorPos && isPending(c)) : []
+  // 已并入过 = 位置不晚于锚点章（anchorPos 是 0 起、pos 是 1 起）：最新一章被改稿是最常见的情形，不能漏
+  const revised = trusted ? chapters.filter((c) => c.pos <= anchorPos + 1 && isPending(c)) : []
   const resummarize = fresh.filter(isPending)
   if (!fresh.length && !revised.length) return null
   // 没有旧梗概可依托时，这批章至少得有一条纪要可并，否则没有材料

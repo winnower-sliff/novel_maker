@@ -528,6 +528,16 @@ try {
     '改章工具卡告诉 agent：纪要与梗概会在后台刷新',
     said.some((s) => s.meta?.tool === 'revise_chapter' && s.content.includes('后台按新正文刷新'))
   )
+  // 最常见的情形：改的正是梗概覆盖到的最新一章（回归：位置比较差一位时会漏掉）
+  store.replaceChapterContent(ch4.id, '第4章改稿后的正文。老船工提灯下舱。')
+  recap.noteRevisedChapter(ch4.id)
+  await recap.storyRecapSettled()
+  ok(
+    '改的是最新一章（梗概盖到的那章）也重写纪要并重并',
+    store.getChapter(ch4.id).summary === '改稿后的纪要第2版' &&
+      store.getRunningMemory(main).content.includes('主线第7版') &&
+      store.getRunningMemory(main).toOrder === 4
+  )
 
   // ── ⑤ 沉淀证据校验：写章任务里 save_card / save_foreshadow 必须附本章原句 ──
   // 此刻 main 上：第 1 章原样，第 2 章已改稿，第 4 章是最新一章（正文「老船工提灯下舱」）
