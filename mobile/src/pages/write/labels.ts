@@ -12,7 +12,7 @@ export const TOOL_LABEL: Record<string, string> = {
   list_characters: '翻人物',
   list_foreshadows: '翻伏笔',
   get_write_context: '备上下文',
-  list_samples: '翻范文库',
+  list_samples: '翻范文',
   read_sample: '读范文',
   search_project: '检索',
   list_lines: '看剧情线',

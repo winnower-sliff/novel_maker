@@ -93,7 +93,7 @@ export default function BookWorkspace() {
       >
         <button
           type="button"
-          aria-label="返回书架"
+          aria-label="返回"
           className={`-my-0.5 -ml-1.5 rounded-full p-2.5 ${
             dark
               ? 'text-stone-400 hover:bg-white/10 hover:text-stone-100'

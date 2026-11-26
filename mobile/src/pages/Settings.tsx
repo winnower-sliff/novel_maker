@@ -111,7 +111,7 @@ export default function Settings() {
         <ModelForm />
       </Section>
 
-      {/* 范文库在底部导航的「范文」页（pages/Samples.tsx） */}
+      {/* 范文在底部导航的「范文」页（pages/Samples.tsx） */}
 
       <ArchivedBooks />
 
