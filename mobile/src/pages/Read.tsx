@@ -201,10 +201,11 @@ export default function Read() {
   return (
     <div className={`min-h-full ${THEME_BG[theme]}`}>
       <div className="sticky top-0 z-10 bg-inherit">
+        {/* 小按钮视觉不变、命中区域撑到 40px：多出来的高度用负 margin 抵消占位 */}
         <div className="flex items-center justify-between px-4 py-2.5">
           <button
             type="button"
-            className="rounded-lg px-2 py-1 text-xs opacity-60"
+            className="-my-2 min-h-10 rounded-lg px-2 py-1 text-xs opacity-60"
             onClick={backToList}
           >
             ← 目录
@@ -214,7 +215,7 @@ export default function Read() {
           </span>
           <button
             type="button"
-            className="rounded-lg px-2 py-1 text-xs opacity-60"
+            className="-mx-[5px] -my-2 min-h-10 min-w-10 rounded-lg px-2 py-1 text-xs opacity-60"
             onClick={() => setShowSettings((v) => !v)}
           >
             Aa
@@ -251,16 +252,20 @@ export default function Read() {
               <button
                 key={s}
                 type="button"
-                className={
-                  'rounded-lg px-2.5 py-1 text-xs ' +
-                  (fontSize === s ? 'bg-orange-600 text-white' : 'bg-orange-100')
-                }
+                className="-mx-[3.5px] -my-2 flex min-h-10 min-w-10 items-center justify-center"
                 onClick={() => {
                   setFontSize(s)
                   persist({ fontSize: s })
                 }}
               >
-                {s}
+                <span
+                  className={
+                    'rounded-lg px-2.5 py-1 text-xs ' +
+                    (fontSize === s ? 'bg-orange-600 text-white' : 'bg-orange-100')
+                  }
+                >
+                  {s}
+                </span>
               </button>
             ))}
           </div>
@@ -270,16 +275,20 @@ export default function Read() {
               <button
                 key={t}
                 type="button"
-                className={
-                  'rounded-lg px-2.5 py-1 text-xs ' +
-                  (theme === t ? 'bg-orange-600 text-white' : 'bg-orange-100')
-                }
+                className="-my-2 flex min-h-10 items-center justify-center"
                 onClick={() => {
                   setTheme(t)
                   persist({ theme: t })
                 }}
               >
-                {t === 'sepia' ? '护眼' : t === 'light' ? '日间' : '夜间'}
+                <span
+                  className={
+                    'rounded-lg px-2.5 py-1 text-xs ' +
+                    (theme === t ? 'bg-orange-600 text-white' : 'bg-orange-100')
+                  }
+                >
+                  {t === 'sepia' ? '护眼' : t === 'light' ? '日间' : '夜间'}
+                </span>
               </button>
             ))}
           </div>
@@ -321,10 +330,12 @@ export default function Read() {
             <span className="text-xs opacity-60">点选要改的段落</span>
             <button
               type="button"
-              className="rounded-lg border border-orange-200 px-3 py-1.5 text-xs"
+              className="-my-[5px] flex min-h-10 shrink-0 items-center"
               onClick={() => setSegmentMode(false)}
             >
-              退出选段
+              <span className="rounded-lg border border-orange-200 px-3 py-1.5 text-xs">
+                退出选段
+              </span>
             </button>
           </div>
         )}
@@ -334,15 +345,19 @@ export default function Read() {
         <div className="mt-3 flex gap-3">
           <button
             type="button"
-            className={
-              'flex-1 rounded-xl border py-2.5 text-xs ' +
-              (segmentMode
-                ? 'border-orange-600 font-medium text-orange-600'
-                : 'border-orange-200 opacity-70')
-            }
+            className="-my-px flex min-h-10 flex-1 items-center"
             onClick={() => setSegmentMode((v) => !v)}
           >
-            选段修改
+            <span
+              className={
+                'w-full rounded-xl border py-2.5 text-center text-xs ' +
+                (segmentMode
+                  ? 'border-orange-600 font-medium text-orange-600'
+                  : 'border-orange-200 opacity-70')
+              }
+            >
+              选段修改
+            </span>
           </button>
         </div>
 

@@ -10,12 +10,15 @@ export function ErrorBox({ error, onRetry }: { error: unknown; onRetry?: () => v
     <div className="py-10 text-center text-sm text-stone-600">
       <div className="px-4 leading-relaxed">{errorText(error)}</div>
       {onRetry && (
+        // 视觉仍是原来的按钮，命中区域撑到 40px 高（负 margin 抵消占位，位置不变）
         <button
           type="button"
-          className="mt-4 rounded-xl border border-orange-200 px-6 py-2 active:bg-orange-50"
+          className="group -mb-px mt-[15px] inline-flex min-h-10 items-center justify-center"
           onClick={onRetry}
         >
-          重试
+          <span className="rounded-xl border border-orange-200 px-6 py-2 group-active:bg-orange-50">
+            重试
+          </span>
         </button>
       )}
     </div>
