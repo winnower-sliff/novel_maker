@@ -13,6 +13,7 @@ import type {
   Job,
   ModelProbeResult,
   SampleFileInfo,
+  SampleImportResult,
   SampleInfo,
   SampleSearchHit,
   SampleSectionView,
@@ -171,6 +172,15 @@ export const SampleImportSchema = z.object({
   name: z.string().min(1).optional()
 })
 
+/**
+ * 范文分片上传的规格（手机端与电脑端共用这一处）：手机把 txt 按 1MB 切片、编成 base64 逐片上传。
+ * 单次 invoke 的请求体上限 16MB、超时 30 秒——几 MB 的 txt 整本一次发，慢网络下会超时，
+ * 也报不了进度；分片之后每片都远在上限内，还能按片报进度。
+ */
+export const SAMPLE_UPLOAD = { chunkBytes: 1024 * 1024, maxChunks: 64 } as const
+/** 一片原始字节编成 base64 后的最大长度（4/3 膨胀，4 字节对齐） */
+const SAMPLE_CHUNK_B64_MAX = Math.ceil(SAMPLE_UPLOAD.chunkBytes / 3) * 4
+
 // ── invoke 契约 ──────────────────────────────────────────────────────────────
 
 const ret = <T>(): T => null as unknown as T
@@ -269,9 +279,23 @@ export const invokeContract = {
     ret: ret<{ reply: string; options: string[]; stage: string; draft?: unknown; done?: boolean }>()
   },
 
-  // ── 范文库（完整书入库，agent 节选翻阅） ────────────────────────────────────
+  // ── 范文（完整书入库，agent 节选翻阅） ────────────────────────────────────
   'sample:listDir': { args: z.tuple([]), ret: ret<SampleFileInfo[]>() },
-  'sample:import': { args: z.tuple([SampleImportSchema]), ret: ret<SampleInfo>() },
+  'sample:import': { args: z.tuple([SampleImportSchema]), ret: ret<SampleImportResult>() },
+  // 手机端直接选 txt：分片上传，开始 → 逐片 → 收尾入库；手机端中途放弃时 abort
+  'sample:uploadBegin': {
+    args: z.tuple([
+      z.string().min(1).max(200),
+      z.number().int().min(1).max(SAMPLE_UPLOAD.maxChunks)
+    ]),
+    ret: ret<{ uploadId: string }>()
+  },
+  'sample:uploadChunk': {
+    args: z.tuple([z.string(), z.number().int(), z.string().min(1).max(SAMPLE_CHUNK_B64_MAX)]),
+    ret: ret<{ received: number }>()
+  },
+  'sample:uploadFinish': { args: z.tuple([z.string()]), ret: ret<SampleImportResult>() },
+  'sample:uploadAbort': { args: z.tuple([z.string()]), ret: ret<boolean>() },
   'sample:list': { args: z.tuple([]), ret: ret<SampleInfo[]>() },
   'sample:attach': {
     args: z.tuple([z.string(), z.array(z.string())]),
@@ -408,7 +432,16 @@ export interface Api {
   }
   sample: {
     listDir: InvokeFn<'sample:listDir'>
+    /** imports 目录导入（同名不覆盖，另存为「名（2）」） */
     import: InvokeFn<'sample:import'>
+    /** 分片上传：开始一次上传，拿 uploadId */
+    uploadBegin: InvokeFn<'sample:uploadBegin'>
+    /** 传一片（下标 + base64）；返回电脑端已收到的片数，回执丢了可以按它续传 */
+    uploadChunk: InvokeFn<'sample:uploadChunk'>
+    /** 传完收尾：解码入库 */
+    uploadFinish: InvokeFn<'sample:uploadFinish'>
+    /** 中途放弃：丢掉已收到的分片 */
+    uploadAbort: InvokeFn<'sample:uploadAbort'>
     list: InvokeFn<'sample:list'>
     /** 整组设置某书的绑定范文（传空数组=全部解绑），旧 sample:detach 已并入 */
     attach: InvokeFn<'sample:attach'>

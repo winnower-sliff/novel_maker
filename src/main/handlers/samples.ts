@@ -1,5 +1,7 @@
-import type { SampleSearchHit } from '../../shared/types.js'
-import { listImportFiles, readImportFile } from '../samples.js'
+import { randomUUID } from 'node:crypto'
+import { SAMPLE_UPLOAD } from '../../shared/contract.js'
+import type { SampleImportResult, SampleSearchHit } from '../../shared/types.js'
+import { decodeSampleBytes, listImportFiles, readImportFile } from '../samples.js'
 import {
   deleteSample,
   getSample,
@@ -14,10 +16,76 @@ import type { HandlerTable } from './types.js'
 /** 单本范文入库上限（字符数）。超出说明放错了文件（如整站合集），拒绝并提示拆分 */
 const MAX_SAMPLE_CHARS = 30_000_000
 
+/** 两条导入通路（电脑端 imports 文件夹、手机端分片上传）的公共收尾：查上限 → 起个不撞名的书名 → 切节入库 */
+function importSampleText(rawName: string, text: string): SampleImportResult {
+  if (text.length > MAX_SAMPLE_CHARS) {
+    throw new Error(
+      `这个文件有 ${text.length.toLocaleString()} 字，超过单本范文上限（3000 万字）。请拆成几本再导入`
+    )
+  }
+  if (!text.trim()) throw new Error('这个 txt 是空的，没有可以导入的文字')
+  const wanted = rawName.trim() || '未命名范文'
+  const saved = saveSample(wanted, text)
+  return saved.name === wanted ? saved : { ...saved, originalName: wanted }
+}
+
+/** 文件名 → 范文书名：去掉路径与 .txt 后缀 */
+function sampleNameOf(fileName: string): string {
+  return (fileName.split(/[\\/]/).pop() ?? fileName).replace(/\.txt$/i, '')
+}
+
+// ── 手机端分片上传 ───────────────────────────────────────────────────────────
+//
+// 会话只放内存，重启即弃（手机端会收到「上传已失效」并提示重新导入）。
+// 片必须按序传；某片的回执在路上丢了，手机端会重发同一片，这里按「已收到几片」应答让它续上。
+
+/** 同时在传的会话上限；超过这么久没有新片的会话视为手机端已放弃 */
+const MAX_PENDING_UPLOADS = 3
+const PENDING_TTL_MS = 30 * 60_000
+/** 标准 base64（4 字节对齐、最多两个 = 结尾） */
+const B64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/
+
+interface PendingUpload {
+  fileName: string
+  total: number
+  chunks: Buffer[]
+  bytes: number
+  at: number
+}
+
+const pendingUploads = new Map<string, PendingUpload>()
+
+/** 清掉过期的会话；满员时让最久没动静的让位——手机端断网 / 被杀不会来收尾，不能让残留的上传堵死新导入 */
+function makeRoomForUpload(): void {
+  const now = Date.now()
+  for (const [id, u] of pendingUploads) {
+    if (now - u.at > PENDING_TTL_MS) pendingUploads.delete(id)
+  }
+  while (pendingUploads.size >= MAX_PENDING_UPLOADS) {
+    let oldest: string | null = null
+    for (const [id, u] of pendingUploads) {
+      if (oldest === null || u.at < (pendingUploads.get(oldest)?.at ?? now)) oldest = id
+    }
+    if (oldest === null) break
+    pendingUploads.delete(oldest)
+  }
+}
+
+function takeUpload(uploadId: string): PendingUpload {
+  const u = pendingUploads.get(uploadId)
+  if (!u) throw new Error('上传已失效，请重新导入')
+  u.at = Date.now()
+  return u
+}
+
 const sampleHandlers: Pick<
   HandlerTable,
   | 'sample:listDir'
   | 'sample:import'
+  | 'sample:uploadBegin'
+  | 'sample:uploadChunk'
+  | 'sample:uploadFinish'
+  | 'sample:uploadAbort'
   | 'sample:list'
   | 'sample:attach'
   | 'sample:delete'
@@ -26,15 +94,46 @@ const sampleHandlers: Pick<
   | 'sample:search'
 > = {
   'sample:listDir': () => listImportFiles(),
-  'sample:import': async (_ctx, [{ fileName, name }]) => {
-    const text = await readImportFile(fileName)
-    if (text.length > MAX_SAMPLE_CHARS) {
-      throw new Error(
-        `这个文件有 ${text.length.toLocaleString()} 字，超过单本范文上限（3000 万字）。请拆成几本再导入`
-      )
-    }
-    return saveSample(name || fileName.replace(/\.txt$/i, ''), text)
+  'sample:import': async (_ctx, [{ fileName, name }]) =>
+    importSampleText(name || sampleNameOf(fileName), await readImportFile(fileName)),
+  'sample:uploadBegin': (_ctx, [fileName, totalChunks]) => {
+    makeRoomForUpload()
+    const uploadId = randomUUID()
+    pendingUploads.set(uploadId, {
+      fileName,
+      total: totalChunks,
+      chunks: [],
+      bytes: 0,
+      at: Date.now()
+    })
+    return { uploadId }
   },
+  'sample:uploadChunk': (_ctx, [uploadId, index, dataBase64]) => {
+    const u = takeUpload(uploadId)
+    const buf = B64_RE.test(dataBase64) ? Buffer.from(dataBase64, 'base64') : null
+    if (!buf || buf.length === 0 || buf.length > SAMPLE_UPLOAD.chunkBytes) {
+      pendingUploads.delete(uploadId)
+      throw new Error('上传数据不完整，请重新导入')
+    }
+    if (index < u.chunks.length) return { received: u.chunks.length }
+    if (index !== u.chunks.length) {
+      pendingUploads.delete(uploadId)
+      throw new Error('上传顺序不对，请重新导入')
+    }
+    u.chunks.push(buf)
+    u.bytes += buf.length
+    return { received: u.chunks.length }
+  },
+  'sample:uploadFinish': (_ctx, [uploadId]) => {
+    const u = takeUpload(uploadId)
+    pendingUploads.delete(uploadId)
+    if (u.chunks.length !== u.total) {
+      throw new Error(`文件没有传完（${u.chunks.length}/${u.total} 片），请重新导入`)
+    }
+    const { text } = decodeSampleBytes(Buffer.concat(u.chunks, u.bytes))
+    return importSampleText(sampleNameOf(u.fileName), text)
+  },
+  'sample:uploadAbort': (_ctx, [uploadId]) => pendingUploads.delete(uploadId),
   'sample:list': () => listSamples(),
   /** 整组设置绑定（多本；空数组=全解绑）。sampleId 不存在时拒绝，防悬空 */
   'sample:attach': (_ctx, [bookId, sampleIds]) => {

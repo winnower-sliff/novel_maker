@@ -726,7 +726,7 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       })
       return {
         ok: true,
-        summary: `查范文库 ${all.length} 本`,
+        summary: `查范文 ${all.length} 本`,
         data: rows.length ? rows.join(N) : '（范文库为空）'
       }
     }

@@ -1,11 +1,15 @@
 import { create } from 'zustand'
 
 /**
- * 全局 UI 态（产品极简：书架/设置两 tab + 书内全屏工作区 + 开书引导全屏）。
+ * 全局 UI 态（产品极简：写书/范文/设置三个底部 tab + 书内全屏工作区 + 开书引导全屏）。
  * 数据层走 TanStack Query；这里只有导航与视图态。
+ * tab 取值沿用旧名（shelf 即界面上的「写书」页）。
  */
-type Tab = 'shelf' | 'settings'
+type Tab = 'shelf' | 'samples' | 'settings'
 type BookSub = 'write' | 'read' | 'cards' | 'lines'
+
+/** 进设置页时要滚到的分区 */
+type SettingsAnchor = 'archived'
 
 interface UiState {
   tab: Tab
@@ -16,7 +20,12 @@ interface UiState {
   onboardBookId: string | null
   /** 阅读页当前是否夜间主题（底栏跟随深色；仅阅读子页生效，离开自动复位） */
   readerDark: boolean
+  /** 写书页的「已归档」入口行带过来的定位目标；设置页滚到位后清掉 */
+  settingsAnchor: SettingsAnchor | null
   setTab: (tab: Tab) => void
+  /** 进设置页并直接定位到「已归档的书」分区 */
+  goArchived: () => void
+  clearSettingsAnchor: () => void
   openBook: (bookId: string) => void
   closeBook: () => void
   setBookSub: (sub: BookSub) => void
@@ -31,7 +40,10 @@ export const useUiStore = create<UiState>((set) => ({
   bookSub: 'write',
   onboardBookId: null,
   readerDark: false,
-  setTab: (tab) => set({ tab }),
+  settingsAnchor: null,
+  setTab: (tab) => set({ tab, settingsAnchor: null }),
+  goArchived: () => set({ tab: 'settings', settingsAnchor: 'archived' }),
+  clearSettingsAnchor: () => set({ settingsAnchor: null }),
   openBook: (bookId) => {
     try {
       localStorage.setItem('nm-last-opened', bookId)

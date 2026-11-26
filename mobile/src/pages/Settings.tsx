@@ -1,9 +1,9 @@
 import type { ProviderId } from '@shared/providers'
-import type { Book, SampleFileInfo, SampleInfo, SettingsView, UsageStats } from '@shared/types'
+import type { SettingsView, UsageStats } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { ErrorBox } from '../components/ErrorBox'
-import { SampleReader } from '../components/SampleReader'
+import { PageShell } from '../components/PageShell'
 import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
 import { useConnStore } from '../lib/conn'
 import { useBackups, useBooks } from '../lib/queries'
@@ -28,8 +28,40 @@ const LINK: Record<'ok' | 'down' | 'probing', { label: string; cls: string }> = 
 export default function Settings() {
   const conn = useConnStore((s) => s.conn)
   const setConn = useConnStore((s) => s.setConn)
-  const setTab = useUiStore((s) => s.setTab)
   const queryClient = useQueryClient()
+  const clearSettingsAnchor = useUiStore((s) => s.clearSettingsAnchor)
+  // 是否从写书页的「已归档」入口行进来：挂载时读一次、定成本次挂载的局部状态。
+  // 不把 store 里的锚点放进下面 effect 的依赖——StrictMode 下 effect 会「挂载→清理→再挂载」跑两遍，
+  // 依赖一变就提前收尾，第二次布局撑高后就没法重新对齐了
+  const [pinArchived] = useState(() => useUiStore.getState().settingsAnchor === 'archived')
+
+  // 锚点只管这一次进设置页：消费掉，之后从底部导航再进来不会被带着滚
+  useEffect(() => {
+    clearSettingsAnchor()
+  }, [clearSettingsAnchor])
+
+  // 从「已归档」入口行进来：直接滚到归档分区，省得在一长串设置里找。
+  // 首帧下方内容不够高时滚不到顶，且上面的分区（模型表单等）数据回来后会撑高、把目标顶下去，
+  // 所以内容尺寸一变就重新对齐，直到用户自己滚动或布局稳定（2.5 秒内没再变）为止
+  useEffect(() => {
+    if (!pinArchived) return
+    const target = document.getElementById('settings-archived')
+    if (!target) return
+    let timer = 0
+    const ro = new ResizeObserver(() => target.scrollIntoView({ block: 'start' }))
+    for (const el of target.parentElement?.children ?? []) ro.observe(el)
+    target.scrollIntoView({ block: 'start' })
+    const stop = () => {
+      clearTimeout(timer)
+      ro.disconnect()
+      window.removeEventListener('touchmove', stop)
+      window.removeEventListener('wheel', stop)
+    }
+    timer = window.setTimeout(stop, 2500)
+    window.addEventListener('touchmove', stop, { passive: true })
+    window.addEventListener('wheel', stop, { passive: true })
+    return stop
+  }, [pinArchived])
 
   const { data: server, isError: serverFailed } = useQuery({
     queryKey: ['serverStatus'],
@@ -45,18 +77,7 @@ export default function Settings() {
   const link = serverFailed ? 'down' : server ? (server.running ? 'ok' : 'down') : 'probing'
 
   return (
-    <div className="px-4 py-5 pb-10">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="text-base font-semibold">设置</div>
-        <button
-          type="button"
-          className="rounded-lg px-3 py-1.5 text-xs text-stone-500"
-          onClick={() => setTab('shelf')}
-        >
-          返回书架
-        </button>
-      </div>
-
+    <PageShell title="设置" subtitle="连接、模型、备份与更新">
       {/* 连接 */}
       <Section title="连接">
         <div className="flex items-center justify-between">
@@ -90,10 +111,7 @@ export default function Settings() {
         <ModelForm />
       </Section>
 
-      {/* 范文库 */}
-      <Section title="范文库">
-        <SampleLib />
-      </Section>
+      {/* 范文在底部导航的「范文」页（pages/Samples.tsx） */}
 
       <ArchivedBooks />
 
@@ -139,7 +157,7 @@ export default function Settings() {
       <Section title="备份与恢复">
         <BackupSection />
       </Section>
-    </div>
+    </PageShell>
   )
 }
 
@@ -175,7 +193,7 @@ function ArchivedBooks() {
     }
   }
   return (
-    <Section title={`已归档的书（${archived.length}）`}>
+    <Section id="settings-archived" title={`已归档的书（${archived.length}）`}>
       <div className="space-y-2">
         {archived.map((b) => (
           <div key={b.id} className="rounded-xl bg-orange-50 p-2.5">
@@ -185,7 +203,7 @@ function ArchivedBooks() {
                 <div className="mt-0.5 text-[11px] text-stone-400">
                   {confirmDel === b.id
                     ? '删除后无法找回（会自动留一份当日快照）'
-                    : '归档于书架，内容保留'}
+                    : '已归档，内容保留'}
                 </div>
               </div>
               {confirmDel === b.id ? (
@@ -233,240 +251,19 @@ function ArchivedBooks() {
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  id,
+  title,
+  children
+}: {
+  id?: string
+  title: string
+  children: React.ReactNode
+}) {
   return (
-    <div className="mb-5 rounded-2xl border border-orange-100 bg-white p-4">
+    <div id={id} className="mb-5 scroll-mt-3 rounded-2xl border border-orange-100 bg-white p-4">
       <div className="mb-3 text-xs font-semibold text-stone-500">{title}</div>
       {children}
-    </div>
-  )
-}
-
-function SampleLib() {
-  const queryClient = useQueryClient()
-  const [busy, setBusy] = useState('')
-  const [msg, setMsg] = useState('')
-  const [confirmDel, setConfirmDel] = useState<string | null>(null)
-  const [reading, setReading] = useState<SampleInfo | null>(null)
-
-  const {
-    data: samples,
-    isPending: samplesLoading,
-    error: samplesError,
-    isError: samplesFailed
-  } = useQuery({
-    queryKey: ['samples'],
-    queryFn: async (): Promise<SampleInfo[]> => window.api.sample.list()
-  })
-  const {
-    data: files,
-    isPending: filesLoading,
-    error: filesError,
-    isError: filesFailed
-  } = useQuery({
-    queryKey: ['importFiles'],
-    queryFn: async (): Promise<SampleFileInfo[]> => window.api.sample.listDir()
-  })
-  const { data: books } = useQuery({
-    queryKey: ['books'],
-    queryFn: async (): Promise<Book[]> => window.api.book.list()
-  })
-
-  const refresh = () => {
-    queryClient.invalidateQueries({ queryKey: ['samples'] })
-    queryClient.invalidateQueries({ queryKey: ['importFiles'] })
-    queryClient.invalidateQueries({ queryKey: ['books'] })
-  }
-
-  const doImport = async (fileName: string) => {
-    setBusy(fileName)
-    setMsg('')
-    try {
-      await window.api.sample.import({ fileName })
-      setMsg('已导入')
-      refresh()
-    } catch (e) {
-      setMsg(`导入失败：${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy('')
-    }
-  }
-
-  const doToggle = async (bookId: string, sampleId: string, nextIds: string[]) => {
-    if (!bookId) return
-    setBusy(sampleId + bookId)
-    try {
-      await window.api.sample.attach(bookId, nextIds)
-      refresh()
-    } catch (e) {
-      setMsg(`绑定失败：${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy('')
-    }
-  }
-
-  const doDelete = async (sampleId: string) => {
-    setBusy(sampleId)
-    try {
-      await window.api.sample.delete(sampleId)
-      setConfirmDel(null)
-      setMsg('已删除')
-      refresh()
-    } catch (e) {
-      setMsg(`删除失败：${e instanceof Error ? e.message : String(e)}`)
-    } finally {
-      setBusy('')
-    }
-  }
-
-  // 两个列表任一拉不到就整段报错：断连时逐条显示「还没有」会让人以为数据没了。
-  // 点重试后会回到加载态（没有数据的重新请求在 TanStack 里算 pending），所以加载态必须先判
-  if (samplesLoading || filesLoading) {
-    return <div className="py-4 text-center text-xs text-stone-400">加载中…</div>
-  }
-  if ((samplesFailed && !samples) || (filesFailed && !files)) {
-    return <ErrorBox error={samplesError ?? filesError} onRetry={refresh} />
-  }
-
-  return (
-    <div>
-      {samples && samples.length > 0 ? (
-        <div className="space-y-3">
-          {samples.map((s) => {
-            const boundCount = (books ?? []).filter((b) => b.sampleSources?.includes(s.id)).length
-            return (
-              <div key={s.id} className="rounded-xl bg-orange-50 p-3">
-                <div className="flex items-center justify-between">
-                  <button type="button" className="min-w-0 text-left" onClick={() => setReading(s)}>
-                    <div className="truncate text-sm text-stone-700 underline decoration-orange-300 decoration-dotted underline-offset-4">
-                      {s.name}
-                    </div>
-                    <div className="mt-0.5 text-[11px] text-stone-400">
-                      {s.chars.toLocaleString()} 字{s.chapterCount ? ` · ${s.chapterCount} 章` : ''}
-                      {boundCount ? ` · 已绑定 ${boundCount} 本书` : ''}
-                      {' · 点看'}
-                    </div>
-                  </button>
-                  {confirmDel === s.id ? null : (
-                    <button
-                      type="button"
-                      className="shrink-0 text-[11px] text-stone-400"
-                      onClick={() => setConfirmDel(s.id)}
-                    >
-                      删除
-                    </button>
-                  )}
-                </div>
-                {(books ?? []).filter((b) => !b.archived && !b.draft).length > 0 &&
-                  confirmDel !== s.id && (
-                    <div className="mt-2 flex flex-wrap gap-1.5">
-                      {(books ?? [])
-                        .filter((b) => !b.archived && !b.draft)
-                        .map((b) => {
-                          const on = b.sampleSources?.includes(s.id) ?? false
-                          return (
-                            <button
-                              key={b.id}
-                              type="button"
-                              disabled={busy === s.id + b.id}
-                              className={
-                                on
-                                  ? 'rounded-full bg-orange-600 px-2.5 py-1 text-[11px] text-white disabled:opacity-50'
-                                  : 'rounded-full border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500 disabled:opacity-50'
-                              }
-                              onClick={() =>
-                                doToggle(
-                                  b.id,
-                                  s.id,
-                                  on
-                                    ? (b.sampleSources ?? []).filter((x) => x !== s.id)
-                                    : [...(b.sampleSources ?? []), s.id]
-                                )
-                              }
-                            >
-                              {on ? '✓ ' : ''}
-                              {b.title}
-                            </button>
-                          )
-                        })}
-                    </div>
-                  )}
-                {confirmDel === s.id ? (
-                  <div className="mt-2 flex items-center gap-2">
-                    <span className="flex-1 text-[11px] text-red-600">
-                      删除范文？绑定的书会自动解绑
-                    </span>
-                    <button
-                      type="button"
-                      disabled={busy === s.id}
-                      className="rounded-lg bg-red-100 px-2.5 py-1 text-[11px] text-red-600"
-                      onClick={() => doDelete(s.id)}
-                    >
-                      删除
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-lg border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500"
-                      onClick={() => setConfirmDel(null)}
-                    >
-                      取消
-                    </button>
-                  </div>
-                ) : null}
-              </div>
-            )
-          })}
-        </div>
-      ) : (
-        <div className="text-xs text-stone-400">还没有范文</div>
-      )}
-
-      <div className="mt-4 border-t border-orange-100 pt-3">
-        <div className="mb-2 text-[11px] text-stone-400">
-          电脑端把 txt 放进数据目录的 imports 文件夹，这里点导入（全文入库，agent 按需翻阅）
-        </div>
-        {files && files.length > 0 ? (
-          <div className="space-y-2">
-            {files.map((f) => (
-              <div
-                key={f.fileName}
-                className="flex items-center justify-between rounded-xl bg-orange-50 p-2.5"
-              >
-                <div className="min-w-0">
-                  <div className="truncate text-xs text-stone-700">{f.fileName}</div>
-                  <div className="truncate text-[11px] text-stone-500">
-                    {f.preview.trim() || '（空文件）'}
-                  </div>
-                  <div className="text-[11px] text-stone-400">
-                    {f.sizeBytes < 1048576
-                      ? `${Math.max(1, Math.round(f.sizeBytes / 1024))} KB`
-                      : `${(f.sizeBytes / 1048576).toFixed(1)} MB`}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  disabled={busy === f.fileName}
-                  className="shrink-0 rounded-lg bg-orange-600 px-3 py-1.5 text-[11px] text-white disabled:opacity-50"
-                  onClick={() => doImport(f.fileName)}
-                >
-                  {busy === f.fileName ? '导入中…' : '导入'}
-                </button>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <div className="text-xs text-stone-400">（imports 目录暂无 txt 文件）</div>
-        )}
-      </div>
-
-      {msg && <div className="mt-2 text-xs text-orange-600">{msg}</div>}
-
-      {reading && (
-        <SampleReader
-          sample={{ id: reading.id, name: reading.name, chars: reading.chars }}
-          onClose={() => setReading(null)}
-        />
-      )}
     </div>
   )
 }

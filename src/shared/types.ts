@@ -168,6 +168,15 @@ export interface SampleInfo {
   chapterCount?: number
 }
 
+/**
+ * 导入结果：name 是最终入库的书名。范文只增不改——同名已存在时不覆盖，
+ * 另存为「名（2）」，并带上原来的书名让手机端提示作者。
+ */
+export interface SampleImportResult extends SampleInfo {
+  /** 发生了重名另存时的原书名（没另存就不带） */
+  originalName?: string
+}
+
 /** imports 目录待导入文件（只 stat + 读文件头，不读全文，故无精确字数） */
 export interface SampleFileInfo {
   fileName: string

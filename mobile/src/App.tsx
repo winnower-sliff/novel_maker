@@ -1,6 +1,7 @@
 import type { ChatMessageRow } from '@shared/types'
 import { useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
+import { TabBar } from './components/TabBar'
 import { ToastHost } from './components/ToastHost'
 import { consumeBack } from './lib/backHandler'
 import { installBridge } from './lib/bridge'
@@ -12,6 +13,7 @@ import { useUiStore } from './lib/uiStore'
 import BookWorkspace from './pages/BookWorkspace'
 import Connect from './pages/Connect'
 import Onboard from './pages/Onboard'
+import Samples from './pages/Samples'
 import Settings from './pages/Settings'
 import Shelf from './pages/Shelf'
 
@@ -118,7 +120,8 @@ export default function App() {
     }
   }, [qc])
 
-  // Android 返回键：先消费弹层/子视图栈，无处理器时回书架，书架再按退出
+  // Android 返回键：先消费弹层/子视图栈，无处理器时回「写书」页（shelf），
+  // 已经在「写书」页再按才退出——范文 / 设置页按返回不会退出应用
   useEffect(() => {
     const app = nativeApp()
     if (!app) return
@@ -150,14 +153,20 @@ export default function App() {
   if (!ready) return null
   if (!conn) return <Connect />
 
+  // 书内工作区与开书引导都是全屏层：开着时不渲染底部导航，免得它留在盖板下面的无障碍树里
+  const covered = openBookId !== null || onboardBookId !== null
+
   return (
-    <div className="h-full">
+    <div className="flex h-full flex-col">
       {sseDown && (
         <div className="fixed inset-x-0 top-0 z-[60] bg-amber-500 py-1.5 text-center text-xs font-medium text-white">
           与电脑的连接已断开，正在重连…
         </div>
       )}
-      {tab === 'shelf' ? <Shelf /> : <Settings />}
+      {tab === 'shelf' && <Shelf />}
+      {tab === 'samples' && <Samples />}
+      {tab === 'settings' && <Settings />}
+      {!covered && <TabBar />}
       {onboardBookId && <Onboard bookId={onboardBookId} />}
       {openBookId && <BookWorkspace />}
       <ToastHost />
