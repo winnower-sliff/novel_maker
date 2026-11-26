@@ -500,16 +500,25 @@ function checkEvidence(
   if (!ctx.requireEvidence) return none
   const chapters = store.effectiveChapters(lineId)
   const idGiven = typeof input.chapterId === 'string' ? input.chapterId : ''
+  const noGiven = typeof input.chapterNo === 'number' ? input.chapterNo : null
   const byId = idGiven ? chapters.find((c) => c.id === idGiven) : undefined
-  const byNo =
-    typeof input.chapterNo === 'number' ? chapters[Math.trunc(input.chapterNo) - 1] : undefined
+  const byNo = noGiven !== null ? chapters[Math.trunc(noGiven) - 1] : undefined
   const chapter = byId ?? byNo ?? chapters.at(-1) ?? null
+  // 点名了章却对不上就不能悄悄退回「最新一章」核对——那会拿错章的正文当依据
   if (idGiven && !byId)
     return {
       ...none,
       failure: refuse(
         '章节对不上',
         'chapterId 在本线的有效章里找不到。用 commit_chapter 返回的章节 id，或不传（默认最新一章）。'
+      )
+    }
+  if (!idGiven && noGiven !== null && !byNo)
+    return {
+      ...none,
+      failure: refuse(
+        '章节对不上',
+        `chapterNo 超出本线的章数（现有 ${chapters.length} 章）。改用 commit_chapter 返回的章节 id，或不传（默认最新一章）。`
       )
     }
   if (!chapter)

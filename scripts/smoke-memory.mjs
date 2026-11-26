@@ -575,6 +575,17 @@ try {
     '原句不在所指定的那一章 → 拒',
     wrongChapter.ok === false && !cardTitles().includes('章号点错的卡')
   )
+  const outOfRange = execTool(
+    'save_card',
+    { kind: 'custom', title: '章号越界的卡', evidence: '老船工提灯下舱', chapterNo: 99 },
+    writing
+  )
+  ok(
+    '章号越界不会悄悄退回最新一章核对 → 拒',
+    outOfRange.ok === false &&
+      outOfRange.summary.includes('章节对不上') &&
+      !cardTitles().includes('章号越界的卡')
+  )
   const quoted = execTool(
     'save_card',
     {

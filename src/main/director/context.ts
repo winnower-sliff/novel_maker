@@ -28,8 +28,11 @@ const RECENT_CHAPTERS = 8
 const RECAP_MAX = 3000
 const MAX_FOCUS_CHARACTERS = 6
 const MAX_RELATED_CARDS = 5
-const PERSONA_DATA_MAX = 600
-const CARD_DATA_MAX = 1500
+/** 出场人物与相关设定卡是本章专属段：按「人数 × 单份上限」给足预算，免得排在后面的被截没 */
+const BUDGET_CAST = 4000
+const BUDGET_CARDS = 5000
+const PERSONA_DATA_MAX = 400
+const CARD_DATA_MAX = 800
 
 export interface BriefFocus {
   /** 本章大纲、作者交代等文本：用来挑「本章出场人物」与「相关设定卡」 */
@@ -166,13 +169,13 @@ export function buildStoryBrief(_book: Book, lineId: string, focus: BriefFocus =
     const cast = pickCharacters(lineId, text)
     if (cast.length) {
       sections.push(
-        `## 本章出场人物（人设与现状，言行要对得上人设）\n${clip(cast.map(characterPersona).join('\n\n'), BUDGET_LOOKUP)}`
+        `## 本章出场人物（人设与现状，言行要对得上人设）\n${clip(cast.map(characterPersona).join('\n\n'), BUDGET_CAST)}`
       )
     }
     const related = pickCards(lineId, text)
     if (related.length) {
       sections.push(
-        `## 本章相关设定卡（细节以此为准，不要另编）\n${clip(related.map(cardFull).join('\n\n'), BUDGET_LOOKUP)}`
+        `## 本章相关设定卡（细节以此为准，不要另编）\n${clip(related.map(cardFull).join('\n\n'), BUDGET_CARDS)}`
       )
     }
   }
