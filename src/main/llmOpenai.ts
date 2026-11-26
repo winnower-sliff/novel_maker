@@ -2,11 +2,16 @@ import type { ChatParams } from '../shared/contract.js'
 import type { ChatMessage, ChatResult, ToolDef, UsageInfo } from '../shared/types.js'
 import { LlmError, normalizeBase } from './llm.js'
 
-/** OpenAI 兼容消息（tool 角色 + tool_calls 展开） */
+/** OpenAI 兼容消息（tool 角色 + tool_calls 展开；assistant 的思考链以 reasoning_content 回传） */
 type OpenAiMessage =
   | { role: 'system'; content: string }
   | { role: 'user'; content: string }
-  | { role: 'assistant'; content: string | null; tool_calls?: OpenAiToolCall[] }
+  | {
+      role: 'assistant'
+      content: string | null
+      tool_calls?: OpenAiToolCall[]
+      reasoning_content?: string
+    }
   | { role: 'tool'; tool_call_id: string; content: string }
 
 interface OpenAiToolCall {
@@ -50,9 +55,17 @@ function toolResultContent(content: string | undefined): string {
 function toOpenaiMessages(system: string | undefined, messages: ChatMessage[]): OpenAiMessage[] {
   const out: OpenAiMessage[] = []
   if (system) out.push({ role: 'system', content: system })
+  // 思考模式带工具的续轮，assistant 的 reasoning_content 必须原样回传（DeepSeek 文档要求，缺了 400）；
+  // 没带思考链的消息（思考关闭、或历史里没存）就不带这个字段
+  const reasoning = (m: ChatMessage): { reasoning_content?: string } =>
+    m.reasoning ? { reasoning_content: m.reasoning } : {}
   for (const m of messages) {
     if (typeof m.content === 'string') {
-      out.push({ role: m.role, content: m.content })
+      out.push(
+        m.role === 'assistant'
+          ? { role: 'assistant', content: m.content, ...reasoning(m) }
+          : { role: m.role, content: m.content }
+      )
       continue
     }
     if (m.role === 'assistant') {
@@ -71,8 +84,8 @@ function toOpenaiMessages(system: string | undefined, messages: ChatMessage[]): 
       }
       out.push(
         toolCalls.length
-          ? { role: 'assistant', content: text || null, tool_calls: toolCalls }
-          : { role: 'assistant', content: text }
+          ? { role: 'assistant', content: text || null, tool_calls: toolCalls, ...reasoning(m) }
+          : { role: 'assistant', content: text, ...reasoning(m) }
       )
     } else {
       let text = ''

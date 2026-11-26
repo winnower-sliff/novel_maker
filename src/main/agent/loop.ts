@@ -497,6 +497,11 @@ ${rows}
 
   let truncNudges = 0 // 思考耗尽输出预算的补救次数（实锤：deepseek thinking 吃满 8192 token，正文/工具全空静默退出）
   let promiseNudges = 0 // 「光说不练」补救次数（实锤：白话承诺「这就改」但本轮无 tool_use，纯文本路径直接结束任务）
+  /** 回灌 assistant 历史：思考模式开着时把这一轮的思考链一并带上（DeepSeek 带工具续轮的硬性要求）；思考关闭不带 */
+  const assistantMessage = (content: ChatMessage['content'], thinking?: string): ChatMessage =>
+    opts.thinking === 'enabled' && thinking?.trim()
+      ? { role: 'assistant', content, reasoning: thinking }
+      : { role: 'assistant', content }
   for (let turn = 0; turn < maxTurns; turn++) {
     throwIfAborted()
     opts.onTurn?.() // 每轮喂狗：有真实进展就续看门狗（挂死/死循环不喂→照杀）
@@ -547,7 +552,7 @@ ${rows}
       for (const tu of res.toolUses) {
         blocks.push({ type: 'tool_use', id: tu.id, name: tu.name, input: tu.input })
       }
-      messages.push({ role: 'assistant', content: blocks })
+      messages.push(assistantMessage(blocks, res.thinking))
     }
     if (!res.toolUses.length) {
       if (!res.text.trim() && res.stopReason === 'max_tokens' && truncNudges < 2) {
@@ -578,7 +583,7 @@ ${rows}
           `[agent] jobId=${jobId} 第 ${turn + 1} 轮口头承诺执行但未调工具，第 ${promiseNudges} 次追问`
         )
         // 承诺原文先进历史，否则模型只看到「你刚才承诺了」却不知道自己承诺了什么
-        messages.push({ role: 'assistant', content: res.text.trim() })
+        messages.push(assistantMessage(res.text.trim(), res.thinking))
         messages.push({
           role: 'user',
           content:

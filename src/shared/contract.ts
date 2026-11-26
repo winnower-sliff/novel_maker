@@ -46,7 +46,8 @@ export const ChatMessageSchema: z.ZodType<ChatMessage> = z.object({
   content: z.union([
     z.string(),
     z.array(z.custom<ContentBlock>((v) => typeof v === 'object' && v !== null))
-  ])
+  ]),
+  reasoning: z.string().optional()
 })
 
 export const ChatParamsSchema = z.object({

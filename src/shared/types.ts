@@ -31,6 +31,8 @@ export type ContentBlock = TextBlock | ToolUseBlock | ToolResultBlock
 export interface ChatMessage {
   role: 'user' | 'assistant'
   content: string | ContentBlock[]
+  /** assistant 的思考链：思考模式带工具的续轮必须原样回传（DeepSeek 文档要求）；思考关闭时不带 */
+  reasoning?: string
 }
 
 export interface ToolDef {
