@@ -3,12 +3,12 @@ import type { Book, SampleFileInfo, SampleInfo, SettingsView, UsageStats } from 
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
 import { ErrorBox } from '../components/ErrorBox'
+import { PageShell } from '../components/PageShell'
 import { SampleReader } from '../components/SampleReader'
 import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '../lib/apkUpdater'
 import { useConnStore } from '../lib/conn'
 import { useBackups, useBooks } from '../lib/queries'
 import { errorText, toastError } from '../lib/toastStore'
-import { useUiStore } from '../lib/uiStore'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   glm: '智谱 GLM',
@@ -28,7 +28,6 @@ const LINK: Record<'ok' | 'down' | 'probing', { label: string; cls: string }> = 
 export default function Settings() {
   const conn = useConnStore((s) => s.conn)
   const setConn = useConnStore((s) => s.setConn)
-  const setTab = useUiStore((s) => s.setTab)
   const queryClient = useQueryClient()
 
   const { data: server, isError: serverFailed } = useQuery({
@@ -45,18 +44,7 @@ export default function Settings() {
   const link = serverFailed ? 'down' : server ? (server.running ? 'ok' : 'down') : 'probing'
 
   return (
-    <div className="px-4 py-5 pb-10">
-      <div className="mb-6 flex items-center justify-between">
-        <div className="text-base font-semibold">设置</div>
-        <button
-          type="button"
-          className="rounded-lg px-3 py-1.5 text-xs text-stone-500"
-          onClick={() => setTab('shelf')}
-        >
-          返回书架
-        </button>
-      </div>
-
+    <PageShell title="设置" subtitle="连接、模型、备份与更新">
       {/* 连接 */}
       <Section title="连接">
         <div className="flex items-center justify-between">
@@ -139,7 +127,7 @@ export default function Settings() {
       <Section title="备份与恢复">
         <BackupSection />
       </Section>
-    </div>
+    </PageShell>
   )
 }
 
@@ -242,7 +230,8 @@ function Section({ title, children }: { title: string; children: React.ReactNode
   )
 }
 
-function SampleLib() {
+/** 范文库段（暂由范文页复用；迁出设置页由后续提交完成） */
+export function SampleLib() {
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState('')
   const [msg, setMsg] = useState('')

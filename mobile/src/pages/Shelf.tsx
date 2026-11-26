@@ -35,8 +35,9 @@ function relTime(ts: number): string {
 }
 
 /**
- * 书架：开书中途退出的书置顶为虚线卡（接着聊）+ 最近的书大卡续写 + 其余列表卡
- * + ⋯ 菜单归档（归档不在书架显示，设置里可恢复）。
+ * 写书页（界面原叫「书架」，tab 取值仍是 shelf）：开书中途退出的书置顶为虚线卡（接着聊）
+ * + 最近的书大卡续写 + 其余列表卡 + ⋯ 菜单归档（归档不在书架显示，设置里可恢复）。
+ * 底部导航栏在 App 里，页面只管导航上方的内容。
  */
 export default function Shelf() {
   const { data: books, error, isError, isLoading, refetch } = useBooks()
@@ -169,9 +170,9 @@ export default function Shelf() {
   }
 
   return (
-    <div className="flex h-full flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-baseline justify-between px-5 pb-2 pt-safe">
-        <h1 className="pt-3 text-2xl font-bold">书架</h1>
+        <h1 className="pt-3 text-2xl font-bold">写书</h1>
         <div className="flex items-center gap-3 pt-3">
           {active.length > 0 && (
             <span className="text-xs text-stone-400">共 {active.length} 本</span>
@@ -189,7 +190,7 @@ export default function Shelf() {
           <button
             type="button"
             disabled={creating}
-            className="group -m-1 flex h-10 w-10 items-center justify-center disabled:opacity-50"
+            className="group -my-1 flex h-10 w-10 items-center justify-center disabled:opacity-50"
             aria-label="开新书"
             onClick={() => {
               setCreating(true)
@@ -200,21 +201,13 @@ export default function Shelf() {
               ＋
             </span>
           </button>
-          <button
-            type="button"
-            className="-my-1 -ml-1 -mr-2 flex h-10 w-10 items-center justify-center text-2xl text-stone-500"
-            aria-label="设置"
-            onClick={() => setTab('settings')}
-          >
-            ⚙️
-          </button>
         </div>
       </header>
 
       {/* 刷新失败但手里还有书：照常显示，只提醒一句这些不是最新的；恢复后自动消失 */}
       {isError && !!books && <OfflineBanner />}
 
-      <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-safe">
+      <div className="no-scrollbar flex-1 overflow-y-auto px-5 pb-6">
         {(exporting || exportMsg) && (
           <div className="mt-2 rounded-xl bg-orange-50 px-3 py-2 text-center text-xs text-stone-600">
             {exporting
@@ -359,7 +352,7 @@ export default function Shelf() {
       </div>
 
       {books && active.length === 0 && opening.length === 0 && (
-        <div className="px-5 pb-safe pt-3">
+        <div className="px-5 pb-4 pt-3">
           <button
             type="button"
             disabled={creating}

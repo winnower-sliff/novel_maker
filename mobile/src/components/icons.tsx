@@ -1,0 +1,64 @@
+import type { ReactNode } from 'react'
+
+/**
+ * 内联线条图标（24 网格、2px 描边、圆头圆角）。全项目手写 SVG 统一走这里，
+ * 不引第三方图标库，也不与书内底栏（BookWorkspace 内联的 Feather 线稿）风格打架。
+ */
+
+function Svg({
+  size = 20,
+  className,
+  children
+}: {
+  size?: number
+  className?: string
+  children: ReactNode
+}) {
+  return (
+    <svg
+      aria-hidden="true"
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth={2}
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      className={className}
+    >
+      {children}
+    </svg>
+  )
+}
+
+/** 铅笔：写书 */
+export function IconPencil({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z" />
+    </Svg>
+  )
+}
+
+/** 书架上的几本书：范文 */
+export function IconLibrary({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <path d="m16 6 4 14" />
+      <path d="M12 6v14" />
+      <path d="M8 8v12" />
+      <path d="M4 4v16" />
+    </Svg>
+  )
+}
+
+/** 齿轮：设置 */
+export function IconGear({ className }: { className?: string }) {
+  return (
+    <Svg className={className}>
+      <circle cx="12" cy="12" r="3" />
+      <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
+    </Svg>
+  )
+}

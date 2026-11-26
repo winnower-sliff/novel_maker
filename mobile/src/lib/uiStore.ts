@@ -1,10 +1,11 @@
 import { create } from 'zustand'
 
 /**
- * 全局 UI 态（产品极简：书架/设置两 tab + 书内全屏工作区 + 开书引导全屏）。
+ * 全局 UI 态（产品极简：写书/范文/设置三个底部 tab + 书内全屏工作区 + 开书引导全屏）。
  * 数据层走 TanStack Query；这里只有导航与视图态。
+ * tab 取值沿用旧名（shelf 即界面上的「写书」页）。
  */
-type Tab = 'shelf' | 'settings'
+type Tab = 'shelf' | 'samples' | 'settings'
 type BookSub = 'write' | 'read' | 'cards' | 'lines'
 
 interface UiState {
