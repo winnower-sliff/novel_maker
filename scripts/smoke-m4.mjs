@@ -145,6 +145,17 @@ try {
   )
   ok(!ch1.content.includes('不应出现'), '未命中的 edit 不落正文')
 
+  // 改稿后：章纪要在后台按新正文重写（桩的旁路应答以【改稿后】开头，与入书时的纪要不同）
+  {
+    let refreshed = null
+    for (let i = 0; i < 40; i++) {
+      refreshed = await invoke('chapter:get', ch0.id)
+      if (String(refreshed?.summary ?? '').startsWith('【改稿后】')) break
+      await sleep(300)
+    }
+    ok('改稿后章纪要按新正文重写', String(refreshed?.summary ?? '').startsWith('【改稿后】'))
+  }
+
   // ── 审读 / 审计 / 诊断 ──
   let vj = await invoke('job:startReview', ch0.id)
   vj = await waitJob(vj.id, (j) => j.state === 'done', '章审读')

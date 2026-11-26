@@ -79,9 +79,11 @@ raw.close()
 
 // ── 本进程内的模型桩：按系统提示的身份应答，并记下每个请求 ──────────────────
 const seen = []
+const queue = []
 let recapCalls = 0
 let summaryCalls = 0
 let badJsonPending = false
+let callSeq = 0
 const userText = (messages) =>
   (messages ?? [])
     .filter((m) => m.role === 'user' && typeof m.content === 'string')
@@ -101,6 +103,7 @@ const llm = createServer((req, res) => {
     const user = userText(parsed.messages)
     seen.push({ system, user, messages: parsed.messages })
     let text = '{}'
+    let toolCalls = null
     if (system.includes('你是前情梗概维护员')) {
       // 每次合并回一份带版号的梗概：断言「原地更新」时看得出换没换
       recapCalls += 1
@@ -121,22 +124,56 @@ const llm = createServer((req, res) => {
         badJsonPending = true
         text = '这不是 JSON，只是一段话。'
       }
+    } else {
+      // 其余请求（agent 循环）按队列走：{ text } 纯文本，{ toolCalls } 工具调用
+      const item = queue.shift() ?? {}
+      if (item.toolCalls) toolCalls = item.toolCalls
+      else text = item.text ?? '{}'
     }
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
-    for (let i = 0; i < text.length; i += 40)
+    if (toolCalls) {
+      callSeq += 1
       res.write(
         `data: ${JSON.stringify({
           model: 'stub-model',
-          choices: [{ delta: { content: text.slice(i, i + 40) } }]
+          choices: [
+            {
+              delta: {
+                role: 'assistant',
+                tool_calls: toolCalls.map((t, i) => ({
+                  index: i,
+                  id: `call_${callSeq}_${i}`,
+                  type: 'function',
+                  function: { name: t.name, arguments: JSON.stringify(t.arguments ?? {}) }
+                }))
+              }
+            }
+          ]
         })}\n\n`
       )
-    res.write(
-      `data: ${JSON.stringify({
-        model: 'stub-model',
-        choices: [{ delta: {}, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 100, completion_tokens: 300 }
-      })}\n\n`
-    )
+      res.write(
+        `data: ${JSON.stringify({
+          model: 'stub-model',
+          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
+          usage: { prompt_tokens: 100, completion_tokens: 300 }
+        })}\n\n`
+      )
+    } else {
+      for (let i = 0; i < text.length; i += 40)
+        res.write(
+          `data: ${JSON.stringify({
+            model: 'stub-model',
+            choices: [{ delta: { content: text.slice(i, i + 40) } }]
+          })}\n\n`
+        )
+      res.write(
+        `data: ${JSON.stringify({
+          model: 'stub-model',
+          choices: [{ delta: {}, finish_reason: 'stop' }],
+          usage: { prompt_tokens: 100, completion_tokens: 300 }
+        })}\n\n`
+      )
+    }
     res.write('data: [DONE]\n\n')
     res.end()
   })
@@ -430,6 +467,66 @@ try {
       turns[1].content.includes('这不是 JSON') &&
       turns[2].role === 'user' &&
       turns[2].content.includes('不是合法 JSON')
+  )
+
+  // ── ④ 改稿后刷新纪要：走 agent 的 revise_chapter（改章任务走的是同一个后台入口）──
+  const { runAgentLoop, interceptorDefs } = await import(url('agent/loop.js'))
+  const { toolDefs } = await import(url('agent/tools.js'))
+  const summaryBefore = store.getChapter('old-ch2').summary
+  queue.push(
+    {
+      toolCalls: [
+        {
+          name: 'revise_chapter',
+          arguments: { chapterId: 'old-ch2', instruction: '把刻痕写细一点' }
+        }
+      ]
+    },
+    {
+      text: JSON.stringify({
+        edits: [{ find: '断刀刻着「沈」字', replace: '断刀上刻着被磨掉一半的「沈」字' }]
+      })
+    },
+    { toolCalls: [{ name: 'finish', arguments: { message: '改好了' } }] }
+  )
+  const runMainBefore = store.getRunningMemory(main)
+  const said = []
+  const loopRes = await runAgentLoop({
+    jobId: 'smoke-revise',
+    bookId: book.id,
+    task: '把第 2 章断刀的细节改细一点',
+    history: [],
+    mode: 'free',
+    tools: [...toolDefs(), ...interceptorDefs('free')],
+    say: (content, meta) => said.push({ content, meta })
+  })
+  await recap.storyRecapSettled()
+  const ch2After = store.getChapter('old-ch2')
+  ok(
+    '改稿生效（局部替换命中）',
+    loopRes.text === '改好了' && ch2After.content.includes('被磨掉一半的「沈」字')
+  )
+  ok(
+    '改稿后章纪要按新正文重写',
+    ch2After.summary === '改稿后的纪要第1版' && summaryBefore !== ch2After.summary
+  )
+  const reviseMerge = seen.filter((s) => s.system.includes('前情梗概维护员')).at(-1)
+  ok(
+    '梗概做了增量合并（说明本章已改稿，以新纪要为准）',
+    reviseMerge.user.includes('已改稿的章') &&
+      reviseMerge.user.includes('第2章《第2章》：改稿后的纪要第1版')
+  )
+  const runMainAfter = store.getRunningMemory(main)
+  ok(
+    '合并更新的是原线梗概，覆盖章号不变',
+    runMainAfter.id === runMainBefore.id &&
+      runMainAfter.content.includes('主线第6版') &&
+      runMainAfter.toOrder === 4
+  )
+  ok('别的章的纪要不动', store.getChapter('old-ch1').summary === '第1章的旧纪要。')
+  ok(
+    '改章工具卡告诉 agent：纪要与梗概会在后台刷新',
+    said.some((s) => s.meta?.tool === 'revise_chapter' && s.content.includes('后台按新正文刷新'))
   )
 
   console.log(`\n[长期记忆冒烟] ${passed} 通过 / ${failed} 失败`)

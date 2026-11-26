@@ -22,6 +22,7 @@ import {
   genRevisePlan,
   selfCheck
 } from '../director/steps.js'
+import { noteRevisedChapter } from '../director/storyRecap.js'
 import { lintChapter, stripHtmlComments } from '../lint.js'
 import * as store from '../store.js'
 import { execTool, type ToolCtx, type ToolResult, toolDefs } from './tools.js'
@@ -822,6 +823,8 @@ ${rows}
         })
         throwIfAborted()
         store.replaceChapterContent(chapterId, clean)
+        // 后台按新正文重写该章纪要，并把前情梗概里涉及本章的说法更正（fire-and-forget，失败只记日志）
+        noteRevisedChapter(chapterId)
         const missed = applied.total - applied.applied
         return {
           ok: true,
@@ -834,7 +837,7 @@ ${rows}
                     ? `（引文在全文重复出现，共改动 ${applied.hits} 处）`
                     : ''
                 }${missed > 0 ? `；${missed} 处引文未在原文中找到` : ''}`
-          }并替换。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
+          }并替换，本章纪要与前情梗概会在后台按新正文刷新。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
         }
       }
       case 'spawn_subagent': {

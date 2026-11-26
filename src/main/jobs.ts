@@ -18,7 +18,7 @@ import {
   genRevisePlan,
   selfCheck
 } from './director/steps.js'
-import { scheduleStoryRecap } from './director/storyRecap.js'
+import { noteRevisedChapter, scheduleStoryRecap } from './director/storyRecap.js'
 import { stripHtmlComments } from './lint.js'
 import {
   activeLine,
@@ -470,6 +470,8 @@ async function runReviseJob(job: Job, signal: AbortSignal): Promise<Job | null> 
   )
   const clean = stripHtmlComments(applied.next)
   replaceChapterContent(revise.chapterId, clean)
+  // 后台按新正文重写该章纪要，并把前情梗概里涉及本章的说法更正（fire-and-forget，失败只记日志）
+  noteRevisedChapter(revise.chapterId)
   note(job.id, 'revised', `《${chapter.title}》已按指令改好`)
   return finishJob(job.id, {
     state: 'done',
