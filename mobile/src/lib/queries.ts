@@ -20,7 +20,6 @@ export const qk = {
   books: ['books'] as const,
   book: (id: string) => ['book', id] as const,
   statusCard: (id: string) => ['statusCard', id] as const,
-  chapter: (id: string) => ['chapter', id] as const,
   cards: (lineId: string) => ['cards', lineId] as const,
   characters: (lineId: string) => ['characters', lineId] as const,
   foreshadows: (lineId: string) => ['foreshadows', lineId] as const,
@@ -70,14 +69,6 @@ export function useShelfStatus(bookIds: string[]) {
   })
 }
 
-export function useChapter(chapterId: string | null) {
-  return useQuery({
-    queryKey: qk.chapter(chapterId ?? ''),
-    queryFn: async (): Promise<Chapter | null> => window.api.chapter.get(chapterId as string),
-    enabled: !!chapterId
-  })
-}
-
 export function useCards(lineId: string | null) {
   return useQuery({
     queryKey: qk.cards(lineId ?? ''),
@@ -102,18 +93,16 @@ export function useForeshadows(lineId: string | null) {
   })
 }
 
-/** 该书 job 流：active=最近未终态（含 revise/review 等子任务，恢复用）；lastDone=最近完成的写作任务（纪要卡回看）；jobs=全量（聊天流 jobId→job 映射用） */
+/** 该书 job 流：active=最近未终态（含 revise/review 等子任务，恢复用）；jobs=全量（聊天流 jobId→job 映射用） */
 export function useJobFlow(bookId: string | null) {
   return useQuery({
     queryKey: qk.jobs(bookId ?? ''),
-    queryFn: async (): Promise<{ active: Job | null; lastDone: Job | null; jobs: Job[] }> => {
+    queryFn: async (): Promise<{ active: Job | null; jobs: Job[] }> => {
       const jobs = await window.api.job.list(bookId as string)
       return {
         active:
           jobs.find((j) => j.state !== 'done' && j.state !== 'failed' && j.state !== 'cancelled') ??
           null,
-        // listJobs 按 created_at DESC，首个 done 的写作任务即最近完成的一章
-        lastDone: jobs.find((j) => j.kind === 'write' && j.state === 'done') ?? null,
         jobs
       }
     },
@@ -130,23 +119,6 @@ export function useMessages(bookId: string | null, fast = false) {
     queryFn: async (): Promise<ChatMessageRow[]> => window.api.message.list(bookId as string),
     enabled: !!bookId,
     refetchInterval: fast ? 4_000 : 20_000 // SSE 断连兜底；任务运行中加快
-  })
-}
-
-/** 最近完成的审读/审计/诊断报告（新→旧） */
-export function useReports(bookId: string | null) {
-  return useQuery({
-    queryKey: [...qk.jobs(bookId ?? ''), 'reports'],
-    queryFn: async (): Promise<Job[]> => {
-      const jobs = await window.api.job.list(bookId as string)
-      return jobs.filter(
-        (j) =>
-          (j.kind === 'review' || j.kind === 'audit' || j.kind === 'diagnose') &&
-          j.state === 'done' &&
-          j.payload.report
-      )
-    },
-    enabled: !!bookId
   })
 }
 

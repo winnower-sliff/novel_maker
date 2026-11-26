@@ -3,7 +3,7 @@ import { useState } from 'react'
 import { Markdown } from '../../components/Markdown'
 import ReportCard from '../../components/ReportCard'
 import { useJobFlow } from '../../lib/queries'
-import { toastError } from '../../lib/toastStore'
+import { errorText, toastError } from '../../lib/toastStore'
 import { ChapterDoneCard, RevisedCard } from './DoneCards'
 import PlanCard from './PlanCard'
 
@@ -69,7 +69,7 @@ export default function JobCard({
         <div className="rounded-2xl border border-red-200 bg-red-50 p-3.5">
           <div className="mb-1 text-xs font-semibold text-red-600">卡住了</div>
           <div className="text-xs leading-relaxed break-all text-stone-500">
-            {job.error || '未知错误'}
+            {errorText(job.error || '未知错误')}
           </div>
           {retryable ? (
             <div className="mt-3 flex gap-2">

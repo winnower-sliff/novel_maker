@@ -75,19 +75,22 @@ export default function Write() {
   const listRef = useRef<HTMLDivElement>(null)
   const contentRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
-  // 内容高度不断变化（流式/聚合条）：只要用户仍贴底就跟随滚底
+  const lastTopRef = useRef(0)
+  // 内容高度（流式/聚合条）或列表可视高度（键盘弹出收起、输入栏增高）变化：只要用户仍贴底就跟随滚底；
+  // 用户往上翻看历史时 onScroll 已把 stickRef 置 false，这里不拽回
   useEffect(() => {
-    const el = contentRef.current
-    if (!el) return
+    const content = contentRef.current
+    const list = listRef.current
+    if (!content || !list) return
     const stick = () => {
-      if (stickRef.current) {
-        const list = listRef.current
-        if (list) list.scrollTop = list.scrollHeight
-      }
+      if (!stickRef.current) return
+      list.scrollTop = list.scrollHeight
+      lastTopRef.current = list.scrollTop
     }
     stick()
     const ro = new ResizeObserver(stick)
-    ro.observe(el)
+    ro.observe(content)
+    ro.observe(list)
     return () => ro.disconnect()
   }, [])
 
@@ -99,7 +102,13 @@ export default function Write() {
         className="min-h-0 flex-1 overflow-y-auto no-scrollbar"
         onScroll={(e) => {
           const el = e.currentTarget
-          stickRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120
+          const top = el.scrollTop
+          // 只有往上翻才取消跟随：视口变矮时浏览器的滚动锚定也会挪动 scrollTop 并派发 scroll
+          // （离底距离随之变大），那不是用户在翻历史，不能据此停跟
+          stickRef.current =
+            el.scrollHeight - top - el.clientHeight < 120 ||
+            (stickRef.current && top >= lastTopRef.current - 1)
+          lastTopRef.current = top
         }}
       >
         <StatusHead bookId={bookId} active={active} />

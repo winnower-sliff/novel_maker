@@ -1,4 +1,4 @@
-/** AI 页统一标签表：agent 工具/运行阶段/走向类型（展示层唯一来源） */
+/** AI 页统一标签表：agent 工具（展示层唯一来源） */
 
 /** agent 工具 → 中文名（缺省裸名兜底） */
 export const TOOL_LABEL: Record<string, string> = {
@@ -7,6 +7,8 @@ export const TOOL_LABEL: Record<string, string> = {
   read_chapter: '读章',
   list_cards: '翻设定',
   get_card: '看设定',
+  list_card_kinds: '看设定类别',
+  rename_card_kind: '改设定类别',
   list_characters: '翻人物',
   list_foreshadows: '翻伏笔',
   get_write_context: '备上下文',
@@ -32,14 +34,8 @@ export const TOOL_LABEL: Record<string, string> = {
   commit_chapter: '定稿入书',
   revise_chapter: '改章',
   spawn_subagent: '派调查员',
+  propose_chapter: '排队写新章',
+  request_review: '申请审读',
+  request_audit: '申请审计',
   finish: '收工'
-}
-
-/** job 运行阶段 → 概括文案 */
-export const RUN_LABEL: Record<string, string> = {
-  proposal: '导演正在构思走向…',
-  agent: '导演自主工作中',
-  report: '出报告中…',
-  draft: '改章中',
-  finalize: '收尾中…'
 }
