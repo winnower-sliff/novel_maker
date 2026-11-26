@@ -5,7 +5,11 @@
 - 用户指令（原话）：「继续自己检查问题并修复。在APP中取消使用glm的能力。在该APP使用dpsk的时候幻觉和遗忘很严重。
   参考最新的功能为APP提供更复杂高效的长期记忆能力，以维持更好的风格统一与逻辑一致。」
 - ① APK 安装故障——**已完成**（见下方「APK 自更新故障修复」）。
-- ② 移除 GLM 能力——**调查完成，未动手**。生产 `settings.json`：provider=deepseek
+- ② 移除 GLM 能力——**开发线实施中**（2026-11-27）：分支 `fix/remove-glm`，worktree
+  `C:\Users\14270\.local\share\opencode\worktree\754ca1\noglm`，基于 154f026，子代理实施
+  `ses_de75eb4f0ffe1Jiry10VfNWmtp`；完成标准 = 门禁绿 + `npm test` 20 套（新增 `smoke-config.mjs`）
+  + 已推送 → 主 checkout 合并 → `npm run verify` → `npm run apk`（主进程与手机端都有改动，自动 deploy）。
+  生产 `settings.json`：provider=deepseek
   （模型 `deepseek-v4-pro`），只存了 DeepSeek 的 Key，`routing` 为空，`profiles.glm` 残留。
   调查结论（已核实代码）：
   - `config.ts` 的 `load()` 不走 zod，只有 `JSON.parse` 抛错才改名 `.corrupt-<时间>` → 残留 glm
@@ -21,7 +25,10 @@
 - ③ 长期记忆——**调查中，未动手**。目标：风格统一 + 逻辑一致；缓解 DeepSeek 的幻觉与遗忘。
 - 计划：先拿三份只读调查结论（GLM 落点 / 现行记忆机制全貌 / 业界最新做法）→ 把 ②③ 的具体设计
   与分步计划写回本段 → 各开一条开发线（worktree + 子代理）实施 → 主 checkout 验收、合并、出包。
-- 下一步：等调查结论 → 设计 → 开线。若本文件停在这里，新会话从「设计」接着做，不要从头调查。
+- 下一步：② 验收子代理的 `fix/remove-glm`（看提交、`npm test` 结果、与 origin 同步）→ 主 checkout
+  合并出包；③ 等两份只读调查（现行记忆机制全貌 `ses_de763d6c1ffetfFKcMpNgXyP1h`、业界最新做法
+  `ses_de763d6c0ffePNneHjjB3r9VmC`）→ 设计写回本段 → 开线。若本文件停在这里，新会话从这里接着做，
+  ② 不要重做，③ 不要从头调查（先看主会话是否已有结论）。
 
 ### APK 自更新故障修复（已完成，v4.8.1）
 
