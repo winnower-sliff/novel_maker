@@ -175,7 +175,7 @@ try {
       .every((r) => r.last_chapter_id === '')
   )
 
-  const { buildWriteContext } = await import(url('director/context.js'))
+  const { buildWriteContext, buildStoryBrief } = await import(url('director/context.js'))
   const recap = await import(url('director/storyRecap.js'))
   const book = store.getBook('old-book')
   const main = 'old-line'
@@ -254,6 +254,107 @@ try {
   recap.scheduleStoryRecap(main)
   await recap.storyRecapSettled()
   ok('没有新章时再触发不调模型', seen.length === callsBefore)
+
+  // ── ③ 写作简报：本章点名的出场人物带人设，相关设定卡带完整 data，已批准的计划进简报 ──
+  store.saveCharacter({
+    lineId: main,
+    name: '林岸',
+    role: '主角',
+    data: { 背景: '前水手，父亲留下断刀', 性格: '能忍，出手狠' },
+    state: { location: '蔗糖舱' },
+    relations: [{ to: '老船工', label: '警惕' }]
+  })
+  store.saveCharacter({
+    lineId: main,
+    name: '蓑衣老船工',
+    role: '关键配角',
+    data: { 背景: '南屿货船上的老船工' }
+  })
+  store.saveCard({
+    lineId: main,
+    kind: 'geography',
+    title: '南屿',
+    readerText: '悬赏画像贴满码头',
+    data: { 泊位: [{ 名称: '七号泊位', 用途: '私货' }] }
+  })
+  store.saveCard({ lineId: main, kind: 'item', title: '无关的卡', readerText: '不相关' })
+  const focusBrief = buildStoryBrief(book, main, {
+    text: '林岸随船抵达南屿，码头上的悬赏画像……',
+    plan: '- **走向**：老船工试探林岸'
+  })
+  ok(
+    '出场人物带人设 data 与现状',
+    focusBrief.includes('本章出场人物') &&
+      focusBrief.includes('人设：背景：前水手') &&
+      focusBrief.includes('location=蔗糖舱')
+  )
+  ok('没点名的人物只进人物现状、不带人设', !focusBrief.includes('南屿货船上的老船工'))
+  ok(
+    '相关设定卡带完整 data',
+    focusBrief.includes('本章相关设定卡') &&
+      focusBrief.includes('悬赏画像贴满码头') &&
+      focusBrief.includes('"名称":"七号泊位"')
+  )
+  ok('没被本章提到的设定卡不进相关卡', !focusBrief.includes('无关的卡'))
+  ok(
+    '已批准的本章计划进简报',
+    focusBrief.includes('本章计划（作者已批准') && focusBrief.includes('老船工试探林岸')
+  )
+  const plainBrief = buildWriteContext(book, main)
+  ok(
+    '通用简报（get_write_context）不带本章专属段',
+    !plainBrief.includes('本章出场人物') &&
+      !plainBrief.includes('本章计划') &&
+      plainBrief.includes('主线第2版')
+  )
+
+  // ── 写手提示：吃同一份简报，文风范例在末尾，过时措辞已去掉 ──
+  const { draftPrompt } = await import(url('director/steps.js'))
+  store.updateBook(book.id, { styleSample: '短句。短句。雾很重。' })
+  const writerBook = store.getBook(book.id)
+  const outline = { title: '夜探', synopsis: '林岸夜探南屿码头', beats: ['登岸'] }
+  const prompt = draftPrompt({
+    book: writerBook,
+    lineId: main,
+    outline,
+    scenes: null,
+    direction: { source: 'free', text: '作者：多写雾' }
+  })
+  ok(
+    '写手提示带出场人物人设与走向交代',
+    prompt.user.includes('本章出场人物') &&
+      prompt.user.includes('人设：背景：前水手') &&
+      prompt.user.includes('本章走向与作者交代\n作者：多写雾')
+  )
+  ok('写手提示带前情梗概', prompt.user.includes('主线第2版'))
+  ok('过时措辞「作者选定的走向」已去掉', !prompt.user.includes('作者选定的走向'))
+  ok(
+    '文风范例在提示末尾（大纲之后、动笔指令之前）',
+    prompt.user.includes('文风范例') &&
+      prompt.user.includes('短句。短句。雾很重。') &&
+      prompt.user.indexOf('文风范例') > prompt.user.indexOf('## 本章大纲') &&
+      prompt.user.trimEnd().endsWith('现在，写本章正文。')
+  )
+  const silent = draftPrompt({
+    book: writerBook,
+    lineId: main,
+    outline,
+    scenes: null,
+    direction: { source: 'free', text: '' }
+  })
+  ok('作者没给倾向时不硬造走向段', !silent.user.includes('本章走向与作者交代'))
+  const planned = draftPrompt({
+    book: writerBook,
+    lineId: main,
+    outline,
+    scenes: null,
+    direction: { source: 'free', text: '' },
+    plan: '- **走向**：按批准的计划写'
+  })
+  ok(
+    '计划模式下写手提示带已批准的计划',
+    planned.user.includes('本章计划（作者已批准') && planned.user.includes('按批准的计划写')
+  )
 
   // ── ⑦ 分叉：新线有自己的梗概，此后各线独立演化 ──
   const forkA = store.forkLine(book.id, ch4.id, '甲线', '')

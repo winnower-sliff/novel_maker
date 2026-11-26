@@ -8,7 +8,13 @@ import type {
   ToolDef
 } from '../../shared/types.js'
 import { callJson, callRaw, isAbortError, StepError } from '../director/callJson.js'
-import { bookBasics, directorPersona, redlineBlock, wordListBlock } from '../director/prompts.js'
+import {
+  bookBasics,
+  directorPersona,
+  redlineBlock,
+  styleBlock,
+  wordListBlock
+} from '../director/prompts.js'
 import {
   applyRevisePlan,
   autoFixDraft,
@@ -64,6 +70,10 @@ export interface LoopOpts {
   bookId: string
   /** 给 agent 的任务指令（写章/聊天/自由任务） */
   task: string
+  /** 作者对本章的倾向（计划模式下留空，计划另给）：进写手提示的「本章走向与作者交代」 */
+  chapterDirection?: string
+  /** 计划模式下作者已批准的本章计划：进写手提示的「本章计划」 */
+  chapterPlan?: string
   /** 对话历史（ChatMessage 文本投影；写章任务通常为空） */
   history: ChatMessage[]
   /** agent 可用工具（含拦截工具的 ToolDef） */
@@ -341,13 +351,31 @@ ${samples.map((s, i) => `${i + 1}. 《${s.name}》`).join('\n')}
   return parts.join('\n\n')
 }
 
-function agentSystem(book: Book, mode: 'chapter' | 'free'): string {
+/** 记忆简报（紧凑版）：前情梗概 + 主要人物名单。细节靠工具拉，这里只保证导演每轮都记得书写到哪了 */
+function memoryBrief(lineId: string): string {
+  if (!lineId) return ''
+  const parts: string[] = []
+  const running = store.getRunningMemory(lineId)
+  if (running) parts.push(`前情梗概（覆盖到第 ${running.toOrder} 章）：\n${running.content}`)
+  const roster = store
+    .listCharacters(lineId)
+    .slice(0, 12)
+    .map((c) => `${c.name}${c.role ? `（${c.role}）` : ''}`)
+    .join('、')
+  if (roster) parts.push(`主要人物：${roster}`)
+  return parts.length
+    ? `\n\n## 记忆简报（全貌用 get_write_context 取，细节用读类工具查）\n${parts.join('\n')}`
+    : ''
+}
+
+/** agent 系统提示（每轮重建，红线/正负词/文风/记忆简报随库内最新值注入） */
+function agentSystem(book: Book, lineId: string, mode: 'chapter' | 'free'): string {
   const chapterDiscipline =
     mode === 'chapter'
       ? `
 
 ## 写章任务纪律（当前处于写章流程；走向由作者在聊天里给出或由你自主拟定）
-1. 先 get_write_context 拿上下文（钉选设定/伏笔/人物现状/近章），再动笔。${book.sampleSources.length ? '动笔前可用 read_sample 按本章要素检索一段范文找语感（draft 时系统也会自动检索注入）。' : ''}
+1. 先 get_write_context 拿上下文（钉选设定/前情梗概/伏笔/人物现状/近章），再动笔。${book.sampleSources.length ? '动笔前可用 read_sample 按本章要素检索一段范文找语感（draft 时系统也会自动检索注入）。' : ''}
 2. write_chapter_draft 一次成型；报告有问题而你判断可修→再 draft 一次；系统已自动修过一轮仍 major 的字数/接缝问题，若你判断无法两全→commit 前在 finish 里说明，或与作者商量（作者接受瑕疵）。
 3. commit_chapter 后立即做沉淀：新设定 save_card、人物动向 patch_character_state、伏笔三态 save_foreshadow。这是纪律，不许跳过。
 4. 全部做完 finish 收尾（汇报+建议下一章走向）。`
@@ -358,11 +386,13 @@ function agentSystem(book: Book, mode: 'chapter' | 'free'): string {
 - 作者要在已有章上改稿→revise_chapter；维护设定/人物/伏笔/红线/正负词→对应工具。
 - 作者要写新章→直接调 propose_chapter（可带方向提示）排进写章队列，并告诉作者「已开章」；界面上没有「写下一章」按钮，不要让作者去找。
 - 承诺即执行：凡对作者说「这就改/马上改/现在就动手」，必须在同一轮调用对应工具完成，只说不做是违规；改不动就明说原因，不许空头承诺。`
+  // 稳定内容在前、每章都变的记忆简报在后（DeepSeek 前缀缓存按前缀整体命中）
   return `${directorPersona()}
 
 ${bookBasics(book)}
 ${redlineBlock(book)}
 ${wordListBlock(book)}
+${styleBlock(book)}
 ${sampleBlock(book)}
 ${chapterDiscipline}
 
@@ -370,7 +400,7 @@ ${chapterDiscipline}
 - 每次工具调用都会以小卡形式给作者看，大方用。
 - 删除类工具已自动快照兜底，但删除前仍要确认作者意图。
 - 工具结果太长会被截断，需要细节就用读类工具分页看。
-- 要翻大量资料但只需要结论（摸人物关系、查伏笔现状、找前文原句）时，派 spawn_subagent 去调查——它只把最终结论带回你的上下文，省你自己的空间。日常单点查询不必派。`
+- 要翻大量资料但只需要结论（摸人物关系、查伏笔现状、找前文原句）时，派 spawn_subagent 去调查——它只把最终结论带回你的上下文，省你自己的空间。日常单点查询不必派。${memoryBrief(lineId)}`
 }
 
 /** 子代理调查员系统提示（fresh 会话，只读，静默执行） */
@@ -507,10 +537,11 @@ ${rows}
     opts.onTurn?.() // 每轮喂狗：有真实进展就续看门狗（挂死/死循环不喂→照杀）
     book = store.getBook(bookId) ?? book // 每轮重读（agent 可能改了配置/切了线）
     await compactIfNeeded()
+    const line = store.activeLine(book)
     const res = await callRaw(
       {
         slot: 'director',
-        system: opts.system ?? agentSystem(book, mode),
+        system: opts.system ?? agentSystem(book, line?.id ?? '', mode),
         user: task,
         jsonHint: '',
         params: {
@@ -667,7 +698,6 @@ ${rows}
         const b = store.getBook(bookId) ?? book
         const line = store.activeLine(b)
         if (!line) return { ok: false, summary: '没有激活线', data: '当前书没有激活线' }
-        const direction = (opts.task.match(/走向[：:]\s*(.+)/)?.[1] ?? opts.task).slice(0, 200)
         const outline = {
           title: String(input.title ?? '未命名'),
           synopsis: String(input.synopsis ?? ''),
@@ -679,8 +709,13 @@ ${rows}
           lineId: line.id,
           outline,
           scenes: (input.scenes as Scene[] | undefined) ?? null,
-          direction: { source: 'free' as const, text: direction },
-          styleRefs: styleRefs || undefined
+          // 走向卡早已废除：写手看的是作者的真实倾向（或已批准的计划），不是任务指令原文
+          direction: {
+            source: 'free' as const,
+            text: (opts.chapterDirection ?? '').slice(0, 2000)
+          },
+          styleRefs: styleRefs || undefined,
+          plan: opts.chapterPlan
         }
         let draft = await genDraft(input2, progressSaver('draft'), signal)
         let report = selfCheck(b, line.id, draft, tailOf(line.id))

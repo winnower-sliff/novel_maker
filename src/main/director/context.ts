@@ -11,9 +11,10 @@ import {
 } from '../store.js'
 
 /**
- * 上下文装配（G7）：钉选卡 → 本轮任务 → 伏笔/人物状态 → 最近章细记 → 前情梗概。
+ * 写作简报（导演与写手共用的同一份上下文，M3）：
+ * 钉选设定 → 前情梗概 → 人物 → 伏笔 → 本章出场人物人设 → 相关设定卡 → 近章细记 → 本章计划。
+ * 稳定内容在前、每章都变的在后（DeepSeek 前缀缓存按前缀整体命中）。
  * 预算（字符）：引用≤35%、历史≤25%、检索≤15%，超限从低优先级截断。
- * M2 检索层=伏笔台账+人物活状态；语义嵌入 M5 接入后并入此层。
  */
 
 const BUDGET_TOTAL = 24000
@@ -21,9 +22,21 @@ const BUDGET_REF = Math.floor(BUDGET_TOTAL * 0.35)
 const BUDGET_HISTORY = Math.floor(BUDGET_TOTAL * 0.25)
 const BUDGET_LOOKUP = Math.floor(BUDGET_TOTAL * 0.15)
 
-const RECENT_DETAIL_COUNT = 5
+/** 近章细记带最后几章（更早的靠前情梗概） */
+const RECENT_CHAPTERS = 8
 /** 前情梗概入库时已卡在 2200 字内；这里只是防脏数据的兜底上限 */
 const RECAP_MAX = 3000
+const MAX_FOCUS_CHARACTERS = 6
+const MAX_RELATED_CARDS = 5
+const PERSONA_DATA_MAX = 600
+const CARD_DATA_MAX = 1500
+
+export interface BriefFocus {
+  /** 本章大纲、作者交代等文本：用来挑「本章出场人物」与「相关设定卡」 */
+  text?: string
+  /** 计划模式下已批准的本章计划 */
+  plan?: string
+}
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…（截断）`
@@ -40,7 +53,7 @@ function cardText(card: Card): string {
 function characterText(c: Character): string {
   const st = Object.entries(c.state)
     .filter(([, v]) => v)
-    .map(([k, v]) => `${k}=${v}`)
+    .map(([k, v]) => `${k}=${typeof v === 'string' ? v : JSON.stringify(v)}`)
     .join('；')
   const rel = c.relations.length
     ? `；关系：${c.relations.map((r) => `${r.to}(${r.label})`).join('、')}`
@@ -48,9 +61,60 @@ function characterText(c: Character): string {
   return `【${c.name}】${c.role ? `（${c.role}）` : ''}${st ? ` 状态：${st}` : ''}${rel}`
 }
 
-/** 写作上下文（给各步骤 prompt 用） */
-export function buildWriteContext(_book: Book, lineId: string): string {
+/** 出场人物的人设（data）+ 现状（state）+ 关系 */
+function characterPersona(c: Character): string {
+  const data = Object.entries(c.data)
+    .filter(([, v]) => v !== null && v !== undefined && v !== '')
+    .map(([k, v]) => `${k}：${typeof v === 'string' ? v : JSON.stringify(v)}`)
+    .join('；')
+  return `${characterText(c)}${data ? `\n人设：${clip(data, PERSONA_DATA_MAX)}` : ''}`
+}
+
+/** 设定卡全文，带完整 data */
+function cardFull(card: Card): string {
+  const hasData = card.data && Object.keys(card.data).length > 0
+  return `${cardText(card)}${hasData ? `\n数据：${clip(JSON.stringify(card.data), CARD_DATA_MAX)}` : ''}`
+}
+
+/**
+ * 本章出场人物：按大纲/交代里点名的人物挑（名字或定位被提到），
+ * 不足时补钉选人物；一个都没点名时至少带前两位（主角人设是人物不跑偏的地基）。
+ */
+function pickCharacters(lineId: string, text: string): Character[] {
+  const all = listCharacters(lineId)
+  const named = text
+    ? all.filter(
+        (c) => (c.name.length >= 2 && text.includes(c.name)) || (c.role && text.includes(c.role))
+      )
+    : []
+  const fill = all.filter((c) => c.pinned && !named.includes(c))
+  const picked = [...named, ...fill].slice(0, MAX_FOCUS_CHARACTERS)
+  return picked.length ? picked : all.slice(0, 2)
+}
+
+/** 相关设定卡：非钉选卡里标题或标签在本章文本里被提到的，按命中多少排序 */
+function pickCards(lineId: string, text: string): Card[] {
+  if (!text) return []
+  return listCards(lineId)
+    .filter((c) => !c.pinned)
+    .map((card) => {
+      let score = card.title && text.includes(card.title) ? 3 : 0
+      for (const tag of card.tags) if (tag && text.includes(tag)) score += 2
+      return { card, score }
+    })
+    .filter((x) => x.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, MAX_RELATED_CARDS)
+    .map((x) => x.card)
+}
+
+/**
+ * 写作简报：导演（get_write_context / 系统提示）与写手（正文、改稿、审读、诊断）共用。
+ * 不带 focus = 通用简报；写手动笔前传本章大纲等文本，会多带出场人物人设与相关设定卡。
+ */
+export function buildStoryBrief(_book: Book, lineId: string, focus: BriefFocus = {}): string {
   const sections: string[] = []
+  const text = focus.text ?? ''
 
   // 1. 钉选引用（B7：钉选必进上下文）
   const pinnedCards = listCards(lineId).filter((c) => c.pinned)
@@ -62,36 +126,7 @@ export function buildWriteContext(_book: Book, lineId: string): string {
     sections.push(`## 钉选设定（作者指定每次必带）\n${clip(refParts.join('\n\n'), BUDGET_REF)}`)
   }
 
-  // 2. 伏笔台账 + 人物活状态（检索层）
-  const chapters = effectiveChapters(lineId)
-  const nextOrder = (chapters.length ? (chapters[chapters.length - 1]?.orderNo ?? 0) : 0) + 1
-  const fs = listForeshadows(lineId).filter((f) => f.status !== 'resolved')
-  if (fs.length) {
-    const lines = fs.slice(0, 20).map((f) => {
-      const planned = f.plannedChapterId ? plannedOrderText(f.plannedChapterId, chapters) : null
-      return `- ${f.title}：${clip(f.detail, 120)}${planned ? `（计划于第 ${planned} 章前后回收）` : ''}${
-        nextOrder >= (planned ?? Number.POSITIVE_INFINITY) ? ' ←已到期，优先考虑回收' : ''
-      }`
-    })
-    sections.push(`## 未闭合伏笔\n${clip(lines.join('\n'), BUDGET_LOOKUP)}`)
-  }
-  const mainChars = listCharacters(lineId).slice(0, 8)
-  if (mainChars.length) {
-    sections.push(`## 人物现状\n${clip(mainChars.map(characterText).join('\n'), BUDGET_LOOKUP)}`)
-  }
-
-  // 3. 最近章细记（滚动分层——细记层）
-  const recent = chapters.slice(-RECENT_DETAIL_COUNT)
-  if (recent.length) {
-    const lines = recent.map((c) => `第${c.orderNo}章《${c.title}》：${clip(c.summary, 300)}`)
-    sections.push(`## 最近章节\n${clip(lines.join('\n'), BUDGET_HISTORY)}`)
-    const prev = chapters[chapters.length - 1]
-    if (prev?.content) {
-      sections.push(`## 上一章结尾（接缝参考，不得重复）\n${clip(prev.content.slice(-500), 600)}`)
-    }
-  }
-
-  // 4. 前情梗概（合并式：每线一行，新章入书后更新，整段注入不截尾）；
+  // 2. 前情梗概（合并式：每线一行，新章入书后更新，整段注入不截尾）；
   //    还没有时回退到旧的逐章压缩块（legacy，不再新增）
   const running = getRunningMemory(lineId)
   if (running) {
@@ -104,7 +139,66 @@ export function buildWriteContext(_book: Book, lineId: string): string {
     }
   }
 
+  // 3. 人物现状 + 伏笔台账（检索层）。「第 N 章」= 本线有效章序列里的位置（分叉线的章序号会从 1 重排）
+  const chapters = effectiveChapters(lineId)
+  const orderOf = (id: string): number | null => {
+    const at = chapters.findIndex((c) => c.id === id)
+    return at >= 0 ? at + 1 : null
+  }
+  const nextOrder = chapters.length + 1
+  const mainChars = listCharacters(lineId).slice(0, 8)
+  if (mainChars.length) {
+    sections.push(`## 人物现状\n${clip(mainChars.map(characterText).join('\n'), BUDGET_LOOKUP)}`)
+  }
+  const fs = listForeshadows(lineId).filter((f) => f.status !== 'resolved')
+  if (fs.length) {
+    const lines = fs.slice(0, 20).map((f) => {
+      const planned = f.plannedChapterId ? orderOf(f.plannedChapterId) : null
+      return `- ${f.title}：${clip(f.detail, 120)}${planned ? `（计划于第 ${planned} 章前后回收）` : ''}${
+        nextOrder >= (planned ?? Number.POSITIVE_INFINITY) ? ' ←已到期，优先考虑回收' : ''
+      }`
+    })
+    sections.push(`## 未闭合伏笔\n${clip(lines.join('\n'), BUDGET_LOOKUP)}`)
+  }
+
+  // 4. 本章出场人物的人设 + 相关设定卡（只有带 focus 时才有）
+  if (text) {
+    const cast = pickCharacters(lineId, text)
+    if (cast.length) {
+      sections.push(
+        `## 本章出场人物（人设与现状，言行要对得上人设）\n${clip(cast.map(characterPersona).join('\n\n'), BUDGET_LOOKUP)}`
+      )
+    }
+    const related = pickCards(lineId, text)
+    if (related.length) {
+      sections.push(
+        `## 本章相关设定卡（细节以此为准，不要另编）\n${clip(related.map(cardFull).join('\n\n'), BUDGET_LOOKUP)}`
+      )
+    }
+  }
+
+  // 5. 最近章细记
+  const recent = chapters.slice(-RECENT_CHAPTERS)
+  if (recent.length) {
+    const lines = recent.map((c) => `第${orderOf(c.id)}章《${c.title}》：${clip(c.summary, 300)}`)
+    sections.push(`## 最近章节\n${clip(lines.join('\n'), BUDGET_HISTORY)}`)
+    const prev = chapters[chapters.length - 1]
+    if (prev?.content) {
+      sections.push(`## 上一章结尾（接缝参考，不得重复）\n${clip(prev.content.slice(-500), 600)}`)
+    }
+  }
+
+  // 6. 计划模式下已批准的本章计划（最动态，放最后）
+  if (focus.plan?.trim()) {
+    sections.push(`## 本章计划（作者已批准，按它写）\n${clip(focus.plan.trim(), 2000)}`)
+  }
+
   return sections.join('\n\n')
+}
+
+/** 写作上下文（get_write_context 工具与各步骤 prompt 用）= 不带本章 focus 的通用简报 */
+export function buildWriteContext(_book: Book, lineId: string): string {
+  return buildStoryBrief(_book, lineId)
 }
 
 function plannedOrderText(

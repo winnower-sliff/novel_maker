@@ -4,7 +4,7 @@
  * 前置：npm run build（dist 最新）。stub 由本脚本 spawn（AGENT_MODE=1，端口 3923）。
  */
 import { spawn } from 'node:child_process'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -53,9 +53,16 @@ async function waitJob(jobId, pred, label, timeoutMs = 90_000, allowFailed = fal
 
 const dataDir = mkdtempSync(join(tmpdir(), 'nm-m6-smoke-'))
 writeFileSync(join(dataDir, 'settings.json'), JSON.stringify({ server: { port: PORT } }))
+// 桩把每个请求体追加到这个文件：断言提示词内容用（导演系统提示、写手提示）
+const dumpFile = join(dataDir, 'stub-dump.jsonl')
+const dumped = () =>
+  readFileSync(dumpFile, 'utf8')
+    .split('\n')
+    .filter(Boolean)
+    .map((l) => JSON.parse(l))
 
 const stub = spawn(process.execPath, ['scripts/smoke-m3-stub.mjs'], {
-  env: { ...process.env, AGENT_MODE: '1', SUBAGENT: '1' },
+  env: { ...process.env, AGENT_MODE: '1', SUBAGENT: '1', STUB_DUMP: dumpFile },
   stdio: 'inherit'
 })
 const server = spawn(process.execPath, ['dist/main/index.js'], {
@@ -91,8 +98,8 @@ try {
   ok(true, '模型配置 → stub')
 
   const book = await invoke('book:create', { title: '冒烟之书', targetWords: 600 })
-  // 负向词硬闸：DRAFT 里有「忽然」，agent 写出后 lint 应 major → autoFix → 修掉
-  await invoke('book:update', book.id, { negativeWords: ['忽然'] })
+  // 负向词硬闸：DRAFT 里有「忽然」，agent 写出后 lint 应 major → autoFix → 修掉；文风进导演系统提示
+  await invoke('book:update', book.id, { negativeWords: ['忽然'], styleName: '冷硬短句' })
   await invoke('character:save', {
     lineId: book.activeLineId,
     name: '林岸',
@@ -135,6 +142,19 @@ try {
       '入书后生成一行前情梗概（覆盖到第 1 章）'
     )
     ok(count === 1, `running 梗概只有一行（${count}）`)
+
+    // 写手提示：吃的是和导演同一份写作简报（出场人物带人设），过时措辞已去掉
+    {
+      const writer = dumped().find((b) =>
+        String(b.messages?.[0]?.content ?? '').includes('正文写作特别纪律')
+      )
+      const user = String(writer?.messages?.[1]?.content ?? '')
+      ok(
+        !!writer && user.includes('本章出场人物') && user.includes('【林岸】（主角）'),
+        '写手提示带出场人物人设'
+      )
+      ok(!user.includes('作者选定的走向'), '写手提示不再出现过时的「作者选定的走向」')
+    }
   }
 
   // 工具卡消息序列
@@ -184,6 +204,25 @@ try {
     chatTools.length >= 1 && chatTools[0].meta.tool === 'list_chapters',
     'chat agent 用了 list_chapters 工具'
   )
+
+  // 导演系统提示（每轮重建）：带文风与记忆简报（梗概 + 主要人物名单）
+  {
+    const chatReq = dumped().find((b) =>
+      b.messages?.some((m) => m.role === 'user' && String(m.content).includes('现在写到哪了'))
+    )
+    const system = String(chatReq?.messages?.[0]?.content ?? '')
+    ok(
+      system.includes('## 文风') && system.includes('记忆简报') && system.includes('林岸雾夜藏身'),
+      '导演系统提示带文风与前情梗概'
+    )
+    ok(system.includes('主要人物：林岸（主角）'), '导演系统提示带主要人物名单')
+    ok(
+      system.includes('记忆简报') &&
+        system.indexOf('## 文风') < system.indexOf('记忆简报') &&
+        system.indexOf('## 工具纪律') < system.indexOf('记忆简报'),
+      '稳定内容在前、记忆简报在后'
+    )
+  }
 
   // 用户动作消息（role=user）触发草稿转正：写章+chat 后书必须是正书
   const bookNow = await invoke('book:get', book.id)

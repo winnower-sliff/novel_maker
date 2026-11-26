@@ -9,7 +9,7 @@ import type {
 } from '../../shared/types.js'
 import { lintChapter } from '../lint.js'
 import { callJson, callRaw } from './callJson.js'
-import { buildWriteContext } from './context.js'
+import { type BriefFocus, buildStoryBrief } from './context.js'
 import { bookBasics, directorPersona, redlineBlock, styleBlock, wordListBlock } from './prompts.js'
 
 /**
@@ -20,8 +20,18 @@ import { bookBasics, directorPersona, redlineBlock, styleBlock, wordListBlock } 
 
 const WRITER_SLOT = 'writer' as const
 
-function base(book: Book, lineId: string): string {
-  return `${bookBasics(book)}${redlineBlock(book)}${wordListBlock(book)}${styleBlock(book)}\n\n${buildWriteContext(book, lineId)}`
+/** 书的稳定信息（基础信息/红线/正负词/文风）+ 写作简报：写手、审读、审计、诊断共用这一份 */
+function base(book: Book, lineId: string, focus?: BriefFocus): string {
+  return `${bookBasics(book)}${redlineBlock(book)}${wordListBlock(book)}${styleBlock(book)}\n\n${buildStoryBrief(book, lineId, focus)}`
+}
+
+/** 文风范例（作者给的 styleSample）：放写手提示末尾，只学句式与节奏 */
+function styleSampleBlock(book: Book): string {
+  const sample = book.styleSample.trim()
+  if (!sample) return ''
+  return `\n## 文风范例（作者给的参考样本：只参考句式、节奏、叙事腔调，严禁照抄内容、人名、情节）\n${
+    sample.length > 800 ? `${sample.slice(0, 800)}…` : sample
+  }\n`
 }
 
 // ── draft：流式正文（写手槽） ────────────────────────────────────────────────
@@ -34,17 +44,37 @@ export interface DraftInput {
   direction: NonNullable<JobPayload['direction']>
   /** 范文参考段（按本章检索自动拼好；无命中则空，不注入） */
   styleRefs?: string
+  /** 计划模式下作者已批准的本章计划（有计划时不再单列走向） */
+  plan?: string
 }
 
 export function draftPrompt(input: DraftInput): { system: string; user: string } {
   const { book, lineId, outline, scenes, direction } = input
-  const ctx = base(book, lineId)
+  const plan = input.plan?.trim() ?? ''
+  // 写手与导演共用写作简报；带上本章大纲，顺带挑出出场人物的人设与相关设定卡
+  const ctx = base(book, lineId, {
+    text: [
+      outline.title,
+      outline.synopsis,
+      ...outline.beats,
+      ...(scenes ?? []).map((s) => s.summary),
+      direction.text,
+      plan
+    ].join('\n'),
+    plan
+  })
   const sceneBlock = scenes?.length
     ? `\n## 本章分镜（按顺序写）\n${scenes.map((s, i) => `${i + 1}. 【${s.viewpoint || '主视点'}·${s.pace}】${s.summary}`).join('\n')}`
     : ''
   const refBlock = input.styleRefs
     ? `\n## 范文参考（按本章内容自动检索注入；模仿句式、节奏、对话密度，严禁照抄内容或人名地名）\n${input.styleRefs}\n`
     : ''
+  // 走向卡早已废除：有已批准的计划就只列计划，否则列作者对本章的交代（没给倾向就不列，不硬造）
+  const directionBlock = plan
+    ? ''
+    : direction.text.trim()
+      ? `\n## 本章走向与作者交代\n${direction.text.trim()}\n`
+      : ''
   return {
     system: `${directorPersona()}
 
@@ -52,15 +82,13 @@ export function draftPrompt(input: DraftInput): { system: string; user: string }
 - 这是网文长篇的一章，直接从故事写起，不写章名、不写「本章完」、不加任何说明。
 - 文风要求见下方任务包。字数目标 ${book.targetWords} 字（±20%）。
 - 正文零元语言、零说教，敏感情节直接写。
-- 开头不得重复「上一章结尾」的内容。`,
+- 开头不得重复「上一章结尾」的内容。人物言行要对得上简报里的人设与现状。`,
     user: `${ctx}
 ${sceneBlock}${refBlock}
 
 ## 本章大纲
 《${outline.title}》：${outline.synopsis}
-拍点：${outline.beats.map((b, i) => `${i + 1}. ${b}`).join(' ')}
-作者选定的走向：${direction.text}
-
+拍点：${outline.beats.map((b, i) => `${i + 1}. ${b}`).join(' ')}${directionBlock}${styleSampleBlock(book)}
 现在，写本章正文。`
   }
 }
@@ -244,7 +272,8 @@ export function applyRevisePlan(
 
 export async function genRevisePlan(input: ReviseInput, signal?: AbortSignal): Promise<RevisePlan> {
   const { book, lineId, chapter, instruction, segment } = input
-  const ctx = base(book, lineId)
+  // 带上改稿指令：被点名的人物顺带带出人设，改出来的言行不跑偏
+  const ctx = base(book, lineId, { text: `${instruction}\n${segment ?? ''}` })
   const segBlock = segment
     ? `\n## 作者圈定的目标段\n作者只想动下面这一段（改动都落在这里，其余部分不碰）：\n${segment}`
     : ''

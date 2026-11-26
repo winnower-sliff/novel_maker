@@ -171,7 +171,7 @@ export function toolDefs(): ToolDef[] {
     {
       name: 'get_write_context',
       description:
-        '取写作上下文装配（钉选设定+未闭合伏笔+人物现状+最近5章细记+上一章结尾+远端压缩记忆）。动笔前必读。',
+        '取写作简报（钉选设定+前情梗概+人物现状+未闭合伏笔+最近8章细记+上一章结尾；还没有前情梗概时给旧的压缩摘要）。动笔前必读；涉及书里已发生的事先查它再回答。',
       input_schema: { type: 'object', properties: {} }
     },
     {
