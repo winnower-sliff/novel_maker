@@ -99,7 +99,12 @@ export default function Samples() {
   return (
     <PageShell
       title="范文"
-      subtitle={samples ? `共 ${samples.length} 本 · ${fmtChars(totalChars)}` : undefined}
+      subtitle={
+        samples && samples.length > 0
+          ? `共 ${samples.length} 本 · ${fmtChars(totalChars)}`
+          : '写作时供导演翻阅的参考书'
+      }
+      bodyClass="flex flex-col"
     >
       {/* 操作回执吸顶：导入区在页面底部、范文卡在顶部，无论停在哪一段点按钮都看得见 */}
       {msg && (
@@ -114,9 +119,11 @@ export default function Samples() {
       {/* 两个列表任一拉不到就整段报错：断连时逐条显示「还没有」会让人以为数据没了。
           点重试后会回到加载态（没有数据的重新请求在 TanStack 里算 pending），所以加载态必须先判 */}
       {samplesLoading || filesLoading ? (
-        <p className="py-16 text-center text-sm text-stone-500">加载中…</p>
+        <div className="flex flex-1 items-center justify-center py-16">
+          <p className="text-sm text-stone-500">加载中…</p>
+        </div>
       ) : (samplesFailed && !samples) || (filesFailed && !files) ? (
-        <div className="py-10">
+        <div className="flex flex-1 items-center justify-center py-10">
           <ErrorBox error={samplesError ?? filesError} onRetry={refresh} />
         </div>
       ) : (

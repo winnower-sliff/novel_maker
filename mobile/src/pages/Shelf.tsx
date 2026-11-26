@@ -353,15 +353,19 @@ export default function Shelf() {
           onClick={startCreate}
         >
           <IconPlus size={16} />
-          开新书
+          {creating ? '创建中…' : '开新书'}
         </button>
       }
       banner={offline ? <OfflineBanner /> : undefined}
       bodyClass="flex flex-col"
     >
-      {isLoading && <p className="py-16 text-center text-sm text-stone-500">加载中…</p>}
+      {isLoading && (
+        <div className="flex flex-1 items-center justify-center py-16">
+          <p className="text-sm text-stone-500">加载中…</p>
+        </div>
+      )}
       {isError && !books && (
-        <div className="py-10">
+        <div className="flex flex-1 items-center justify-center py-10">
           <ErrorBox error={error} onRetry={() => refetch()} />
         </div>
       )}
