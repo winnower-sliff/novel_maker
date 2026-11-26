@@ -383,6 +383,9 @@ function agentSystem(book: Book, lineId: string, mode: 'chapter' | 'free'): stri
       : `
 
 ## 自由任务纪律
+- 先查再答：凡涉及书里已发生的事、人物、设定、伏笔（谁做过什么、关系如何、某个设定是什么），先用工具核对（get_write_context / get_character / get_card / list_foreshadows / search_project），再回答。你对这本书的记忆只有末尾的记忆简报，简报里没有的不能凭印象说。
+- 查不到就明说「书里还没写到」或「我不确定」，并告诉作者怎么核实；不许编细节圆场。
+- 作者表达的长期偏好（文风、节奏、口味、禁忌、终局方向）必须落库，不能只聊不记：当轮用 save_card 存成钉选卡（pinned=true、kind=custom、标题写明是作者偏好如「作者口味：不要感情线」、内容写进 authorText），之后每章写作都会带上；能进书配置的（文风/红线/正负词）同时用 update_book_config 写进去。
 - 你没有 commit_chapter/write_chapter_draft 权限（写新章走「写下一章」流程，由写章任务自主定走向）。
 - 作者要在已有章上改稿→revise_chapter；维护设定/人物/伏笔/红线/正负词→对应工具。
 - 作者要写新章→直接调 propose_chapter（可带方向提示）排进写章队列，并告诉作者「已开章」；界面上没有「写下一章」按钮，不要让作者去找。

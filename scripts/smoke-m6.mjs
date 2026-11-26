@@ -217,10 +217,17 @@ try {
     )
     ok(system.includes('主要人物：林岸（主角）'), '导演系统提示带主要人物名单')
     ok(
-      system.includes('记忆简报') &&
-        system.indexOf('## 文风') < system.indexOf('记忆简报') &&
-        system.indexOf('## 工具纪律') < system.indexOf('记忆简报'),
+      system.includes('## 记忆简报') &&
+        system.indexOf('## 文风') < system.indexOf('## 记忆简报') &&
+        system.indexOf('## 工具纪律') < system.indexOf('## 记忆简报'),
       '稳定内容在前、记忆简报在后'
+    )
+    ok(
+      system.includes('先查再答') &&
+        system.includes('get_write_context / get_character / get_card') &&
+        system.includes('长期偏好') &&
+        system.includes('save_card 存成钉选卡'),
+      '聊天纪律：先查再答、查不到明说、作者长期偏好存钉选卡'
     )
   }
 
