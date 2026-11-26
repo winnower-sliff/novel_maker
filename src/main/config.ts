@@ -2,6 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { SettingsPatch } from '../shared/contract.js'
 import {
+  isModelSlot,
   isProviderId,
   type ModelSlot,
   PROVIDER_IDS,
@@ -46,6 +47,77 @@ function defaults(): StoredConfig {
   }
 }
 
+const isPlainObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+/** 只留「键是现有 provider、值形状合格」的条目并返回被剔除的键；raw 不是对象时视为空段 */
+function pickProviders(
+  raw: unknown,
+  okValue: (v: unknown) => boolean
+): { kept: Record<string, unknown>; dropped: string[] } {
+  const kept: Record<string, unknown> = {}
+  const dropped: string[] = []
+  if (isPlainObject(raw)) {
+    for (const [key, value] of Object.entries(raw)) {
+      if (isProviderId(key) && okValue(value)) kept[key] = value
+      else dropped.push(key)
+    }
+  }
+  return { kept, dropped }
+}
+
+/**
+ * 清洗已移除 provider 的残留：provider 不在可选范围则回落到默认；profiles / apiKeys 里不属于现有
+ * provider 的键剔除；routing 里指向不存在 provider 的槽删除。只在内存里清洗——不改名、不落盘，
+ * 下次保存设置时才自然写回。routing 槽不清的话 resolveAuth 会拿它去取预设，直接 TypeError。
+ */
+function sanitize(raw: unknown, fallback: ProviderId): Omit<StoredConfig, 'server'> {
+  const r = isPlainObject(raw) ? raw : {}
+  const notes: string[] = []
+
+  const provider = isProviderId(r.provider) ? r.provider : fallback
+  if (typeof r.provider === 'string' && !isProviderId(r.provider)) {
+    notes.push(`当前服务「${r.provider}」不在可选范围，改为「${provider}」`)
+  }
+
+  const profiles = pickProviders(r.profiles, isPlainObject)
+  const apiKeys = pickProviders(r.apiKeys, (v) => typeof v === 'string')
+  const stale = [
+    ...(profiles.dropped.length ? [`profiles 的 ${profiles.dropped.join('、')} 段`] : []),
+    ...(apiKeys.dropped.length ? [`apiKeys 的 ${apiKeys.dropped.join('、')} 段`] : [])
+  ]
+  if (stale.length) notes.push(`已忽略 ${stale.join('、')}`)
+
+  const routing: ModelRouting = {}
+  if (isPlainObject(r.routing)) {
+    for (const [slot, value] of Object.entries(r.routing)) {
+      if (!isModelSlot(slot) || !isPlainObject(value)) continue
+      const target = value.provider
+      if (!isProviderId(target)) {
+        const name = typeof target === 'string' ? target : '（未填写）'
+        notes.push(`模型槽「${slot}」指向的「${name}」不在可选范围，已清除这一条，该槽改用默认模型`)
+        continue
+      }
+      routing[slot] = {
+        provider: target,
+        model: typeof value.model === 'string' ? value.model : ''
+      }
+    }
+  }
+
+  if (notes.length) {
+    console.warn(
+      `[config] settings.json 含已移除模型服务的残留，已在内存中清洗（不改名、不落盘，下次保存设置时才写回）：${notes.join('；')}`
+    )
+  }
+  return {
+    provider,
+    profiles: profiles.kept as Partial<Record<ProviderId, ProviderProfile>>,
+    apiKeys: apiKeys.kept as Partial<Record<ProviderId, string>>,
+    routing
+  }
+}
+
 function load(): StoredConfig {
   const f = file()
   if (!existsSync(f)) return defaults()
@@ -77,13 +149,7 @@ function load(): StoredConfig {
       typeof rawPort === 'number' && Number.isInteger(rawPort) && rawPort > 0
         ? rawPort
         : d.server.port
-    return {
-      server: { port },
-      provider: isProviderId(raw.provider) ? raw.provider : d.provider,
-      profiles: raw.profiles ?? {},
-      apiKeys: raw.apiKeys ?? {},
-      routing: raw.routing ?? {}
-    }
+    return { server: { port }, ...sanitize(raw, d.provider) }
   } catch {
     return defaults()
   }
