@@ -179,27 +179,31 @@ export default function Shelf() {
           {archivedCount > 0 && (
             <button
               type="button"
-              className="text-xs text-stone-400 underline underline-offset-2"
+              className="-my-3 py-3 text-xs text-stone-400 underline underline-offset-2"
               onClick={() => setTab('settings')}
             >
               已归档 {archivedCount}
             </button>
           )}
+          {/* 小图标按钮：视觉保持 32px，命中区域用外层撑到 40px（负 margin 抵消多出的占位） */}
           <button
             type="button"
             disabled={creating}
-            className="flex h-8 w-8 items-center justify-center rounded-full border border-orange-200 text-lg font-light text-orange-600 active:bg-orange-50 disabled:opacity-50"
+            className="group -m-1 flex h-10 w-10 items-center justify-center disabled:opacity-50"
             aria-label="开新书"
             onClick={() => {
               setCreating(true)
               createBook.mutate(NEW_BOOK_TITLE)
             }}
           >
-            ＋
+            <span className="flex h-8 w-8 items-center justify-center rounded-full border border-orange-200 text-lg font-light text-orange-600 group-active:bg-orange-50">
+              ＋
+            </span>
           </button>
           <button
             type="button"
-            className="text-2xl text-stone-500"
+            className="-my-1 -ml-1 -mr-2 flex h-10 w-10 items-center justify-center text-2xl text-stone-500"
+            aria-label="设置"
             onClick={() => setTab('settings')}
           >
             ⚙️
@@ -295,11 +299,13 @@ export default function Shelf() {
             </button>
             <button
               type="button"
-              className="absolute right-3 top-3 flex h-8 w-8 items-center justify-center rounded-full bg-white/25 text-lg font-light text-white active:bg-white/40"
+              className="group absolute right-2 top-2 flex h-10 w-10 items-center justify-center"
               onClick={() => setMenuFor(recent)}
               aria-label="书操作"
             >
-              ⋯
+              <span className="flex h-8 w-8 items-center justify-center rounded-full bg-white/25 text-lg font-light text-white group-active:bg-white/40">
+                ⋯
+              </span>
             </button>
           </div>
         )}
@@ -330,7 +336,7 @@ export default function Shelf() {
                 </button>
                 <button
                   type="button"
-                  className="my-auto ml-1 flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-stone-400 active:bg-orange-100 active:text-stone-600"
+                  className="-mx-0.5 my-auto flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-stone-400 active:bg-orange-100 active:text-stone-600"
                   onClick={() => setMenuFor(b)}
                   aria-label="书操作"
                 >
@@ -344,7 +350,7 @@ export default function Shelf() {
         {archivedCount > 0 && (
           <button
             type="button"
-            className="mt-4 w-full py-1 text-center text-xs text-stone-400 active:text-stone-600"
+            className="-mb-4 mt-4 w-full py-3 text-center text-xs text-stone-400 active:text-stone-600"
             onClick={() => setTab('settings')}
           >
             已归档 {archivedCount} 本 · 归档管理 →
@@ -446,7 +452,7 @@ export default function Shelf() {
           ) : (
             <button
               type="button"
-              className="mt-2.5 w-full py-1.5 text-xs text-stone-400 active:text-red-600"
+              className="-mb-3 mt-2.5 w-full py-3 text-xs text-stone-400 active:text-red-600"
               onClick={() => setConfirmWipe(true)}
             >
               彻底删除这本书…

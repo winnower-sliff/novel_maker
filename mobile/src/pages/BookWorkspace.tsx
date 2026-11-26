@@ -82,7 +82,8 @@ export default function BookWorkspace() {
       <header className="pt-safe flex items-center gap-2 border-b border-orange-100 px-4 pb-3">
         <button
           type="button"
-          className="-ml-1 rounded-full p-2 text-stone-500 hover:bg-orange-100 hover:text-stone-800"
+          aria-label="返回书架"
+          className="-my-0.5 -ml-1.5 rounded-full p-2.5 text-stone-500 hover:bg-orange-100 hover:text-stone-800"
           onClick={() => {
             queryClient.invalidateQueries({ queryKey: qk.books })
             closeBook()

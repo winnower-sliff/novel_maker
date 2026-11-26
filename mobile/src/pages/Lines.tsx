@@ -95,20 +95,24 @@ export default function Lines() {
                     写作中
                   </span>
                 ) : (
+                  // 外层撑到 40px 命中区域（负 margin 抵消占位），内层保持原来的小胶囊
                   <button
                     type="button"
                     disabled={busy}
-                    className="rounded-lg border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500 disabled:opacity-50"
+                    className="-my-2 flex min-h-10 shrink-0 items-center disabled:opacity-50"
                     onClick={() => act(() => window.api.line.activate(book.id, l.id), '切换失败')}
                   >
-                    切到这条线
+                    <span className="rounded-lg border border-orange-200 px-2.5 py-1 text-[11px] text-stone-500">
+                      切到这条线
+                    </span>
                   </button>
                 )}
                 {mainLine?.id !== l.id && (
                   <button
                     type="button"
                     disabled={busy}
-                    className="rounded-full p-1 text-stone-400 hover:text-red-600"
+                    aria-label="删除这条线"
+                    className="-m-2.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-full text-stone-400 hover:text-red-600"
                     onClick={() => setConfirmDelete(l.id)}
                   >
                     <svg
@@ -216,13 +220,14 @@ function ForkSheet({
       <div className="mb-4 text-xs text-stone-500">选一个分叉点——新线从这一章之后独立展开。</div>
 
       <div className="mb-2 text-xs text-stone-500">分叉点</div>
-      <div className="mb-4 max-h-48 space-y-1 overflow-y-auto no-scrollbar">
+      {/* 每行 40px 点击区域、视觉行高不变（负 margin 抵消）；容器留 2px 内边距免得首尾行被滚动裁掉 */}
+      <div className="no-scrollbar mb-4 flex max-h-48 flex-col gap-1 overflow-y-auto py-0.5">
         {chapters.map((c) => (
           <button
             key={c.id}
             type="button"
             className={
-              'flex w-full items-baseline gap-2 rounded-lg px-3 py-2 text-left text-sm ' +
+              'min-h-10 -my-0.5 flex w-full items-baseline gap-2 rounded-lg px-3 py-2 text-left text-sm ' +
               (chapterId === c.id
                 ? 'bg-orange-900/40 text-orange-800'
                 : 'bg-orange-50 text-stone-600')

@@ -42,6 +42,7 @@ export default function QuickActionsBar({
   return (
     <div className="mt-4 rounded-2xl border border-orange-100 bg-white/40 p-4">
       <div className="mb-3 text-xs font-semibold opacity-60">想改改这章？</div>
+      {/* 胶囊视觉高 28px，点击区域撑到 40px（负 margin 抵消占位）；换行间距留足，上下两行的点击区域不重叠 */}
       {pending ? (
         <div className="flex items-center gap-2">
           <span className="min-w-0 flex-1 text-xs leading-relaxed text-red-600">
@@ -67,13 +68,13 @@ export default function QuickActionsBar({
           </button>
         </div>
       ) : (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-x-2 gap-y-3">
           {QUICK_ACTIONS.map((a) => (
             <button
               key={a.label}
               type="button"
               disabled={busy || !chapterId}
-              className="rounded-full border border-orange-200 px-3 py-1.5 text-xs active:border-orange-700 disabled:opacity-40"
+              className="min-h-10 -my-1.5 rounded-full border border-orange-200 px-3 py-1.5 text-xs active:border-orange-700 disabled:opacity-40"
               onClick={() => setPending(a)}
             >
               {a.label}
@@ -84,7 +85,7 @@ export default function QuickActionsBar({
               key={a.label}
               type="button"
               disabled={busy}
-              className="rounded-full border border-orange-800/80 bg-orange-950/30 px-3 py-1.5 text-xs text-orange-700 active:border-orange-600 disabled:opacity-40"
+              className="min-h-10 -my-1.5 rounded-full border border-orange-800/80 bg-orange-950/30 px-3 py-1.5 text-xs text-orange-700 active:border-orange-600 disabled:opacity-40"
               onClick={() => void revise(a.instruction)}
             >
               {a.label}
@@ -94,7 +95,7 @@ export default function QuickActionsBar({
       )}
       <div className="mt-3 flex gap-2">
         <input
-          className="min-w-0 flex-1 rounded-xl border border-orange-200 bg-orange-50 px-3 py-2 text-xs outline-none focus:border-orange-600"
+          className="min-h-10 min-w-0 flex-1 rounded-xl border border-orange-200 bg-orange-50 px-3 py-3 text-xs outline-none focus:border-orange-600"
           placeholder="或直接说要怎么改…"
           value={freeText}
           onChange={(e) => setFreeText(e.target.value)}
@@ -102,7 +103,7 @@ export default function QuickActionsBar({
         <button
           type="button"
           disabled={busy || !freeText.trim() || !chapterId}
-          className="rounded-xl bg-orange-100 px-4 text-xs text-orange-700 disabled:opacity-40"
+          className="min-h-10 min-w-10 rounded-xl bg-orange-100 px-4 text-xs text-orange-700 disabled:opacity-40"
           onClick={() => revise(freeText.trim())}
         >
           改

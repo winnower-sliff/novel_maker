@@ -38,16 +38,21 @@ export default function Cards() {
             ['foreshadows', '伏笔']
           ] as const
         ).map(([k, label]) => (
+          // 外层撑到 40px 命中区域（负 margin 抵消占位），内层保持 32px 的选中胶囊
           <button
             key={k}
             type="button"
-            className={
-              'flex-1 rounded-lg py-2 text-xs ' +
-              (seg === k ? 'bg-orange-600 text-white' : 'text-stone-500')
-            }
+            className="-my-1 flex min-h-10 flex-1 items-center justify-center"
             onClick={() => setSeg(k)}
           >
-            {label}
+            <span
+              className={
+                'w-full rounded-lg py-2 text-xs ' +
+                (seg === k ? 'bg-orange-600 text-white' : 'text-stone-500')
+              }
+            >
+              {label}
+            </span>
           </button>
         ))}
       </div>
@@ -89,9 +94,10 @@ function DeleteBar({ label, onConfirm }: { label: string; onConfirm: () => Promi
   if (!arming)
     return (
       <div className="mt-3 flex justify-end">
+        {/* 负 margin 抵消撑高的部分：文字位置与行高不变，点击区域 40px */}
         <button
           type="button"
-          className="text-[11px] text-stone-400"
+          className="-my-3 flex min-h-10 min-w-10 items-center justify-end text-[11px] text-stone-400"
           onClick={() => setArming(true)}
         >
           删除
@@ -104,7 +110,7 @@ function DeleteBar({ label, onConfirm }: { label: string; onConfirm: () => Promi
       <button
         type="button"
         disabled={busy}
-        className="rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] text-red-600 disabled:opacity-50"
+        className="-my-1.5 flex min-h-10 items-center disabled:opacity-50"
         onClick={async () => {
           setBusy(true)
           try {
@@ -117,14 +123,16 @@ function DeleteBar({ label, onConfirm }: { label: string; onConfirm: () => Promi
           }
         }}
       >
-        删除
+        <span className="rounded-lg bg-red-100 px-2.5 py-1.5 text-[11px] text-red-600">删除</span>
       </button>
       <button
         type="button"
-        className="rounded-lg border border-orange-200 px-2.5 py-1.5 text-[11px] text-stone-500"
+        className="-my-1.5 flex min-h-10 items-center"
         onClick={() => setArming(false)}
       >
-        取消
+        <span className="rounded-lg border border-orange-200 px-2.5 py-1.5 text-[11px] text-stone-500">
+          取消
+        </span>
       </button>
     </div>
   )
@@ -138,7 +146,7 @@ function PinToggle({ on, onToggle }: { on: boolean; onToggle: () => Promise<void
       role="button"
       tabIndex={0}
       aria-label={on ? '取消钉选' : '钉选'}
-      className={`shrink-0 rounded-full p-1.5 ${on ? 'text-orange-600' : 'text-stone-300'}`}
+      className={`-m-1.75 flex h-10 w-10 shrink-0 items-center justify-center rounded-full ${on ? 'text-orange-600' : 'text-stone-300'}`}
       onClick={(e) => {
         e.stopPropagation()
         void attempt(onToggle, on ? '取消钉选失败' : '钉选失败')
@@ -257,13 +265,15 @@ function CardsList({ lineId }: { lineId: string }) {
 
   return (
     <div>
-      <div className="no-scrollbar mb-3 flex gap-1.5 overflow-x-auto">
+      {/* 横向滚动的胶囊栏：容器上下各留 8px 内边距并用负 margin 抵消，
+          胶囊的 40px 点击区域才不会被滚动容器裁掉 */}
+      <div className="no-scrollbar -mt-2 mb-1 flex gap-1.5 overflow-x-auto py-2">
         {kindTabs.map((k) => (
           <button
             key={k}
             type="button"
             className={
-              'shrink-0 rounded-full px-3 py-1 text-xs ' +
+              'min-h-10 -my-2 shrink-0 rounded-full px-3 py-1 text-xs ' +
               (kind === k ? 'bg-orange-600 text-white' : 'bg-white text-stone-500')
             }
             onClick={() => setKind(k)}
@@ -464,13 +474,13 @@ function CharactersList({ lineId }: { lineId: string }) {
   return (
     <div>
       {allTags.length > 0 && (
-        <div className="no-scrollbar -mx-1 mb-3 flex gap-1.5 overflow-x-auto px-1 pb-0.5">
+        <div className="no-scrollbar -mx-1 -mt-2 mb-1.5 flex gap-1.5 overflow-x-auto px-1 py-2">
           {[null, ...allTags].map((t) => (
             <button
               key={t ?? '__all'}
               type="button"
               className={
-                'shrink-0 rounded-full px-2.5 py-1 text-[11px] ' +
+                'min-h-10 -my-2 shrink-0 rounded-full px-2.5 py-1 text-[11px] ' +
                 (tagFilter === t
                   ? 'bg-orange-600 text-white'
                   : 'border border-orange-100 bg-orange-50 text-orange-800/80')
@@ -641,7 +651,7 @@ function ForeshadowsList({
             key={label}
             type="button"
             className={
-              'rounded-full px-3 py-1 text-xs ' +
+              'min-h-10 -my-2 rounded-full px-3 py-1 text-xs ' +
               (status === k ? 'bg-orange-600 text-white' : 'bg-white text-stone-500')
             }
             onClick={() => setStatus(k)}
