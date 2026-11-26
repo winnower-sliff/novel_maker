@@ -1,9 +1,9 @@
 /**
  * v2 模型接入：统一 OpenAI 兼容协议（/v1/chat/completions）。
- * 预设只留 glm / deepseek；任意其他端点（含本地 Ollama / LM Studio）走 custom。
+ * 预设只留 deepseek；任意其他端点（含本地 Ollama / LM Studio，以及不再内置的 GLM 官方端点）走 custom。
  */
 
-export const PROVIDER_IDS = ['glm', 'deepseek', 'custom'] as const
+export const PROVIDER_IDS = ['deepseek', 'custom'] as const
 export type ProviderId = (typeof PROVIDER_IDS)[number]
 
 export interface ProviderPreset {
@@ -23,18 +23,6 @@ export interface ProviderPreset {
 }
 
 export const PROVIDER_PRESETS: Record<ProviderId, ProviderPreset> = {
-  glm: {
-    id: 'glm',
-    label: 'GLM',
-    baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
-    defaultModel: 'glm-4.6',
-    builtinModels: ['glm-5.3', 'glm-4.6', 'glm-4.5-air', 'glm-4.5'],
-    needsKey: true,
-    keyHint: '填入 GLM 的 API Key',
-    hint: '走官方 OpenAI 兼容端点（open.bigmodel.cn/api/paas/v4），按量计费。获取：open.bigmodel.cn → API Keys',
-    contextWindow: 200_000,
-    maxOutputTokens: 16384
-  },
   deepseek: {
     id: 'deepseek',
     label: 'DeepSeek',

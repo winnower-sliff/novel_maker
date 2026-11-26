@@ -40,7 +40,7 @@ function file(): string {
 function defaults(): StoredConfig {
   return {
     server: { port: DEFAULT_PORT },
-    provider: 'glm',
+    provider: 'deepseek',
     profiles: {},
     apiKeys: {},
     routing: {}

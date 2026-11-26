@@ -1,4 +1,4 @@
-import type { ProviderId } from '@shared/providers'
+import { PROVIDER_IDS, type ProviderId } from '@shared/providers'
 import type { SettingsView, UsageStats } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useEffect, useState } from 'react'
@@ -11,7 +11,6 @@ import { errorText, toastError } from '../lib/toastStore'
 import { useUiStore } from '../lib/uiStore'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
-  glm: '智谱 GLM',
   deepseek: 'DeepSeek',
   custom: '自定义'
 }
@@ -393,7 +392,7 @@ function ModelForm() {
   return (
     <div>
       <div className="mb-3 flex gap-1.5">
-        {(['glm', 'deepseek', 'custom'] as ProviderId[]).map((p) => (
+        {PROVIDER_IDS.map((p) => (
           <button
             key={p}
             type="button"
