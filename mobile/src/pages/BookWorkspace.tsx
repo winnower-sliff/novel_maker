@@ -76,14 +76,29 @@ export default function BookWorkspace() {
 
   const book = data?.book
   const activeLine = data?.lines.find((l) => l.id === book?.activeLineId)
+  // 阅读页夜间主题：开关沿用阅读页写进 uiStore 的 readerDark（不另造状态），
+  // 只在阅读子页生效——顶栏、整页底色、底栏一起转深色，切到别的子页自动回浅色
+  const dark = bookSub === 'read' && readerDark
 
   return (
-    <div className="fixed inset-0 z-20 flex flex-col bg-[#fbf6ec]">
-      <header className="pt-safe flex items-center gap-2 border-b border-orange-100 px-4 pb-3">
+    <div
+      className={`fixed inset-0 z-20 flex flex-col ${
+        dark ? 'bg-[#1c1917] text-[#d6cfc4]' : 'bg-[#fbf6ec]'
+      }`}
+    >
+      <header
+        className={`pt-safe flex items-center gap-2 border-b px-4 pb-3 ${
+          dark ? 'border-stone-800 bg-[#141210]' : 'border-orange-100'
+        }`}
+      >
         <button
           type="button"
           aria-label="返回书架"
-          className="-my-0.5 -ml-1.5 rounded-full p-2.5 text-stone-500 hover:bg-orange-100 hover:text-stone-800"
+          className={`-my-0.5 -ml-1.5 rounded-full p-2.5 ${
+            dark
+              ? 'text-stone-400 hover:bg-white/10 hover:text-stone-100'
+              : 'text-stone-500 hover:bg-orange-100 hover:text-stone-800'
+          }`}
           onClick={() => {
             queryClient.invalidateQueries({ queryKey: qk.books })
             closeBook()
@@ -104,10 +119,16 @@ export default function BookWorkspace() {
         <div className="min-w-0 flex-1">
           <div className="truncate text-base font-semibold">{book?.title ?? '…'}</div>
           {activeLine && activeLine.name !== '主线' && (
-            <div className="truncate text-xs text-orange-600">{activeLine.name}</div>
+            <div className={`truncate text-xs ${dark ? 'text-orange-400' : 'text-orange-600'}`}>
+              {activeLine.name}
+            </div>
           )}
         </div>
-        <span className="rounded-full bg-orange-100 px-2 py-0.5 text-xs text-stone-500">
+        <span
+          className={`rounded-full px-2 py-0.5 text-xs ${
+            dark ? 'bg-white/10 text-stone-400' : 'bg-orange-100 text-stone-500'
+          }`}
+        >
           {data?.chapters.length ?? 0} 章
         </span>
       </header>
@@ -124,14 +145,11 @@ export default function BookWorkspace() {
       <nav
         className={
           'pb-safe grid grid-cols-4 border-t ' +
-          (bookSub === 'read' && readerDark
-            ? 'border-stone-800 bg-[#141210] '
-            : 'border-orange-100 bg-[#fbf6ec] ')
+          (dark ? 'border-stone-800 bg-[#141210] ' : 'border-orange-100 bg-[#fbf6ec] ')
         }
       >
         {SUBS.map((s) => {
           const on = bookSub === s.key
-          const dark = bookSub === 'read' && readerDark
           return (
             <button
               key={s.key}
