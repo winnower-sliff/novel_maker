@@ -1,12 +1,13 @@
 // 分叉点保护冒烟（直调 store/execTool，无需模型）：
 // 分叉点章不可删 / 分叉点丢失时子线不丢祖先章 / 普通末章照常可删
-import { mkdtempSync, readdirSync, rmSync } from 'node:fs'
+import { mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { removeTempDir } from './temp-dir.mjs'
 
 process.env.NM_DATA_DIR = mkdtempSync(join(tmpdir(), 'nm-fork-smoke-'))
 
-const { getDb } = await import('../dist/main/db.js')
+const { closeDb, getDb } = await import('../dist/main/db.js')
 const store = await import('../dist/main/store.js')
 const { execTool } = await import('../dist/main/agent/tools.js')
 
@@ -83,12 +84,10 @@ try {
 } catch (e) {
   ok(`异常：${e.message}`, false)
 } finally {
-  try {
-    rmSync(process.env.NM_DATA_DIR, { recursive: true, force: true })
-  } catch {
-    // Windows 上 sqlite 句柄可能未释放
-  }
+  // 本进程开着的 sqlite 句柄不关，目录删不掉
+  closeDb()
+  await removeTempDir(process.env.NM_DATA_DIR)
 }
 
 console.log(`\n[分叉点冒烟] ${failed ? '失败' : '全部通过'}${failed ? ` ×${failed}` : ''}`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

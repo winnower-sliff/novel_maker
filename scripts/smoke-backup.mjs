@@ -1,10 +1,11 @@
 // 备份冒烟：每日备份 / 保留策略 / 进程内恢复 / 坏配置保全 / 升级前快照（无 LLM，端口 3983）
 import { spawn, spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { pathToFileURL } from 'node:url'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const root = process.cwd()
 const PORT = 3983
@@ -219,16 +220,11 @@ console.log(JSON.stringify({ files: readdirSync(process.env.NM_DATA_DIR), versio
 } catch (e) {
   ok(`异常：${e instanceof Error ? e.message : String(e)}`, false)
 } finally {
-  server.kill()
-  await sleep(800)
+  await stopChild(server)
   try {
     dbMod.closeDb()
   } catch {}
-  for (const dir of [DATA, OLD_DIR, CFG_DIR, FRESH_DIR]) {
-    try {
-      rmSync(dir, { recursive: true, force: true })
-    } catch {}
-  }
+  await Promise.all([DATA, OLD_DIR, CFG_DIR, FRESH_DIR].map((dir) => removeTempDir(dir)))
 }
 console.log(`\n[备份冒烟] ${passed} 通过 / ${failed} 失败`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

@@ -1,11 +1,12 @@
 // 任务生命周期冒烟：启动即返回、串行不并发、取消真正中止、先来后到、重试、未知类型不堵队列、重启续跑。
 // 自带慢桩（每次模型调用延迟 3 秒），不占公共桩端口 3923，无需真实 LLM key。
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3985
 const STUB_PORT = 3986
@@ -310,11 +311,8 @@ try {
   ok(`异常：${e.message}`, false)
 } finally {
   llm.close()
-  server?.kill()
-  await sleep(600)
-  try {
-    rmSync(DATA, { recursive: true, force: true })
-  } catch {}
+  await stopChild(server)
+  await removeTempDir(DATA)
 }
 console.log(`\n[任务生命周期冒烟] ${failed ? `失败 ×${failed}` : '全部通过'}`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

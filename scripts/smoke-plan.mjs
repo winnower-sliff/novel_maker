@@ -8,6 +8,7 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3961
 const BASE = `http://127.0.0.1:${PORT}`
@@ -148,9 +149,9 @@ try {
   failed++
   console.error('冒烟中断：', err.message)
 } finally {
-  server.kill()
-  stub.kill()
-  setTimeout(() => process.exit(failed ? 1 : 0), 300)
+  await Promise.all([stopChild(server), stopChild(stub)])
+  await removeTempDir(dataDir)
+  process.exitCode = failed ? 1 : 0
 }
 
 process.on('unhandledRejection', (e) => {

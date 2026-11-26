@@ -1,8 +1,9 @@
 // character:save HTTP 链路部分更新验证：不带 name 只改 pinned（zod optional + store 兑底）
 import { spawn } from 'node:child_process'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3973
 const BASE = `http://127.0.0.1:${PORT}`
@@ -57,11 +58,8 @@ try {
 } catch (e) {
   ok(`异常：${e.message}`, false)
 } finally {
-  server.kill()
-  await new Promise((r) => setTimeout(r, 500))
-  try {
-    rmSync(DATA, { recursive: true, force: true })
-  } catch {}
+  await stopChild(server)
+  await removeTempDir(DATA)
 }
 console.log(`\n[HTTP 部分更新] ${failed ? `失败 ×${failed}` : '全部通过'}`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0

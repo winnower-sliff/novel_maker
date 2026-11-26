@@ -1,13 +1,14 @@
 // 部署链路冒烟：在临时数据目录上跑 scripts/deploy.mjs——首启 / 构建失败不伤旧服务 / 升级 / 幂等 / 忙时拒绝 / --force。
 // 不碰生产：--data-dir 指向临时目录、端口 3979；deploy 只终止「本 checkout 拉起的」进程。
 import { spawnSync } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
 import { fileURLToPath } from 'node:url'
 import { readBuildInfo, sourceFingerprint } from './build-info.mjs'
 import { probeHealth } from './prod-server.mjs'
+import { removeTempDir } from './temp-dir.mjs'
 
 const PORT = 3979
 const root = resolve(fileURLToPath(new URL('..', import.meta.url)))
@@ -158,9 +159,7 @@ try {
     /* 没有 PID 文件 */
   }
   await kill(livePid)
-  try {
-    rmSync(DATA, { recursive: true, force: true })
-  } catch {}
+  await removeTempDir(DATA)
 }
 console.log(`\n[部署冒烟] ${failed ? `失败 ×${failed}` : '全部通过'}`)
-process.exit(failed ? 1 : 0)
+process.exitCode = failed ? 1 : 0
