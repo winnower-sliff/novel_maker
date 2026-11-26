@@ -59,6 +59,8 @@ function HeroCard({
         : book.intro
           ? '还没动笔，和导演聊聊第一章'
           : '还没完成开书引导，接着聊'
+  // 按钮文案跟着书的状态走：写过的是「继续写」，没动笔的是「开始写」，引导没聊完的是「接着聊」
+  const cta = chapters > 0 ? '继续写' : book.intro ? '开始写' : '接着聊'
   return (
     <section className="relative mt-1">
       <button
@@ -99,7 +101,7 @@ function HeroCard({
               aria-hidden="true"
               className="inline-flex shrink-0 items-center gap-1 rounded-full bg-white py-2 pl-3.5 pr-3 text-[13px] font-semibold leading-none text-orange-700"
             >
-              继续写
+              {cta}
               <IconArrowRight size={14} />
             </span>
           </span>
