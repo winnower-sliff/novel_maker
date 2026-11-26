@@ -1101,30 +1101,33 @@ function rowToSample(r: Record<string, unknown>): SampleInfo {
   }
 }
 
-/** 同名范文已存在时覆盖更新（重复导入幂等）；导入即结构化切节（章+资料段） */
+/**
+ * 导入范文：只增不改——同名已存在也不覆盖（用户硬约束：已导入的范文必须保留），
+ * 书名撞了就另存为「名（2）」「名（3）」。导入即结构化切节（章+资料段）。
+ * 返回值里的 name 是最终入库的书名，调用方据此提示作者是否另存。
+ */
 export function saveSample(name: string, content: string): SampleInfo {
   const db = getDb()
   const clean = content.replace(/\r\n/g, '\n')
   const chars = clean.length
-  const existing = db.prepare('SELECT id FROM samples WHERE name = ?').get(name) as
-    | { id: string }
-    | undefined
-  const id = existing?.id ?? randomUUID()
-  if (existing) {
-    db.prepare('UPDATE samples SET chars = ?, content = ? WHERE id = ?').run(
-      chars,
-      clean,
-      existing.id
-    )
-    db.prepare('DELETE FROM sample_sections WHERE sample_id = ?').run(existing.id)
-  } else {
-    db.prepare(
-      'INSERT INTO samples (id, name, chars, content, created_at) VALUES (?, ?, ?, ?, ?)'
-    ).run(id, name, chars, clean, Date.now())
-  }
+  const id = randomUUID()
+  db.prepare(
+    'INSERT INTO samples (id, name, chars, content, created_at) VALUES (?, ?, ?, ?, ?)'
+  ).run(id, uniqueSampleName(db, name), chars, clean, Date.now())
   const chapterCount = writeSampleSections(id, clean)
   const r = db.prepare(`${SAMPLE_BRIEF_SQL} WHERE id = ?`).get(id) as Record<string, unknown>
   return { ...rowToSample(r), chapterCount }
+}
+
+/** 撞名时顺延成「名（2）」「名（3）」…（范文总量小，读一遍全部书名足够） */
+function uniqueSampleName(db: DatabaseSync, base: string): string {
+  const rows = db.prepare('SELECT name FROM samples').all() as { name: string }[]
+  const taken = new Set(rows.map((r) => r.name))
+  if (!taken.has(base)) return base
+  for (let n = 2; ; n++) {
+    const candidate = `${base}（${n}）`
+    if (!taken.has(candidate)) return candidate
+  }
 }
 
 /** 结构化切节入库（章+资料大段），供 read_sample 直达检索；返回切出的章数 */

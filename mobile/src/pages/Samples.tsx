@@ -1,20 +1,30 @@
-import type { Book, SampleFileInfo, SampleInfo } from '@shared/types'
+import { SAMPLE_UPLOAD } from '@shared/contract'
+import type { Book, SampleFileInfo, SampleImportResult, SampleInfo } from '@shared/types'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Cover } from '../components/Cover'
 import { ErrorBox } from '../components/ErrorBox'
-import { IconFileText } from '../components/icons'
+import { IconFileText, IconPlus } from '../components/icons'
 import { PageShell } from '../components/PageShell'
 import { SampleReader } from '../components/SampleReader'
+import { UploadCancelled, uploadSampleText } from '../lib/sampleUpload'
+import { toastError } from '../lib/toastStore'
 
 function fmtChars(chars: number): string {
   return chars >= 10_000 ? `${(chars / 10_000).toFixed(1)} 万字` : `${chars.toLocaleString()} 字`
 }
 
+/** 导入回执：导入区可能在屏幕外，回执吸顶，停在哪一段点按钮都看得见 */
+function importReceipt(res: SampleImportResult): string {
+  const meta = `${fmtChars(res.chars)}${res.chapterCount ? ` · ${res.chapterCount} 章` : ''}`
+  return res.originalName
+    ? `已有同名的范文，这本另存为《${res.name}》：${meta}`
+    : `已导入《${res.name}》：${meta}`
+}
+
 /**
- * 范文页（底部导航第二项）：由原设置页的「范文库」段原样迁来——待导入列表与导入、范文卡、
- * 绑定 / 解绑到书、删除的两步确认、阅读入口，功能与文案不变，只换成与写书页一致的卡片风格。
- * 范文库的功能重做（手机端导入、阅读器、绑定体验）另行立项，这里不加新能力，也没有「清空」入口。
+ * 范文页（底部导航第二项）：范文卡（绑定 / 解绑到书、删除的两步确认、阅读入口）+ 两条导入通路——
+ * 手机端直接选 txt（分片上传，自动识别编码）与电脑端 imports 文件夹。范文只增不改，没有「清空」入口。
  */
 export default function Samples() {
   const queryClient = useQueryClient()
@@ -22,6 +32,10 @@ export default function Samples() {
   const [msg, setMsg] = useState('')
   const [confirmDel, setConfirmDel] = useState<string | null>(null)
   const [reading, setReading] = useState<SampleInfo | null>(null)
+  const fileInput = useRef<HTMLInputElement>(null)
+  /** 上传进度；非空即「正在导入」 */
+  const [upload, setUpload] = useState<{ name: string; sent: number; total: number } | null>(null)
+  const cancelUpload = useRef(false)
 
   const {
     data: samples,
@@ -56,14 +70,43 @@ export default function Samples() {
     setBusy(fileName)
     setMsg('')
     try {
-      await window.api.sample.import({ fileName })
-      setMsg('已导入')
+      setMsg(importReceipt(await window.api.sample.import({ fileName })))
       refresh()
     } catch (e) {
-      setMsg(`导入失败：${e instanceof Error ? e.message : String(e)}`)
+      toastError(e, '导入失败')
     } finally {
       setBusy('')
     }
+  }
+
+  const pickFile = (file: File | undefined) => {
+    if (!file) return
+    if (!/\.txt$/i.test(file.name) && file.type && file.type !== 'text/plain') {
+      toastError(new Error('只能导入 txt 文本文件'), '导入失败')
+      return
+    }
+    const name = file.name.replace(/\.txt$/i, '')
+    const chunks = Math.ceil(file.size / SAMPLE_UPLOAD.chunkBytes)
+    setMsg('')
+    setUpload({ name, sent: 0, total: chunks > 0 ? chunks : 1 })
+    cancelUpload.current = false
+    uploadSampleText(
+      file,
+      (sent, total) => setUpload({ name, sent, total }),
+      () => cancelUpload.current
+    )
+      .then((res) => {
+        setMsg(importReceipt(res))
+        refresh()
+      })
+      .catch((e: unknown) => {
+        if (!(e instanceof UploadCancelled)) toastError(e, `导入《${name}》失败`)
+      })
+      .finally(() => setUpload(null))
+  }
+
+  const stopUpload = () => {
+    cancelUpload.current = true
   }
 
   const doToggle = async (bookId: string, sampleId: string, nextIds: string[]) => {
@@ -103,6 +146,44 @@ export default function Samples() {
         samples && samples.length > 0
           ? `共 ${samples.length} 本 · ${fmtChars(totalChars)}`
           : '写作时供导演翻阅的参考书'
+      }
+      action={
+        <button
+          type="button"
+          disabled={upload !== null}
+          className="inline-flex h-10 shrink-0 items-center gap-1 rounded-full bg-orange-600 pl-3 pr-4 text-sm font-semibold text-white active:bg-orange-700 disabled:opacity-50"
+          onClick={() => fileInput.current?.click()}
+        >
+          <IconPlus size={16} />
+          {upload ? '导入中…' : '导入 txt'}
+        </button>
+      }
+      banner={
+        upload ? (
+          <div role="status" className="border-b border-orange-100 bg-orange-50 px-5 py-2.5">
+            <div className="flex items-center gap-3">
+              <span className="min-w-0 flex-1 truncate text-xs text-orange-700">
+                正在导入《{upload.name}》
+              </span>
+              <span className="shrink-0 text-xs tabular-nums text-orange-700">
+                {Math.round((upload.sent / upload.total) * 100)}%
+              </span>
+              <button
+                type="button"
+                className="-my-1.5 min-h-10 shrink-0 rounded-full border border-orange-200 px-3 text-xs text-stone-600 active:bg-white"
+                onClick={stopUpload}
+              >
+                取消
+              </button>
+            </div>
+            <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-orange-100">
+              <div
+                className="h-full bg-orange-500 transition-all duration-300"
+                style={{ width: `${(upload.sent / upload.total) * 100}%` }}
+              />
+            </div>
+          </div>
+        ) : undefined
       }
       bodyClass="flex flex-col"
     >
@@ -248,7 +329,8 @@ export default function Samples() {
             <div className="rounded-2xl border border-dashed border-orange-200 px-4 py-6 text-center">
               <div className="text-sm text-stone-500">还没有范文</div>
               <div className="mt-1 text-xs leading-relaxed text-stone-400">
-                把 txt 放进电脑端数据目录的 imports 文件夹，在下面点导入
+                点「导入 txt」从手机里选一本，或把 txt 放进电脑端数据目录的 imports
+                文件夹再在下面导入
               </div>
             </div>
           )}
@@ -307,6 +389,17 @@ export default function Samples() {
           onClose={() => setReading(null)}
         />
       )}
+      {/* 选完同一个文件再选一次也要触发 change：每次用完把 value 清空 */}
+      <input
+        ref={fileInput}
+        type="file"
+        accept=".txt,text/plain"
+        className="hidden"
+        onChange={(e) => {
+          pickFile(e.target.files?.[0])
+          e.target.value = ''
+        }}
+      />
     </PageShell>
   )
 }
