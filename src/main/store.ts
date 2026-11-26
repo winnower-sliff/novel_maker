@@ -569,7 +569,7 @@ export function replaceChapterContent(chapterId: string, content: string): Chapt
   return getChapter(chapterId)
 }
 
-/** 纪要摘要写回（滚动记忆细记层） */
+/** 纪要摘要写回（入书时由 commit_chapter 写入；改稿后后台按新正文重写） */
 export function updateChapterSummary(chapterId: string, summary: string): void {
   getDb()
     .prepare('UPDATE chapters SET summary = ?, updated_at = ? WHERE id = ?')

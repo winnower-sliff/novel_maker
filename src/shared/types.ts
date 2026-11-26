@@ -274,7 +274,7 @@ export interface Chapter {
   title: string
   content: string
   wordCount: number
-  /** 本章摘要（滚动记忆的细记层） */
+  /** 本章摘要（章纪要：并进前情梗概，也作近章细记；改稿后后台按新正文重写） */
   summary: string
   meta: ChapterMeta
   createdAt: number
