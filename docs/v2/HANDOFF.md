@@ -9,136 +9,124 @@
 
 ---
 
-## 当前任务：自主优化长跑（自己提需求自己改，不要停）
+## 当前状态：空闲（2026-11-26）
 
-### 授权与规则（用户 2026-11-25）
-- 「检查该项目并进行你觉得值得的优化，自己提需求自己改不要停」
-- 「记得按你觉得值得的需求进行 git 管理」→ 每个需求包 = 一个独立开发线（lane-flow）：
+- 自主优化长跑（需求包 A–E、全新克隆自检 Q、部署漏洞修复）已全部合并、push、部署、出包，
+  **没有未完成任务**——新会话不必续做任何东西，等用户新需求。
+- 生产现状：电脑端 health 自报 version 4.7.0 / `build.commit=342d057` / `build.sourceHash=a613fd32c43dd4d3`
+  （PID 不固定，需要时查 health）；手机端更新源 APK **v4.7.0-202611261215**
+  （用户需在「设置 → APP 更新」升级）。
+- 下一步：空闲。要做「候选清单」里的项，先逐项重新核实证据（均未排期、未复现）。
+- 唯一未闭环的是「待用户真机验收」四项，在用户侧。
+
+## 授权与规则
+
+- 2026-11-25 用户授权：「检查该项目并进行你觉得值得的优化，自己提需求自己改不要停」+
+  「记得按你觉得值得的需求进行 git 管理」。该长跑已收线（见「已完成需求包」），现等用户新需求。
+- 开发线纪律（lane-flow）：每个需求包 = 一个独立开发线：
   `worktree_create` → `session_move` → 从 `feat/v2-rebuild` 开 `feat/<名>`/`fix/<名>` → `npm ci`
   → 开发 → 门禁（typecheck+biome）+冒烟 → commit+push → 回**主 checkout**（本目录）
   `git merge --no-ff` → push → `worktree_remove` → **在主 checkout** 跑 `npm run deploy`（主进程有改动）
   / `npm run apk`（前端有改动）
 - 单点小修（文档、一行改动）不开线，直接在主 checkout 提交。
 
-### 主 checkout 关键事实
+## 主 checkout 关键事实
+
 - 主目录：`C:\Users\14270\.local\share\opencode\worktree\754ca1\v2-rebuild`（分支 feat/v2-rebuild）
 - **生产 server 跑的就是主 checkout 的 `dist/main/index.js`**（deploy.mjs `cwd: root`）——
   **开发线里绝不 deploy / 绝不 build-apk**（会让生产寄生在待删的 worktree 上、且会打 tag 推版本）；
   开发线只靠冒烟脚本验证主进程改动。合并回主 checkout 后再 deploy。
 - `npm run apk` = `build-apk.mjs`（v4.5 起两阶段）：先 `deploy.mjs --if-stale` 确保生产 server
   是当前源码的构建 → 出包 → **全部成功才**提交 `chore(release): vX` + 打 tag（失败回滚版本号）。
-- 冒烟回归全集：`npm test`（=build+`scripts/smoke-all.mjs`，14 套串行，约 45s）；`npm run verify`
-  = typecheck+lint+test。输出很长——后台跑+重定向到文件+只看尾部。
-- 2026-11-25 基线：HEAD=af6aab2，与 origin 同步；生产 health `build.commit=af6aab2`（PID 92592）。
-  **判断生产是否落后：比对 `/api/health` 的 `build.sourceHash` 与
+- 冒烟回归全集：`npm test`（=build+`scripts/smoke-all.mjs`，18 套串行）；`npm run verify`
+  = typecheck+lint+test，即完整门禁。输出很长——后台跑+重定向到文件+只看尾部。
+- 2026-11-26 基线：HEAD=342d057（`chore(release): v4.7.0`，tag v4.7.0 已推送），与 origin 同步；
+  生产 health `build.commit=342d057`、`build.sourceHash=a613fd32c43dd4d3`；
+  手机端更新源 APK v4.7.0-202611261215。
+- **判断生产是否落后：比对 `/api/health` 的 `build.sourceHash` 与
   `node scripts/build-info.mjs --print`**（`npm run apk` 会自动 deploy，有任务在跑时拒绝重启）。
+- **在主 checkout 跑过 `npm test` / `npm run verify` 之后要记得部署**：两者都会重新 build、改写
+  `dist/`，而生产进程仍是旧的那一个（7824e33 起 health 如实上报本进程加载的构建，
+  `deploy --if-stale` 不会再被骗过）。
 - **只改主进程的提交不出 APK**（内容相同的包只会白白打断用户安装）；手机端有改动才 `npm run apk`。
 - 拆提交后逐个中间提交验门禁的手法：`git worktree add --detach <tmp> <sha>` + `npm ci` + tsc 两套
   + biome；按依赖顺序提交（库层 → 调用层），强耦合的重构（如 jobs.ts+store.ts+loop.ts）合成一个提交。
 - 上下文纪律：大文件分段读、读完即压缩；冒烟输出绝不直接进上下文。
 
-### 已确认的问题/机会（开工前调研）
-1. **部署一致性无机器保证**：health 的 version 是 deploy 时的 package.json 版本，而 build-apk 之后
-   才 bump → 「server 版本落后 package.json」恒成立，AGENTS.md 里那条判据不可靠；「改主进程忘 deploy」
-   已实锤过一次。→ 源码指纹门禁。
-2. **备份**：数据目录 184MB，28 个 `backup-*.db` 全是删除操作前的快照（无保留策略、无定期全量备份）。
-3. **工程卫生**：`"test": "vitest run"` 无任何测试文件（vitest 死依赖，`npm test` 必失败）；
-   biome includes 只有 `src/**`（mobile/src 零 lint）；无 CI；Capacitor 模板残留
-   （`com/getcapacitor/myapp/Example*Test.java`）；AGENTS.md 引用不存在的 `docs/v2/REQUIREMENTS.md`
-   与 `.opencode/skill/{reload,reviewer}`（v1 遗留）；build-apk.mjs 注释仍提 `src/wizard`。
-4. **真实故障线索**（server.log）：`[llm] tool save_character 参数 JSON 解析失败（N 字符），已丢弃片段`
-   出现过 2 次；usage 里 deepseek 的 cacheRead 恒 0（疑似未读 `prompt_cache_hit_tokens`）。均待核实现状。
-5. 阅读页夜间模式只联动了正文+底栏（顶栏/目录/Aa 面板仍亮色）；切章疑似双请求+乱序竞态（待核实）。
+## 开线坑（2026-11-25 实锤）
 
-### 后台审查（结果到齐后定稿需求包清单）
-- 后端健壮性：ses_deeeae788ffdvZ0nM9Hcxe3jAu
-- 移动端体验：ses_deeeae787ffe6zKX3A2mRQX2Lp
-- 数据安全与运维：ses_deeeae784ffeDg8nIdngIcWTAQ
-
-### 开线坑（2026-11-25 实锤）
 - `worktree_create` 默认从 **main（v1）** 拉新 worktree，不是 feat/v2-rebuild！开线后必须
   `git switch -c <branch> && git reset --hard feat/v2-rebuild`（或先 reset 再开分支）。
-- 新 worktree 无 node_modules，`npm ci` 约 6s（218 包）；mobile-app/node_modules 仅 build-apk 需要。
+- 新 worktree 无 node_modules，`npm ci` 很快（2026-11-25 实测约 6s）；mobile-app/node_modules 仅 build-apk 需要。
 
-### 需求包（三份审查去重后定稿；状态 待做/开发中/待合并/已部署）
-- **A `chore/hygiene` 工程卫生+部署门禁**（**已部署** 2026-11-25，合并提交 65df5f2，APK v4.5.0）
-  - b027707 死代码 / 45d0e93 biome 纳管 mobile+scripts（BottomSheet 统一弹层）/ aee1226 删裸 LLM
-    代理 / 22016f8 死依赖+`npm test` 冒烟总入口 / 862051e 构建指纹+deploy 加固 / 926ce9d 仓库卫生
-  - 遗留给线 D：BottomSheet 尚未接返回键；离开阅读页未恢复状态栏
-- **B `fix/job-lifecycle` 后端 P1**（**已部署** 2026-11-25，合并提交 09db98f；无手机端改动故未出 APK）
-  - a4582d3 LLM 层：重试判定读 `LlmError.status`（429/5xx 此前不重试）+retry-after；流中断/挂起
-    （120s 无新数据）识别为可重试错误；取消信号贯穿；缓存命中记账；`onRestart` 回调
-  - 43b978c steps：`applyRevisePlan` 按字面量替换（多处命中全换、不受 `$&` 影响）；生成步骤支持
-    取消；删 genOutline/genScenes/genRecap/genChat 死代码
-  - 1b3ac5f 任务生命周期：启动接口**入队即返回**（此前等整轮，手机 30s 超时显示「发送失败」）；
-    `running: Map<jobId, AbortController>` 取代单变量，串行不再失守；取消/看门狗真正中止在跑的
-    请求；终态写入带 `WHERE state='running'`（取消不被 done 覆盖）；队列 FIFO；重启后 queued 续跑、
-    running 标「服务重启被打断」；恢复正文进度事件+写章全程喂狗；入书后失败的任务重试不重复入书；
-    上下文压缩切点落到 assistant；工具内异常不再炸整个任务；`scripts/smoke-jobs.mjs` 28 断言
-  - e876dbe invoke 异常留痕
-  - 未做（留给后续）：LLM 错误对用户的友好文案（现直接显示底层错误信息）
-  - 遗留给线 D：BottomSheet 尚未接返回键；离开阅读页未恢复状态栏
-- **C `feat/data-safety`**（**已部署** 2026-11-25，合并提交 b8806c7；APK v4.6.0-202611251900，release fbdbe4b）：
-  - 9186eba 范文摘要链路不再读全文（列表/绑定校验/待导入预览只读文件头；导入上限 3000 万字）
-  - 7c336c9 `save_character` 改已有人物时不再覆盖活状态（state 仅新建时可带）
-  - 95835de 开书引导：确认草案**先问后存**（下一阶段生成失败不重复入库）；重复确认幂等返回最新草案；
-    `onboard:answer` 增加 `expectStage`，阶段不符不再误确认下一阶段；手机端失败保留选项可重试
-  - f3d6e26 分叉点保护：起点章不可删（工具层先拦，不白占快照）；`lines.fork_order` 记录分叉点序号，
-    分叉点章不在时子线仍保住更早的祖先章
-  - 33971d9 settings.json 原子写（tmp→rename）；JSON 损坏时改名 `settings.json.corrupt-<时间>` 保全后用默认值
-  - e2306cf 备份体系：`src/main/backup.ts` 每日一份 gzip（近 7 天全留、更早每周 1 份共 8 桶）；删除前快照
-    （del-/card-/char-/book-/line-/fore-）只留最新 30 份，manual/pre-migrate/pre-restore 永不自动清；
-    `PRAGMA user_version`+结构升级前自动快照；通道 `backup:list/create/restore`（进程内换库：先留
-    pre-restore 快照→关连接→换文件→重开，失败自动换回）；设置页「备份与恢复」可立即备份/一键恢复
-  - 冒烟：smoke-backup 24、smoke-fork 13、smoke-onboard 26、smoke-sample 14、smoke-char-tags 9；全量 17 套
-  - 调研后**不改**的：`purgeDraftBooks`（草稿书按定义无用户发言，不加快照）；子线删不到父线章（已有校验）
-  - 操作备忘：恢复入口=手机设置页「备份与恢复」；备份文件在数据目录 `%APPDATA%/novel-maker-v2`
-- **D `feat/mobile-polish`**（**开发中**）：失败卡重试钮（`job.state==='failed'`）+计划卡闪「已处理」；
-  时间轴「加载更早」；delta 失配 job.get 请求风暴（单在途）；BottomSheet+`useBackHandler` 关弹层
-  （现零使用）；统一错误态（全项目无 isError）；整章改稿二次确认；写操作失败 toast；
-  草稿书续接入口；切子页复位滚动；输入框自适应高度+键盘贴底；点击目标≥40px；
-  离开阅读页恢复状态栏；切章 useQuery+失败重试；夜间主题残留对比度；工具卡 5 个裸英文名+死代码
-  （`RUN_LABEL/useReports/useChapter/lastDone`）
-  - 证据明细（审查时的文件与现象；**行号已被线 A 的格式化与 BottomSheet 迁移挪动，动手前按符号名重新定位**）：
-    - D1 `JobCard.tsx` 重试钮条件 `active && active.id===job.id`，而 `queries.ts` 的 active 永不含
-      failed → 失败卡永远没有重试钮；计划消息先于 job 状态到达时先显「已处理」约 5 秒
-      （修：onAppend 收到 `meta.kind==='job'` 时一并失效 `qk.jobs`）
-    - D2 `MessageRow.tsx` 的 jobsById 查不到就退化成白话气泡；`store.listJobs` 默认 limit 20、
-      消息封顶 200 且无「加载更早」→ 聊 20 句后早期「已入书」卡退化成白话
-    - D3 `App.tsx` `if (st.chatText.length !== total - chunk.length) void window.api.job.get(jobId)`
-      每个 chunk 一次请求（回前台/重连/冷启动后落库快照恒落后）→ 单在途 + 丢弃 `total<=chatTotal` 的 delta
-    - D4 `lib/backHandler.ts` 的 `useBackHandler` 全项目零使用；`App.tsx` 返回键 consumeBack →
-      closeBook → setTab('shelf') → exitApp，弹层开着会直接关书 → 在 BottomSheet 内接一次
-    - D5 全项目无 isError：电脑没开机时书架显示「还没有书」；Lines/Read「加载中…」永久；
-      Cards/Settings 范文「还没有范文」
-    - D6 `QuickActionsBar.tsx` 整章重写/加长/缩短一键覆盖无确认
-    - D7 写操作失败静默无 toast（Shelf 归档、Lines 删线、Read 选段修改、Settings）
-    - D8 `Shelf.tsx` 过滤 `!b.archived && !b.draft`，开新书中途退出 → 草稿书成孤儿无续接入口
-      （修：书架显示 draft 书 +「继续开书」）
-    - D9 `BookWorkspace.tsx` 的 `<main overflow-y-auto>` 切子页不复位滚动（修：`key={bookSub}`）
-    - D10 `InputBar.tsx` textarea rows=1 不随内容增高；`Write.tsx` ResizeObserver 未观察列表自身
-      → 键盘弹出后不贴底
-    - D11 点击目标 <40px：Shelf ⋯ 按钮、Cards 删除、Lines 切线/删线
-    - D13 `Read.tsx` theme effect 无 cleanup → 离开阅读页系统栏不恢复（修：cleanup 调 `applySystemBars('light')`）
-    - D14 `Read.tsx` `chapter.get(...).then()` 无 catch → 断网永远「正在打开…」；prev/next 手动
-      `chapter.get` 与 effect 重复且无 alive 守卫
-    - D15 深色主题残留：Settings `bg-orange-900/60 text-orange-700`、Lines `border-red-900 bg-red-950/50
-      text-red-600`、Connect；server undefined 时先显红色「未连接」
-    - D16 `pages/write/labels.ts` 的 `TOOL_LABEL` 缺 propose_chapter/request_review/request_audit/
-      list_card_kinds/rename_card_kind 中文名；死代码 `RUN_LABEL/useReports/useChapter/lastDone`、
-      ticker 的 acts/progress
-    - 自线 B 新增：LLM 错误对用户不友好（直接显示底层错误信息）；手机端 Chromium fetch 对 POST
-      复用死连接的行为未验证（server 重启后首个请求可能落空）；夜间模式只联动正文+底栏，
-      BookWorkspace 顶栏/目录视图/Aa 面板仍亮色
-- **E `docs/agents-v2`**：AGENTS.md 重写（257 行里 v1 遗留约 53%、流水账 37%）→
-  `docs/v2/HISTORY.md`+`docs/v1/LEGACY.md` 拆分
-- **候选（未排期）**：生产产物迁出 worktree（现寄生在 opencode worktree 路径）；supervisor 守护
+## 已完成需求包（均已合并进 feat/v2-rebuild 并 push）
 
-### 下一步
-线 D `feat/mobile-polish`：开线（worktree 默认基于 main，先 `git reset --hard feat/v2-rebuild`，`npm ci`）
-→ 逐项亲读 mobile/src 核实上面的 D 证据（行号已被格式化与 BottomSheet 迁移改动，按现象搜）
-→ 按价值排序实现（建议先做：失败卡重试钮+统一错误态+BottomSheet 返回键+delta 补拉请求风暴+切章容错，
-  再做草稿书续接、输入框自适应、点击目标、夜间主题残留、工具中文名）
-→ 验证：mobile tsc + biome + `npx vite build --config mobile/vite.config.ts` + check-tailwind-classes
-→ 按项提交 → push → 主 checkout `git merge --no-ff` → push → 删 worktree → `npm run apk`（纯前端改动，
-  build-apk 自动确认 server 最新）→ 更新本板（线 D 已部署，开线 E `docs/agents-v2`）
+- **A 工程卫生 + 部署门禁 `chore/hygiene`**（2026-11-25，合并 65df5f2，APK v4.5.0，release 0b6395d）：
+  清死代码与死依赖；biome 纳管 mobile+scripts（BottomSheet 统一弹层）；`npm test` 冒烟总入口；
+  构建指纹进 health + deploy 加固。提交：b027707 / 45d0e93 / aee1226 / 22016f8 / 862051e / 926ce9d。
+- **B 后端 P1 `fix/job-lifecycle`**（2026-11-25，合并 09db98f；无手机端改动，未出 APK）：LLM 重试
+  读结构化状态码（429/5xx、retry-after、流中断或挂起 120s）；启动接口入队即返回、可真正取消、
+  队列先来后到、重启续跑、终态不被覆盖；局部替换按字面量；`scripts/smoke-jobs.mjs`。
+  提交：a4582d3 / 43b978c / 1b3ac5f / e876dbe。
+- **C 数据安全 `feat/data-safety`**（2026-11-25，合并 b8806c7，APK v4.6.0-202611251900，release fbdbe4b）：
+  范文摘要不读全文；`save_character` 不覆盖活状态；开书确认先问后存；分叉点保护（起点章不可删、
+  `lines.fork_order`）；settings.json 原子写；每日备份 + 保留策略 + 手机端备份与恢复。
+  提交：9186eba / 7c336c9 / 95835de / f3d6e26 / 33971d9 / e2306cf。
+- **D 手机端打磨 `feat/mobile-polish` + 支线 `fix/mobile-input`**（2026-11-26，合并 6ffb2da + 7135079，
+  随 APK v4.7.0 发布，release 342d057）。提交索引：
+  - 第 1 组 写作时间轴：9412257 全局轻提示；e187922 失败卡可重试、计划卡不再闪「已处理」；
+    104a1da 较早的节点卡不再退化成白话气泡（新增通道 `job:listBriefs`，最近 300 个任务、不带正文）；
+    d52132c 聊天流校正不再每个增量拉一次、过期增量丢弃
+  - 第 2 组 fix(ui)：52b92f0 弹层支持返回键关闭；8b914a1 连不上电脑端时明确提示与重试
+    （`components/ErrorBox.tsx`）；cd3425d 操作失败弹出提示、不再静默
+  - 第 3 组 feat(shelf)：9311328 切子页滚动回顶；e04f732 钉选与删除失败弹提示；9ca1e93 整章改稿前先确认；
+    5d4c2a2 + 7fa4f44 断网但有旧数据时书架横幅、恢复后自动消失；e47987c 中途退出的草稿书可继续开书；
+    e5ae811 点击区域 ≥40px
+  - 第 4+6 组 阅读页与主题：dff9072 离开阅读页恢复系统栏；a0b7e53 切章单请求、失败可重试；
+    99c57a6 阅读页按钮 ≥40px；93c74f7 范文全屏阅读器返回键关闭；b32a417 深色主题残留的对比度；
+    e76dd92 探测中显示「正在连接…」；2809995 夜间模式覆盖顶栏、目录、字号面板
+  - 支线 fix/mobile-input：2f0db74 输入框随内容增高、键盘弹出贴底；6406b18 工具卡补全中文名（36 个工具）；
+    68c37ac 清理死代码；8fd4ca7 模型与服务端错误翻译成作者看得懂的提示
+- **E 项目须知重写 `docs/agents-v2`**（2026-11-25，合并 c6aaa80）：AGENTS.md 257→128 行（只写 v2 现在
+  仍成立的事实；线 Q 补缺后现为 136 行）；`docs/v2/HISTORY.md`（演进史）；`docs/v1/LEGACY.md`（v1 归档）。
+- **Q 全新克隆自检**（2026-11-26，合并 5b6091a + 93b40cb）：从零 `npm ci` → `npm run verify` 全过 →
+  按文档起服务一次成功。发现项已全部处理：
+  - 21c889b + e313b34 + fa43661（合并 5b6091a）：冒烟临时目录泄漏 + 文档缺口——冒烟统一收尾
+    （`scripts/temp-dir.mjs`），总入口每套跑前跑后比对 Temp 下 `nm-*` 目录；AGENTS.md 补 `npm run start`、
+    停止服务、出包前要装 `mobile-app` 依赖；README 修正过时说法。本机积压的 7353 个 `nm-*`
+    临时目录已清（释放约 1.6 GB）
+  - 小尾巴（合并 93b40cb）：e90feb9 兜底话术不再提已废除的走向卡；93bf982 `docs/v2/DECISIONS.md`
+    新增 §11（补记走向卡废除等交付期决策变更）；9ff2e08 README 与 AGENTS 的安装命令、模块清单对齐；
+    4f1a58e `deploy.mjs` 失败退出前留出收尾时间
+  - 另有 55789df（主分支直接提交）自由模式提示不再让作者去点已删除的按钮
+- **部署漏洞修复**（2026-11-26，7824e33，仅电脑端）：服务进程原先每次请求都重新读
+  `dist/build-info.json`，在同一目录跑过测试后旧进程会谎报新构建，`deploy --if-stale` 因此被跳过
+  → 手机端新、电脑端旧。现在以启动时加载的那一份为准（文件指纹一致才用文件），如实上报；
+  新增 `smoke-build-info.mjs`，`smoke-deploy.mjs` 按真实语义改写（冒烟 17 → 18 套）。
+
+## 待用户真机验收（自动化测不了）
+
+- 返回键关闭弹层
+- 输入框随内容增高；软键盘弹出后贴底
+- 夜间模式（顶栏 / 目录 / 字号面板）
+- 断网时书架顶部的提示横幅
+
+## 候选清单（未做，动手前先逐项重新核实证据）
+
+- `chapter_versions` 是死表（只有建表与删除、从不写入）
+- `JobKind` 含 `'rewrite'` 但没有对应 runner
+- 语义检索（`docs/v2/DECISIONS.md` G10）未做，代码里是 SQL 关键词检索
+- 两个旧命名的快照文件（如 `backup-del-char-20261106.db`）不匹配清理正则，永不被清理（无害）
+- `lib/tickerStore.ts` 的 acts / progress 是只写状态（App.tsx 的 SSE 接线仍写入，全仓无读取方）
+- 手机端 WebView 对 POST 复用死连接的行为未验证（服务重启后首个请求可能落空）
+- `docs/v2/DECISIONS.md` 两处与现行不一致：§7 导出 vs `4494bc2`、D4 vs `f011c1a`；
+  计划模式、M7 全对话化、G3–G5 的决策未补记
+- 托盘（systray）每次启动在 Temp 留约 14 个 `systray_temp_icon*` 文件（本机已 570 个）
+- 旧板遗留、未排期：生产产物迁出 worktree（现寄生在 opencode worktree 路径）；supervisor 守护
+- 旧板线索、未核实：server.log 出现过 2 次 `[llm] tool save_character 参数 JSON 解析失败…已丢弃片段`，
+  该日志行仍在 `llmOpenai.ts`，是否复现未查
+
+## 明确不做
+
+- 聊天时间轴「加载更早」（消息上限 200 条，约对应 60–100 章）
+- 调研后决定不改：`purgeDraftBooks` 不加快照（草稿书按定义无用户发言）；子线删不到父线章（已有校验，非问题）
