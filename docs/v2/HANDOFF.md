@@ -1,6 +1,42 @@
 # 任务交接板
 
-## 进行中：无
+## 进行中：移除 GLM + 为 DeepSeek 做更强的长期记忆（2026-11-27 开工）
+
+- 用户指令（原话）：「继续自己检查问题并修复。在APP中取消使用glm的能力。在该APP使用dpsk的时候幻觉和遗忘很严重。
+  参考最新的功能为APP提供更复杂高效的长期记忆能力，以维持更好的风格统一与逻辑一致。」
+- ① APK 安装故障——**已完成**（见下方「APK 自更新故障修复」）。
+- ② 移除 GLM 能力——**调查完成，未动手**。生产 `settings.json`：provider=deepseek
+  （模型 `deepseek-v4-pro`），只存了 DeepSeek 的 Key，`routing` 为空，`profiles.glm` 残留。
+  调查结论（已核实代码）：
+  - `config.ts` 的 `load()` 不走 zod，只有 `JSON.parse` 抛错才改名 `.corrupt-<时间>` → 残留 glm
+    **不会**让整份配置被判损坏；但若 `routing` 里有槽指向 glm，`defaultProfile` 会抛 TypeError、任务 failed。
+  - 落点：`src/shared/providers.ts:3,6,26-37`（预设与 `ProviderId` 枚举）、`src/main/config.ts:42`
+    （默认 provider）、`mobile/src/pages/Settings.tsx:13-17,396`（供应商按钮写死数组）、
+    `AGENTS.md:49`、`docs/v2/DECISIONS.md:23`（A7 明文含 GLM，移除属决策变更，须追加条目）。
+    冒烟全用 custom，无断言要改；`HISTORY.md`/`LEGACY.md` 是历史记录不改。
+  - 做法：枚举与预设删 glm → 默认 provider 改 deepseek → `load()` 加清洗（无效键从 `profiles`/`apiKeys`
+    剔除——顺带清掉明文残留 Key；`routing` 中指向不存在 provider 的槽删除并写日志）→
+    `Settings.tsx` 供应商按钮改两项（手机端有改动要出新 APK；旧 APK 点「智谱 GLM」只会 toast
+    「切换失败」，属可接受的一次性过渡）→ 文档同步。GLM 仍可经 custom 接入（填地址、手填模型名）。
+- ③ 长期记忆——**调查中，未动手**。目标：风格统一 + 逻辑一致；缓解 DeepSeek 的幻觉与遗忘。
+- 计划：先拿三份只读调查结论（GLM 落点 / 现行记忆机制全貌 / 业界最新做法）→ 把 ②③ 的具体设计
+  与分步计划写回本段 → 各开一条开发线（worktree + 子代理）实施 → 主 checkout 验收、合并、出包。
+- 下一步：等调查结论 → 设计 → 开线。若本文件停在这里，新会话从「设计」接着做，不要从头调查。
+
+### APK 自更新故障修复（已完成，v4.8.1）
+
+- 现象：应用内提示「新版 4.8.0 已下载」，点安装却装到 4.3.0 旧包 → `安装失败(-25) 无法降级安装`。
+- 根因：Capacitor `PluginCall.getLong(name, default)` 只在值是 `Long` 时返回，否则给默认值；
+  JS 传来的 `versionCode` 经 JSON 到原生是 `Integer` → 永远读成 0 → 旧插件落到固定文件名
+  `cacheDir/NovelMaker.apk`（4.2.0 版时下载的 4.3.0 包）→ `status` 报它「已下载」、`install` 装的也是它。
+- 修复：`0b1da5b`（原生改用 `getData().opt` 自己转数值、去掉固定文件名回退、下载写 `.part` 并核对
+  字节数与包内真实 versionCode 后才转正、安装前再核一次；JS 就绪判据改 `complete`、下载 URL 带 `?vc=`）
+  + `9615fdd`（`versionCodeOf` 改用 int 形式——当前安卓编译环境解析不到 `longVersionCode`，原因未查明）。
+  详见 AGENTS.md 踩坑 17。
+- 上线：APK **v4.8.1-202611270010**（versionCode 29928490），release 提交 `09b276a`，tag v4.8.1。
+- 遗留（用户侧）：手机上的 4.7.0 自带缺陷，服务端救不了——这一次要用浏览器打开
+  `http://100.100.62.8:3910/api/mobile/apk?vc=29928490` 装（或清除 APP 缓存后走应用内更新）；
+  装上 4.8.1 之后应用内更新才可靠。
 
 ---
 
@@ -13,15 +49,16 @@
 
 ---
 
-## 当前状态：空闲（2026-11-26）
+## 当前状态：进行中（2026-11-27）
 
 - 自主优化长跑（需求包 A–E、全新克隆自检 Q、部署漏洞修复）与「首页重设计 + 底部导航 + 范文功能重做」
-  均已合并、push、部署、出包，**没有未完成任务**——新会话不必续做任何东西，等用户新需求。
-- 生产现状：电脑端 4.8.0 / `build.commit=0eaefde` / `build.sourceHash=4db9ee339e606552`
-  （PID 不固定，需要时查 health）；手机端更新源 APK **v4.8.0-202611262112**
-  （用户需在「设置 → APP 更新」或 `http://100.100.62.8:3910/api/mobile/apk` 升级）。
-- 下一步：空闲。要做「候选清单」里的项，先逐项重新核实证据（均未排期、未复现）。
-- 唯一未闭环的是「待用户真机验收」几项，在用户侧。
+  均已合并、push、部署、出包；APK 自更新故障已修（v4.8.1）。
+- **未完成**：用户指令 ②移除 GLM 能力、③为 DeepSeek 做更强的长期记忆——见顶部「进行中」段，
+  新会话先续做它，不接新需求。
+- 生产现状：电脑端 4.8.0 / `build.sourceHash=4db9ee339e606552`（PID 不固定，需要时查 health）；
+  手机端更新源 APK **v4.8.1-202611270010**（versionCode 29928490；用户这一次需用浏览器打开
+  `http://100.100.62.8:3910/api/mobile/apk?vc=29928490` 安装，之后应用内更新才可靠）。
+- 「候选清单」里的项均未排期，要做先逐项重新核实证据。
 
 ## 授权与规则
 
