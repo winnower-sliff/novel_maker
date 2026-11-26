@@ -22,13 +22,47 @@
     剔除——顺带清掉明文残留 Key；`routing` 中指向不存在 provider 的槽删除并写日志）→
     `Settings.tsx` 供应商按钮改两项（手机端有改动要出新 APK；旧 APK 点「智谱 GLM」只会 toast
     「切换失败」，属可接受的一次性过渡）→ 文档同步。GLM 仍可经 custom 接入（填地址、手填模型名）。
-- ③ 长期记忆——**调查中，未动手**。目标：风格统一 + 逻辑一致；缓解 DeepSeek 的幻觉与遗忘。
-- 计划：先拿三份只读调查结论（GLM 落点 / 现行记忆机制全貌 / 业界最新做法）→ 把 ②③ 的具体设计
-  与分步计划写回本段 → 各开一条开发线（worktree + 子代理）实施 → 主 checkout 验收、合并、出包。
+- ③ 长期记忆——**调查完成，方案已定，未开工**（在 ② 合并出包后开线）。目标：风格统一 + 逻辑一致；
+  缓解 DeepSeek 的幻觉与遗忘。
+- ③ 调查结论（已核实代码）：
+  - 滚动记忆有缺陷：`compactMemories`（`src/main/director/steps.ts:177-199`）章数 ≤12 不压，之后每入书一章
+    多一个单章块，且提示词要「400-800 字」把纪要扩写；读取时整段 `clip(…,6000)` 保头去尾
+    （`director/context.ts:92-96`）→ 20 余章后最新内容先被截掉。
+  - 导演与写手是两个上下文：写手 `draftPrompt`（`steps.ts:40-66`）拿不到人物人设 `characters.data`、
+    非钉选卡、`books.styleSample`；导演 `agentSystem`（`agent/loop.ts:344-374`）没有 `styleBlock` 与记忆，
+    靠 `get_write_context` 拉；写章任务 `history: []`（`jobs.ts:342`）；提示里仍有「作者选定的走向」
+    （走向卡已废除的过时措辞）。
+  - 聊天（free）模式失忆：只取末 12 条 chat 消息（`jobs.ts:586-589`），系统提示不带记忆、不要求先查再答；
+    作者偏好不强制落库；终局方向（skeleton）只回显未落库（`director/onboard.ts:247-256`）。
+  - 沉淀与检索：`save_card` 丢 data/tags（`agent/tools.ts:817-826`）；`save_foreshadow` 不收
+    plantedChapterId（`tools.ts:914-937`）；改稿不刷新 `chapters.summary`；删末章不回滚状态/伏笔/记忆
+    （`store.ts:532-575`）；`search_project`（`tools.ts:679-718`）与 `searchSampleSections`
+    （`store.ts:1184-1199`）都是子串首命中、无排序。
+  - `callJson` 解析失败重试时把整段 user 换成「上次输出开头 200 字」（`director/callJson.ts:183-198`）→
+    重试会凭空编。
+  - 思考模式：assistant 历史不带 `reasoning_content`（`llmOpenai.ts:54-76`、`loop.ts:543-551`）。已用生产 Key
+    实测：工具调用 id 为模型真实签发时续轮 200，只有伪造 id 才 400 → 线上不触发（生产 19 条 chat 全
+    done），按文档加固即可。
+- ③ 设计（三阶段，串行开线；每阶段一个 general 子代理；队列式冒烟桩同步改）：
+  - 阶段一「堵漏」（分支 `feat/memory-stage1`）：①合并式前情梗概（固定结构：主线脉络/伏笔状态/人物关系/
+    时间地点，上限约 1500 字；`memories` 加 `kind` legacy/running，`SCHEMA_VERSION` +1，旧块保留作首次
+    合并输入、不再注入；`forkLine` 的 COPY_COLUMNS 同步）②导演与写手共用上下文构建（写手提示补出场
+    人物的 data+state、相关设定卡、计划；导演系统提示加 `styleBlock` 与记忆简报；`books.styleSample`
+    作 few-shot 放提示末尾；改掉「作者选定的走向」）③聊天模式带记忆简报 +「先查再答」；作者长期偏好
+    存成钉选卡；终局方向落库 ④callJson 重试保留原消息（追加纠错说明，不替换）⑤改稿后刷新该章纪要
+    ⑥沉淀带证据：save_card / save_foreshadow 必须附本章原句与章节号，服务端校验原句确在正文里
+    ⑦思考模式回传 `reasoning_content`（记 AGENTS 踩坑 18）⑧新增/改名工具同步
+    `mobile/src/pages/write/labels.ts`。
+  - 阶段二「全书档案」：事件时间线表（章号、人物、地点）；人物「知道/不知道」知识边界；`search_project`
+    升级 FTS5（`Intl.Segmenter` 分词 + BM25 + LIKE 兜底），命中带章号；写手动笔前自动检索「相关前情」。
+  - 阶段三「巩固与风格」：每 8 章的后台审计升级为巩固任务（对照原文复核设定与状态、刷新梗概、提炼
+    设定卡；不一致只作为建议报给作者，作者保留最终决定权）；风格一致性检查进审读。
+  - 硬约束：已有数据不删（只增量迁移）；作者保留最终决定权；向量/图谱暂缓。决策记录见
+    `docs/v2/DECISIONS.md` §14。
 - 下一步：② 验收子代理的 `fix/remove-glm`（看提交、`npm test` 结果、与 origin 同步）→ 主 checkout
-  合并出包；③ 等两份只读调查（现行记忆机制全貌 `ses_de763d6c1ffetfFKcMpNgXyP1h`、业界最新做法
-  `ses_de763d6c0ffePNneHjjB3r9VmC`）→ 设计写回本段 → 开线。若本文件停在这里，新会话从这里接着做，
-  ② 不要重做，③ 不要从头调查（先看主会话是否已有结论）。
+  合并出包 → 开线做 ③ 阶段一（`worktree_create` → `git switch -c feat/memory-stage1 && git reset --hard
+  feat/v2-rebuild` + `npm ci` → 子代理）。若本文件停在这里，新会话从这里接着做，② 不要重做，
+  ③ 不要从头调查。
 
 ### APK 自更新故障修复（已完成，v4.8.1）
 
