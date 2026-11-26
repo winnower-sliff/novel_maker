@@ -17,6 +17,7 @@ import type {
   JobState,
   JobStep,
   MemoryBlock,
+  MemoryKind,
   SampleInfo,
   StoryLine
 } from '../shared/types.js'
@@ -137,6 +138,8 @@ function rowToMemory(r: Record<string, unknown>): MemoryBlock {
     fromOrder: r.from_order as number,
     toOrder: r.to_order as number,
     content: r.content as string,
+    kind: r.kind === 'running' ? 'running' : 'legacy',
+    lastChapterId: (r.last_chapter_id as string) ?? '',
     createdAt: r.created_at as number
   }
 }
@@ -368,12 +371,13 @@ export function forkLine(
       }
     }
 
-    // 远端压缩记忆复制（只带 fork 点之前的块；部分覆盖的块整块带过——压缩摘要多带无害）
+    // 旧的逐章压缩块：只带 fork 点之前的块（部分覆盖的块整块带过——压缩摘要多带无害）
     const memRows = db
-      .prepare('SELECT * FROM memories WHERE line_id = ? AND to_order <= ?')
+      .prepare("SELECT * FROM memories WHERE line_id = ? AND kind = 'legacy' AND to_order <= ?")
       .all(parentLine.id, forkChapter.orderNo) as Record<string, SQLInputValue | undefined>[]
     const memIns = db.prepare(
-      `INSERT INTO memories (id, line_id, from_order, to_order, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`
+      `INSERT INTO memories (id, line_id, from_order, to_order, content, created_at, kind, last_chapter_id)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
     )
     for (const r of memRows) {
       memIns.run(
@@ -382,8 +386,31 @@ export function forkLine(
         r.from_order ?? 0,
         r.to_order ?? 0,
         r.content ?? '',
-        r.created_at ?? now
+        r.created_at ?? now,
+        'legacy',
+        ''
       )
+    }
+
+    // 前情梗概：覆盖范围没越过分叉点的整行带过去，此后各线独立演化；
+    // 越过了（含分叉点之后的剧情）不带，留给后台按本线的有效章重建。位置按新线的有效章序列算
+    const running = getRunningMemory(parentLine.id)
+    if (running) {
+      const list = effectiveChapters(lineId)
+      const anchorAt = list.findIndex((c) => c.id === running.lastChapterId)
+      const forkAt = list.findIndex((c) => c.id === forkChapterId)
+      if (anchorAt >= 0 && anchorAt <= forkAt) {
+        memIns.run(
+          randomUUID(),
+          lineId,
+          1,
+          anchorAt + 1,
+          running.content,
+          running.createdAt,
+          'running',
+          running.lastChapterId
+        )
+      }
     }
 
     db.prepare('UPDATE books SET active_line_id = ?, updated_at = ? WHERE id = ?').run(
@@ -571,6 +598,10 @@ export function deleteLastChapter(lineId: string): Chapter | null {
   }
   db.prepare('DELETE FROM chapter_versions WHERE chapter_id = ?').run(last.id)
   db.prepare('DELETE FROM chapters WHERE id = ?').run(last.id)
+  // 前情梗概盖到了被删的章：不做「反合并」，直接删掉，之后由后台按现有章节重建
+  const running = getRunningMemory(lineId)
+  if (running && !effectiveChapters(lineId).some((c) => c.id === running.lastChapterId))
+    deleteRunningMemory(lineId)
   return last
 }
 
@@ -879,27 +910,50 @@ export function deleteForeshadow(id: string): boolean {
   return r.changes > 0
 }
 
-// ── memories（滚动分层远端压缩层） ───────────────────────────────────────────
+// ── memories（前情梗概 running + 旧的逐章压缩块 legacy） ─────────────────────
 
-export function listMemories(lineId: string): MemoryBlock[] {
-  return (
-    getDb()
-      .prepare('SELECT * FROM memories WHERE line_id = ? ORDER BY from_order')
-      .all(lineId) as Record<string, unknown>[]
-  ).map(rowToMemory)
+export function listMemories(lineId: string, kind?: MemoryKind): MemoryBlock[] {
+  const db = getDb()
+  const rows = kind
+    ? (db
+        .prepare('SELECT * FROM memories WHERE line_id = ? AND kind = ? ORDER BY from_order')
+        .all(lineId, kind) as Record<string, unknown>[])
+    : (db
+        .prepare('SELECT * FROM memories WHERE line_id = ? ORDER BY from_order')
+        .all(lineId) as Record<string, unknown>[])
+  return rows.map(rowToMemory)
 }
 
-export function saveMemory(input: {
+/** 本线的前情梗概（每线至多一行 running；没有返回 null，调用方回退到旧的压缩块） */
+export function getRunningMemory(lineId: string): MemoryBlock | null {
+  const r = getDb()
+    .prepare("SELECT * FROM memories WHERE line_id = ? AND kind = 'running'")
+    .get(lineId) as Record<string, unknown> | undefined
+  return r ? rowToMemory(r) : null
+}
+
+/** 写入或原地更新本线的前情梗概（同一条线复用同一行，不追加） */
+export function upsertRunningMemory(input: {
   lineId: string
-  fromOrder: number
-  toOrder: number
   content: string
+  toOrder: number
+  lastChapterId: string
 }): void {
-  getDb()
+  const db = getDb()
+  const updated = db
     .prepare(
-      `INSERT INTO memories (id, line_id, from_order, to_order, content, created_at) VALUES (?, ?, ?, ?, ?, ?)`
+      "UPDATE memories SET content = ?, to_order = ?, last_chapter_id = ? WHERE line_id = ? AND kind = 'running'"
     )
-    .run(randomUUID(), input.lineId, input.fromOrder, input.toOrder, input.content, Date.now())
+    .run(input.content, input.toOrder, input.lastChapterId, input.lineId)
+  if (Number(updated.changes) > 0) return
+  db.prepare(
+    `INSERT INTO memories (id, line_id, from_order, to_order, content, created_at, kind, last_chapter_id)
+     VALUES (?, ?, 1, ?, ?, ?, 'running', ?)`
+  ).run(randomUUID(), input.lineId, input.toOrder, input.content, Date.now(), input.lastChapterId)
+}
+
+export function deleteRunningMemory(lineId: string): void {
+  getDb().prepare("DELETE FROM memories WHERE line_id = ? AND kind = 'running'").run(lineId)
 }
 
 // ── messages（对话历史，M5 按章回看） ─────────────────────────────────────────

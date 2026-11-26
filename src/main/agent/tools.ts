@@ -9,6 +9,7 @@ import type {
 } from '../../shared/types.js'
 import { snapshotDb } from '../db.js'
 import { buildWriteContext } from '../director/context.js'
+import { scheduleStoryRecap } from '../director/storyRecap.js'
 import { chapterNoOfLabel } from '../sampleParse.js'
 import * as store from '../store.js'
 
@@ -669,12 +670,10 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
     }
     case 'get_write_context': {
       const { book, lineId } = ctxLine(ctx)
-      // 动态 import 避免与 jobs.ts 循环依赖
-      return {
-        ok: true,
-        summary: '取写作上下文',
-        data: writeContextOf(book, lineId)
-      }
+      const data = writeContextOf(book, lineId)
+      // 本线还没有前情梗概（或落后于章）：后台补建/补跑一次，不动这次返回的内容
+      scheduleStoryRecap(lineId)
+      return { ok: true, summary: '取写作上下文', data }
     }
     case 'search_project': {
       const { lineId } = ctxLine(ctx)
@@ -1058,6 +1057,8 @@ export function execTool(name: string, input: Record<string, unknown>, ctx: Tool
       snapshotDb(`del-chapter`)
       const removed = store.deleteLastChapter(lineId)
       if (!removed) return { ok: false, summary: '删除失败', data: '删除失败' }
+      // 前情梗概若盖到了被删的章已被一并删掉：立刻在后台按现有章重建，不等下一次取上下文
+      scheduleStoryRecap(lineId)
       return {
         ok: true,
         summary: `撤回《${removed.title}》`,

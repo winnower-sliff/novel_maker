@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 import { removeTempDir, stopChild } from './temp-dir.mjs'
 
 const PORT = 3969
@@ -112,6 +113,29 @@ try {
   ok((ch?.title ?? '') === '雾夜登船', `章标题（${ch?.title}）`)
   ok(!(ch?.content ?? '').includes('忽然'), '负向词「忽然」已被自动修掉')
   ok((ch?.content ?? '').length > 300, `正文字数（${ch?.content ?? ''.length}）`)
+
+  // 前情梗概：入书后后台合并出本线唯一一行 running 梗概（合并是 fire-and-forget，直读临时库等它落库）
+  {
+    const db = new DatabaseSync(join(dataDir, 'novel.db'))
+    const runningSql = "SELECT * FROM memories WHERE line_id = ? AND kind = 'running'"
+    let row = null
+    for (let i = 0; i < 40 && !row; i++) {
+      row = db.prepare(runningSql).get(book.activeLineId) ?? null
+      if (!row) await sleep(250)
+    }
+    const count = db
+      .prepare(`SELECT COUNT(*) AS n FROM memories WHERE line_id = ? AND kind = 'running'`)
+      .get(book.activeLineId).n
+    db.close()
+    ok(
+      !!row &&
+        row.to_order === 1 &&
+        row.last_chapter_id === detail.chapters[0].id &&
+        String(row.content).includes('林岸雾夜藏身'),
+      '入书后生成一行前情梗概（覆盖到第 1 章）'
+    )
+    ok(count === 1, `running 梗概只有一行（${count}）`)
+  }
 
   // 工具卡消息序列
   let msgs = await invoke('message:list', book.id)

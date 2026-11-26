@@ -363,13 +363,19 @@ export interface Foreshadow {
   updatedAt: number
 }
 
-/** 滚动分层记忆的远端压缩层（D2）：最近章细记在 chapters.summary */
+/** running=前情梗概（每线一行，新章入书后合并更新）；legacy=旧的逐章压缩块（只读保留，首次合并时当参考材料） */
+export type MemoryKind = 'legacy' | 'running'
+
 export interface MemoryBlock {
   id: string
   lineId: string
   fromOrder: number
+  /** running：梗概覆盖到第几章（本线有效章序列里的位置）；legacy：旧压缩块的章区间终点 */
   toOrder: number
   content: string
+  kind: MemoryKind
+  /** running：覆盖到的最后一章 id（按 id 定位，分叉线里章序号会从 1 重排） */
+  lastChapterId: string
   createdAt: number
 }
 

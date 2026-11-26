@@ -8,7 +8,6 @@ import type {
   Scene
 } from '../../shared/types.js'
 import { lintChapter } from '../lint.js'
-import { listMemories, saveMemory } from '../store.js'
 import { callJson, callRaw } from './callJson.js'
 import { buildWriteContext } from './context.js'
 import { bookBasics, directorPersona, redlineBlock, styleBlock, wordListBlock } from './prompts.js'
@@ -171,31 +170,6 @@ ${draft}`,
   )
   if (!text) throw new Error('自动修正返回空正文')
   return text
-}
-
-/** 滚动记忆压缩（D2：细记层超阈值时把最老一段压进 memories，后台执行） */
-export async function compactMemories(
-  _book: Book,
-  lineId: string,
-  chapters: Array<{ orderNo: number; title: string; summary: string }>
-): Promise<void> {
-  if (chapters.length <= 12) return
-  const mems = listMemories(lineId)
-  const compactedTo = mems.length ? Math.max(...mems.map((m) => m.toOrder)) : 0
-  const from = compactedTo + 1
-  const to = chapters.length - 8
-  if (to <= from) return
-  const slice = chapters.filter((c) => c.orderNo >= from && c.orderNo <= to)
-  if (!slice.length) return
-  const res = await callJson<{ summary: string }>({
-    slot: 'utility',
-    system:
-      '你是小说前情压缩器，把分章摘要压成连贯的前情梗概，保留：主线推进、伏笔状态、人物关系变化、时间地点跳转。不保留细节描写。',
-    user: `第${from}-${to}章的分章摘要：\n${slice.map((c) => `第${c.orderNo}章《${c.title}》：${c.summary}`).join('\n')}\n\n产出压缩前情摘要（400-800字）。`,
-    jsonHint: `{"summary":"..."}`,
-    maxTokens: 2000
-  })
-  if (res.summary) saveMemory({ lineId, fromOrder: from, toOrder: to, content: res.summary })
 }
 
 // ── revise：改章（局部编辑为主，整章重写为兜底；用户决策：不留旧版） ──────────

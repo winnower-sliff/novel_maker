@@ -3,6 +3,7 @@ import {
   activeLine,
   effectiveChapters,
   getBook,
+  getRunningMemory,
   listCards,
   listCharacters,
   listForeshadows,
@@ -10,7 +11,7 @@ import {
 } from '../store.js'
 
 /**
- * 上下文装配（G7）：钉选卡 → 本轮任务 → 伏笔/人物状态 → 最近章细记 → 远端压缩摘要。
+ * 上下文装配（G7）：钉选卡 → 本轮任务 → 伏笔/人物状态 → 最近章细记 → 前情梗概。
  * 预算（字符）：引用≤35%、历史≤25%、检索≤15%，超限从低优先级截断。
  * M2 检索层=伏笔台账+人物活状态；语义嵌入 M5 接入后并入此层。
  */
@@ -21,6 +22,8 @@ const BUDGET_HISTORY = Math.floor(BUDGET_TOTAL * 0.25)
 const BUDGET_LOOKUP = Math.floor(BUDGET_TOTAL * 0.15)
 
 const RECENT_DETAIL_COUNT = 5
+/** 前情梗概入库时已卡在 2200 字内；这里只是防脏数据的兜底上限 */
+const RECAP_MAX = 3000
 
 function clip(text: string, max: number): string {
   return text.length <= max ? text : `${text.slice(0, max)}…（截断）`
@@ -88,11 +91,17 @@ export function buildWriteContext(_book: Book, lineId: string): string {
     }
   }
 
-  // 4. 远端压缩前情（滚动分层——压缩层）
-  const mems = listMemories(lineId)
-  if (mems.length) {
-    const lines = mems.map((m) => `第${m.fromOrder}-${m.toOrder}章：${clip(m.content, 800)}`)
-    sections.push(`## 更早前情（压缩摘要）\n${clip(lines.join('\n'), BUDGET_HISTORY)}`)
+  // 4. 前情梗概（合并式：每线一行，新章入书后更新，整段注入不截尾）；
+  //    还没有时回退到旧的逐章压缩块（legacy，不再新增）
+  const running = getRunningMemory(lineId)
+  if (running) {
+    sections.push(`## 前情梗概（第 1-${running.toOrder} 章）\n${clip(running.content, RECAP_MAX)}`)
+  } else {
+    const mems = listMemories(lineId, 'legacy')
+    if (mems.length) {
+      const lines = mems.map((m) => `第${m.fromOrder}-${m.toOrder}章：${clip(m.content, 800)}`)
+      sections.push(`## 更早前情（压缩摘要）\n${clip(lines.join('\n'), BUDGET_HISTORY)}`)
+    }
   }
 
   return sections.join('\n\n')

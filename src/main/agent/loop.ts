@@ -89,7 +89,7 @@ export interface LoopOpts {
   onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
   /** 落一条 assistant 消息（agent 白话/工具卡） */
   say: (content: string, meta?: Record<string, unknown>) => void
-  /** 落章后回调（note chapter 消息/recap 进 payload/记忆压缩/审计排队——jobs.ts 注入） */
+  /** 落章后回调（note chapter 消息/recap 进 payload/前情梗概合并/审计排队——jobs.ts 注入） */
   onChapterCommitted?: (
     chapter: { id: string; title: string; wordCount: number; orderNo: number; content: string },
     extra: { summary: string; quickActions: Array<{ label: string; instruction: string }> }
@@ -231,7 +231,7 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
         input_schema: {
           type: 'object',
           properties: {
-            summary: { type: 'string', description: '本章纪要（100-200字，进滚动记忆）' }
+            summary: { type: 'string', description: '本章纪要（100-200字，并进前情梗概）' }
           },
           quickActions: {
             type: 'array',

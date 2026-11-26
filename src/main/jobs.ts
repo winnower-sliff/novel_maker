@@ -11,7 +11,6 @@ import {
 import { isQuotaError } from './director/callJson.js'
 import {
   applyRevisePlan,
-  compactMemories,
   genAudit,
   genChapterPlan,
   genDiagnose,
@@ -19,6 +18,7 @@ import {
   genRevisePlan,
   selfCheck
 } from './director/steps.js'
+import { scheduleStoryRecap } from './director/storyRecap.js'
 import { stripHtmlComments } from './lint.js'
 import {
   activeLine,
@@ -365,7 +365,8 @@ async function runAgentChapterJob(
       })
       const b2 = getBook(job.bookId)
       if (b2) {
-        void compactMemories(b2, job.lineId, effectiveChapters(job.lineId)).catch(() => {})
+        // 前情梗概后台合并（fire-and-forget：失败只记日志，绝不让写章任务受影响）
+        scheduleStoryRecap(job.lineId)
         const n = effectiveChapters(job.lineId).length
         if (n > 0 && n % 8 === 0) maybeQueueAudit(job.bookId, job.lineId)
       }
