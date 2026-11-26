@@ -8,6 +8,7 @@ import { checkUpdate, getDownloadStatus, installUpdate, startDownload } from '..
 import { useConnStore } from '../lib/conn'
 import { useBackups, useBooks } from '../lib/queries'
 import { errorText, toastError } from '../lib/toastStore'
+import { useUiStore } from '../lib/uiStore'
 
 const PROVIDER_LABEL: Record<ProviderId, string> = {
   glm: '智谱 GLM',
@@ -28,6 +29,39 @@ export default function Settings() {
   const conn = useConnStore((s) => s.conn)
   const setConn = useConnStore((s) => s.setConn)
   const queryClient = useQueryClient()
+  const clearSettingsAnchor = useUiStore((s) => s.clearSettingsAnchor)
+  // 是否从写书页的「已归档」入口行进来：挂载时读一次、定成本次挂载的局部状态。
+  // 不把 store 里的锚点放进下面 effect 的依赖——StrictMode 下 effect 会「挂载→清理→再挂载」跑两遍，
+  // 依赖一变就提前收尾，第二次布局撑高后就没法重新对齐了
+  const [pinArchived] = useState(() => useUiStore.getState().settingsAnchor === 'archived')
+
+  // 锚点只管这一次进设置页：消费掉，之后从底部导航再进来不会被带着滚
+  useEffect(() => {
+    clearSettingsAnchor()
+  }, [clearSettingsAnchor])
+
+  // 从「已归档」入口行进来：直接滚到归档分区，省得在一长串设置里找。
+  // 首帧下方内容不够高时滚不到顶，且上面的分区（模型表单等）数据回来后会撑高、把目标顶下去，
+  // 所以内容尺寸一变就重新对齐，直到用户自己滚动或布局稳定（2.5 秒内没再变）为止
+  useEffect(() => {
+    if (!pinArchived) return
+    const target = document.getElementById('settings-archived')
+    if (!target) return
+    let timer = 0
+    const ro = new ResizeObserver(() => target.scrollIntoView({ block: 'start' }))
+    for (const el of target.parentElement?.children ?? []) ro.observe(el)
+    target.scrollIntoView({ block: 'start' })
+    const stop = () => {
+      clearTimeout(timer)
+      ro.disconnect()
+      window.removeEventListener('touchmove', stop)
+      window.removeEventListener('wheel', stop)
+    }
+    timer = window.setTimeout(stop, 2500)
+    window.addEventListener('touchmove', stop, { passive: true })
+    window.addEventListener('wheel', stop, { passive: true })
+    return stop
+  }, [pinArchived])
 
   const { data: server, isError: serverFailed } = useQuery({
     queryKey: ['serverStatus'],
@@ -159,7 +193,7 @@ function ArchivedBooks() {
     }
   }
   return (
-    <Section title={`已归档的书（${archived.length}）`}>
+    <Section id="settings-archived" title={`已归档的书（${archived.length}）`}>
       <div className="space-y-2">
         {archived.map((b) => (
           <div key={b.id} className="rounded-xl bg-orange-50 p-2.5">
@@ -169,7 +203,7 @@ function ArchivedBooks() {
                 <div className="mt-0.5 text-[11px] text-stone-400">
                   {confirmDel === b.id
                     ? '删除后无法找回（会自动留一份当日快照）'
-                    : '归档于书架，内容保留'}
+                    : '已归档，内容保留'}
                 </div>
               </div>
               {confirmDel === b.id ? (
@@ -217,9 +251,17 @@ function ArchivedBooks() {
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({
+  id,
+  title,
+  children
+}: {
+  id?: string
+  title: string
+  children: React.ReactNode
+}) {
   return (
-    <div className="mb-5 rounded-2xl border border-orange-100 bg-white p-4">
+    <div id={id} className="mb-5 scroll-mt-3 rounded-2xl border border-orange-100 bg-white p-4">
       <div className="mb-3 text-xs font-semibold text-stone-500">{title}</div>
       {children}
     </div>
