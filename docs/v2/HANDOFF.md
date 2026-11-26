@@ -22,7 +22,9 @@
     剔除——顺带清掉明文残留 Key；`routing` 中指向不存在 provider 的槽删除并写日志）→
     `Settings.tsx` 供应商按钮改两项（手机端有改动要出新 APK；旧 APK 点「智谱 GLM」只会 toast
     「切换失败」，属可接受的一次性过渡）→ 文档同步。GLM 仍可经 custom 接入（填地址、手填模型名）。
-- ③ 长期记忆——**调查完成，方案已定，未开工**（在 ② 合并出包后开线）。目标：风格统一 + 逻辑一致；
+- ③ 长期记忆——**调查完成，方案已定；阶段一「堵漏」开发线实施中**（分支 `feat/memory-stage1`，worktree
+  `C:\Users\14270\.local\share\opencode\worktree\754ca1\memory1`，基于 d6e9014；与 ② 并行，文件不重叠）。
+  目标：风格统一 + 逻辑一致；
   缓解 DeepSeek 的幻觉与遗忘。
 - ③ 调查结论（已核实代码）：
   - 滚动记忆有缺陷：`compactMemories`（`src/main/director/steps.ts:177-199`）章数 ≤12 不压，之后每入书一章
@@ -59,10 +61,11 @@
     设定卡；不一致只作为建议报给作者，作者保留最终决定权）；风格一致性检查进审读。
   - 硬约束：已有数据不删（只增量迁移）；作者保留最终决定权；向量/图谱暂缓。决策记录见
     `docs/v2/DECISIONS.md` §14。
-- 下一步：② 验收子代理的 `fix/remove-glm`（看提交、`npm test` 结果、与 origin 同步）→ 主 checkout
-  合并出包 → 开线做 ③ 阶段一（`worktree_create` → `git switch -c feat/memory-stage1 && git reset --hard
-  feat/v2-rebuild` + `npm ci` → 子代理）。若本文件停在这里，新会话从这里接着做，② 不要重做，
-  ③ 不要从头调查。
+- 下一步：两条线各自验收（看提交、`npm test` 结果、与 origin 同步；先完成的先等，不必单独出包）→
+  主 checkout 依次 `git merge --no-ff fix/remove-glm` → `git merge --no-ff feat/memory-stage1`（都动
+  `AGENTS.md`，可能要手工解）→ `npm run verify`（预期 21 套：19 + smoke-config + smoke-memory）→ 一次
+  出包。若本文件停在这里，新会话从这里接着做：② 与 ③ 阶段一都不要重做，③ 不要从头调查；子代理若因
+  额度中断，先核对应 worktree 的磁盘现状（`git status -sb` / `git log --oneline`）再续做。
 
 ### APK 自更新故障修复（已完成，v4.8.1）
 
