@@ -1,5 +1,5 @@
 // 分叉点保护冒烟（直调 store/execTool，无需模型）：
-// 分叉点章不可删 / 分叉点丢失时子线不丢祖先章 / 普通末章照常可删
+// 分叉点章不可删 / 分叉点丢失时子线不丢祖先章 / 普通末章照常可删 / 嵌套分叉的有效章按位置截
 import { mkdtempSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -81,6 +81,59 @@ try {
   const removed = execTool('delete_last_chapter', {}, { bookId: book2.id })
   ok('普通末章可删', removed.ok === true && String(removed.summary).includes('撤回《二》'))
   ok('删后剩 1 章', store.listChapters(book2.activeLineId).length === 1)
+
+  // ── 嵌套分叉：有效章按分叉点在它所在线里的位置截 ──
+  // 回归：各线章序号从 1 重排，曾拿子线的序号去过滤祖先章，祖先线中间的章被整段丢掉
+  const book3 = store.createBook({ title: '嵌套分叉书' })
+  const main3 = book3.activeLineId
+  const a = []
+  for (let i = 1; i <= 10; i++) a.push(addChapter(main3, a.at(-1)?.id ?? '', `A${i}`))
+  const lineB = store.forkLine(book3.id, a[5].id, '乙线', '').id
+  const b1 = addChapter(lineB, a[5].id, 'B1')
+  const b2 = addChapter(lineB, b1.id, 'B2')
+  const lineC = store.forkLine(book3.id, b2.id, '丙线', '').id
+  const c1 = addChapter(lineC, b2.id, 'C1')
+  const idSeq = (lineId) => store.effectiveChapters(lineId).map((c) => c.id)
+  const seq = (...chs) => chs.map((c) => c.id)
+  ok(
+    '嵌套① 乙线（分叉于 A6 后）= A1–A6 + B1、B2',
+    idSeq(lineB).join() === seq(...a.slice(0, 6), b1, b2).join()
+  )
+  ok(
+    '嵌套① 丙线（分叉于乙线 B2 后）= A1–A6 + B1、B2 + C1',
+    idSeq(lineC).join() === seq(...a.slice(0, 6), b1, b2, c1).join()
+  )
+  const lineD = store.forkLine(book3.id, a[3].id, '丁线', '').id
+  const d1 = addChapter(lineD, a[3].id, 'D1')
+  ok(
+    '嵌套② 分叉点是继承来的 A4 = A1–A4 + 自己的章',
+    idSeq(lineD).join() === seq(...a.slice(0, 4), d1).join()
+  )
+  const lineF = store.forkLine(book3.id, a[1].id, '戊线', '').id
+  ok('嵌套② 隔两代的祖先章 A2 = A1、A2', idSeq(lineF).join() === seq(...a.slice(0, 2)).join())
+
+  // ③ 分叉点章不在了的兜底（删章接口会拦，只能直接删行模拟历史遗留）：
+  // 按建线时记的序号切，且只切直接父线自己的章；继承来的祖先章全部保留
+  const lineE = store.forkLine(book3.id, b1.id, '己线', '').id
+  const e1 = addChapter(lineE, b1.id, 'E1')
+  const dropChapter = (ch) => {
+    getDb().prepare('DELETE FROM chapter_versions WHERE chapter_id = ?').run(ch.id)
+    getDb().prepare('DELETE FROM chapters WHERE id = ?').run(ch.id)
+  }
+  dropChapter(b1)
+  ok(
+    '嵌套③ 己线的分叉点章 B1 丢了：保住继承的 A1–A6 + 自己的章',
+    idSeq(lineE).join() === seq(...a.slice(0, 6), e1).join()
+  )
+  dropChapter(a[5])
+  ok(
+    '嵌套③ 乙线的分叉点章 A6 丢了：A1–A5（分叉点之后的 A7–A10 不算）+ B2',
+    idSeq(lineB).join() === seq(...a.slice(0, 5), b2).join()
+  )
+  ok(
+    '嵌套③ 再往下的丙线跟着对：A1–A5 + B2 + C1',
+    idSeq(lineC).join() === seq(...a.slice(0, 5), b2, c1).join()
+  )
 } catch (e) {
   ok(`异常：${e.message}`, false)
 } finally {

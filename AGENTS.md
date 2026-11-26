@@ -54,7 +54,8 @@
 - **数据层**（`db.ts` + `store.ts`）：内置 `node:sqlite`，**一律不用原生模块**。表：books / lines / chapters / chapter_versions / cards / characters / foreshadows / memories / messages / jobs / samples / sample_sections。
   `SCHEMA_VERSION`（`PRAGMA user_version`，现为 2）——改表结构或 migrate 时 +1，老库升级前自动留快照。
 - **分叉树**：每本书一条激活线，可从任意章之后开新线；不分卷、不合并、无状态机、无真删除（一切重来 = 分叉）。
-  - `effectiveChapters(lineId)` = 祖先线 fork 点前的章节 + 本线章节按序拼接，是分叉树的核心读操作。`lines.fork_order` 记录分叉点序号，分叉点章不在时子线仍保住更早的祖先章；起点章不可删。
+  - `effectiveChapters(lineId)` = 分叉点章所在线的有效章里到它为止（含）的前缀 + 本线章节按序拼接，是分叉树的核心读操作——**按位置截取**，分叉点章可以是直接父线的章，也可以是更早祖先线继承下来的章。
+    分叉点章不在时（历史遗留）才用 `lines.fork_order` 兜底：只拿它比较直接父线自己的章，继承来的祖先章全部保留；起点章不可删。
   - **「第 N 章」= 本线有效章序列里的位置**：本线自己的章序号（`order_no`）从 1 重排，跨线不可比——要定位一章用章节 id。
   - `forkLine` 在事务里深拷贝 cards / characters / foreshadows，设定各线独立演化；前情梗概在覆盖范围没越过分叉点时一并带过去，各线此后独立演化。
   - 删除（删书 / 线 / 卡 / 人物 / 伏笔）前自动 `snapshotDb` 留快照；归档 = `book:update {archived:true}`（内容全保留），彻底删除走 `book:delete`（带确认参数）。
