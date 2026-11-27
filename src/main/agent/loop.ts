@@ -1,10 +1,10 @@
+import type { ModelSlot } from '../../shared/providers.js'
 import type {
   Book,
   ChatMessage,
   ContentBlock,
   LintReport,
   SampleInfo,
-  Scene,
   ToolDef
 } from '../../shared/types.js'
 import { callJson, callRaw, isAbortError, StepError } from '../director/callJson.js'
@@ -15,22 +15,35 @@ import {
   styleBlock,
   wordListBlock
 } from '../director/prompts.js'
-import {
-  applyRevisePlan,
-  autoFixDraft,
-  genDraft,
-  genRevisePlan,
-  selfCheck
-} from '../director/steps.js'
+import { applyRevisePlan, genRevisePlan, type ReviseApplied } from '../director/steps.js'
 import { noteRevisedChapter } from '../director/storyRecap.js'
 import { lintChapter, stripHtmlComments } from '../lint.js'
 import * as store from '../store.js'
-import { execTool, type ToolCtx, type ToolResult, toolDefs } from './tools.js'
+import {
+  execTool,
+  READ_TOOLS,
+  type ToolCtx,
+  type ToolInterceptor,
+  type ToolResult,
+  toolDefs
+} from './tools.js'
+import {
+  BRIEF_MAX,
+  briefProblem,
+  briefTooLong,
+  createWriter,
+  receiptData,
+  receiptSummary,
+  type WriterReceipt,
+  type WriterRun
+} from './writer.js'
 
 /**
  * M6 agent 主循环：自由 LLM 工具循环（用户拍板「全面 agent 化」）。
- * - 普通工具（CRUD）走 execTool；三个拦截工具在本文件：
- *   write_chapter_draft（流式写正文+lint+自动修一轮）/ commit_chapter（落章）/ finish（收工）。
+ * - 普通工具（CRUD）走 execTool；主智能体的拦截工具在本文件：
+ *   write_chapter_draft（派写作子智能体）/ read_last_draft / commit_chapter（落章）/ finish（收工）等。
+ * - 同一个循环也是子智能体的运行器（runSubagent）：嵌套跑在父任务之下；调查员对作者不可见，
+ *   写作子智能体只落工具卡（见 subagentSay）。
  * - 工具卡=messages 表独立行（meta={kind:'tool',jobId,name,summary}），聊天流即工作日志。
  * - 每轮系统提示重新注入红线/正负词/文风（防长程遗忘）。
  */
@@ -71,9 +84,9 @@ export interface LoopOpts {
   bookId: string
   /** 给 agent 的任务指令（写章/聊天/自由任务） */
   task: string
-  /** 作者对本章的倾向（计划模式下留空，计划另给）：进写手提示的「本章走向与作者交代」 */
+  /** 作者对本章的倾向（计划模式下留空，计划另给）：进写作子智能体提示的「作者对本章的交代」 */
   chapterDirection?: string
-  /** 计划模式下作者已批准的本章计划：进写手提示的「本章计划」 */
+  /** 计划模式下作者已批准的本章计划：进写作子智能体的记忆简报 */
   chapterPlan?: string
   /** 对话历史（ChatMessage 文本投影；写章任务通常为空） */
   history: ChatMessage[]
@@ -82,8 +95,17 @@ export interface LoopOpts {
   /** 场景：写章（有 commit 链）或自由（无 commit） */
   mode: 'chapter' | 'free'
   maxTurns?: number
-  /** 覆盖系统提示（子代理用调查员提示；默认导演人格 agentSystem） */
+  /** 覆盖系统提示（子智能体用自己的提示；默认导演人格 agentSystem） */
   system?: string
+  /** 模型槽（默认 director；写作子智能体走 writer 槽） */
+  slot?: ModelSlot
+  /** 每轮输出预算（默认：思考关 4000、思考开 16384；截断补救轮翻倍） */
+  maxTokens?: number
+  /**
+   * 子智能体运行形态（runSubagent 设置）：只能调自己 tools 清单里的工具；
+   * intercept 接子循环自己的拦截工具，回 null 走默认拦截表与普通工具
+   */
+  subagent?: { intercept?: ToolInterceptor }
   /** 导演白话流式（chat 气泡预览；正文/改章不走这里——见 onProgress） */
   onDelta?: (t: string) => void
   /** 思考链流式（chat 折叠区；正文/改章不接） */
@@ -96,8 +118,11 @@ export interface LoopOpts {
   onTurn?: () => void
   /** 本轮流式输出中途断线、将从头重试时回调（jobs 层借此清空已推给前端的半截内容） */
   onRestart?: () => void
-  /** 生成进度（正文/改章字数计数，聚合条显示；正文不进聊天流） */
-  onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
+  /**
+   * 生成进度（写手已写字数）：实时推给前端并落进任务 payload。
+   * null = 写手收工（不论成败），进度条收起。
+   */
+  onProgress?: (p: { phase: 'draft' | 'revise'; chars: number } | null) => void
   /** 落一条 assistant 消息（agent 白话/工具卡） */
   say: (content: string, meta?: Record<string, unknown>) => void
   /** 落章后回调（note chapter 消息/recap 进 payload/前情梗概合并/审计排队——jobs.ts 注入） */
@@ -137,16 +162,35 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
     {
       name: 'revise_chapter',
       description:
-        '按指令改已有章（整章或选段）。默认做局部替换（只动点名处，未点名一字不动），直接替换旧版不留档；只有作者明确要求推倒重写才整章重写。',
+        '改已有章，直接替换旧版不留档。默认局部替换：先 read_chapter 读原文，把要改处直接给 edits（find=原文逐字引文，replace=改后文本，空串=删除；未点名处一字不动）。作者明确要求推倒重写时传 brief（整章重写的修改要求），由写作子智能体重写。只给 instruction 时由模型出改稿方案兜底，命中率不如自己给 edits。',
       input_schema: {
         type: 'object',
         properties: {
           chapterId: { type: 'string' },
           instruction: {
             type: 'string',
-            description: '改稿指令（如「更狠：把打斗写实，收尾更冷」）'
+            description: '改稿指令（作者的原话或你的概括，如「更狠：把打斗写实，收尾更冷」）'
           },
-          segment: { type: 'string', description: '可选：只改这段原文（选段改）' }
+          edits: {
+            type: 'array',
+            description: '局部修改：原文→改后 [{find, replace}]',
+            items: {
+              type: 'object',
+              properties: {
+                find: {
+                  type: 'string',
+                  description: '原文逐字引文（10 字以上、足以在全文中唯一定位，含标点）'
+                },
+                replace: { type: 'string', description: '改后的完整文本，空串=删除' }
+              },
+              required: ['find', 'replace']
+            }
+          },
+          brief: {
+            type: 'string',
+            description: '整章重写时传：给写作子智能体的修改要求（与 edits 二选一）'
+          },
+          segment: { type: 'string', description: '可选：只给 instruction 时，限定只改这段原文' }
         },
         required: ['chapterId', 'instruction']
       }
@@ -207,53 +251,53 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
       {
         name: 'write_chapter_draft',
         description:
-          '写本章正文：传你拟好的章题+梗概+3-6 拍点（可选分镜）。系统会流式写作+自动自检（负向词/接缝/穿帮/字数），不过自动修一轮。返回最终稿与报告，你审阅后决定 commit_chapter 或重写。',
+          '派写作子智能体写本章正文。brief=你写好的任务简报（60-4000 字，一般 300-1500 字够用）：本章要发生什么、出场人物与各自要点、要埋/收的伏笔、基调与节奏、想模仿的句子与要避免的。写手带着记忆简报自己查人设/设定/前文/范文，分段交稿，自检不过会被退回自己改。只回传章题/字数/自检报告/纪要与沉淀线索（不回灌全文，要看用 read_last_draft）。',
         input_schema: {
           type: 'object',
           properties: {
+            brief: { type: 'string', description: '任务简报（60-4000 字）' },
             title: { type: 'string', description: '章题' },
-            synopsis: { type: 'string', description: '本章梗概（150-300字）' },
-            beats: {
-              type: 'array',
-              items: { type: 'string' },
-              description: '拍点序列（3-6 拍）'
-            },
-            scenes: {
-              type: 'array',
-              description: '可选分镜 [{summary,viewpoint,pace}]',
-              items: {
-                type: 'object',
-                properties: {
-                  summary: { type: 'string' },
-                  viewpoint: { type: 'string' },
-                  pace: { type: 'string' }
-                },
-                required: ['summary']
-              }
+            targetWords: {
+              type: 'number',
+              description: '可选：本章目标字数（不传用书的章节目标字数）'
             }
           },
-          required: ['title', 'synopsis', 'beats']
+          required: ['brief']
         }
       },
       {
         name: 'commit_chapter',
         description:
-          '正文定稿入书（调它之前必须已有一稿通过或你判断可接受的 write_chapter_draft）。传入本章 100-200 字纪要。',
+          '正文定稿入书（调它之前必须已有一稿通过或你判断可接受的 write_chapter_draft）。纪要可省略：缺省用写手回执里的纪要。',
         input_schema: {
           type: 'object',
           properties: {
-            summary: { type: 'string', description: '本章纪要（100-200字，并进前情梗概）' }
-          },
-          quickActions: {
-            type: 'array',
-            description: '2-3 个本章专属快捷改章建议 [{label:4-8字, instruction:具体指令}]',
-            items: {
-              type: 'object',
-              properties: { label: { type: 'string' }, instruction: { type: 'string' } },
-              required: ['label', 'instruction']
+            summary: {
+              type: 'string',
+              description: '可选：本章纪要（100-200字，并进前情梗概）；不传用写手回执里的纪要'
+            },
+            quickActions: {
+              type: 'array',
+              description: '2-3 个本章专属快捷改章建议 [{label:4-8字, instruction:具体指令}]',
+              items: {
+                type: 'object',
+                properties: { label: { type: 'string' }, instruction: { type: 'string' } },
+                required: ['label', 'instruction']
+              }
             }
-          },
-          required: ['summary']
+          }
+        }
+      },
+      {
+        name: 'read_last_draft',
+        description:
+          '读最近一稿（写手交的正文，入书前可读）：默认从头 2000 字；from=从第几字起；maxChars 最多 8000。写手回执不回灌全文，要核对细节时用它。',
+        input_schema: {
+          type: 'object',
+          properties: {
+            from: { type: 'number', description: '从第几字起读（0 起）' },
+            maxChars: { type: 'number', description: '本次取多少字（默认 2000，上限 8000）' }
+          }
         }
       }
     )
@@ -281,18 +325,19 @@ function sampleBlock(book: Book): string {
 ## 绑定范文
 ${list}
 - read_sample 支持四种读法：toc 看目录（卷名/章节名清单，找不到位置时先用它）、chapter 章号直达（如第 3 章）、query 关键词检索（如「登船」「林岸」）、offsetPct 百分比翻页。
-- 用途：模仿句式/节奏/叙事腔调——绝不抄内容、不搬人物情节。动笔前按本章要素检索一段找语感（write_chapter_draft 也会自动检索注入范文参考段）。`
+- 用途：模仿句式/节奏/叙事腔调——绝不抄内容、不搬人物情节。动笔前按本章要素检索一段找语感（派写手时系统也会自动检索一段范文起点带给写手，写手自己还能 read_sample）。`
 }
 
 /**
- * 范文参考段检索（用户决策：不固定截开头，动笔前按本章内容主动检索注入；
+ * 范文起点检索（用户决策：不固定截开头，动笔前按本章内容主动检索注入；
  * 检索词由 LLM 决定——按本章的场景/动作/意象/情绪自选，而非程序硬提人名）。
- * 一次轻量 LLM 调用出词 → 逐本搜节取片段；每本最多 2 段、总预算约 2400 字。
+ * 一次轻量 LLM 调用出词 → 取首个命中片段（约 1200 字）给写作子智能体当起点；
+ * 要更多语感由写手自己 read_sample，不再多段注入。
  * 出词失败或全 miss 返回 ''（不注入，不阻断写章）。
  */
 export async function genStyleRefs(
   book: Book,
-  outline: { title: string; synopsis: string; beats: string[] },
+  chapter: { title: string; text: string },
   signal?: AbortSignal
 ): Promise<string> {
   if (!book.sampleSources.length) return ''
@@ -311,16 +356,15 @@ export async function genStyleRefs(
 ${samples.map((s, i) => `${i + 1}. 《${s.name}》`).join('\n')}
 
 ## 本章信息
-标题：${outline.title}
-梗概：${outline.synopsis}
-拍点：${outline.beats.join('；')}
+标题：${chapter.title}
+任务简报：${chapter.text.slice(0, 800)}
 
 ## 任务
-针对每一本范文，给出 1-3 个用于在其全文中检索参考段的**关键词**。
+针对每一本范文，给出 1-2 个用于在其全文中检索参考段的**关键词**。
 - 词要来自本章的场景/动作/意象/情绪/桥段类型（如「夜袭」「审讯」「重逢」「暴雨中的对峙」），不要用本书人名（范文是另一部作品，人名大概率不存在）。
 - 想模仿哪类写法（打斗节奏/对话密度/环境烘托），就检索那类桥段。
 
-输出 JSON：{"queries":[{"sample":"范文名","q":"关键词"}]}，总数不超过 ${Math.min(6, samples.length * 3)} 个。`,
+输出 JSON：{"queries":[{"sample":"范文名","q":"关键词"}]}，总数不超过 ${Math.min(4, samples.length * 2)} 个。`,
       jsonHint: '{"queries":[{"sample":"范文名","q":"关键词"}]}',
       signal
     })
@@ -331,25 +375,17 @@ ${samples.map((s, i) => `${i + 1}. 《${s.name}》`).join('\n')}
     if (isAbortError(err)) throw err
     return '' // 出词失败静默跳过
   }
-  const BUDGET = 2400
-  const parts: string[] = []
-  let used = 0
   for (const s of samples) {
     const words = queries
       .filter((x) => x.sample.includes(s.name) || s.name.includes(x.sample))
       .map((x) => x.q)
-    let hits = 0
     for (const q of words) {
-      if (hits >= 2 || used >= BUDGET) break
       const hit = store.searchSampleSections(s.id, s.content, q)
       if (hit.offset < 0) continue
-      const seg = s.content.slice(hit.offset, hit.offset + 1200)
-      parts.push(`◆ 《${s.name}》（检索词「${q}」）\n${seg}`)
-      used += seg.length
-      hits++
+      return `◆ 《${s.name}》（检索词「${q}」）\n${s.content.slice(hit.offset, hit.offset + 1200)}`
     }
   }
-  return parts.join('\n\n')
+  return ''
 }
 
 /** 记忆简报（紧凑版）：前情梗概 + 主要人物名单。细节靠工具拉，这里只保证导演每轮都记得书写到哪了 */
@@ -376,18 +412,19 @@ function agentSystem(book: Book, lineId: string, mode: 'chapter' | 'free'): stri
       ? `
 
 ## 写章任务纪律（当前处于写章流程；走向由作者在聊天里给出或由你自主拟定）
-1. 先 get_write_context 拿上下文（钉选设定/前情梗概/伏笔/人物现状/近章），再动笔。${book.sampleSources.length ? '动笔前可用 read_sample 按本章要素检索一段范文找语感（draft 时系统也会自动检索注入）。' : ''}
-2. write_chapter_draft 一次成型；报告有问题而你判断可修→再 draft 一次；系统已自动修过一轮仍 major 的字数/接缝问题，若你判断无法两全→commit 前在 finish 里说明，或与作者商量（作者接受瑕疵）。
-3. commit_chapter 后立即做沉淀：新设定 save_card、人物动向 patch_character_state、伏笔三态 save_foreshadow。save_card / save_foreshadow 必须附 evidence（本章正文里连续的一句原话，逐字照抄）——系统会核对原句确在正文里，对不上会退回让你重提；正文里没有写到的不许存。这是纪律，不许跳过。
-4. 全部做完 finish 收尾（汇报+建议下一章走向）。`
+1. 先 get_write_context 拿上下文（钉选设定/前情梗概/伏笔/人物现状/近章），定本章走向。${book.sampleSources.length ? '需要找语感可用 read_sample 按本章要素检索一段范文（派写手时系统也会自动检索一段带给写手）。' : ''}
+2. 写任务简报，调 write_chapter_draft 派写作子智能体：简报 60-4000 字，写清本章要发生什么、出场人物与各自要点、要埋/收的伏笔、基调与节奏、想模仿的句子与要避免的；带上章题。写手带着记忆简报自己查人设/设定/前文/范文，分段交稿，自检不过会被退回自己改。你拿到的只有章题/字数/自检报告/纪要与沉淀线索，不回灌全文——要核对细节用 read_last_draft。
+3. 回执的自检报告仍有 major、或走向写偏了：先 read_last_draft 看一眼再定。写手自检不过会被退回自己改，只在需要整章重来时再派一次 write_chapter_draft；自检退回两轮仍 major 的字数/接缝问题，若你判断无法两全→commit 前在 finish 里说明，或与作者商量（作者接受瑕疵）。
+4. commit_chapter（纪要可省略，缺省用回执里的纪要）后立即做沉淀，evidence 照抄回执里的原句：新设定 save_card、人物动向 patch_character_state、伏笔三态 save_foreshadow。save_card / save_foreshadow 必须附 evidence（本章正文里连续的一句原话，逐字照抄）——系统会核对原句确在正文里，对不上会退回让你重提；正文里没有写到的不许存；回执里标明「已丢弃」的线索不要照抄，先 read_last_draft 找到正确原句。这是纪律，不许跳过。
+5. 全部做完 finish 收尾（汇报+建议下一章走向）。`
       : `
 
 ## 自由任务纪律
 - 先查再答：凡涉及书里已发生的事、人物、设定、伏笔（谁做过什么、关系如何、某个设定是什么），先用工具核对（get_write_context / get_character / get_card / list_foreshadows / search_project），再回答。你对这本书的记忆只有末尾的记忆简报，简报里没有的不能凭印象说。
 - 查不到就明说「书里还没写到」或「我不确定」，并告诉作者怎么核实；不许编细节圆场。
 - 作者表达的长期偏好（文风、节奏、口味、禁忌、终局方向）必须落库，不能只聊不记：当轮用 save_card 存成钉选卡（pinned=true、kind=custom、标题写明是作者偏好如「作者口味：不要感情线」、内容写进 authorText），之后每章写作都会带上；能进书配置的（文风/红线/正负词）同时用 update_book_config 写进去。
-- 你没有 commit_chapter/write_chapter_draft 权限（写新章走「写下一章」流程，由写章任务自主定走向）。
-- 作者要在已有章上改稿→revise_chapter；维护设定/人物/伏笔/红线/正负词→对应工具。
+- 你没有 commit_chapter/write_chapter_draft 权限（写新章走「写下一章」流程，由写章任务里的主智能体自主定走向）。
+- 作者要在已有章上改稿→revise_chapter：局部修改先 read_chapter 读原文，把要改处直接给 edits（原文→改后）；作者明确要求推倒重写才传 brief，由写作子智能体整章重写。维护设定/人物/伏笔/红线/正负词→对应工具。
 - 作者要写新章→直接调 propose_chapter（可带方向提示）排进写章队列，并告诉作者「已开章」；界面上没有「写下一章」按钮，不要让作者去找。
 - 承诺即执行：凡对作者说「这就改/马上改/现在就动手」，必须在同一轮调用对应工具完成，只说不做是违规；改不动就明说原因，不许空头承诺。`
   // 稳定内容在前、每章都变的记忆简报在后（DeepSeek 前缀缓存按前缀整体命中）
@@ -407,7 +444,7 @@ ${chapterDiscipline}
 - 要翻大量资料但只需要结论（摸人物关系、查伏笔现状、找前文原句）时，派 spawn_subagent 去调查——它只把最终结论带回你的上下文，省你自己的空间。日常单点查询不必派。${memoryBrief(lineId)}`
 }
 
-/** 子代理调查员系统提示（fresh 会话，只读，静默执行） */
+/** 调查员系统提示（fresh 会话，只读，静默执行）；身份行也是冒烟桩路由子智能体调用的依据 */
 const SUB_SYSTEM = `你是只读调查员，受导演指派调查小说项目的资料，只输出调查结论。
 
 ## 纪律
@@ -417,26 +454,15 @@ const SUB_SYSTEM = `你是只读调查员，受导演指派调查小说项目的
 
 const MAX_DATA = 30000
 const N = '\n'
+/** read_last_draft：默认取 2000 字，一次最多 8000 字（全文回灌正是要省的开销） */
+const READ_DRAFT_DEFAULT = 2000
+const READ_DRAFT_MAX = 8000
 
 /** 即时执行承诺信号：这就改/马上删/现在就写…（拦「光说不练」：承诺了却不在本轮调工具） */
 const ACT_NOW_RE = /(这就|现在就|马上|立刻|立即)[^。！？!?\n]{0,10}(改|删|建|写|加|换|存|更新|动)/
 
-/** 子代理可用工具：全部读类 + finish */
-const READ_TOOLS = new Set([
-  'get_book_config',
-  'list_chapters',
-  'read_chapter',
-  'list_cards',
-  'get_card',
-  'list_characters',
-  'list_foreshadows',
-  'get_write_context',
-  'list_samples',
-  'read_sample',
-  'search_project'
-])
-
-function subTools(): ToolDef[] {
+/** 调查员可用工具：只读类 + finish */
+function researchTools(): ToolDef[] {
   const defs = toolDefs().filter((d) => READ_TOOLS.has(d.name))
   defs.push({
     name: 'finish',
@@ -450,8 +476,123 @@ function subTools(): ToolDef[] {
   return defs
 }
 
+/** 调查员规格：固定提示 + 读工具，没有自己的拦截工具 */
+function researchSpec(task: string): SubagentSpec {
+  return { kind: 'research', task, system: SUB_SYSTEM, tools: researchTools(), slot: 'director' }
+}
+
 function clipData(s: string): string {
   return s.length > MAX_DATA ? `${s.slice(0, MAX_DATA)}\n…（结果过长已截断）` : s
+}
+
+/** 子智能体规格：research=只读调查员；write=写作子智能体 */
+export interface SubagentSpec {
+  kind: 'research' | 'write'
+  /** 首条 user 消息：任务本身 */
+  task: string
+  system: string
+  tools: ToolDef[]
+  /** 模型槽：调查员与导演同槽；写手走 writer 槽 */
+  slot: ModelSlot
+  /** 每轮输出预算；不传用循环默认值 */
+  maxTokens?: number
+  intercept?: ToolInterceptor
+  /**
+   * 作者可见（缺省不可见）：每调一个清单内的工具落一张工具卡，返回值并进卡片 meta（写手带累计字数）
+   */
+  cardMeta?: () => Record<string, unknown>
+}
+
+/** 子智能体的宿主：父任务的取消信号、看门狗喂狗、进度出口与工具卡出口，嵌套循环原样透传 */
+export interface SubagentHost {
+  jobId: string
+  bookId: string
+  signal?: AbortSignal
+  onTurn?: () => void
+  onProgress?: LoopOpts['onProgress']
+  say?: LoopOpts['say']
+}
+
+/** 调查翻十几轮资料、写手分段交稿带两轮回改都够用；再多多半是在打转 */
+const SUBAGENT_MAX_TURNS = 12
+const SUBAGENT_LABEL = { research: '调查员', write: '写作子智能体' } as const
+
+/**
+ * 子智能体的工具卡出口。缺省对作者不可见（调查员、没给 cardMeta 的规格）；
+ * 给了的每调一个清单内的工具落一张卡——白话与思考照旧不进时间轴（正文更不进），
+ * 清单外的工具是模型幻觉、系统当面拒掉就算完，不给作者看。
+ */
+function subagentSay(spec: SubagentSpec, host: SubagentHost): LoopOpts['say'] {
+  const say = host.say
+  if (!spec.cardMeta || !say) return () => {}
+  const allowed = new Set(spec.tools.map((t) => t.name))
+  return (content, meta) => {
+    if (meta?.kind !== 'tool' || !allowed.has(String(meta.tool))) return
+    say(content, { ...meta, ...spec.cardMeta?.() })
+  }
+}
+
+/**
+ * 子智能体运行器：调查员与写手共用一套嵌套循环。
+ * - 默认对作者不可见（say 空操作）；要给作者看的由 subagentSay 落工具卡
+ * - 透传父循环的取消信号与喂狗：子循环卡死，父任务的看门狗照杀
+ * - 只能调自己清单里的工具：模型幻觉出清单外的写工具也拒
+ */
+async function runSubagent(spec: SubagentSpec, host: SubagentHost): Promise<LoopResult> {
+  const child = await runAgentLoop({
+    jobId: host.jobId,
+    bookId: host.bookId,
+    task: spec.task,
+    history: [],
+    tools: spec.tools,
+    mode: 'free',
+    maxTurns: SUBAGENT_MAX_TURNS,
+    system: spec.system,
+    slot: spec.slot,
+    maxTokens: spec.maxTokens,
+    say: subagentSay(spec, host),
+    signal: host.signal,
+    onTurn: host.onTurn,
+    onProgress: host.onProgress,
+    subagent: { intercept: spec.intercept }
+  })
+  if (child.turns >= SUBAGENT_MAX_TURNS) {
+    console.warn(
+      `[agent] jobId=${host.jobId} ${SUBAGENT_LABEL[spec.kind]}跑满 ${SUBAGENT_MAX_TURNS} 轮`
+    )
+  }
+  return child
+}
+
+/**
+ * 派写作子智能体并主持进度条：动笔即报 0 字，收工（不论成败、含取消）清进度——
+ * 写手交完稿后导演还要定稿、沉淀，这时进度条不能再显示「写手已写 N 字」。
+ */
+async function runWriter(writer: WriterRun, host: SubagentHost): Promise<LoopResult> {
+  host.onProgress?.({ phase: writer.phase, chars: 0 })
+  try {
+    return await runSubagent(writer.spec, host)
+  } finally {
+    host.onProgress?.(null)
+  }
+}
+
+/** 任务简报在卡面上直接露出的字数（全文进卡片详情，点开看） */
+const BRIEF_EXCERPT = 120
+
+/**
+ * 「派写手」卡在动笔前就上墙：作者先看到导演给了写手什么任务，写手的工具卡跟在它后面，
+ * 而不是等整章写完才补一张派写手的卡。
+ */
+function sayDispatch(opts: LoopOpts, tool: string, summary: string, brief: string): void {
+  opts.say(brief.slice(0, BRIEF_MAX), {
+    kind: 'tool',
+    jobId: opts.jobId,
+    tool,
+    summary,
+    ok: true,
+    brief: brief.length > BRIEF_EXCERPT ? `${brief.slice(0, BRIEF_EXCERPT)}…` : brief
+  })
 }
 
 export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
@@ -467,22 +608,34 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
     book = initial
   }
 
-  // 写章会话内暂存的最近草稿（commit_chapter 用）
+  // 写章会话内暂存的最近一稿（commit_chapter / read_last_draft 用）：全文只在这里，不回灌给主智能体
   let lastDraft: {
     title: string
-    synopsis: string
-    beats: string[]
+    /** 主智能体给写手的任务简报（入书时存进章的 meta） */
+    brief: string
     content: string
     report: LintReport
+    receipt: WriterReceipt
   } | null = null
   let chaptersCommitted = 0
   let finishText = ''
   let lastFinishMessage = ''
+  // 子智能体只能调自己清单里的工具（runOne 里核对）
+  const allowedTools = new Set(opts.tools.map((t) => t.name))
 
   const messages: ChatMessage[] = [...opts.history, { role: 'user', content: task }]
   const historyLen = opts.history.length
   let taskNote = '' // 并入 task 消息尾部的历次〔前情工作纪要〕
   const signal = opts.signal
+  // 派子智能体时的宿主：取消信号、喂狗、进度与工具卡出口都挂在父任务上
+  const subHost: SubagentHost = {
+    jobId,
+    bookId,
+    signal,
+    onTurn: opts.onTurn,
+    onProgress: opts.onProgress,
+    say: opts.say
+  }
 
   /** 取消检查：jobs 层 abort（作者取消/看门狗）后不再发起任何调用、不再执行任何工具 */
   function throwIfAborted(): void {
@@ -543,9 +696,12 @@ ${rows}
     book = store.getBook(bookId) ?? book // 每轮重读（agent 可能改了配置/切了线）
     await compactIfNeeded()
     const line = store.activeLine(book)
+    // 输出预算：思考计入输出 token（DeepSeek/GPT 系皆然），上限必须盖住「思考+正文」，只按实际生成计费；
+    // 截断补救轮翻倍（8192 顶格实锤过三次静默中断，2026-11）
+    const baseMax = opts.maxTokens ?? (opts.thinking === 'enabled' ? 16384 : 4000)
     const res = await callRaw(
       {
-        slot: 'director',
+        slot: opts.slot ?? 'director',
         system: opts.system ?? agentSystem(book, line?.id ?? '', mode),
         user: task,
         jsonHint: '',
@@ -553,16 +709,7 @@ ${rows}
           messages,
           tools: opts.tools,
           responseFormat: 'text',
-          // 思考计入输出 token（DeepSeek/GPT 系皆然）：上限必须盖住「思考+正文」，只按实际生成计费；
-          // 截断补救轮再翻倍（8192 顶格实锤过三次静默中断，2026-11）
-          maxTokens:
-            opts.thinking === 'enabled'
-              ? truncNudges > 0
-                ? 32768
-                : 16384
-              : truncNudges > 0
-                ? 8000
-                : 4000
+          maxTokens: truncNudges > 0 ? baseMax * 2 : baseMax
         },
         onThinking: opts.onThinking,
         thinking: opts.thinking,
@@ -661,13 +808,15 @@ ${rows}
           }
         }
       }
-      // 工具卡（作者可见的工作日志；content 截 2000 字防膨胀，全文走 resultBlocks 给 LLM）
-      opts.say(result.data.slice(0, 2000), {
+      // 工具卡（作者可见的工作日志）：详情缺省用结果数据、截 2000 字防膨胀（全文走 resultBlocks 给 LLM）；
+      // 工具可以用 card 换成给作者看的说明（写手的交稿卡不带正文），cardMeta 并进 meta（累计字数 / 任务简报）
+      opts.say((result.card ?? result.data).slice(0, 2000), {
         kind: 'tool',
         jobId,
         tool: tu.name,
         summary: result.summary,
-        ok: result.ok
+        ok: result.ok,
+        ...result.cardMeta
       })
       resultBlocks.push({
         type: 'tool_result',
@@ -694,6 +843,18 @@ ${rows}
 
   // ── 单工具执行（拦截工具内联） ──────────────────────────────────────────
   async function runOne(name: string, input: Record<string, unknown>): Promise<ToolResult> {
+    if (opts.subagent) {
+      // 模型幻觉出清单外的工具（写类居多）：拒掉，不给子智能体越权落库的机会
+      if (!allowedTools.has(name)) {
+        return {
+          ok: false,
+          summary: `${name} 不可用`,
+          data: `你没有 ${name} 这个工具，只能用工具清单里的工具。`
+        }
+      }
+      const taken = await opts.subagent.intercept?.(name, input)
+      if (taken) return taken
+    }
     switch (name) {
       case 'finish': {
         lastFinishMessage = String(input.message ?? '')
@@ -703,54 +864,79 @@ ${rows}
         const b = store.getBook(bookId) ?? book
         const line = store.activeLine(b)
         if (!line) return { ok: false, summary: '没有激活线', data: '当前书没有激活线' }
-        const outline = {
-          title: String(input.title ?? '未命名'),
-          synopsis: String(input.synopsis ?? ''),
-          beats: (input.beats as string[]) ?? ['']
-        }
-        const styleRefs = await genStyleRefs(b, outline, signal)
-        const input2 = {
+        const brief = String(input.brief ?? '').trim()
+        const problem = briefProblem(brief)
+        if (problem) return { ok: false, summary: '任务简报不合格', data: problem }
+        const title = String(input.title ?? '').trim() || '未命名'
+        const targetWords =
+          typeof input.targetWords === 'number' &&
+          Number.isFinite(input.targetWords) &&
+          input.targetWords > 0
+            ? Math.trunc(input.targetWords)
+            : b.targetWords
+        sayDispatch(opts, name, `写《${title}》`, brief)
+        const styleRefs = await genStyleRefs(b, { title, text: brief }, signal)
+        const writer = createWriter({
           book: b,
           lineId: line.id,
-          outline,
-          scenes: (input.scenes as Scene[] | undefined) ?? null,
+          brief,
           // 走向卡早已废除：写手看的是作者的真实倾向（或已批准的计划），不是任务指令原文
-          direction: {
-            source: 'free' as const,
-            text: (opts.chapterDirection ?? '').slice(0, 2000)
-          },
+          direction: opts.chapterDirection,
+          plan: opts.chapterPlan,
+          targetWords,
           styleRefs: styleRefs || undefined,
-          plan: opts.chapterPlan
-        }
-        let draft = await genDraft(input2, progressSaver('draft'), signal)
-        let report = selfCheck(b, line.id, draft, tailOf(line.id))
-        if (report.issues.some((i) => i.level === 'major')) {
-          // 自动修一轮（W6 纪律）
-          draft = await autoFixDraft(input2, draft, report, progressSaver('draft'), signal)
-          report = selfCheck(b, line.id, draft, tailOf(line.id))
+          signal,
+          onProgress: opts.onProgress
+        })
+        const child = await runWriter(writer, subHost)
+        const outcome = writer.session.settle(child.text)
+        if (!outcome.ok) {
+          return {
+            ok: false,
+            summary: outcome.summary,
+            data: outcome.data,
+            card: '写手没有交出正文，这一章没有写成。'
+          }
         }
         lastDraft = {
-          title: input2.outline.title,
-          synopsis: input2.outline.synopsis,
-          beats: input2.outline.beats,
-          content: draft,
-          report
+          title,
+          brief,
+          content: outcome.content,
+          report: outcome.report,
+          receipt: outcome.receipt
         }
-        const majors = report.issues.filter((i) => i.level === 'major')
-        const wordCount = draft.replace(/\s/g, '').length
         return {
           ok: true,
-          summary: `写《${input2.outline.title}》${wordCount} 字（${majors.length ? `仍有 ${majors.length} 个 major 问题` : '自检通过'}）`,
-          data:
-            `《${input2.outline.title}》草稿完成（约 ${wordCount} 字）。自检报告：${N}` +
-            (report.issues.length
-              ? report.issues
-                  .map(
-                    (i) => `[${i.level}/${i.rule}] ${i.quote ? `「${i.quote}」` : ''}${i.advice}`
-                  )
-                  .join(N)
-              : '全部通过') +
-            `${N}${N}正文全文：${N}${draft}`
+          summary: receiptSummary(title, outcome),
+          data: receiptData(title, targetWords, outcome),
+          card: outcome.card
+        }
+      }
+      case 'read_last_draft': {
+        if (!lastDraft) {
+          return {
+            ok: false,
+            summary: '没有草稿',
+            data: '现在没有草稿：先 write_chapter_draft 派写手；已入书的章用 read_chapter 读。'
+          }
+        }
+        const total = lastDraft.content.length
+        const from = Math.min(
+          Math.max(0, Math.trunc(Number(input.from) || 0)),
+          Math.max(0, total - 1)
+        )
+        const want =
+          typeof input.maxChars === 'number' && input.maxChars > 0
+            ? Math.trunc(input.maxChars)
+            : READ_DRAFT_DEFAULT
+        const end = Math.min(total, from + Math.min(want, READ_DRAFT_MAX))
+        const more = end < total ? `\n…（第 ${from + 1}-${end} 字；继续往后传 from:${end}）` : ''
+        return {
+          ok: true,
+          summary: `读草稿第 ${from + 1}-${end} 字`,
+          data: `${lastDraft.content.slice(from, end)}${more}`,
+          // 草稿是没入书的正文：只回给导演核对，工具卡详情换成说明
+          card: `导演在核对写手交的草稿（第 ${from + 1}-${end} 字，共 ${total} 字）。正文不入聊天，定稿入书后在成品卡里看全文。`
         }
       }
       case 'commit_chapter': {
@@ -774,14 +960,11 @@ ${rows}
           summary: '',
           meta: {
             direction: { source: 'free', text: opts.task.slice(0, 500) },
-            outline: {
-              title: lastDraft.title,
-              synopsis: lastDraft.synopsis,
-              beats: lastDraft.beats
-            }
+            brief: lastDraft.brief.slice(0, 2000)
           }
         })
-        const summary = String(input.summary ?? '')
+        // 纪要缺省用写手回执里的
+        const summary = String(input.summary ?? '').trim() || lastDraft.receipt.summary
         if (summary) store.updateChapterSummary(chapter.id, summary)
         const quickActions = Array.isArray(input.quickActions)
           ? (input.quickActions as Array<{ label: string; instruction: string }>).filter(
@@ -805,10 +988,101 @@ ${rows}
         const chapter = store.getChapter(chapterId)
         if (!chapter) return { ok: false, summary: '章节不存在', data: `章节 ${chapterId} 不存在` }
         const instruction = String(input.instruction ?? '')
+        const b = store.getBook(bookId) ?? book
+        const noHit = (): ToolResult => ({
+          ok: false,
+          summary: '改稿未命中原文',
+          data: '修改定位失败：find 引文在原文中找不到，请重新引用原文逐字片段。'
+        })
+        /** 局部替换 / 改稿方案落到章上：自检只报告不入闸（字数类指令天然会偏离目标字数） */
+        const apply = (applied: ReviseApplied): ToolResult => {
+          const clean = stripHtmlComments(applied.next)
+          const report = lintChapter(clean, { bannedWords: b.negativeWords })
+          throwIfAborted()
+          store.replaceChapterContent(chapterId, clean)
+          // 后台按新正文重写该章纪要，并把前情梗概里涉及本章的说法更正（fire-and-forget，失败只记日志）
+          noteRevisedChapter(chapterId)
+          const missed = applied.total - applied.applied
+          return {
+            ok: true,
+            summary: `改好《${chapter.title}》`,
+            data: `《${chapter.title}》已按「${briefOf(instruction)}」${
+              applied.mode === 'rewrite'
+                ? '整章重写'
+                : `局部修改 ${applied.applied}/${applied.total} 处${
+                    applied.hits > applied.applied
+                      ? `（引文在全文重复出现，共改动 ${applied.hits} 处）`
+                      : ''
+                  }${missed > 0 ? `；${missed} 处引文未在原文中找到` : ''}`
+            }并替换，本章纪要与前情梗概会在后台按新正文刷新。lint：${lintNote(report)}`
+          }
+        }
+        // 三条路径：edits 直改 → brief 整章重写（派写手）→ 只给 instruction 时由模型出改稿方案兜底
+        const rawEdits: unknown = input.edits
+        if (Array.isArray(rawEdits) && rawEdits.length) {
+          // 逐条校验后才落章：缺 replace 的半截 edit 若按「删除」应用，等于悄悄删正文（改章不留旧版）
+          const edits: Array<{ find: string; replace: string }> = []
+          for (const e of rawEdits) {
+            const find = (e as { find?: unknown } | null)?.find
+            const replace = (e as { replace?: unknown } | null)?.replace
+            if (
+              typeof e !== 'object' ||
+              e === null ||
+              typeof find !== 'string' ||
+              !find ||
+              typeof replace !== 'string'
+            ) {
+              return {
+                ok: false,
+                summary: 'edits 格式不对',
+                data: '每条 edit 都要同时给 find（原文逐字引文）与 replace（改后文本；要删除传空串 ""）。这次没有改动任何内容，修正后重发。'
+              }
+            }
+            edits.push({ find, replace })
+          }
+          const applied = applyRevisePlan(chapter.content, { edits })
+          return 'noHit' in applied ? noHit() : apply(applied)
+        }
+        const brief = typeof input.brief === 'string' ? input.brief.trim() : ''
+        if (brief) {
+          const tooLong = briefTooLong(brief)
+          if (tooLong) return { ok: false, summary: '重写要求不合格', data: tooLong }
+          // 重写不查字数（加长/缩短都是常见的改稿要求），写手看着原章改
+          sayDispatch(opts, name, `重写《${chapter.title}》`, brief)
+          const writer = createWriter({
+            book: b,
+            lineId: chapter.lineId,
+            brief,
+            original: chapter,
+            targetWords: 0,
+            signal,
+            onProgress: opts.onProgress
+          })
+          const child = await runWriter(writer, subHost)
+          const outcome = writer.session.settle(child.text)
+          if (!outcome.ok) {
+            return {
+              ok: false,
+              summary: '重写没有完成',
+              data: outcome.data,
+              card: '写手没有交出重写后的正文，原章保持不变。'
+            }
+          }
+          const clean = stripHtmlComments(outcome.content)
+          throwIfAborted()
+          store.replaceChapterContent(chapterId, clean)
+          noteRevisedChapter(chapterId)
+          return {
+            ok: true,
+            summary: `重写《${chapter.title}》`,
+            data: `《${chapter.title}》已按「${briefOf(instruction)}」整章重写并替换（${outcome.report.wordCount} 字，原章 ${chapter.wordCount} 字），本章纪要与前情梗概会在后台按新正文刷新。lint：${lintNote(outcome.report)}`,
+            card: `整章重写完成：现在 ${outcome.report.wordCount} 字（原章 ${chapter.wordCount} 字），本章纪要与前情梗概会在后台按新正文刷新。\n${outcome.card}`
+          }
+        }
         const segment = typeof input.segment === 'string' ? input.segment : undefined
         const plan = await genRevisePlan(
           {
-            book: store.getBook(bookId) ?? book,
+            book: b,
             lineId: chapter.lineId,
             chapter,
             instruction,
@@ -817,53 +1091,12 @@ ${rows}
           signal
         )
         const applied = applyRevisePlan(chapter.content, plan)
-        if ('noHit' in applied) {
-          return {
-            ok: false,
-            summary: '改稿未命中原文',
-            data: '修改定位失败：find 引文在原文中找不到，请重新引用原文逐字片段。'
-          }
-        }
-        const clean = stripHtmlComments(applied.next)
-        const report = lintChapter(clean, {
-          bannedWords: (store.getBook(bookId) ?? book).negativeWords
-        })
-        throwIfAborted()
-        store.replaceChapterContent(chapterId, clean)
-        // 后台按新正文重写该章纪要，并把前情梗概里涉及本章的说法更正（fire-and-forget，失败只记日志）
-        noteRevisedChapter(chapterId)
-        const missed = applied.total - applied.applied
-        return {
-          ok: true,
-          summary: `改好《${chapter.title}》`,
-          data: `《${chapter.title}》已按「${briefOf(instruction)}」${
-            applied.mode === 'rewrite'
-              ? '整章重写'
-              : `局部修改 ${applied.applied}/${applied.total} 处${
-                  applied.hits > applied.applied
-                    ? `（引文在全文重复出现，共改动 ${applied.hits} 处）`
-                    : ''
-                }${missed > 0 ? `；${missed} 处引文未在原文中找到` : ''}`
-          }并替换，本章纪要与前情梗概会在后台按新正文刷新。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
-        }
+        return 'noHit' in applied ? noHit() : apply(applied)
       }
       case 'spawn_subagent': {
         const t = String(input.task ?? '').trim()
         if (!t) return { ok: false, summary: '调查任务为空', data: 'spawn_subagent 需要 task 参数' }
-        const child = await runAgentLoop({
-          jobId,
-          bookId,
-          task: t,
-          history: [],
-          tools: subTools(),
-          mode: 'free',
-          maxTurns: 12,
-          system: SUB_SYSTEM,
-          say: () => {},
-          // 调查可能跑十几轮：取消要能传进去，每轮也要替父循环喂狗
-          signal,
-          onTurn: opts.onTurn
-        })
+        const child = await runSubagent(researchSpec(t), subHost)
         return {
           ok: true,
           summary: `调查员回报（${child.turns} 轮）`,
@@ -900,22 +1133,15 @@ ${rows}
         return execTool(name, input, ctx)
     }
   }
-
-  /** 正文/改章进度：只报字数（正文不进聊天流），作者在聚合条看到「正在写正文·已 N 字」 */
-  function progressSaver(phase: 'draft' | 'revise'): (t: string) => void {
-    let chars = 0
-    return (t) => {
-      chars += t.replace(/\s/g, '').length
-      opts.onProgress?.({ phase, chars })
-    }
-  }
-}
-
-function tailOf(lineId: string): string | undefined {
-  const prev = store.previousChapter(lineId)
-  return prev?.content.slice(-500)
 }
 
 function briefOf(s: string): string {
   return s.length > 40 ? `${s.slice(0, 40)}…` : s
+}
+
+/** 改章自检的一句话结论（只报告不入闸，问题大由作者再发指令） */
+function lintNote(report: LintReport): string {
+  return report.issues.length
+    ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；')
+    : '干净'
 }

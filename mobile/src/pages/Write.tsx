@@ -153,7 +153,7 @@ export default function Write() {
             </div>
           ))}
           {active && (active.state === 'running' || active.state === 'queued') && (
-            <StreamRow jobId={active.id} />
+            <StreamRow job={active} />
           )}
         </div>
         <div className="h-3" />

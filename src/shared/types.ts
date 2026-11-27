@@ -483,6 +483,8 @@ export interface JobPayload {
   /** draft/selfcheck 产物 */
   draftText?: string
   draftWordCount?: number
+  /** 写手进行中的进度（已写字数）；写手收工即清除。断线 / 重开后前端以它补回进度条 */
+  progress?: { phase: 'draft' | 'revise'; chars: number }
   /** 改章生效方式（局部修改 N 处 / 整章重写） */
   reviseMode?: string
   /** 自检报告（两轮：初检/自动修后复检） */

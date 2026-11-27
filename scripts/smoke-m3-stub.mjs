@@ -3,17 +3,19 @@
  * 用法：node scripts/smoke-m3-stub.mjs
  * 每收到一次 /v1/chat/completions 弹出下一个预设；队列空了回空 JSON。
  * 后台记忆调用（前情梗概合并 / 改稿后重写章纪要）与主链路并发到达，走旁路应答、不吃队列（见 SIDE_ROUTES）。
+ * 子智能体（写作子智能体 / 只读调查员）按 system 身份行路由到各自的队列，不吃主队列（见 SUB_QUEUES）。
  */
 import { appendFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 
-const DRAFT = [
+const DRAFT_PARAS = [
   '雾津港的雾在半夜最重。林岸蹲在七号泊位的缆桩后面，把断刀往怀里又拢了拢。刀身断口用麻布缠了三层，还是硌得肋骨生疼。远处盐帮的灯笼一盏一盏漂过来，光晕被雾泡开，像化在水里的蛋黄。',
   '脚步声近了。两个人，踩着木板很沉，是练过桩功的底子。林岸把呼吸压到最缓，整个人贴进缆桩的影子里。「港务官担保今夜没有外船。」其中一个说。「担保？」另一个嗤了一声，「上个月担保过的人，现在就沉在泊位底下。」',
   '一条狗从雾里钻出来，湿鼻子几乎碰到林岸的手背。他一动不动。狗闻了闻，忽然掉头冲着码头另一头狂吠。两个人影立刻提灯奔了过去——那边传来铁器砸落的脆响，像是有人故意弄翻了什么。',
   '货船的跳板只放了一半。林岸贴着船舷摸上去，舱底堆着咸鱼和蔗糖，气味呛得人眼睛发酸。他把断刀塞进蔗糖筐的夹层，自己也蜷了进去。起锚的绞盘声轰隆隆碾过头顶时，他摸到刀柄内侧那道刻痕——一个被磨掉一半的「沈」字。',
   '船离岸很远之后，舱口忽然透进一线光。一个披蓑衣的老船工提着灯下来，在蔗糖筐前站定，慢悠悠地说：「小子，盐帮悬赏你的画像，今早已经送到了南屿。」林岸的手在暗处扣紧了刀柄。'
-].join('\n\n')
+]
+const DRAFT = DRAFT_PARAS.join('\n\n')
 
 // SKIP_ONBOARD=1 时跳过前 4 个 onboard 响应（已开书续写场景）
 // CHAT_FIRST=1 时把两个 chat 响应挪到写作循环之前（M5 冒烟：先对话后写作）
@@ -304,7 +306,64 @@ const QUEUE = process.env.CHAT_FIRST
 // 元素为 string=纯文本 delta；{tool_calls:[{name,arguments}]}=工具调用响应
 // CHAT_IN_QUEUE=0 时去掉 chat 段（m4 场景：写章后直接 revise/review/diagnose）
 // 走向卡已废除：startWrite 直通 agent 链（无 directions 响应）
-const DRAFT_FIXED = DRAFT.replace(/忽然/g, '')
+// 写章正文由写作子智能体写：它的调用按 system 身份行进 WRITER_QUEUE，主队列里没有正文响应
+const WRITER_MARK = '你是写作子智能体'
+const RESEARCH_MARK = '你是只读调查员'
+// 主智能体给写手的任务简报（≥60 字才收）
+const GOOD_BRIEF =
+  '林岸在七号泊位缆桩后藏身半夜，盐帮提灯巡逻逼近，一条狗几乎嗅出他的藏身处，码头另一头突然传来铁器砸落声引开巡逻。中段潮水转向，他摸上只放了一半跳板的货船，藏进蔗糖筐夹层，起锚的绞盘声里他摸到刀柄内侧被磨掉一半的「沈」字。结尾船离岸后蓑衣老船工提灯下舱，径直站在蔗糖筐前，报出盐帮的悬赏。基调冷硬，短句为主，情绪藏在动作里；要埋「沈」字伏笔，避免直接点破刻痕含义。'
+// 写作子智能体队列：读一次人设 → 分两段交稿（第二段 done 触发自检：DRAFT 含负向词「忽然」→ major 退回）
+// → revise_draft 把「忽然」全部去掉 → 复检通过 → finish 交回执（回执原句都出自去掉「忽然」后的正文）
+const WRITER_QUEUE = [
+  { tool_calls: [{ name: 'get_character', arguments: { name: '林岸' } }] },
+  {
+    tool_calls: [
+      { name: 'submit_draft', arguments: { text: DRAFT_PARAS.slice(0, 2).join('\n\n') } }
+    ]
+  },
+  {
+    tool_calls: [
+      { name: 'submit_draft', arguments: { text: DRAFT_PARAS.slice(2).join('\n\n'), done: true } }
+    ]
+  },
+  { tool_calls: [{ name: 'revise_draft', arguments: { find: '忽然', replace: '' } }] },
+  { tool_calls: [{ name: 'submit_draft', arguments: { done: true } }] },
+  {
+    tool_calls: [
+      {
+        name: 'finish',
+        arguments: {
+          summary:
+            '林岸雾夜藏身七号泊位，借码头异响引开盐帮巡逻，藏进蔗糖筐随船离港；老船工下舱点破悬赏画像已送南屿。',
+          characters: [
+            {
+              name: '林岸',
+              patch: { location: '南屿货船·蔗糖舱', mood: '紧绷' },
+              evidence: '他把断刀塞进蔗糖筐的夹层，自己也蜷了进去'
+            }
+          ],
+          foreshadows: [
+            {
+              title: '断刀的来历',
+              detail: '刀柄内侧刻着被磨掉一半的「沈」字，父亲至死不肯解释。',
+              status: 'open',
+              evidence: '刀柄内侧那道刻痕——一个被磨掉一半的「沈」字'
+            }
+          ],
+          settings: [
+            {
+              kind: 'geography',
+              title: '雾津港七号泊位',
+              readerText: '常年大雾的深水泊位，夜里潮水定时辰。',
+              authorText: '七号泊位专走南屿的私货船。',
+              evidence: '盐帮悬赏你的画像，今早已经送到了南屿'
+            }
+          ]
+        }
+      }
+    ]
+  }
+]
 const CHAT_TAIL = [
   { tool_calls: [{ name: 'list_chapters', arguments: {} }] },
   '目前只有第 1 章。断刀「沈」字的伏笔刚埋下，建议下一章让老船工主动试探林岸，把悬赏的紧迫感顶上来。',
@@ -315,17 +374,11 @@ const PLAN_JSON = JSON.stringify({
   plan: '- **走向**：老船工试探林岸，悬赏画像的收货人浮出水面。\n- **设定改动**：无。\n- **伏笔**：无新增，断刀「沈」字保持未解。\n- **风险**：船上密闭场景注意与前章舱底气味的连续性。'
 })
 // SUBAGENT=1：追加一次「父→spawn_subagent→子读→子 finish→父 finish」交换（排 chat 后、revise 前）
+// 子代理的两轮在 RESEARCH_QUEUE 里（按身份行路由），这里只剩父循环的两条
 const SUB_QUEUE = [
   {
     tool_calls: [
       { name: 'spawn_subagent', arguments: { task: '查一下当前写到第几章，最新章的标题是什么。' } }
-    ]
-  },
-  // 子代理轮（静默，不落工具卡）：list_chapters → finish 结论
-  { tool_calls: [{ name: 'list_chapters', arguments: {} }] },
-  {
-    tool_calls: [
-      { name: 'finish', arguments: { message: '调查结论：目前共 1 章，最新章《雾夜登船》。' } }
     ]
   },
   // 父代理拿到结论直接收尾
@@ -337,6 +390,15 @@ const SUB_QUEUE = [
           message: '调查员回报：写到第 1 章《雾夜登船》，断刀伏笔已埋。建议下一章写船上试探。'
         }
       }
+    ]
+  }
+]
+// 只读调查员队列（静默，不落工具卡）：list_chapters → finish 结论
+const RESEARCH_QUEUE = [
+  { tool_calls: [{ name: 'list_chapters', arguments: {} }] },
+  {
+    tool_calls: [
+      { name: 'finish', arguments: { message: '调查结论：目前共 1 章，最新章《雾夜登船》。' } }
     ]
   }
 ]
@@ -383,24 +445,16 @@ const AGENT_QUEUE = [
     tool_calls: [
       {
         name: 'write_chapter_draft',
-        arguments: {
-          title: '雾夜登船',
-          synopsis:
-            '林岸在七号泊位藏身半夜，靠码头异响引开盐帮巡逻，趁潮水转向藏进货船蔗糖筐夹层登船离港；船离岸后蓑衣老船工下舱点破悬赏。',
-          beats: ['缆桩藏身躲巡逻', '异响引开，摸上货船', '蔗糖筐里发现「沈」字', '老船工点破悬赏']
-        }
+        arguments: { brief: GOOD_BRIEF, title: '雾夜登船' }
       }
     ]
   },
-  DRAFT, // write_chapter_draft 拦截内 genDraft 的响应（含负向词「忽然」→触发 lint major）
-  DRAFT_FIXED, // autoFixDraft 的响应（负向词已去）
+  // 正文在 WRITER_QUEUE 里由写作子智能体交稿；纪要不传，缺省用写手回执里的
   {
     tool_calls: [
       {
         name: 'commit_chapter',
         arguments: {
-          summary:
-            '林岸雾夜藏身七号泊位，借码头异响引开盐帮巡逻，藏进蔗糖筐随船离港；老船工下舱点破悬赏画像已送南屿。',
           quickActions: [{ label: '补老船工视角', instruction: '结尾加一小段老船工视角。' }]
         }
       }
@@ -494,15 +548,58 @@ const SIDE_ROUTES = [
     })
   }
 ]
-/** 命中旁路返回应答文本，否则 null（照常吃队列） */
-const sideRoute = (body) => {
+/** 请求的 system 提示（没有或解析失败回空串） */
+const systemOf = (body) => {
   try {
     const system = JSON.parse(body).messages?.find((m) => m.role === 'system')?.content
-    if (typeof system !== 'string') return null
-    return SIDE_ROUTES.find((r) => system.includes(r.mark))?.text ?? null
+    return typeof system === 'string' ? system : ''
   } catch {
-    return null
+    return ''
   }
+}
+/** 命中旁路返回应答文本，否则 null（照常吃队列） */
+const sideRoute = (body) => {
+  const system = systemOf(body)
+  return system ? (SIDE_ROUTES.find((r) => system.includes(r.mark))?.text ?? null) : null
+}
+// 子智能体的调用：写作子智能体 / 只读调查员与主智能体并发嵌套到达，按 system 身份行进各自的队列，
+// 不吃主队列（队列空了回空 JSON，与主队列同款）。
+// 身份行分别定义在 src/main/agent/writer.ts 与 src/main/agent/loop.ts，改了要同步这里。
+const SUB_QUEUES = [
+  { mark: WRITER_MARK, name: '写手', queue: WRITER_QUEUE },
+  { mark: RESEARCH_MARK, name: '调查员', queue: RESEARCH_QUEUE }
+]
+const describe = (item) =>
+  typeof item === 'object' ? `tool_calls→${item.tool_calls.map((t) => t.name).join(',')}` : 'text'
+/** 按预设应答一次（SSE）：对象=工具调用，字符串=纯文本 */
+const sendItem = (res, item) => {
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
+  const send = (delta, finish) =>
+    res.write(
+      `data: ${JSON.stringify({
+        model: 'stub-model',
+        choices: [{ delta, ...(finish ? { finish_reason: finish } : {}) }],
+        ...(finish ? { usage: { prompt_tokens: 100, completion_tokens: 300 } } : {})
+      })}\n\n`
+    )
+  if (typeof item === 'object' && item.tool_calls) {
+    // 工具调用响应：一次性给完整 tool_calls（llmOpenai 按 index 累积）
+    callSeq += 1
+    const fn = item.tool_calls.map((t, i) => ({
+      index: i,
+      id: `call_${callSeq}_${i}`,
+      type: 'function',
+      function: { name: t.name, arguments: JSON.stringify(t.arguments ?? {}) }
+    }))
+    send({ role: 'assistant', tool_calls: fn })
+    send({}, 'tool_calls')
+  } else {
+    const text = typeof item === 'string' ? item : ''
+    for (let i = 0; i < text.length; i += 40) send({ content: text.slice(i, i + 40) })
+    send({}, 'stop')
+  }
+  res.write('data: [DONE]\n\n')
+  res.end()
 }
 const server = createServer((req, res) => {
   if (req.method === 'GET' && req.url?.endsWith('/models')) {
@@ -529,75 +626,21 @@ const server = createServer((req, res) => {
     const side = sideRoute(body)
     if (side !== null) {
       console.log(`[stub] 旁路应答（剩余 ${FINAL_QUEUE.length} 不变）`)
-      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
-      for (let i = 0; i < side.length; i += 40)
-        res.write(
-          `data: ${JSON.stringify({
-            model: 'stub-model',
-            choices: [{ delta: { content: side.slice(i, i + 40) } }]
-          })}\n\n`
-        )
-      res.write(
-        `data: ${JSON.stringify({
-          model: 'stub-model',
-          choices: [{ delta: {}, finish_reason: 'stop' }],
-          usage: { prompt_tokens: 100, completion_tokens: 300 }
-        })}\n\n`
+      sendItem(res, side)
+      return
+    }
+    const sub = SUB_QUEUES.find((q) => systemOf(body).includes(q.mark))
+    if (sub) {
+      const item = sub.queue.length ? sub.queue.shift() : '{}'
+      console.log(
+        `[stub] call #${served} ${sub.name}队列 (剩余 ${sub.queue.length}) ${describe(item)}`
       )
-      res.write('data: [DONE]\n\n')
-      res.end()
+      sendItem(res, item)
       return
     }
     const item = FINAL_QUEUE.length ? FINAL_QUEUE.shift() : '{}'
-    const text = typeof item === 'string' ? item : ''
-    console.log(
-      `[stub] call #${served} (剩余 ${FINAL_QUEUE.length}) ${typeof item === 'object' ? `tool_calls→${item.tool_calls.map((t) => t.name).join(',')}` : 'text'}`
-    )
-    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' })
-    if (typeof item === 'object' && item.tool_calls) {
-      // 工具调用响应：一次性给完整 tool_calls（llmOpenai 按 index 累积）
-      callSeq += 1
-      const fn = item.tool_calls.map((t, i) => ({
-        index: i,
-        id: `call_${callSeq}_${i}`,
-        type: 'function',
-        function: { name: t.name, arguments: JSON.stringify(t.arguments ?? {}) }
-      }))
-      res.write(
-        `data: ${JSON.stringify({
-          model: 'stub-model',
-          choices: [{ delta: { role: 'assistant', tool_calls: fn } }]
-        })}\n\n`
-      )
-      res.write(
-        `data: ${JSON.stringify({
-          model: 'stub-model',
-          choices: [{ delta: {}, finish_reason: 'tool_calls' }],
-          usage: { prompt_tokens: 100, completion_tokens: 300 }
-        })}\n\n`
-      )
-      res.write('data: [DONE]\n\n')
-      res.end()
-      return
-    }
-    const chunkSize = 40
-    for (let i = 0; i < text.length; i += chunkSize) {
-      res.write(
-        `data: ${JSON.stringify({
-          model: 'stub-model',
-          choices: [{ delta: { content: text.slice(i, i + chunkSize) } }]
-        })}\n\n`
-      )
-    }
-    res.write(
-      `data: ${JSON.stringify({
-        model: 'stub-model',
-        choices: [{ delta: {}, finish_reason: 'stop' }],
-        usage: { prompt_tokens: 100, completion_tokens: 300 }
-      })}\n\n`
-    )
-    res.write('data: [DONE]\n\n')
-    res.end()
+    console.log(`[stub] call #${served} (剩余 ${FINAL_QUEUE.length}) ${describe(item)}`)
+    sendItem(res, item)
   })
 })
 const PORT = Number(process.env.STUB_PORT ?? 3923)

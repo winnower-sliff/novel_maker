@@ -1,6 +1,6 @@
 /**
- * M6 冒烟（API 级·全面 agent 化）：startWrite 直通 agent 自主段（工具链+流式正文+自动修+入书+沉淀）
- * + 负向词硬闸（「忽然」触发 autoFix）+ chat free agent（带工具调用）。
+ * M6 冒烟（API 级·全面 agent 化）：startWrite 直通 agent 自主段（主智能体写任务简报→派写作子智能体
+ * 分段交稿+自检退回+回执→入书+沉淀）+ 负向词硬闸（「忽然」触发退回给写手自己改）+ chat free agent（带工具调用）。
  * 前置：npm run build（dist 最新）。stub 由本脚本 spawn（AGENT_MODE=1，端口 3923）。
  */
 import { spawn } from 'node:child_process'
@@ -98,7 +98,7 @@ try {
   ok(true, '模型配置 → stub')
 
   const book = await invoke('book:create', { title: '冒烟之书', targetWords: 600 })
-  // 负向词硬闸：DRAFT 里有「忽然」，agent 写出后 lint 应 major → autoFix → 修掉；文风进导演系统提示
+  // 负向词硬闸：桩交的稿里有「忽然」，写手 done 时自检应 major → 退回 → 写手 revise_draft 改掉；文风进导演系统提示
   await invoke('book:update', book.id, { negativeWords: ['忽然'], styleName: '冷硬短句' })
   await invoke('character:save', {
     lineId: book.activeLineId,
@@ -118,7 +118,10 @@ try {
   ok(detail.chapters.length === 1, `章节入库（${detail.chapters.length} 章）`)
   const ch = await invoke('chapter:get', detail.chapters[0].id)
   ok((ch?.title ?? '') === '雾夜登船', `章标题（${ch?.title}）`)
-  ok(!(ch?.content ?? '').includes('忽然'), '负向词「忽然」已被自动修掉')
+  ok(
+    !(ch?.content ?? '').includes('忽然'),
+    '负向词「忽然」被写手自己改掉（自检退回 → revise_draft）'
+  )
   ok((ch?.content ?? '').length > 300, `正文字数（${ch?.content ?? ''.length}）`)
 
   // 前情梗概：入书后后台合并出本线唯一一行 running 梗概（合并是 fire-and-forget，直读临时库等它落库）
@@ -143,35 +146,144 @@ try {
     )
     ok(count === 1, `running 梗概只有一行（${count}）`)
 
-    // 写手提示：吃的是和导演同一份写作简报（出场人物带人设），过时措辞已去掉
+    // 写作子智能体的提示：吃的是和导演同一份写作简报（出场人物带人设），稳定内容在前、简报在后
     {
-      const writer = dumped().find((b) =>
-        String(b.messages?.[0]?.content ?? '').includes('正文写作特别纪律')
+      const writerReq = dumped().find((b) =>
+        String(b.messages?.[0]?.content ?? '').startsWith('你是写作子智能体')
       )
-      const user = String(writer?.messages?.[1]?.content ?? '')
+      const system = String(writerReq?.messages?.[0]?.content ?? '')
+      const firstUser = String(writerReq?.messages?.[1]?.content ?? '')
+      const toolNames = (writerReq?.tools ?? []).map((t) => t.function?.name)
       ok(
-        !!writer && user.includes('本章出场人物') && user.includes('【林岸】（主角）'),
+        system.includes('## 本章目标字数') &&
+          system.includes('## 负向词') &&
+          system.includes('## 文风') &&
+          system.includes('## 记忆简报') &&
+          system.indexOf('## 本章目标字数') < system.indexOf('## 记忆简报'),
+        '写手系统提示：硬约束在前（字数/负向词/文风）、记忆简报在后'
+      )
+      ok(
+        system.includes('本章出场人物') && system.includes('【林岸】（主角）'),
         '写手提示带出场人物人设'
       )
-      ok(!user.includes('作者选定的走向'), '写手提示不再出现过时的「作者选定的走向」')
+      ok(!system.includes('作者选定的走向'), '写手提示不再出现过时的「作者选定的走向」')
+      ok(
+        firstUser.includes('## 任务简报') && firstUser.includes('## 交稿规则'),
+        '写手首条消息=任务简报+交稿规则'
+      )
+      ok(writerReq?.max_tokens === 8000, `写手每轮输出预算 8000（${writerReq?.max_tokens}）`)
+      ok(
+        [
+          'submit_draft',
+          'revise_draft',
+          'finish',
+          'get_character',
+          'get_card',
+          'read_sample'
+        ].every((t) => toolNames.includes(t)) &&
+          ['save_card', 'commit_chapter', 'write_chapter_draft', 'spawn_subagent'].every(
+            (t) => !toolNames.includes(t)
+          ),
+        `写手工具=读工具+交稿三件套，没有写类工具（${toolNames.length} 个）`
+      )
+    }
+
+    // 自检退回 → 写手自己改 → 复检通过：看写手后续请求里的工具结果
+    {
+      const writerReqs = dumped().filter((b) =>
+        String(b.messages?.[0]?.content ?? '').startsWith('你是写作子智能体')
+      )
+      const toolResults = writerReqs.flatMap((b) =>
+        (b.messages ?? []).filter((m) => m.role === 'tool').map((m) => String(m.content))
+      )
+      ok(
+        toolResults.some((t) => t.includes('自检退回（第 1/2 次）')),
+        '负向词触发自检退回'
+      )
+      ok(
+        toolResults.some((t) => t.includes('已替换 2 处')),
+        '写手用 revise_draft 改掉两处「忽然」'
+      )
+      ok(
+        toolResults.some((t) => t.includes('自检通过')),
+        '改完复检通过'
+      )
+      ok(
+        toolResults.some((t) => t.includes('已累计 ') && t.includes('末尾：')),
+        '分段交稿：每段回累计字数与末尾'
+      )
+    }
+
+    // 回给主智能体的回执不含全文
+    {
+      const mainReq = dumped().find(
+        (b) =>
+          !String(b.messages?.[0]?.content ?? '').startsWith('你是写作子智能体') &&
+          (b.messages ?? []).some(
+            (m) => m.role === 'tool' && String(m.content).includes('写手交稿')
+          )
+      )
+      const receipt = String(
+        (mainReq?.messages ?? []).find(
+          (m) => m.role === 'tool' && String(m.content).includes('写手交稿')
+        )?.content ?? ''
+      )
+      ok(
+        receipt.includes('纪要：') && receipt.includes('伏笔线索') && receipt.includes('设定线索'),
+        '回执带纪要与沉淀线索'
+      )
+      ok(!receipt.includes('正文全文：'), '回执不回灌正文全文')
     }
   }
 
-  // 工具卡消息序列
+  // 工具卡消息序列：派写手先落一张带任务简报的卡，写手的每一步（查人设 / 交稿 / 回改 / 回执）跟在后面，
+  // 整章交回再落一张「写手交稿」卡
   let msgs = await invoke('message:list', book.id)
   const tools = msgs.filter((m) => m.meta?.kind === 'tool').map((m) => m.meta.tool)
   ok(
     tools.join(',') ===
-      'get_write_context,write_chapter_draft,commit_chapter,patch_character_state,save_foreshadow,save_card,finish',
+      'get_write_context,write_chapter_draft,get_character,submit_draft,submit_draft,revise_draft,submit_draft,finish,write_chapter_draft,commit_chapter,patch_character_state,save_foreshadow,save_card,finish',
     `工具卡序列（${tools.join(',')}）`
   )
-  const draftCard = msgs.find(
+  const draftCards = msgs.filter(
     (m) => m.meta?.kind === 'tool' && m.meta.tool === 'write_chapter_draft'
   )
+  const [dispatchCard, doneCard] = draftCards
+  const excerpt = dispatchCard?.meta?.brief
   ok(
-    (draftCard?.meta?.summary ?? '').includes('字'),
-    `write_chapter_draft 卡带字数（${draftCard?.meta?.summary}）`
+    draftCards.length === 2 &&
+      typeof excerpt === 'string' &&
+      excerpt.length === 121 &&
+      excerpt.endsWith('…') &&
+      dispatchCard.content.length > 120 &&
+      dispatchCard.content.startsWith(excerpt.slice(0, 120)),
+    `派写手卡：卡面露任务简报前 120 字，详情是全文（${dispatchCard?.meta?.summary}）`
   )
+  ok(
+    (doneCard?.meta?.summary ?? '').includes('字') &&
+      doneCard?.meta?.brief === undefined &&
+      String(doneCard?.content ?? '').includes('自检通过') &&
+      !String(doneCard?.content ?? '').includes(ch.content.slice(0, 40)),
+    `写手交稿卡带字数与自检结论、详情不带正文（${doneCard?.meta?.summary}）`
+  )
+  // 写手的卡（夹在派写手卡与交稿卡之间）带累计字数；所有工具卡的详情都不带没入书的正文
+  {
+    const writerCards = msgs.slice(msgs.indexOf(dispatchCard) + 1, msgs.indexOf(doneCard))
+    const text = msgs
+      .filter((m) => m.meta?.kind === 'tool')
+      .map((m) => m.content)
+      .join('\n')
+    ok(
+      writerCards.length === 6 &&
+        writerCards.every((m) => typeof m.meta.words === 'number') &&
+        writerCards.at(-1)?.meta?.words === ch.content.replace(/\s/g, '').length,
+      `写手的每张卡带累计字数，收工那张等于入书字数（${writerCards.at(-1)?.meta.words}）`
+    )
+    ok(
+      !text.includes(ch.content.slice(0, 40)) && !text.includes(ch.content.slice(-40)),
+      '工具卡详情不带没入书的正文'
+    )
+  }
 
   // 节点消息：chapter（走向卡已废除，无 cards 节点）
   const steps = msgs.filter((m) => m.meta?.kind === 'job').map((m) => m.meta.step)

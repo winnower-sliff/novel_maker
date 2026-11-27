@@ -33,7 +33,35 @@ export interface ToolResult {
   summary: string
   /** 给 LLM 看的详细结果 */
   data: string
+  /** 工具卡展开后的详情，缺省用 data：正文这类不该进聊天流的内容，在这里换成给作者看的说明 */
+  card?: string
+  /** 并进工具卡 meta 的附加字段（如累计字数 words、任务简报 brief） */
+  cardMeta?: Record<string, unknown>
 }
+
+/**
+ * 拦截工具执行器（子智能体用）：按工具名接下自己的拦截工具并回结果；
+ * 回 null 表示「不是我的」，交给默认拦截表与普通工具。
+ */
+export type ToolInterceptor = (
+  name: string,
+  input: Record<string, unknown>
+) => Promise<ToolResult | null>
+
+/** 只读工具名：调查员用它，写作子智能体在它之上再看人设 */
+export const READ_TOOLS: ReadonlySet<string> = new Set([
+  'get_book_config',
+  'list_chapters',
+  'read_chapter',
+  'list_cards',
+  'get_card',
+  'list_characters',
+  'list_foreshadows',
+  'get_write_context',
+  'list_samples',
+  'read_sample',
+  'search_project'
+])
 
 function ctxBook(ctx: ToolCtx): Book {
   const book = store.getBook(ctx.bookId)
