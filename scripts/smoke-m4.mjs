@@ -92,7 +92,7 @@ try {
   const book = await invoke('book:create', { title: '冒烟之书', targetWords: 600 })
   ok(!!book.id && !!book.activeLineId, 'book:create')
   const line = { id: book.activeLineId }
-  // 负向词触发 stub 链的 autoFix 轮，对齐 AGENT_MODE 队列
+  // 负向词触发写手的自检退回轮，对齐桩的写手队列
   await invoke('book:update', book.id, { negativeWords: ['忽然'] })
 
   await invoke('card:save', {

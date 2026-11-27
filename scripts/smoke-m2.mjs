@@ -100,7 +100,7 @@ try {
   const book = await invoke('book:create', [{ title: '雾津夜航', genre: '悬疑', targetWords: 600 }])
   ok(!!book?.id && !!book?.activeLineId, 'book:create（自动建主线）')
   const mainLineId = book.activeLineId
-  // 负向词触发 stub 链的 autoFix 轮（DRAFT 含「忽然」→修掉），对齐 AGENT_MODE 队列
+  // 负向词触发写手的自检退回轮（桩交的稿含「忽然」→退回→写手改掉），对齐桩的写手队列
   await invoke('book:update', [book.id, { negativeWords: ['忽然'] }])
 
   const saltGang = await invoke('card:save', [

@@ -84,7 +84,7 @@ try {
   const book = await invoke('book:create', [
     { title: '计划模式测试书', genre: '悬疑', targetWords: 600 }
   ])
-  // 负向词触发 autoFix 轮（对齐 AGENT_MODE 队列）
+  // 负向词触发写手的自检退回轮（对齐桩的写手队列）
   await invoke('book:update', [book.id, { negativeWords: ['忽然'] }])
   // 计划模式开启
   const b1 = await invoke('book:update', [book.id, { planMode: true }])

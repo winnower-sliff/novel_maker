@@ -362,52 +362,52 @@ try {
       plainBrief.includes('主线第2版')
   )
 
-  // ── 写手提示：吃同一份简报，文风范例在末尾，过时措辞已去掉 ──
-  const { draftPrompt } = await import(url('director/steps.js'))
+  // ── 写作子智能体的提示：吃同一份简报；硬约束在前、记忆简报在后，任务简报与交稿规则在首条消息 ──
+  const { buildWriterPrompt } = await import(url('agent/writer.js'))
   store.updateBook(book.id, { styleSample: '短句。短句。雾很重。' })
   const writerBook = store.getBook(book.id)
-  const outline = { title: '夜探', synopsis: '林岸夜探南屿码头', beats: ['登岸'] }
-  const prompt = draftPrompt({
+  const brief = '林岸夜探南屿码头，看悬赏画像。'
+  const prompt = buildWriterPrompt({
     book: writerBook,
     lineId: main,
-    outline,
-    scenes: null,
-    direction: { source: 'free', text: '作者：多写雾' }
+    brief,
+    direction: '作者：多写雾'
   })
+  ok('身份行在系统提示开头（桩按它路由写手的调用）', prompt.system.startsWith('你是写作子智能体'))
   ok(
-    '写手提示带出场人物人设与走向交代',
-    prompt.user.includes('本章出场人物') &&
-      prompt.user.includes('人设：背景：前水手') &&
-      prompt.user.includes('本章走向与作者交代\n作者：多写雾')
+    '写手提示带出场人物人设',
+    prompt.system.includes('本章出场人物') && prompt.system.includes('人设：背景：前水手')
   )
-  ok('写手提示带前情梗概', prompt.user.includes('主线第2版'))
-  ok('过时措辞「作者选定的走向」已去掉', !prompt.user.includes('作者选定的走向'))
+  ok('写手提示带前情梗概', prompt.system.includes('主线第2版'))
   ok(
-    '文风范例在提示末尾（大纲之后、动笔指令之前）',
-    prompt.user.includes('文风范例') &&
-      prompt.user.includes('短句。短句。雾很重。') &&
-      prompt.user.indexOf('文风范例') > prompt.user.indexOf('## 本章大纲') &&
-      prompt.user.trimEnd().endsWith('现在，写本章正文。')
+    '过时措辞「作者选定的走向」已去掉',
+    !prompt.user.includes('作者选定的走向') && !prompt.system.includes('作者选定的走向')
   )
-  const silent = draftPrompt({
+  ok(
+    '首条消息=任务简报+作者交代+交稿规则',
+    prompt.user.includes('## 任务简报') &&
+      prompt.user.includes(brief) &&
+      prompt.user.includes('## 作者对本章的交代\n作者：多写雾') &&
+      prompt.user.includes('## 交稿规则')
+  )
+  ok(
+    '文风范例在系统提示里，排在记忆简报之前（稳定内容在前）',
+    prompt.system.includes('## 文风范例') &&
+      prompt.system.includes('短句。短句。雾很重。') &&
+      prompt.system.indexOf('## 文风范例') < prompt.system.indexOf('## 本章目标字数') &&
+      prompt.system.indexOf('## 本章目标字数') < prompt.system.indexOf('## 记忆简报')
+  )
+  const silent = buildWriterPrompt({ book: writerBook, lineId: main, brief, direction: '' })
+  ok('作者没给倾向时不硬造交代段', !silent.user.includes('作者对本章的交代'))
+  const planned = buildWriterPrompt({
     book: writerBook,
     lineId: main,
-    outline,
-    scenes: null,
-    direction: { source: 'free', text: '' }
-  })
-  ok('作者没给倾向时不硬造走向段', !silent.user.includes('本章走向与作者交代'))
-  const planned = draftPrompt({
-    book: writerBook,
-    lineId: main,
-    outline,
-    scenes: null,
-    direction: { source: 'free', text: '' },
+    brief,
     plan: '- **走向**：按批准的计划写'
   })
   ok(
     '计划模式下写手提示带已批准的计划',
-    planned.user.includes('本章计划（作者已批准') && planned.user.includes('按批准的计划写')
+    planned.system.includes('本章计划（作者已批准') && planned.system.includes('按批准的计划写')
   )
 
   // ── ⑦ 分叉：新线有自己的梗概，此后各线独立演化 ──
