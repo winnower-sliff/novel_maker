@@ -35,14 +35,6 @@
   变体与首尾省略号视为相同 ④证据章默认最新一章 ⑤没点名时补钉选人物再带前两位、相关卡按标题和标签
   匹配 ⑥任何改稿都刷新纪要 ⑦聊天历史仍取末 12 条 ⑧改祖先线共享章只更新该线梗概。
   **阶段二、三未开工**（设计见下）。
-- ④ **新需求：写作链路简化——只保留一个主智能体，写正文改由主智能体派「写作子智能体」**（2026-11-27 08:00，
-  用户原话：「导演和写手原来是两套机制吗？需要简化一下，把智能体里不需要的写手给去掉，只保留一个，
-  改为可以调用子智能体，由主智能体决定给子智能体提供什么」）。状态：**设计中（只读摸底中），未开工**。
-  现状事实（已读码）：写手不是智能体，是被拦截的工具 `write_chapter_draft`（`agent/loop.ts` ~:702）里由代码拼
-  `draftPrompt`（`director/steps.ts:51`）再调 `genDraft` → `writeSegments` 的一次性调用，草稿全文回灌给导演；
-  `revise_chapter`（loop.ts ~:803）= `genRevisePlan` 出 find/replace 计划再 `applyRevisePlan`；已有的
-  `spawn_subagent`（loop.ts ~:850）只是只读调查员（`subTools()`、`SUB_SYSTEM`、12 轮、对作者不可见）。
-  顺序：排在嵌套分叉修复合并之后、长期记忆阶段二之前（三者都改 loop.ts / steps.ts / jobs.ts，必须串行）。
   目标：风格统一 + 逻辑一致；
   缓解 DeepSeek 的幻觉与遗忘。
 - ③ 调查结论（已核实代码）：
@@ -95,11 +87,56 @@
   父线自己的章、继承的祖先章全保留；不改表结构；扩 `smoke-fork.mjs`；同步 AGENTS.md「分叉树」）
   ②`fix(memory)` 改到子线也继承的章时，安排子线的前情梗概重建（删 `running` 行，交给已有补建机制懒
   重建；`legacy` 不动；扩 `smoke-memory.mjs`）。
+- ④ **新需求：写作链路简化——只保留一个主智能体，写正文改由主智能体派「写作子智能体」**（2026-11-27 08:00，
+  用户原话：「导演和写手原来是两套机制吗？需要简化一下，把智能体里不需要的写手给去掉，只保留一个，
+  改为可以调用子智能体，由主智能体决定给子智能体提供什么」）。状态：**设计已定（只读摸底完成），未开工**。
+  现状事实（已读码）：写手不是智能体，是被拦截的工具 `write_chapter_draft`（`agent/loop.ts:210` 定义、:697
+  拦截）里由代码拼 `draftPrompt`（`director/steps.ts:51`）再调 `genDraft` → `writeSegments`（S:100）的一次性
+  调用，草稿全文回灌给导演（L:745-753）；`revise_chapter`（L:803）= `genRevisePlan`（S:273）出 find/replace
+  计划再 `applyRevisePlan`（S:249）；已有的 `spawn_subagent`（L:850）只是只读调查员（`subTools()` L:439、
+  `SUB_SYSTEM` L:411、12 轮、`say: () => {}` 对作者不可见）。
+  顺序：排在嵌套分叉修复合并并部署之后开线；长期记忆阶段二排在其后（三者都改 loop.ts / steps.ts / jobs.ts，
+  必须串行）。分支 `feat/single-agent`，worktree + general 子代理。缩写：L=`agent/loop.ts`，J=`jobs.ts`，
+  S=`director/steps.ts`，X=`director/context.ts`，T=`agent/tools.ts`，M=`smoke-m3-stub.mjs`；行号基于 81208ad。
+  实施规格：
+  1. 派写手：`write_chapter_draft` 入参改为主智能体自己写的任务简报（本章要发生什么、出场人物与要点、要埋 / 收的
+     伏笔、基调与节奏、目标字数，可附想模仿的句子与要避免的），不再要求 title / synopsis / beats / scenes；
+     L:379-380「一次成型…再 draft 一次」与 L:389 相应改写。
+  2. 写作子智能体：把 `spawn_subagent` 扩成「派子智能体」（任务类型 research = 现状调查员 / write = 写手）。
+     write 的 system = 写手角色纪律 + 电脑端自动附上的硬约束（书信息、红线、正负词、文风、文风范例
+     `books.styleSample`、目标字数）+ 记忆简报（`buildStoryBrief` X:118，focus = 简报文本）+ 任务简报；
+     模型走 writer 槽（`resolveAuth`，config.ts:222）；工具 = 读工具（L:425 的 11 个，另加 `get_character`、
+     `get_card`）+ `submit_draft`；`maxTurns` 12。
+  3. 交稿：`submit_draft` 为子循环内的拦截工具，分段提交（每段约 1500 字以内），服务端拼成 `lastDraft.content`；
+     `job:progress`（L:905 → J:229）照常报字数并喂狗。正文不进聊天流（现行口径不变，手机上只有字数进度与
+     入书卡）。
+  4. 自检与回改：服务端 `selfCheck`（S:158 = lintChapter）；有 major 就把问题当工具结果退回**同一个**子智能体
+     让它重新 `submit_draft`（最多 2 轮，取代 `autoFixDraft` S:172 的一次性重写）；仍 major 则按现行规则带着
+     报告入书。冒烟靠 negativeWords 设「忽然」触发的「自动修一轮」相应改成「被退回一次」。
+  5. 回灌瘦身：回给主智能体的工具结果只有标题、字数、自检报告（去掉 L:745-753 的「正文全文：」）；
+     `lastDraft` 仍存全文供 `commit_chapter`（L:756）用。
+  6. 改稿：`revise_chapter` 带 `segment` = 局部修改，主智能体读原文后直接给「原文 → 改后」对（去掉
+     `genRevisePlan` 这一层，全未命中仍报「改稿未命中原文」）；整章重写 = 派写作子智能体（任务简报 = 修改
+     要求，交稿后走同一条替换与 `noteRevisedChapter`）。`job:startRevise`（J:433）无人值守链路保留
+     `genRevisePlan` 作兜底。
+  7. 范文：`genStyleRefs`（L:305）的字面检索注入保留一段作起点；写作子智能体可自己 `read_sample`（简报里可
+     点名参考哪本范文的哪段）。
+  8. 手机端：父工具卡显示任务简报摘要（「派写手：……」）；子智能体的查询轮落成 activity 卡（不再
+     `say: () => {}`）；新 / 改名工具同步 `mobile/src/pages/write/labels.ts` 的 `TOOL_LABEL`；不新增确认步骤。
+  9. 不动：审读 / 审计 / 诊断 / 记忆整理等后台检查（S:341 / 368 / 402）；聊天模式无写章权限；计划模式闸门
+     （J:269 / 285）；工具结果 30000 字上限（DECISIONS G8）。
+  10. 冒烟：写章队列（M:381，9 项）整体重排——多出子智能体的读工具轮、`submit_draft` 轮与回改轮；断言工具卡
+     序列与写手提示的地方同步改（m6:148、m6:163；`smoke-memory.mjs:357` 直调 `draftPrompt`）；桩按 system
+     身份行区分主 / 子（旁路识别在 M:529）。
+  已知代价：每章多几次模型调用、耗时多几十秒；简报写得薄时靠记忆简报与读工具兜底（提示词要求简报必含
+  出场人物 / 伏笔 / 目标 / 基调 / 字数）。
 - 下一步：等修复线子代理完成 → 验收（两个提交、`npm test` 21 套、与 origin 同步）→ 主 checkout
   `git merge --no-ff fix/fork-tree` → `npm run verify` → push → `worktree_remove` forktree →
   `git branch -d fix/fork-tree` → `npm run deploy`（本修复不动手机端，按 AGENTS 约定不出 APK；
   版本号与 tag 留到下次出包时一并推进）。
-  若本文件停在这里，新会话从这里接着做：②③ 已上线不要重做；修复线若因子代理额度中断，先核 forktree
+  随后开线实施 ④（规格见上）：`worktree_create` → `git switch -c feat/single-agent && git reset --hard feat/v2-rebuild`
+  + `npm ci` → general 子代理；合并后出包。
+  若本文件停在这里，新会话从这里接着做：②③ 已上线不要重做，④ 设计已定、待修复线合并后开线；修复线若因子代理额度中断，先核 forktree
   worktree 的磁盘现状（`git status -sb` / `git log --oneline`）再续做。
 
 ### APK 自更新故障修复（已完成，v4.8.1）
