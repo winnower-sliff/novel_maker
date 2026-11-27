@@ -1,3 +1,4 @@
+import type { ModelSlot } from '../../shared/providers.js'
 import type {
   Book,
   ChatMessage,
@@ -25,12 +26,13 @@ import {
 import { noteRevisedChapter } from '../director/storyRecap.js'
 import { lintChapter, stripHtmlComments } from '../lint.js'
 import * as store from '../store.js'
-import { execTool, type ToolCtx, type ToolResult, toolDefs } from './tools.js'
+import { execTool, type ToolCtx, type ToolInterceptor, type ToolResult, toolDefs } from './tools.js'
 
 /**
  * M6 agent 主循环：自由 LLM 工具循环（用户拍板「全面 agent 化」）。
  * - 普通工具（CRUD）走 execTool；三个拦截工具在本文件：
  *   write_chapter_draft（流式写正文+lint+自动修一轮）/ commit_chapter（落章）/ finish（收工）。
+ * - 同一个循环也是子智能体的运行器（runSubagent）：嵌套跑在父任务之下，对作者不可见。
  * - 工具卡=messages 表独立行（meta={kind:'tool',jobId,name,summary}），聊天流即工作日志。
  * - 每轮系统提示重新注入红线/正负词/文风（防长程遗忘）。
  */
@@ -82,8 +84,17 @@ export interface LoopOpts {
   /** 场景：写章（有 commit 链）或自由（无 commit） */
   mode: 'chapter' | 'free'
   maxTurns?: number
-  /** 覆盖系统提示（子代理用调查员提示；默认导演人格 agentSystem） */
+  /** 覆盖系统提示（子智能体用自己的提示；默认导演人格 agentSystem） */
   system?: string
+  /** 模型槽（默认 director；写作子智能体走 writer 槽） */
+  slot?: ModelSlot
+  /** 每轮输出预算（默认：思考关 4000、思考开 16384；截断补救轮翻倍） */
+  maxTokens?: number
+  /**
+   * 子智能体运行形态（runSubagent 设置）：只能调自己 tools 清单里的工具；
+   * intercept 接子循环自己的拦截工具，回 null 走默认拦截表与普通工具
+   */
+  subagent?: { intercept?: ToolInterceptor }
   /** 导演白话流式（chat 气泡预览；正文/改章不走这里——见 onProgress） */
   onDelta?: (t: string) => void
   /** 思考链流式（chat 折叠区；正文/改章不接） */
@@ -407,7 +418,7 @@ ${chapterDiscipline}
 - 要翻大量资料但只需要结论（摸人物关系、查伏笔现状、找前文原句）时，派 spawn_subagent 去调查——它只把最终结论带回你的上下文，省你自己的空间。日常单点查询不必派。${memoryBrief(lineId)}`
 }
 
-/** 子代理调查员系统提示（fresh 会话，只读，静默执行） */
+/** 调查员系统提示（fresh 会话，只读，静默执行）；身份行也是冒烟桩路由子智能体调用的依据 */
 const SUB_SYSTEM = `你是只读调查员，受导演指派调查小说项目的资料，只输出调查结论。
 
 ## 纪律
@@ -421,7 +432,7 @@ const N = '\n'
 /** 即时执行承诺信号：这就改/马上删/现在就写…（拦「光说不练」：承诺了却不在本轮调工具） */
 const ACT_NOW_RE = /(这就|现在就|马上|立刻|立即)[^。！？!?\n]{0,10}(改|删|建|写|加|换|存|更新|动)/
 
-/** 子代理可用工具：全部读类 + finish */
+/** 调查员可用工具：全部读类 + finish */
 const READ_TOOLS = new Set([
   'get_book_config',
   'list_chapters',
@@ -436,7 +447,7 @@ const READ_TOOLS = new Set([
   'search_project'
 ])
 
-function subTools(): ToolDef[] {
+function researchTools(): ToolDef[] {
   const defs = toolDefs().filter((d) => READ_TOOLS.has(d.name))
   defs.push({
     name: 'finish',
@@ -450,8 +461,72 @@ function subTools(): ToolDef[] {
   return defs
 }
 
+/** 调查员规格：固定提示 + 读工具，没有自己的拦截工具 */
+function researchSpec(task: string): SubagentSpec {
+  return { kind: 'research', task, system: SUB_SYSTEM, tools: researchTools(), slot: 'director' }
+}
+
 function clipData(s: string): string {
   return s.length > MAX_DATA ? `${s.slice(0, MAX_DATA)}\n…（结果过长已截断）` : s
+}
+
+/** 子智能体规格：research=只读调查员；write=写作子智能体 */
+export interface SubagentSpec {
+  kind: 'research' | 'write'
+  /** 首条 user 消息：任务本身 */
+  task: string
+  system: string
+  tools: ToolDef[]
+  /** 模型槽：调查员与导演同槽；写手走 writer 槽 */
+  slot: ModelSlot
+  /** 每轮输出预算；不传用循环默认值 */
+  maxTokens?: number
+  intercept?: ToolInterceptor
+}
+
+/** 子智能体的宿主：父任务的取消信号、看门狗喂狗与进度出口，嵌套循环原样透传 */
+export interface SubagentHost {
+  jobId: string
+  bookId: string
+  signal?: AbortSignal
+  onTurn?: () => void
+  onProgress?: LoopOpts['onProgress']
+}
+
+/** 调查翻十几轮资料、写手分段交稿带两轮回改都够用；再多多半是在打转 */
+const SUBAGENT_MAX_TURNS = 12
+const SUBAGENT_LABEL = { research: '调查员', write: '写作子智能体' } as const
+
+/**
+ * 子智能体运行器：调查员与写手共用一套嵌套循环。
+ * - 对作者不可见（say 空操作；要给作者看的由父循环的工具卡代劳）
+ * - 透传父循环的取消信号与喂狗：子循环卡死，父任务的看门狗照杀
+ * - 只能调自己清单里的工具：模型幻觉出清单外的写工具也拒
+ */
+async function runSubagent(spec: SubagentSpec, host: SubagentHost): Promise<LoopResult> {
+  const child = await runAgentLoop({
+    jobId: host.jobId,
+    bookId: host.bookId,
+    task: spec.task,
+    history: [],
+    tools: spec.tools,
+    mode: 'free',
+    maxTurns: SUBAGENT_MAX_TURNS,
+    system: spec.system,
+    slot: spec.slot,
+    maxTokens: spec.maxTokens,
+    say: () => {},
+    signal: host.signal,
+    onTurn: host.onTurn,
+    onProgress: host.onProgress,
+    subagent: { intercept: spec.intercept }
+  })
+  if (child.turns >= SUBAGENT_MAX_TURNS) {
+    console.warn(
+      `[agent] jobId=${host.jobId} ${SUBAGENT_LABEL[spec.kind]}跑满 ${SUBAGENT_MAX_TURNS} 轮`
+    )
+  }
+  return child
 }
 
 export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
@@ -478,11 +553,21 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
   let chaptersCommitted = 0
   let finishText = ''
   let lastFinishMessage = ''
+  // 子智能体只能调自己清单里的工具（runOne 里核对）
+  const allowedTools = new Set(opts.tools.map((t) => t.name))
 
   const messages: ChatMessage[] = [...opts.history, { role: 'user', content: task }]
   const historyLen = opts.history.length
   let taskNote = '' // 并入 task 消息尾部的历次〔前情工作纪要〕
   const signal = opts.signal
+  // 派子智能体时的宿主：取消信号、喂狗与进度出口都挂在父任务上
+  const subHost: SubagentHost = {
+    jobId,
+    bookId,
+    signal,
+    onTurn: opts.onTurn,
+    onProgress: opts.onProgress
+  }
 
   /** 取消检查：jobs 层 abort（作者取消/看门狗）后不再发起任何调用、不再执行任何工具 */
   function throwIfAborted(): void {
@@ -543,9 +628,12 @@ ${rows}
     book = store.getBook(bookId) ?? book // 每轮重读（agent 可能改了配置/切了线）
     await compactIfNeeded()
     const line = store.activeLine(book)
+    // 输出预算：思考计入输出 token（DeepSeek/GPT 系皆然），上限必须盖住「思考+正文」，只按实际生成计费；
+    // 截断补救轮翻倍（8192 顶格实锤过三次静默中断，2026-11）
+    const baseMax = opts.maxTokens ?? (opts.thinking === 'enabled' ? 16384 : 4000)
     const res = await callRaw(
       {
-        slot: 'director',
+        slot: opts.slot ?? 'director',
         system: opts.system ?? agentSystem(book, line?.id ?? '', mode),
         user: task,
         jsonHint: '',
@@ -553,16 +641,7 @@ ${rows}
           messages,
           tools: opts.tools,
           responseFormat: 'text',
-          // 思考计入输出 token（DeepSeek/GPT 系皆然）：上限必须盖住「思考+正文」，只按实际生成计费；
-          // 截断补救轮再翻倍（8192 顶格实锤过三次静默中断，2026-11）
-          maxTokens:
-            opts.thinking === 'enabled'
-              ? truncNudges > 0
-                ? 32768
-                : 16384
-              : truncNudges > 0
-                ? 8000
-                : 4000
+          maxTokens: truncNudges > 0 ? baseMax * 2 : baseMax
         },
         onThinking: opts.onThinking,
         thinking: opts.thinking,
@@ -694,6 +773,18 @@ ${rows}
 
   // ── 单工具执行（拦截工具内联） ──────────────────────────────────────────
   async function runOne(name: string, input: Record<string, unknown>): Promise<ToolResult> {
+    if (opts.subagent) {
+      // 模型幻觉出清单外的工具（写类居多）：拒掉，不给子智能体越权落库的机会
+      if (!allowedTools.has(name)) {
+        return {
+          ok: false,
+          summary: `${name} 不可用`,
+          data: `你没有 ${name} 这个工具，只能用工具清单里的工具。`
+        }
+      }
+      const taken = await opts.subagent.intercept?.(name, input)
+      if (taken) return taken
+    }
     switch (name) {
       case 'finish': {
         lastFinishMessage = String(input.message ?? '')
@@ -850,20 +941,7 @@ ${rows}
       case 'spawn_subagent': {
         const t = String(input.task ?? '').trim()
         if (!t) return { ok: false, summary: '调查任务为空', data: 'spawn_subagent 需要 task 参数' }
-        const child = await runAgentLoop({
-          jobId,
-          bookId,
-          task: t,
-          history: [],
-          tools: subTools(),
-          mode: 'free',
-          maxTurns: 12,
-          system: SUB_SYSTEM,
-          say: () => {},
-          // 调查可能跑十几轮：取消要能传进去，每轮也要替父循环喂狗
-          signal,
-          onTurn: opts.onTurn
-        })
+        const child = await runSubagent(researchSpec(t), subHost)
         return {
           ok: true,
           summary: `调查员回报（${child.turns} 轮）`,

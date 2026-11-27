@@ -35,6 +35,15 @@ export interface ToolResult {
   data: string
 }
 
+/**
+ * 拦截工具执行器（子智能体用）：按工具名接下自己的拦截工具并回结果；
+ * 回 null 表示「不是我的」，交给默认拦截表与普通工具。
+ */
+export type ToolInterceptor = (
+  name: string,
+  input: Record<string, unknown>
+) => Promise<ToolResult | null>
+
 function ctxBook(ctx: ToolCtx): Book {
   const book = store.getBook(ctx.bookId)
   if (!book) throw new Error('书不存在')
