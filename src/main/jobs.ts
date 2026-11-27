@@ -335,7 +335,7 @@ async function runAgentChapterJob(
   const task = direction.text
     ? `写第 ${chapterNo} 章。作者给出的倾向：${direction.text}。据此定具体走向，按写章任务纪律自主完成全流程。`
     : `写第 ${chapterNo} 章。作者没有给倾向：综合现状卡、伏笔与前文自主定走向，按写章任务纪律自主完成全流程。`
-  // 计划模式下 direction.text = 已批准的计划 + 作者补充：作为「本章计划」交给写手；否则是作者对本章的倾向
+  // 计划模式下 direction.text = 已批准的计划 + 作者补充：作为「本章计划」交给写作子智能体；否则是作者对本章的倾向
   const planMode = Boolean(book.planMode)
   const result = await runAgentLoop({
     jobId: job.id,

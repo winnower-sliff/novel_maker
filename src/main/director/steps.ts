@@ -1,159 +1,24 @@
-import type {
-  AgentReport,
-  Book,
-  Chapter,
-  ChapterOutline,
-  JobPayload,
-  LintReport,
-  Scene
-} from '../../shared/types.js'
+import type { AgentReport, Book, Chapter, LintReport } from '../../shared/types.js'
 import { lintChapter } from '../lint.js'
-import { callJson, callRaw } from './callJson.js'
+import { callJson } from './callJson.js'
 import { type BriefFocus, buildStoryBrief } from './context.js'
 import { bookBasics, directorPersona, redlineBlock, styleBlock, wordListBlock } from './prompts.js'
 
 /**
  * 写作子步骤（供 jobs.ts 编排、agent 工具调用）：
- * 正文生成（分段续写）/ 自检 / 自动修 / 改章计划 / 计划书 / 审读·审计·诊断。
+ * 自检 / 改章计划 / 计划书 / 审读·审计·诊断。
+ * 正文生成已改由写作子智能体负责（agent/writer.ts），这里不再拼写手提示。
  * 每步一到数次 LLM 调用；可取消的入口都收 AbortSignal（任务被取消/看门狗终止时立刻停手）。
  */
 
 const WRITER_SLOT = 'writer' as const
 
-/** 书的稳定信息（基础信息/红线/正负词/文风）+ 写作简报：写手、审读、审计、诊断共用这一份 */
+/** 书的稳定信息（基础信息/红线/正负词/文风）+ 写作简报：改稿、审读、审计、诊断共用这一份 */
 function base(book: Book, lineId: string, focus?: BriefFocus): string {
   return `${bookBasics(book)}${redlineBlock(book)}${wordListBlock(book)}${styleBlock(book)}\n\n${buildStoryBrief(book, lineId, focus)}`
 }
 
-/** 文风范例（作者给的 styleSample）：放写手提示末尾，只学句式与节奏 */
-function styleSampleBlock(book: Book): string {
-  const sample = book.styleSample.trim()
-  if (!sample) return ''
-  return `\n## 文风范例（作者给的参考样本：只参考句式、节奏、叙事腔调，严禁照抄内容、人名、情节）\n${
-    sample.length > 800 ? `${sample.slice(0, 800)}…` : sample
-  }\n`
-}
-
-// ── draft：流式正文（写手槽） ────────────────────────────────────────────────
-
-export interface DraftInput {
-  book: Book
-  lineId: string
-  outline: ChapterOutline
-  scenes: Scene[] | null
-  direction: NonNullable<JobPayload['direction']>
-  /** 范文参考段（按本章检索自动拼好；无命中则空，不注入） */
-  styleRefs?: string
-  /** 计划模式下作者已批准的本章计划（有计划时不再单列走向） */
-  plan?: string
-}
-
-export function draftPrompt(input: DraftInput): { system: string; user: string } {
-  const { book, lineId, outline, scenes, direction } = input
-  const plan = input.plan?.trim() ?? ''
-  // 写手与导演共用写作简报；带上本章大纲，顺带挑出出场人物的人设与相关设定卡
-  const ctx = base(book, lineId, {
-    text: [
-      outline.title,
-      outline.synopsis,
-      ...outline.beats,
-      ...(scenes ?? []).map((s) => s.summary),
-      direction.text,
-      plan
-    ].join('\n'),
-    plan
-  })
-  const sceneBlock = scenes?.length
-    ? `\n## 本章分镜（按顺序写）\n${scenes.map((s, i) => `${i + 1}. 【${s.viewpoint || '主视点'}·${s.pace}】${s.summary}`).join('\n')}`
-    : ''
-  const refBlock = input.styleRefs
-    ? `\n## 范文参考（按本章内容自动检索注入；模仿句式、节奏、对话密度，严禁照抄内容或人名地名）\n${input.styleRefs}\n`
-    : ''
-  // 走向卡早已废除：有已批准的计划就只列计划，否则列作者对本章的交代（没给倾向就不列，不硬造）
-  const directionBlock = plan
-    ? ''
-    : direction.text.trim()
-      ? `\n## 本章走向与作者交代\n${direction.text.trim()}\n`
-      : ''
-  return {
-    system: `${directorPersona()}
-
-## 正文写作特别纪律
-- 这是网文长篇的一章，直接从故事写起，不写章名、不写「本章完」、不加任何说明。
-- 文风要求见下方任务包。字数目标 ${book.targetWords} 字（±20%）。
-- 正文零元语言、零说教，敏感情节直接写。
-- 开头不得重复「上一章结尾」的内容。人物言行要对得上简报里的人设与现状。`,
-    user: `${ctx}
-${sceneBlock}${refBlock}
-
-## 本章大纲
-《${outline.title}》：${outline.synopsis}
-拍点：${outline.beats.map((b, i) => `${i + 1}. ${b}`).join(' ')}${directionBlock}${styleSampleBlock(book)}
-现在，写本章正文。`
-  }
-}
-
-/**
- * 分段续写：单次输出装不下长章（网关普遍 cap 4096 token，中文 6000 字≈9000+ token）。
- * 每段收尾 stopReason==='max_tokens'（被截断）才续写下一段，≤3 段拼成整章。
- */
-async function writeSegments(
-  base: { system: string; user: string; targetWords: number; signal?: AbortSignal },
-  onDelta: (text: string) => void
-): Promise<string> {
-  const segMax = Math.min(8192, Math.max(4096, Math.ceil(base.targetWords * 0.9)))
-  let full = ''
-  for (let seg = 0; seg < 3; seg++) {
-    const user =
-      seg === 0
-        ? base.user
-        : `${base.user}
-
-## 续写要求（已写 ${full.length} 字，目标 ${base.targetWords} 字）
-上文在输出长度限制处被截断。从断点处无缝续写完剩余部分：直接接正文，不要重复已写内容、不要重起开头。
-（若已写内容已把本章拍点写完，只输出「（完）」三个字即算收尾。）
-
-## 已写尾部（衔接参考，禁止重复）
-…${full.slice(-1200)}`
-    const res = await callRaw(
-      {
-        slot: WRITER_SLOT,
-        system: base.system,
-        user,
-        maxTokens: segMax,
-        jsonHint: '',
-        signal: base.signal,
-        params: { responseFormat: 'text' }
-      },
-      onDelta
-    )
-    const piece = res.text.trim()
-    if (!piece) {
-      if (seg === 0) throw new Error('模型返回空正文')
-      break
-    }
-    if (piece === '（完）') break
-    full = full ? `${full}\n\n${piece}` : piece
-    if (res.stopReason !== 'max_tokens') break
-  }
-  return full
-}
-
-export async function genDraft(
-  input: DraftInput,
-  onDelta: (text: string) => void,
-  signal?: AbortSignal
-): Promise<string> {
-  const { system, user } = draftPrompt(input)
-  const text = await writeSegments(
-    { system, user, targetWords: input.book.targetWords, signal },
-    onDelta
-  )
-  if (!text) throw new Error('模型返回空正文')
-  return text
-}
-
-// ── selfcheck（W6：零成本 lint + 自动修一次） ────────────────────────────────
+// ── selfcheck（W6：零成本 lint；写作子智能体用它主持退回与入书） ──────────────
 
 export function selfCheck(
   book: Book,
@@ -166,38 +31,6 @@ export function selfCheck(
     targetWords: book.targetWords,
     bannedWords: book.negativeWords
   })
-}
-
-/** 自动修正重写（W6 第一道：lint 报告喂回写手重写一次） */
-export async function autoFixDraft(
-  input: DraftInput,
-  draft: string,
-  report: LintReport,
-  onDelta: (text: string) => void,
-  signal?: AbortSignal
-): Promise<string> {
-  const { system, user } = draftPrompt(input)
-  const issues = report.issues
-    .map((i) => `- [${i.rule}] ${i.quote ? `「${i.quote}」` : ''}${i.advice}`)
-    .join('\n')
-  const text = await writeSegments(
-    {
-      system,
-      user: `${user}
-
-## 重写要求
-上一稿存在以下问题，请重写本章修正所有问题，其余部分保持原有质量与走向：
-${issues}
-
-原稿：
-${draft}`,
-      targetWords: input.book.targetWords,
-      signal
-    },
-    onDelta
-  )
-  if (!text) throw new Error('自动修正返回空正文')
-  return text
 }
 
 // ── revise：改章（局部编辑为主，整章重写为兜底；用户决策：不留旧版） ──────────
@@ -219,8 +52,11 @@ export interface RevisePlan {
   edits?: Array<{ find: string; replace: string }>
 }
 
-/** 字面量替换全部命中处。不走 String.replace：替换串里的 $& $' 会被当成特殊模式展开 */
-function replaceLiteral(
+/**
+ * 字面量替换全部命中处（agent/writer.ts 的 revise_draft 也用它）。
+ * 不走 String.replace：替换串里的 $& $' 会被当成特殊模式展开
+ */
+export function replaceLiteral(
   text: string,
   find: string,
   replace: string
@@ -333,7 +169,7 @@ ${hint ? `作者给的倾向：${hint}\n` : '作者没有给倾向，综合现�
 
 // ── 子代理审读（M4：review 七维 / audit 漂移+空转+连续性 / diagnose 问答） ────
 
-const REVIEWER_PERSONA = `你是独立的审稿编辑（与写手隔离视角），只读不写。纪律：
+const REVIEWER_PERSONA = `你是独立的审稿编辑（与写作视角隔离），只读不写。纪律：
 - 每条发现必须附原文引文（quote，20 字以内），无引文不收录。
 - 好的维度也要给 good 评语，七维全评，不许空着。
 - 不复述剧情，只给编辑判断。`

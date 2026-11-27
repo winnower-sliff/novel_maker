@@ -44,6 +44,21 @@ export type ToolInterceptor = (
   input: Record<string, unknown>
 ) => Promise<ToolResult | null>
 
+/** 只读工具名：调查员用它，写作子智能体在它之上再看人设 */
+export const READ_TOOLS: ReadonlySet<string> = new Set([
+  'get_book_config',
+  'list_chapters',
+  'read_chapter',
+  'list_cards',
+  'get_card',
+  'list_characters',
+  'list_foreshadows',
+  'get_write_context',
+  'list_samples',
+  'read_sample',
+  'search_project'
+])
+
 function ctxBook(ctx: ToolCtx): Book {
   const book = store.getBook(ctx.bookId)
   if (!book) throw new Error('书不存在')
