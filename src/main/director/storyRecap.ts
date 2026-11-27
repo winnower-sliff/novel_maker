@@ -49,6 +49,8 @@ type ChapterAt = Chapter & { pos: number }
 
 interface RecapWork {
   lineId: string
+  /** 开算时本线被安排整份重建的次数（见 rebuilds） */
+  rebuilds: number
   /** 现有梗概；null = 首次构建 */
   running: MemoryBlock | null
   /** 参考材料：旧的逐章压缩块，或锚点已失效的旧梗概 */
@@ -104,6 +106,8 @@ const active = new Set<string>()
 const inflight = new Map<string, Promise<void>>()
 const pendingRevisions = new Map<string, Set<string>>()
 const failedAt = new Map<string, number>()
+/** 每条线被安排整份重建的次数：合并拿开算时的数对照，对不上说明这步并的是改稿前的旧材料，不写回 */
+const rebuilds = new Map<string, number>()
 
 /** 新章入书后调用：把新章纪要并进本线的前情梗概（后台执行，失败只记日志） */
 export function scheduleStoryRecap(lineId: string): void {
@@ -127,6 +131,26 @@ export function noteRevisedChapter(chapterId: string): void {
   set.add(chapterId)
   pendingRevisions.set(chapter.lineId, set)
   scheduleStoryRecap(chapter.lineId)
+  invalidateInherited(chapter)
+}
+
+/**
+ * 改到子线也继承的章（在它的分叉点之前）：那些线的前情梗概里还是改稿前的旧情节——删掉，
+ * 下次进入那条线时由补建机制重建，不为没人看的线白烧模型。
+ * 同时把这一章记进那些线的待重并清单：它们若在本线重写纪要之前就重建，会自己按新正文重写，不并进旧纪要。
+ */
+function invalidateInherited(chapter: Chapter): void {
+  const line = store.getLine(chapter.lineId)
+  if (!line) return
+  for (const other of store.listLines(line.bookId)) {
+    if (other.id === chapter.lineId) continue
+    if (!store.effectiveChapters(other.id).some((c) => c.id === chapter.id)) continue
+    const set = pendingRevisions.get(other.id) ?? new Set<string>()
+    set.add(chapter.id)
+    pendingRevisions.set(other.id, set)
+    rebuilds.set(other.id, (rebuilds.get(other.id) ?? 0) + 1)
+    store.deleteRunningMemory(other.id)
+  }
 }
 
 /** 等在跑的合并全部结束（冒烟与收尾用） */
@@ -171,8 +195,15 @@ function takeWork(lineId: string): RecapWork | null {
   const anchorPos = running ? chapters.findIndex((c) => c.id === running.lastChapterId) : -1
   const trusted = running !== null && anchorPos >= 0
   const pending = pendingRevisions.get(lineId)
-  // 章已经不在了的登记项顺手清掉
-  if (pending) for (const id of pending) if (!chapters.some((c) => c.id === id)) pending.delete(id)
+  // 章已经不在了的登记项顺手清掉；别的线继承来的改稿登记，原线已不再等着重写纪要（重写完或章已不在）
+  // 的也清掉——本线直接用现成的新纪要，不重复调模型
+  if (pending)
+    for (const id of pending) {
+      const own = store.getChapter(id)
+      if (!own || !chapters.some((c) => c.id === id)) pending.delete(id)
+      else if (own.lineId !== lineId && !pendingRevisions.get(own.lineId)?.has(id))
+        pending.delete(id)
+    }
   const isPending = (c: ChapterAt): boolean => Boolean(pending?.has(c.id))
 
   const fresh = chapters.slice(anchorPos + 1, anchorPos + 1 + BATCH_CHAPTERS)
@@ -201,6 +232,7 @@ function takeWork(lineId: string): RecapWork | null {
 
   return {
     lineId,
+    rebuilds: rebuilds.get(lineId) ?? 0,
     running: trusted ? running : null,
     reference,
     fresh,
@@ -219,6 +251,8 @@ async function runStep(work: RecapWork, epoch: number): Promise<void> {
   const content = await fitRecap(text)
   // 调模型期间章可能被删、线被删、恢复过备份：这批章已不在本线里，结果作废，下一步重算
   if (epoch !== dbEpoch() || !stillInLine(work.lineId, work.covers.id)) return
+  // 调模型期间本线被安排整份重建（改到它也继承的章）：这步并的是改稿前的旧梗概 / 旧纪要，同样作废
+  if ((rebuilds.get(work.lineId) ?? 0) !== work.rebuilds) return
   store.upsertRunningMemory({
     lineId: work.lineId,
     content,

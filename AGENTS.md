@@ -54,7 +54,8 @@
 - **数据层**（`db.ts` + `store.ts`）：内置 `node:sqlite`，**一律不用原生模块**。表：books / lines / chapters / chapter_versions / cards / characters / foreshadows / memories / messages / jobs / samples / sample_sections。
   `SCHEMA_VERSION`（`PRAGMA user_version`，现为 2）——改表结构或 migrate 时 +1，老库升级前自动留快照。
 - **分叉树**：每本书一条激活线，可从任意章之后开新线；不分卷、不合并、无状态机、无真删除（一切重来 = 分叉）。
-  - `effectiveChapters(lineId)` = 祖先线 fork 点前的章节 + 本线章节按序拼接，是分叉树的核心读操作。`lines.fork_order` 记录分叉点序号，分叉点章不在时子线仍保住更早的祖先章；起点章不可删。
+  - `effectiveChapters(lineId)` = 分叉点章所在线的有效章里到它为止（含）的前缀 + 本线章节按序拼接，是分叉树的核心读操作——**按位置截取**，分叉点章可以是直接父线的章，也可以是更早祖先线继承下来的章。
+    分叉点章不在时（历史遗留）才用 `lines.fork_order` 兜底：只拿它比较直接父线自己的章，继承来的祖先章全部保留；起点章不可删。
   - **「第 N 章」= 本线有效章序列里的位置**：本线自己的章序号（`order_no`）从 1 重排，跨线不可比——要定位一章用章节 id。
   - `forkLine` 在事务里深拷贝 cards / characters / foreshadows，设定各线独立演化；前情梗概在覆盖范围没越过分叉点时一并带过去，各线此后独立演化。
   - 删除（删书 / 线 / 卡 / 人物 / 伏笔）前自动 `snapshotDb` 留快照；归档 = `book:update {archived:true}`（内容全保留），彻底删除走 `book:delete`（带确认参数）。
@@ -78,6 +79,7 @@
   没有梗概（或落后于章）时，`get_write_context` / `delete_last_chapter` 之后在后台补建；删末章盖到梗概时删行待重建，不做「反合并」。
   旧的逐章压缩块（`kind=legacy`）只读保留、不再新增，仅在首次合并时当参考材料、没有 `running` 时回退注入。
   改稿（`revise_chapter` / `job:startRevise`）成功后同样走后台：按新正文重写该章纪要，再对梗概做增量合并。
+  改到子线也继承的章（在分叉点之前）时，那些线的梗概行删掉，下次进入时整份重建；它们的合并恰好在跑，那步作废、下一步重算。
 - **写作简报**（`director/context.ts` 的 `buildStoryBrief`）：导演与写手共用同一份上下文——钉选设定 → 前情梗概 → 人物现状 → 未闭合伏笔 → 本章出场人物人设 → 相关设定卡 → 近 8 章纪要 → 已批准的本章计划。
   写手动笔前传本章大纲作 focus，会多带出场人物的人设（`characters.data`，最多 6 人）与相关设定卡（非钉选里本章提到的，带完整 `data`，最多 5 张）；`books.styleSample` 作「文风范例」放在写手提示末尾。
 - **agent 循环**（`agent/loop.ts`）：`maxTurns` 30；每轮重建系统提示，注入书的基础信息、红线、正负词、文风与记忆简报（前情梗概 + 主要人物名单），稳定内容在前、动态在后（DeepSeek 前缀缓存按前缀命中），防长程遗忘。流式拦截工具 `finish` / `write_chapter_draft` / `commit_chapter` / `revise_chapter` / `spawn_subagent` 内联在 loop.ts；

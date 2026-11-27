@@ -503,13 +503,20 @@ export function effectiveChapters(lineId: string): Chapter[] {
   const line = getLineThrow(lineId)
   const own = listChapters(lineId)
   if (!line.parentLineId) return own
-  // 分叉点章还在：以它为准；已被删（历史遗留）：按建线时记下的序号切，
-  // 保住更早的祖先章，而不是把整条祖先线丢掉
+  // 分叉点章还在：按位置截——取它所在线的有效章里到它为止（含）的前缀。分叉点可以是直接父线的章，
+  // 也可以是更早祖先线继承下来的章；各线的章序号从 1 重排、跨线不可比，不能拿序号去过滤
   const fork = getChapter(line.forkChapterId)
-  const cut = fork ? fork.orderNo : line.forkOrder
-  if (!fork && cut < 0) return own
-  const parentPart = effectiveChapters(fork ? fork.lineId : line.parentLineId).filter(
-    (c) => c.orderNo <= cut
+  if (fork) {
+    const inherited = effectiveChapters(fork.lineId)
+    const at = inherited.findIndex((c) => c.id === fork.id)
+    if (at >= 0) return [...inherited.slice(0, at + 1), ...own]
+  }
+  // 分叉点章已被删（历史遗留）：按建线时记下的序号切，且只拿它比较直接父线自己的章——
+  // 更早祖先线继承下来的章全部保留（它们总排在父线自己的章之前），不把整条祖先线丢掉
+  const cut = line.forkOrder
+  if (cut < 0) return own
+  const parentPart = effectiveChapters(line.parentLineId).filter(
+    (c) => c.lineId !== line.parentLineId || c.orderNo <= cut
   )
   return [...parentPart, ...own]
 }

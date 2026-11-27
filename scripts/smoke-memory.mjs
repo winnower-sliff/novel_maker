@@ -1,6 +1,7 @@
 // 长期记忆冒烟（阶段一「堵漏」）：旧库迁移、合并式前情梗概、写作简报注入、改稿刷新纪要、
-// 沉淀证据校验、callJson 重试、分叉与删章。不起 dist 服务——直接调 dist 里的模块，
-// 模型请求打到本进程内的桩（端口 3980）。须先 npm run build（冒烟打的是 dist）。
+// 沉淀证据校验、callJson 重试、分叉与删章、改到子线继承的章时子线梗概重建。
+// 不起 dist 服务——直接调 dist 里的模块，模型请求打到本进程内的桩（端口 3980）。
+// 须先 npm run build（冒烟打的是 dist）。
 
 import { mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
@@ -85,6 +86,7 @@ let summaryCalls = 0
 let badJsonPending = false
 let callSeq = 0
 let holdNext = null
+let holdSummaryNext = null
 const userText = (messages) =>
   (messages ?? [])
     .filter((m) => m.role === 'user' && typeof m.content === 'string')
@@ -135,6 +137,13 @@ const llm = createServer((req, res) => {
     if (holdNext && system.includes('你是前情梗概维护员')) {
       const hold = holdNext
       holdNext = null
+      hold.arrived()
+      await hold.release
+    }
+    // 「扣住下一次章纪要应答」：让原线重写纪要停在半路，验证这期间子线重建不会并进旧纪要
+    if (holdSummaryNext && system.includes('你是章纪要维护员')) {
+      const hold = holdSummaryNext
+      holdSummaryNext = null
       hold.arrived()
       await hold.release
     }
@@ -685,6 +694,146 @@ try {
   recap.scheduleStoryRecap(main)
   await recap.storyRecapSettled()
   ok('换库稳定后再触发才追平', store.getRunningMemory(main).toOrder === 5)
+
+  // ── ⑧ 改到子线也继承的章（在分叉点之前）：子线的前情梗概安排重建 ──
+  const book2 = store.createBook({ title: '继承章改稿' })
+  const main2 = book2.activeLineId
+  addChapter(main2, '甲一', '甲一的纪要。')
+  const x2 = addChapter(main2, '甲二', '甲二的旧纪要。')
+  const x3 = addChapter(main2, '甲三', '甲三的纪要。')
+  const x4 = addChapter(main2, '甲四', '甲四的纪要。')
+  recap.scheduleStoryRecap(main2)
+  await recap.storyRecapSettled()
+  const sub = store.forkLine(book2.id, x3.id, '子线', '').id
+  recap.scheduleStoryRecap(sub)
+  await recap.storyRecapSettled()
+  const subRun = store.getRunningMemory(sub)
+  ok(
+    '分叉于甲三之后：两条线各有自己的梗概（子线只盖到分叉点第 3 章）',
+    !!store.getRunningMemory(main2) &&
+      !!subRun &&
+      subRun.toOrder === 3 &&
+      subRun.lastChapterId === x3.id
+  )
+  // 给子线补一块旧压缩块：验证只动 running 行
+  dbMod
+    .getDb()
+    .prepare(
+      `INSERT INTO memories (id, line_id, from_order, to_order, content, created_at, kind, last_chapter_id)
+       VALUES ('sub-legacy', ?, 1, 2, '子线的旧压缩块', 0, 'legacy', '')`
+    )
+    .run(sub)
+
+  // 改主线的甲二（子线也继承）
+  const main2Before = store.getRunningMemory(main2)
+  const recapsBefore = recapCalls
+  store.replaceChapterContent(x2.id, '甲二改稿后的正文。')
+  recap.noteRevisedChapter(x2.id)
+  ok('改到子线也继承的章：子线的 running 行当场删掉', store.getRunningMemory(sub) === null)
+  await recap.storyRecapSettled()
+  const x2Summary = store.getChapter(x2.id).summary
+  const main2After = store.getRunningMemory(main2)
+  ok(
+    '原线：纪要按新正文重写，梗概增量更新（同一行、内容换新）',
+    x2Summary.startsWith('改稿后的纪要第') &&
+      main2After.id === main2Before.id &&
+      main2After.content !== main2Before.content
+  )
+  ok(
+    '子线：只删 running 行，旧压缩块不动；不当场重建（只调了原线那一次模型）',
+    store.getRunningMemory(sub) === null &&
+      store.listMemories(sub, 'legacy').some((m) => m.content === '子线的旧压缩块') &&
+      recapCalls === recapsBefore + 1
+  )
+
+  // 对子线触发一次补建：整份重建，直接用原线重写好的新纪要
+  const summariesBefore = summaryCalls
+  recap.scheduleStoryRecap(sub)
+  await recap.storyRecapSettled()
+  const subRebuilt = store.getRunningMemory(sub)
+  const subMerge = seen.filter((s) => s.system.includes('前情梗概维护员')).at(-1)
+  ok(
+    '子线：触发一次补建后梗概重建出来（仍只盖到分叉点第 3 章）',
+    !!subRebuilt &&
+      subRebuilt.toOrder === 3 &&
+      subRebuilt.lastChapterId === x3.id &&
+      subRebuilt.content.includes(`主线第${recapCalls}版`)
+  )
+  ok(
+    '重建是整份重建（不在旧梗概上增量合并），用的是改稿后的新纪要',
+    !subMerge.user.includes('现有前情梗概') &&
+      !subMerge.user.includes('甲二的旧纪要') &&
+      subMerge.user.includes(`第2章《甲二》：${x2Summary}`) &&
+      summaryCalls === summariesBefore
+  )
+
+  // 改甲四（分叉点之后，子线不包含）：子线不受影响
+  const subKept = store.getRunningMemory(sub)
+  store.replaceChapterContent(x4.id, '甲四改稿后的正文。')
+  recap.noteRevisedChapter(x4.id)
+  await recap.storyRecapSettled()
+  const subUnchanged = store.getRunningMemory(sub)
+  ok(
+    '改分叉点之后的章（子线不包含）：子线梗概不受影响，也不为它调模型',
+    !!subUnchanged &&
+      subUnchanged.id === subKept.id &&
+      subUnchanged.content === subKept.content &&
+      recapCalls === recapsBefore + 3
+  )
+
+  // 子线的合并正在进行时改到它继承的章：在跑的那步不写回，下一步整份重建。
+  // 把原线重写纪要扣在半路：这期间子线重建得自己按新正文重写，不能并进旧纪要
+  const subC1 = addChapter(sub, '子线新一', '子线新一的纪要。')
+  const recapSeen = () => seen.filter((s) => s.system.includes('前情梗概维护员'))
+  // 扣住桩的一次应答：桩在请求到达时调 arrived()，随后 await release；测试这边等 arrivedP、调 letGo() 放行
+  const newHold = () => {
+    const h = { arrived: () => {}, release: Promise.resolve(), letGo: () => {}, arrivedP: null }
+    h.arrivedP = new Promise((r) => (h.arrived = r))
+    h.release = new Promise((r) => (h.letGo = r))
+    return h
+  }
+  const recapsHeld = recapCalls
+  const summariesHeld = summaryCalls
+  const heldMerge = newHold()
+  holdNext = heldMerge
+  recap.scheduleStoryRecap(sub)
+  await heldMerge.arrivedP
+  const heldRequest = recapSeen().at(-1)
+  const heldSummary = newHold()
+  holdSummaryNext = heldSummary
+  store.replaceChapterContent(x2.id, '甲二第二次改稿的正文。')
+  recap.noteRevisedChapter(x2.id)
+  await heldSummary.arrivedP
+  const heldRebuild = newHold()
+  holdNext = heldRebuild
+  heldMerge.letGo()
+  await heldRebuild.arrivedP
+  ok(
+    '合并进行中改到它继承的章：在跑的那步作废不写回（此刻子线仍没有梗概行）',
+    store.getRunningMemory(sub) === null
+  )
+  const x2Resummarized = store.getChapter(x2.id).summary
+  heldSummary.letGo()
+  heldRebuild.letGo()
+  await recap.storyRecapSettled()
+  const subAfter = store.getRunningMemory(sub)
+  const rebuildRequest = recapSeen().slice(recapSeen().indexOf(heldRequest) + 1)[0]
+  ok(
+    '随后整份重建（不带旧梗概），盖到子线第 4 章',
+    recapCalls === recapsHeld + 3 &&
+      !!subAfter &&
+      subAfter.toOrder === 4 &&
+      subAfter.lastChapterId === subC1.id &&
+      subAfter.content.includes(`主线第${recapsHeld + 2}版`) &&
+      !rebuildRequest.user.includes('现有前情梗概')
+  )
+  ok(
+    '原线还没写完纪要时，子线重建自己按新正文重写这一章（不并进旧纪要）',
+    summaryCalls === summariesHeld + 2 &&
+      x2Resummarized !== x2Summary &&
+      rebuildRequest.user.includes(`第2章《甲二》：${x2Resummarized}`) &&
+      store.getChapter(x2.id).summary !== x2Summary
+  )
 
   console.log(`\n[长期记忆冒烟] ${passed} 通过 / ${failed} 失败`)
 } catch (e) {
