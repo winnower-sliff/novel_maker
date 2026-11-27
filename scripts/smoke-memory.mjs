@@ -489,6 +489,24 @@ try {
   // ── ④ 改稿后刷新纪要：走 agent 的 revise_chapter（改章任务走的是同一个后台入口）──
   const { runAgentLoop, interceptorDefs } = await import(url('agent/loop.js'))
   const { toolDefs } = await import(url('agent/tools.js'))
+  // 工具入参只能声明在 input_schema.properties 里，写在别处模型看不见
+  // （回归：commit_chapter 的 quickActions 曾写在 properties 外，入书卡的建议钮一直出不来）
+  {
+    const SCHEMA_KEYS = ['type', 'properties', 'required']
+    const stray = [...toolDefs(), ...interceptorDefs('chapter'), ...interceptorDefs('free')]
+      .flatMap((d) =>
+        Object.keys(d.input_schema ?? {})
+          .filter((k) => !SCHEMA_KEYS.includes(k))
+          .map((k) => `${d.name}.${k}`)
+      )
+      .join(',')
+    const commit = interceptorDefs('chapter').find((d) => d.name === 'commit_chapter')
+    ok(
+      `工具入参都声明在 properties 里，commit_chapter 的 quickActions 模型看得见（越界的：${stray}）`,
+      stray.length === 0 &&
+        Array.isArray(commit?.input_schema?.properties?.quickActions?.items?.required)
+    )
+  }
   const summaryBefore = store.getChapter('old-ch2').summary
   queue.push(
     {

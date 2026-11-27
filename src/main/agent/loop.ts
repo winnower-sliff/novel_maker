@@ -269,15 +269,15 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
             summary: {
               type: 'string',
               description: '可选：本章纪要（100-200字，并进前情梗概）；不传用写手回执里的纪要'
-            }
-          },
-          quickActions: {
-            type: 'array',
-            description: '2-3 个本章专属快捷改章建议 [{label:4-8字, instruction:具体指令}]',
-            items: {
-              type: 'object',
-              properties: { label: { type: 'string' }, instruction: { type: 'string' } },
-              required: ['label', 'instruction']
+            },
+            quickActions: {
+              type: 'array',
+              description: '2-3 个本章专属快捷改章建议 [{label:4-8字, instruction:具体指令}]',
+              items: {
+                type: 'object',
+                properties: { label: { type: 'string' }, instruction: { type: 'string' } },
+                required: ['label', 'instruction']
+              }
             }
           }
         }
