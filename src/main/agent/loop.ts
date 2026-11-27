@@ -15,7 +15,7 @@ import {
   styleBlock,
   wordListBlock
 } from '../director/prompts.js'
-import { applyRevisePlan, genRevisePlan } from '../director/steps.js'
+import { applyRevisePlan, genRevisePlan, type ReviseApplied } from '../director/steps.js'
 import { noteRevisedChapter } from '../director/storyRecap.js'
 import { lintChapter, stripHtmlComments } from '../lint.js'
 import * as store from '../store.js'
@@ -29,6 +29,7 @@ import {
 } from './tools.js'
 import {
   briefProblem,
+  briefTooLong,
   createWriter,
   receiptData,
   receiptSummary,
@@ -155,16 +156,35 @@ export function interceptorDefs(mode: 'chapter' | 'free'): ToolDef[] {
     {
       name: 'revise_chapter',
       description:
-        '按指令改已有章（整章或选段）。默认做局部替换（只动点名处，未点名一字不动），直接替换旧版不留档；只有作者明确要求推倒重写才整章重写。',
+        '改已有章，直接替换旧版不留档。默认局部替换：先 read_chapter 读原文，把要改处直接给 edits（find=原文逐字引文，replace=改后文本，空串=删除；未点名处一字不动）。作者明确要求推倒重写时传 brief（整章重写的修改要求），由写作子智能体重写。只给 instruction 时由模型出改稿方案兜底，命中率不如自己给 edits。',
       input_schema: {
         type: 'object',
         properties: {
           chapterId: { type: 'string' },
           instruction: {
             type: 'string',
-            description: '改稿指令（如「更狠：把打斗写实，收尾更冷」）'
+            description: '改稿指令（作者的原话或你的概括，如「更狠：把打斗写实，收尾更冷」）'
           },
-          segment: { type: 'string', description: '可选：只改这段原文（选段改）' }
+          edits: {
+            type: 'array',
+            description: '局部修改：原文→改后 [{find, replace}]',
+            items: {
+              type: 'object',
+              properties: {
+                find: {
+                  type: 'string',
+                  description: '原文逐字引文（10 字以上、足以在全文中唯一定位，含标点）'
+                },
+                replace: { type: 'string', description: '改后的完整文本，空串=删除' }
+              },
+              required: ['find', 'replace']
+            }
+          },
+          brief: {
+            type: 'string',
+            description: '整章重写时传：给写作子智能体的修改要求（与 edits 二选一）'
+          },
+          segment: { type: 'string', description: '可选：只给 instruction 时，限定只改这段原文' }
         },
         required: ['chapterId', 'instruction']
       }
@@ -398,7 +418,7 @@ function agentSystem(book: Book, lineId: string, mode: 'chapter' | 'free'): stri
 - 查不到就明说「书里还没写到」或「我不确定」，并告诉作者怎么核实；不许编细节圆场。
 - 作者表达的长期偏好（文风、节奏、口味、禁忌、终局方向）必须落库，不能只聊不记：当轮用 save_card 存成钉选卡（pinned=true、kind=custom、标题写明是作者偏好如「作者口味：不要感情线」、内容写进 authorText），之后每章写作都会带上；能进书配置的（文风/红线/正负词）同时用 update_book_config 写进去。
 - 你没有 commit_chapter/write_chapter_draft 权限（写新章走「写下一章」流程，由写章任务里的主智能体自主定走向）。
-- 作者要在已有章上改稿→revise_chapter；维护设定/人物/伏笔/红线/正负词→对应工具。
+- 作者要在已有章上改稿→revise_chapter：局部修改先 read_chapter 读原文，把要改处直接给 edits（原文→改后）；作者明确要求推倒重写才传 brief，由写作子智能体整章重写。维护设定/人物/伏笔/红线/正负词→对应工具。
 - 作者要写新章→直接调 propose_chapter（可带方向提示）排进写章队列，并告诉作者「已开章」；界面上没有「写下一章」按钮，不要让作者去找。
 - 承诺即执行：凡对作者说「这就改/马上改/现在就动手」，必须在同一轮调用对应工具完成，只说不做是违规；改不动就明说原因，不许空头承诺。`
   // 稳定内容在前、每章都变的记忆简报在后（DeepSeek 前缀缓存按前缀整体命中）
@@ -897,10 +917,92 @@ ${rows}
         const chapter = store.getChapter(chapterId)
         if (!chapter) return { ok: false, summary: '章节不存在', data: `章节 ${chapterId} 不存在` }
         const instruction = String(input.instruction ?? '')
+        const b = store.getBook(bookId) ?? book
+        const noHit = (): ToolResult => ({
+          ok: false,
+          summary: '改稿未命中原文',
+          data: '修改定位失败：find 引文在原文中找不到，请重新引用原文逐字片段。'
+        })
+        /** 局部替换 / 改稿方案落到章上：自检只报告不入闸（字数类指令天然会偏离目标字数） */
+        const apply = (applied: ReviseApplied): ToolResult => {
+          const clean = stripHtmlComments(applied.next)
+          const report = lintChapter(clean, { bannedWords: b.negativeWords })
+          throwIfAborted()
+          store.replaceChapterContent(chapterId, clean)
+          // 后台按新正文重写该章纪要，并把前情梗概里涉及本章的说法更正（fire-and-forget，失败只记日志）
+          noteRevisedChapter(chapterId)
+          const missed = applied.total - applied.applied
+          return {
+            ok: true,
+            summary: `改好《${chapter.title}》`,
+            data: `《${chapter.title}》已按「${briefOf(instruction)}」${
+              applied.mode === 'rewrite'
+                ? '整章重写'
+                : `局部修改 ${applied.applied}/${applied.total} 处${
+                    applied.hits > applied.applied
+                      ? `（引文在全文重复出现，共改动 ${applied.hits} 处）`
+                      : ''
+                  }${missed > 0 ? `；${missed} 处引文未在原文中找到` : ''}`
+            }并替换，本章纪要与前情梗概会在后台按新正文刷新。lint：${lintNote(report)}`
+          }
+        }
+        // 三条路径：edits 直改 → brief 整章重写（派写手）→ 只给 instruction 时由模型出改稿方案兜底
+        const rawEdits: unknown = input.edits
+        if (Array.isArray(rawEdits) && rawEdits.length) {
+          // 逐条校验后才落章：缺 replace 的半截 edit 若按「删除」应用，等于悄悄删正文（改章不留旧版）
+          const edits: Array<{ find: string; replace: string }> = []
+          for (const e of rawEdits) {
+            const find = (e as { find?: unknown } | null)?.find
+            const replace = (e as { replace?: unknown } | null)?.replace
+            if (
+              typeof e !== 'object' ||
+              e === null ||
+              typeof find !== 'string' ||
+              !find ||
+              typeof replace !== 'string'
+            ) {
+              return {
+                ok: false,
+                summary: 'edits 格式不对',
+                data: '每条 edit 都要同时给 find（原文逐字引文）与 replace（改后文本；要删除传空串 ""）。这次没有改动任何内容，修正后重发。'
+              }
+            }
+            edits.push({ find, replace })
+          }
+          const applied = applyRevisePlan(chapter.content, { edits })
+          return 'noHit' in applied ? noHit() : apply(applied)
+        }
+        const brief = typeof input.brief === 'string' ? input.brief.trim() : ''
+        if (brief) {
+          const tooLong = briefTooLong(brief)
+          if (tooLong) return { ok: false, summary: '重写要求不合格', data: tooLong }
+          // 重写不查字数（加长/缩短都是常见的改稿要求），写手看着原章改
+          const writer = createWriter({
+            book: b,
+            lineId: chapter.lineId,
+            brief,
+            original: chapter,
+            targetWords: 0,
+            signal,
+            onProgress: opts.onProgress
+          })
+          const child = await runSubagent(writer.spec, subHost)
+          const outcome = writer.session.settle(child.text)
+          if (!outcome.ok) return { ok: false, summary: '重写没有完成', data: outcome.data }
+          const clean = stripHtmlComments(outcome.content)
+          throwIfAborted()
+          store.replaceChapterContent(chapterId, clean)
+          noteRevisedChapter(chapterId)
+          return {
+            ok: true,
+            summary: `重写《${chapter.title}》`,
+            data: `《${chapter.title}》已按「${briefOf(instruction)}」整章重写并替换（${outcome.report.wordCount} 字，原章 ${chapter.wordCount} 字），本章纪要与前情梗概会在后台按新正文刷新。lint：${lintNote(outcome.report)}`
+          }
+        }
         const segment = typeof input.segment === 'string' ? input.segment : undefined
         const plan = await genRevisePlan(
           {
-            book: store.getBook(bookId) ?? book,
+            book: b,
             lineId: chapter.lineId,
             chapter,
             instruction,
@@ -909,35 +1011,7 @@ ${rows}
           signal
         )
         const applied = applyRevisePlan(chapter.content, plan)
-        if ('noHit' in applied) {
-          return {
-            ok: false,
-            summary: '改稿未命中原文',
-            data: '修改定位失败：find 引文在原文中找不到，请重新引用原文逐字片段。'
-          }
-        }
-        const clean = stripHtmlComments(applied.next)
-        const report = lintChapter(clean, {
-          bannedWords: (store.getBook(bookId) ?? book).negativeWords
-        })
-        throwIfAborted()
-        store.replaceChapterContent(chapterId, clean)
-        // 后台按新正文重写该章纪要，并把前情梗概里涉及本章的说法更正（fire-and-forget，失败只记日志）
-        noteRevisedChapter(chapterId)
-        const missed = applied.total - applied.applied
-        return {
-          ok: true,
-          summary: `改好《${chapter.title}》`,
-          data: `《${chapter.title}》已按「${briefOf(instruction)}」${
-            applied.mode === 'rewrite'
-              ? '整章重写'
-              : `局部修改 ${applied.applied}/${applied.total} 处${
-                  applied.hits > applied.applied
-                    ? `（引文在全文重复出现，共改动 ${applied.hits} 处）`
-                    : ''
-                }${missed > 0 ? `；${missed} 处引文未在原文中找到` : ''}`
-          }并替换，本章纪要与前情梗概会在后台按新正文刷新。lint：${report.issues.length ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；') : '干净'}`
-        }
+        return 'noHit' in applied ? noHit() : apply(applied)
       }
       case 'spawn_subagent': {
         const t = String(input.task ?? '').trim()
@@ -983,4 +1057,11 @@ ${rows}
 
 function briefOf(s: string): string {
   return s.length > 40 ? `${s.slice(0, 40)}…` : s
+}
+
+/** 改章自检的一句话结论（只报告不入闸，问题大由作者再发指令） */
+function lintNote(report: LintReport): string {
+  return report.issues.length
+    ? report.issues.map((i) => `[${i.rule}]${i.advice}`).join('；')
+    : '干净'
 }

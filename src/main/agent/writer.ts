@@ -1,4 +1,4 @@
-import type { Book, LintReport, ToolDef } from '../../shared/types.js'
+import type { Book, Chapter, LintReport, ToolDef } from '../../shared/types.js'
 import { StepError } from '../director/callJson.js'
 import { buildStoryBrief } from '../director/context.js'
 import { bookBasics, redlineBlock, styleBlock, wordListBlock } from '../director/prompts.js'
@@ -31,11 +31,22 @@ const WRITER_DISCIPLINE = `${WRITER_IDENTITY}，受这部长篇小说的主智�
 - 模仿范文的句式、节奏、叙事腔调——绝不抄内容、不搬人物情节。
 - 严格按任务简报写：简报定了的走向、出场人物、要埋 / 收的伏笔不擅自更改；简报没写到的地方按人设与前情自然发挥。`
 
-const DELIVERY_RULES = `## 交稿规则
-- 动笔前把任务简报和上面的人设、前情对一遍；拿不准的人物、设定、前文、范文用读工具查，不要凭印象编。
-- 正文只经 submit_draft 交给系统：分段交，每段 1500 字以内，后一段直接接前一段，不重复、不重起开头。不要把正文当普通回复输出。
-- 本章写完时 submit_draft 传 done:true，系统自检（负向词 / 接缝重复 / 穿帮词 / 元语言 / 重复段落 / 字数）。有问题会把原句退回给你：用 revise_draft 就地改（find=原句逐字引文，replace=改后文本），改完再传 done:true 复检；最多退回两次，仍不过就带着报告入书。
-- 自检通过后调 finish 交回执：summary 写本章纪要（100-200 字）；本章新出现的、值得记下的人物状态变化、新埋或回收的伏笔、新设定，分条放进 characters / foreshadows / settings，每条附 evidence（正文里连续的一句原话，逐字照抄）——系统会核对，对不上的丢弃。`
+/** 交稿规则（随首条消息给）。整章重写不查字数、也不需要沉淀线索，两处措辞不同 */
+function deliveryRules(rewrite: boolean): string {
+  return `## 交稿规则
+- 动笔前把${rewrite ? '修改要求' : '任务简报'}和上面的人设、前情对一遍；拿不准的人物、设定、前文、范文用读工具查，不要凭印象编。
+- 正文只经 submit_draft 交给系统：分段交，每段 1500 字以内，后一段直接接前一段，不重复、不重起开头。不要把正文当普通回复输出。${
+    rewrite ? '交的是重写后的全章，不是只交改动处。' : ''
+  }
+- 本章写完时 submit_draft 传 done:true，系统自检（负向词 / 接缝重复 / 穿帮词 / 元语言 / 重复段落${
+    rewrite ? '' : ' / 字数'
+  }）。有问题会把原句退回给你：用 revise_draft 就地改（find=原句逐字引文，replace=改后文本），改完再传 done:true 复检；最多退回两次，仍不过就带着报告交稿。
+- 自检通过后调 finish${
+    rewrite
+      ? '收尾。'
+      : ' 交回执：summary 写本章纪要（100-200 字）；本章新出现的、值得记下的人物状态变化、新埋或回收的伏笔、新设定，分条放进 characters / foreshadows / settings，每条附 evidence（正文里连续的一句原话，逐字照抄）——系统会核对，对不上的丢弃。'
+  }`
+}
 
 /** 文风范例（作者给的 styleSample）：只学句式与节奏 */
 function styleSampleBlock(book: Book): string {
@@ -50,14 +61,18 @@ function styleSampleBlock(book: Book): string {
 export const BRIEF_MIN = 60
 export const BRIEF_MAX = 4000
 
+/** 只有上限的检查（整章重写的修改要求可以很短：原章全文都给了，一句话也能改） */
+export function briefTooLong(brief: string): string | null {
+  return brief.length > BRIEF_MAX
+    ? `任务简报有 ${brief.length} 字，超过上限 ${BRIEF_MAX} 字：只留必须发生的、人物要点和硬约束，其余交给写手按人设与前情发挥。`
+    : null
+}
+
 export function briefProblem(brief: string): string | null {
   if (brief.length < BRIEF_MIN) {
     return `任务简报只有 ${brief.length} 字，太短（至少 ${BRIEF_MIN} 字，一般 300-1500 字）。写清本章要发生什么、出场人物与各自要点、要埋 / 收的伏笔、基调与节奏、想模仿的句子与要避免的。`
   }
-  if (brief.length > BRIEF_MAX) {
-    return `任务简报有 ${brief.length} 字，超过上限 ${BRIEF_MAX} 字：只留本章必须发生的事、人物要点和硬约束，其余交给写手按人设与前情发挥。`
-  }
-  return null
+  return briefTooLong(brief)
 }
 
 export interface WriterInput {
@@ -73,10 +88,19 @@ export interface WriterInput {
   targetWords?: number
   /** 范文起点（按简报检索到的一段；没有就不带） */
   styleRefs?: string
+  /** 整章重写时的原章（新章不传）：写手看着它改，没点名处保持原样 */
+  original?: Chapter
 }
 
 /** 作者交代最多带这么多字：倾向是一句话的事，长了说明主智能体该把它写进简报 */
 const DIRECTION_MAX = 300
+/** 原章正文最多带这么多字（超长章截断，写手要后文自己 read_chapter） */
+const ORIGINAL_MAX = 14000
+
+/** 「第 N 章」= 本线有效章序列里的位置（分叉线里章序号从 1 重排，orderNo 不可比） */
+function positionOf(lineId: string, chapterId: string): number {
+  return store.effectiveChapters(lineId).findIndex((c) => c.id === chapterId) + 1
+}
 
 /**
  * 写作子智能体的提示。纯组装、不调模型；稳定内容在前、每章都变的在后
@@ -84,9 +108,11 @@ const DIRECTION_MAX = 300
  */
 export function buildWriterPrompt(input: WriterInput): { system: string; user: string } {
   const { book } = input
+  const original = input.original
   const targetWords = input.targetWords ?? book.targetWords
-  const targetBlock =
-    targetWords > 0
+  const targetBlock = original
+    ? `原章 ${original.wordCount} 字。重写不查字数，长短按修改要求来。`
+    : targetWords > 0
       ? `目标 ${targetWords} 字（可上下浮动 20%；不足六成自检判「字数不足」）`
       : '本章不查字数，长短按任务简报的要求'
   const refBlock = input.styleRefs
@@ -96,6 +122,17 @@ export function buildWriterPrompt(input: WriterInput): { system: string; user: s
   const directionBlock = direction
     ? `\n\n## 作者对本章的交代\n${direction.slice(0, DIRECTION_MAX)}`
     : ''
+  const task = original
+    ? `## 任务
+把第 ${positionOf(original.lineId, original.id)} 章《${original.title}》整章重写。按下面的修改要求改；没点名的情节、人物、走向保持原样。
+
+## 修改要求（主智能体写的）
+${input.brief}
+
+## 原章正文
+${clip(original.content, ORIGINAL_MAX)}`
+    : `## 任务简报（主智能体写的，按它写）
+${input.brief}${directionBlock}`
   return {
     system: `${WRITER_DISCIPLINE}
 
@@ -110,10 +147,9 @@ ${targetBlock}
 
 ## 记忆简报（钉选设定 / 前情梗概 / 人物 / 伏笔 / 近章；要细节用读工具查）
 ${buildStoryBrief(book, input.lineId, { text: input.brief, plan: input.plan })}${refBlock}`,
-    user: `## 任务简报（主智能体写的，按它写）
-${input.brief}${directionBlock}
+    user: `${task}
 
-${DELIVERY_RULES}`
+${deliveryRules(Boolean(original))}`
   }
 }
 
@@ -435,15 +471,15 @@ export interface WriterSession {
 /** 写作子智能体的提示、工具与交稿主持。每次派写手新建一份，草稿只在内存里，不落库 */
 export function createWriter(
   input: WriterInput & {
-    /** 接缝参考按哪一章算：整章重写时传被重写的章，新章不传 */
-    reviseChapterId?: string
     signal?: AbortSignal
     onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
   }
 ): WriterRun {
   const { book } = input
+  // 整章重写：接缝参考按原章的前一章算（不一定是末章），进度报成「改章」
+  const rewriting = Boolean(input.original)
   const targetWords = input.targetWords ?? book.targetWords
-  const prevTail = prevTailOf(input.lineId, input.reviseChapterId)
+  const prevTail = prevTailOf(input.lineId, input.original?.id)
   let content = ''
   let report: LintReport | null = null
   let stale = false // 草稿在上次自检之后又改过
@@ -452,7 +488,7 @@ export function createWriter(
 
   const words = (): number => content.replace(/\s/g, '').length
   const progress = (): void =>
-    input.onProgress?.({ phase: input.reviseChapterId ? 'revise' : 'draft', chars: words() })
+    input.onProgress?.({ phase: rewriting ? 'revise' : 'draft', chars: words() })
   const abort = (): void => {
     if (input.signal?.aborted) throw new StepError('任务已取消', 'aborted')
   }
