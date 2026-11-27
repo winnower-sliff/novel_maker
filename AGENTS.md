@@ -67,8 +67,9 @@
 - **任务**（`jobs.ts`）：kind = write / onboard / rewrite / revise / review / audit / diagnose / chat。全局串行队列（先来后到），**启动接口一律入队即返回**——等整轮会让手机 30s 超时报「发送失败」。
   取消与看门狗经 `AbortSignal` 真正中止在跑的请求，终态写入带 `WHERE state='running'`（取消不被 done 覆盖）；running 超 10 分钟无进展标 failed。
 - **聊天时间轴**：`messages` 表是单一事实源，`meta.kind` = action（用户动作）/ chat（导演白话）/ thinking（思考）/ tool（工具卡）/ job（节点卡）。事件五个：
-  `job:update`、`job:activity`（工具卡）、`job:progress`（正文 / 改章字数）、`job:delta`（白话与思考的流式增量，带累计长度 total）、`message:append`。
-  **正文、改章等一切生成内容不进聊天流**——agent 一律调工具产出，聊天里只有对话、思考、工具卡和成品卡（入书卡）。流式内容周期落进 job 的 `payload.answer` / `payload.draftText`，服务端是唯一真相源。
+  `job:update`、`job:activity`（工具卡）、`job:progress`（写手已写字数，同一份落 `job.payload.progress`；`null` = 写手收工、收起进度）、`job:delta`（白话与思考的流式增量，带累计长度 total）、`message:append`。
+  **正文、改章等一切生成内容不进聊天流**——agent 一律调工具产出，聊天里只有对话、思考、工具卡和成品卡（入书卡）；没入书的草稿连工具卡详情里也不出现（工具用 `ToolResult.card` 把详情换成给作者看的说明）。
+  流式内容周期落进 job 的 `payload.answer` / `payload.draftText`，服务端是唯一真相源。
 - **写章**（走向卡已废除，用户决策：聊天驱动、agent 自主定走向；正文由主智能体派写作子智能体写，见 DECISIONS §15）：`job:startWrite [bookId, hint?]` → 若书开了 `planMode`，先出本章计划书并停在 `waiting_user`（step = `plan`），
   `job:approvePlan [jobId, feedback?]` 后入队 → `runAgentLoop(mode:'chapter')`：`get_write_context` → 主智能体写任务简报、`write_chapter_draft` 派写作子智能体（分段交稿 → 自检有 major 就退回写手自己改，最多 2 次 → 交回执）→ `commit_chapter`（纪要缺省用回执里的）→ 沉淀（evidence 照抄回执原句）→ `finish`。
   回给主智能体的只有章题 / 字数 / 自检报告 / 纪要与沉淀线索，不回灌全文（要核对用 `read_last_draft`）。
@@ -84,12 +85,14 @@
 - **写作简报**（`director/context.ts` 的 `buildStoryBrief`）：主智能体与写作子智能体共用同一份上下文——钉选设定 → 前情梗概 → 人物现状 → 未闭合伏笔 → 本章出场人物人设 → 相关设定卡 → 近 8 章纪要 → 已批准的本章计划。
   写作子智能体的记忆简报以任务简报作 focus，会多带出场人物的人设（`characters.data`，最多 6 人）与相关设定卡（非钉选里本章提到的，带完整 `data`，最多 5 张）；`books.styleSample` 作「文风范例」，连同红线 / 正负词 / 文风 / 目标字数由服务端自动附进写手的系统提示（硬约束在前、记忆简报在后），`genStyleRefs` 按简报检索一段范文作起点。
 - **agent 循环**（`agent/loop.ts`）：`maxTurns` 30；每轮重建系统提示，注入书的基础信息、红线、正负词、文风与记忆简报（前情梗概 + 主要人物名单），稳定内容在前、动态在后（DeepSeek 前缀缓存按前缀命中），防长程遗忘。主智能体的拦截工具 `finish` / `write_chapter_draft` / `read_last_draft` / `commit_chapter` / `revise_chapter` / `spawn_subagent` 内联在 loop.ts；
-  普通 CRUD 工具在 `agent/tools.ts`（读 / 写 / 删 / 线操作四类），返回 `{ok, summary, data}`——summary 给作者的工具卡，data 给 LLM（上限 30000 字）；**模型只看 data**（summary 不进 tool_result）。
+  普通 CRUD 工具在 `agent/tools.ts`（读 / 写 / 删 / 线操作四类），返回 `{ok, summary, data, card?, cardMeta?}`——summary / card / cardMeta 给作者的工具卡（card = 展开后的详情，缺省用 data；cardMeta 并进卡片 meta，如累计字数、任务简报摘要），data 给 LLM（上限 30000 字）；**模型只看 data**。
   - free 模式（`job:startChat`，历史取最近 12 条 chat 消息）没有写章权限：意图工具 `propose_chapter` / `request_review` / `request_audit` 转成排队任务或文本回报。
     纪律：涉及书里已发生的事先查再答，查不到就明说不确定；作者表达的长期偏好当轮存成钉选卡；开书引导定下的终局方向也落库为钉选卡「终局方向」。
-  - **子智能体**共用 `runSubagent`（同一套循环嵌套跑，`maxTurns` 12）：对作者不可见、透传父任务的取消信号与看门狗喂狗、只能调自己清单里的工具（模型幻觉出清单外的工具直接拒）。
+  - **子智能体**共用 `runSubagent`（同一套循环嵌套跑，`maxTurns` 12）：透传父任务的取消信号与看门狗喂狗、只能调自己清单里的工具（模型幻觉出清单外的工具直接拒）。
+    作者可见性看规格有没有 `cardMeta`：调查员对作者不可见；写作子智能体每调一个清单内的工具落一张工具卡（白话与思考照旧不进时间轴，清单外的幻觉工具不落卡）。
     `spawn_subagent` 派只读调查员（只带读工具、只回报结论，要翻大量资料但只要结论时派它去）；`write_chapter_draft` 与 `revise_chapter` 的 `brief` 派写作子智能体（`agent/writer.ts`）。
   - **写作子智能体**：`write_chapter_draft {brief（60–4000 字，过短 / 过长都退回重提）, title?, targetWords?}` 派它。writer 槽、思考关、每轮 8000 token；工具 = 12 个读工具（`READ_TOOLS` + `get_character`）+ `submit_draft`（分段累计，按累计字数发 `job:progress`；`done` 时 lint，有 major 且退回不足 2 次就退回，附问题与负向词的全部出现位置）/ `revise_draft`（字面量精确替换，未命中报错）/ `finish`（回执：纪要 + 人物状态 / 伏笔 / 设定线索，各带 evidence；服务端用 `evidence.ts` 同一规则核对原句确在草稿里，对不上的丢弃并标出）。
+    时间轴上作者看得到全过程：动笔前先上墙一张「派写手」卡（详情 = 任务简报全文，`meta.brief` = 前 120 字直接露在卡面），写手每调一个工具落一张卡（`meta.words` = 那一刻的累计字数，详情只有说明与自检结论、不带正文），交回再落一张「写手交稿」卡（字数 + 自检结论 + 纪要）。进度从动笔的 0 字报起，写手收工（含取消）清空；整章重写（`revise_chapter` 的 `brief`）同样落卡、报进度（相位 `revise`）。
     跑满轮数没交回执：用已收稿内容 + 空纪要继续；没走交稿工具、直接输出够长（≥200 字）的正文：整章收下并在回执里注明；取消沿 AbortSignal 上抛，草稿只在内存里、不入书。全文只存在主循环的 `lastDraft` 供 `commit_chapter`，章的 `meta.brief` 记任务简报。
   - `revise_chapter` 三条路径：`edits`（主智能体先 `read_chapter`，直接给「原文 → 改后」，未点名处一字不动；逐条校验，缺 replace 的整条拒，免得半截 edit 被当成删除）→ `brief`（作者明确要求推倒重写时派写作子智能体，看着原章改、不查字数）→ 只给 `instruction` 时兜底走 `genRevisePlan`。
     都直接替换旧版、不留档，成功后 `noteRevisedChapter`；`job:startRevise` 无人值守链路照旧走 `genRevisePlan`。
@@ -102,6 +105,7 @@
 - `lib/bridge.ts`：`buildApi(transport)` 跑在 fetch + 单例 `EventSource('/api/events')` 上；invoke 带 30s 超时；SSE 断成 CLOSED 后手动退避重建并派发 `nm-sse-reconnect`。
 - 数据层 = TanStack Query（`lib/queries.ts`，写后按 key 失效）；UI 态 = zustand（`uiStore`、`tickerStore`、`conn`）。query 结果按可空处理（`.data?.x`）。
 - 流式恢复：前端收到的 delta 长度与 total 失配时用 `job.get` 补拉，不要在前端自行拼接猜测。
+- 写手进度条：写作页时间轴底部（`StreamRow`）显示「写手已写 N 字」。实时值来自 `job:progress`（`tickerStore.progress`）；本地没有实时值时取任务快照 `payload.progress`（重开应用），SSE 重连后拉 `job.get` 覆盖——服务端是唯一真相源；任务离开运行态清掉。`ToolCard` 认 `meta.words`（累计字数角标）与 `meta.brief`（任务简报摘要，全文在详情）。
 - 样式：Tailwind v4 的唯一扫描源 = `mobile/src`（vite root，无 `@source`）；`styles.css` 用了 `@apply`。
 - 原生插件（`mobile-app/android/app/src/main/java/com/novelmaker/mobile/MainActivity.java`）：**`registerPlugin` 必须写在 `super.onCreate` 之前**，否则报 plugin is not implemented。
 - **新增契约通道**：① `src/shared/contract.ts` 加 zod 通道 + `Api` 接口方法（有覆盖率断言，漏一个编译报错）；② `src/main/handlers/` 对应域文件用 `Pick<HandlerTable, …>` 标注，并在 `index.ts` 汇总；③ 写 handler 本体。客户端方法由 `buildApi` 自动派生。
@@ -127,7 +131,7 @@
     后台记忆调用（前情梗概合并 / 改稿后重写章纪要，身份行在 `director/storyRecap.ts`）与主链路并发到达、顺序不定，走桩的**旁路应答**（按系统提示的身份行识别，不吃队列）；新增后台模型调用照此办理，不要去关功能迁就队列。
     子智能体的调用与主循环嵌套到达，同样按 system 身份行路由到**独立队列**（`WRITER_QUEUE` / `RESEARCH_QUEUE`，不吃主队列；身份行「你是写作子智能体」在 `agent/writer.ts`、「你是只读调查员」在 `agent/loop.ts`）。写章队列里没有正文响应：交稿、退回、回改、回执都在写手队列里。
   - `smoke-memory.mjs` 不起 dist 服务：直接调 dist 模块，模型请求打到脚本内的桩（端口 3980），合并是否落库靠 `storyRecapSettled()` 等待。
-  - `smoke-writer-subagent.mjs` 自带按身份行路由的桩（端口 3976）并订阅 SSE，覆盖交稿 / 退回 / 回执 / 超轮 / 取消 / 三条改稿路径。
+  - `smoke-writer-subagent.mjs` 自带按身份行路由的桩（端口 3976）并订阅 SSE，覆盖交稿 / 退回 / 回执 / 超轮 / 取消 / 三条改稿路径，以及时间轴可见性（派写手卡带简报、写手的卡带累计字数、进度事件与 payload 落库、卡片详情不带正文）。
   - 桩开关：`SKIP_ONBOARD=1`（已开书续写）、`CHAT_FIRST=1`、`CHAT_IN_QUEUE=0`、`AGENT_MODE=1`、`PLAN_MODE=1`、`SUBAGENT=1`。带 LLM 的冒烟脚本都设 `negativeWords`（如 `['忽然']`），对齐桩的写手队列（交两段 → 被退回 → 改 → 复检 → 回执）。
 
 ## 踩坑记录（v2 仍会踩）
@@ -153,7 +157,9 @@
 17. **Capacitor `PluginCall.getLong` / `getInt` 只认精确类型**：JS 传来的整数经 JSON 到原生是 `Integer`，`getLong` 只认 `Long`，类型不符一律返回默认值——APK 自更新的 versionCode 曾因此永远读成 0，所有版本都落到固定文件名、反复安装旧包（`-25 无法降级安装`）。原生取数值参数一律 `call.getData().opt(name)` 后按 `Number` 自己转；APK 交给系统安装器前先用 `getPackageArchiveInfo` 核对包内真实 versionCode。
 18. **DeepSeek 思考模式带工具的续轮必须回传 `reasoning_content`**：官方文档写明带 `tools` 的请求要把之前各轮 assistant 的思考链原样传回，否则 400。但线上实测：只要工具调用 id 是模型真实签发的，不回传也是 200，伪造 id 才 400——所以冒烟桩（自己编 `call_x` id、不校验消息体）测不出这个回归。`ChatMessage.reasoning` → `llmOpenai.ts` 转 `reasoning_content` → `loop.ts` 回灌 assistant 历史时挂上 `res.thinking`，改这条链只能靠真实 DeepSeek 验证；思考关闭时不带。
 
-19. **冒烟断言「模型看到了什么」只能查 tool_result（= 工具的 `data`）**：`summary` 只进作者的工具卡，不回给模型。拦截工具的失败提示（如「改稿未命中原文」「自检退回」）只写在 summary 里模型根本看不到——要模型照着改的话必须写进 data。
+19. **冒烟断言「模型看到了什么」只能查 tool_result（= 工具的 `data`）**：`summary` 与 `card` 只进作者的工具卡，不回给模型。拦截工具的失败提示（如「改稿未命中原文」「自检退回」）只写在 summary 里模型根本看不到——要模型照着改的话必须写进 data。
+
+20. **工具入参必须声明在 `input_schema.properties` 里**：写在 properties 外面（曾是 `commit_chapter` 的 `quickActions`，自 `b1b3a48` 起）是 JSON Schema 认不出的孤儿键，真实模型看不见这个参数、建议钮一直出不来；冒烟桩照样传参所以全绿。`smoke-memory.mjs` 有一条「工具入参不得越界」的断言兜底，新增拦截工具别再手滑。
 
 ## 入口
 
