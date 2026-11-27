@@ -673,11 +673,8 @@ try {
     call('finish', { message: '写手直接给了正文。' })
   )
   push('writer', { text: NEW_TEXT })
-  await waitJob(
-    (await invoke('job:startWrite', book.id)).id,
-    (j) => j.state === 'done',
-    '纯文本兜底'
-  )
+  const jobD = await invoke('job:startWrite', book.id)
+  await waitJob(jobD.id, (j) => j.state === 'done', '纯文本兜底')
   detail = await invoke('book:get', book.id)
   ok(
     detail.chapters.length === 3 &&
@@ -688,6 +685,14 @@ try {
     resultsOf(mainReqs()).some((t) => t.includes('直接输出了正文')),
     '回执注明没有经过退回自检'
   )
+  // 写手直接吐出来的正文属于它的「白话」：子智能体的白话不进时间轴，正文只在入书后以成品卡出现
+  {
+    const mine = (await invoke('message:list', book.id)).filter((m) => m.meta?.jobId === jobD.id)
+    ok(
+      mine.length > 0 && !mine.some((m) => m.content.includes(NEW_TEXT.slice(20, 60))),
+      '写手直接输出的正文没有进聊天流'
+    )
+  }
 
   // ── ④ 取消：写手正写到一半被作者取消 → 任务 cancelled、不入书、队列照常释放 ──
   {
