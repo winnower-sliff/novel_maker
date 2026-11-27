@@ -130,6 +130,20 @@
      身份行区分主 / 子（旁路识别在 M:529）。
   已知代价：每章多几次模型调用、耗时多几十秒；简报写得薄时靠记忆简报与读工具兜底（提示词要求简报必含
   出场人物 / 伏笔 / 目标 / 基调 / 字数）。
+- **2026-11-27 进度**：分叉修复已合并并部署到生产电脑端（`0761189`，指纹 `c893536c6bb3c8e4`；未改手机端，不出 APK，APK 更新源仍为 v4.9.0-202611270122 / vc 29928562）。④ 开发线已建：worktree `C:\Users\14270\.local\share\opencode\worktree\754ca1\single`、分支 `feat/single-agent`（基于 0761189，工作区干净、`npm ci` 已装、**零提交**）。实施子代理因「每周/每月使用上限」中断（额度 **2026-12-01 15:39:11** 重置，此前不要再派子代理）→ 由主会话直接实施，或等额度恢复后派子代理。
+- **实施细化（派单时定的协议，照此实现；行号基于 0761189，L=`agent/loop.ts`、S=`director/steps.ts`、J=`jobs.ts`、M=`smoke-m3-stub.mjs`）**：
+  1. 内部统一函数 `runSubagent({kind:'research'|'write', …})`；`spawn_subagent`（调查员，行为不变）与 `write_chapter_draft`（派写手）都走它；嵌套循环透传父循环的 `onTurn` 喂狗。
+  2. `write_chapter_draft` 新入参 `{ brief: string（必填 60–4000 字，过短返回 ok:false 让主智能体重提）, title?: string, targetWords?: number }`；不再要 title / synopsis / beats / scenes。
+  3. 写作子智能体：system = 写手角色纪律 + 服务端自动附上的硬约束（书信息 / 红线 / 正负词 / 文风 / 文风范例 / 目标字数）+ `buildStoryBrief(book, lineId, {text: brief, plan: chapterPlan})` + `genStyleRefs` 一段范文起点（稳定内容在前、动态在后），含唯一身份行「你是写作子智能体」；首条 user = 任务简报 + `chapterDirection`（作者补充方向 ≤300 字）+ 交稿规则；模型走 writer 槽；thinking 关；每轮 maxTokens 8000；maxTurns 12；对作者不可见（`say: () => {}`，手机端展示是第二步）。
+  4. 写作子智能体的工具 = 13 个读工具（L:425 的 11 个 + `get_character` + `get_card`）+ 三个拦截工具：`submit_draft({text?, done?})`（追加一段，每段 ≲1500 字；每次按累计字数发 `job:progress`；`done` 时对累计全文跑 lintChapter，有 major 且退回 <2 次 → ok:false 附问题与含负向词的原句让它改；通过 → 回「已收稿，请调用 finish 提交回执」）、`revise_draft({find, replace})`（对累计草稿字面量精确替换，未命中 ok:false）、`finish({summary, characters?, foreshadows?, settings?})`（结构化回执，各项带 evidence 原句；用 `agent/evidence.ts` 同一归一化规则校验原句确在草稿里，不对的丢掉并标出；到 maxTurns 仍没 finish → 用已收稿内容 + 空 summary 继续）。
+  5. 回给主智能体的 data = `{title, words, summary, report, characters, foreshadows, settings, head(前300字), tail(后300字)}`，**不含全文**；`lastDraft` 仍存全文供 `commit_chapter`；新增只读拦截工具 `read_last_draft`（默认 2000 字、上限 8000）；删 `draftPrompt` / `genDraft` / `autoFixDraft` / `DraftInput` / `writeSegments`；`commit_chapter` 的 `summary` 改为可选，缺省用回执 summary。
+  6. `revise_chapter`：`edits:[{find,replace}]` = 主智能体先 `read_chapter` 再直接给「原文 → 改后」；`brief` = 整章重写（派写作子智能体）；只给 `instruction` = 兜底走 `genRevisePlan`（保留不删）；全未命中仍报「改稿未命中原文」；成功后照旧 `noteRevisedChapter`；`job:startRevise` 无人值守链路不变。
+  7. 提示词改写位置：L:210（write_chapter_draft 描述）、L:241 / L:284 / L:379–380（「一次成型…再 draft 一次」→ 写手自检不过会被退回自己改，只在需要整章重来时再派一次）、L:389（free 模式纪律）、L:745–753（去掉「正文全文：」回灌）、S:79–92（删写手提示）、S:336（「与写手隔离视角」→ 审读与写作视角隔离）、`storyRecap.ts`:314、J:336；主智能体新纪律：写任务简报 → 调 write_chapter_draft → 用回执里的纪要与原句 commit_chapter → 沉淀（evidence 用回执原句）→ finish。
+  8. 桩与冒烟：M 按 system 身份行把写作子智能体 / 调查员的调用路由到独立队列（不吃主队列，参照 M:529 的旁路）；主队列去掉 DRAFT / DRAFT_FIXED；新增 `scripts/smoke-writer-subagent.mjs`（简报过短被拒、分段累计、自检退回→revise_draft→通过、超轮带报告入书、回执证据校验、回执不含全文、edits 直改、brief 整章重写、startRevise 兜底）；同步 m2 / m4 / m6（m6:148 写手提示断言、m6:163 工具卡序列）、plan、`smoke-memory.mjs`:357（直调 draftPrompt）→ 预期 **22 套**。
+  9. 分两步：A = 主进程 + 桩 + 冒烟 + AGENTS.md / DECISIONS §15 对齐 + `mobile/src/pages/write/labels.ts` 的 TOOL_LABEL；B = 手机端（父工具卡显示任务简报摘要 + 实时「写手已写 N 字」——`job:progress`→`tickerStore.progress` 现无读取方；子智能体工具调用落 activity 卡、白话不进时间轴）+ 行为验证 + 截图。
+  10. 合并后、部署前：用真实 DeepSeek 在临时数据目录试写一章（只读取生产 settings.json 的密钥、不打印），验证新提示词下的真实工具调用链。
+- **不变项**：不新增确认步骤；计划模式闸门 / 聊天无写章权限 / 审读审计诊断记忆整理照旧；正文不进聊天流；不迁移不删数据；作者保留最终决定权。
+- **接手须知**：开发线里绝不 deploy / apk、不碰 3910 与生产数据目录；提交按五步：`refactor(agent): 子智能体运行器——调查与写作共用一套嵌套循环` → `feat(agent): 写手子智能体——任务简报、分段交稿、自检回改与结构化回执` → `refactor(agent): 改稿去掉计划层——局部修改直接给原文与改后，整章重写派写手` → `test(smoke): 桩按身份行路由子智能体调用，写章队列重排；新增 smoke-writer-subagent` → `docs(agent): 写作链路简化落地——项目须知与决策记录对齐实现`；验证 = 门禁 + `rm -rf dist && npm test`（22 套）+ 前端构建与 Tailwind 哨兵；每步可独立编译并 push（`git push -u origin feat/single-agent`，GitHub 慢就循环重试）；做完 A 再做 B；合并回主 checkout（`git merge --no-ff feat/single-agent`）→ `npm run verify` → 真实模型试写一章 → `npm run apk`（自动 deploy）→ push 分支与 tag。
 - 下一步：等修复线子代理完成 → 验收（两个提交、`npm test` 21 套、与 origin 同步）→ 主 checkout
   `git merge --no-ff fix/fork-tree` → `npm run verify` → push → `worktree_remove` forktree →
   `git branch -d fix/fork-tree` → `npm run deploy`（本修复不动手机端，按 AGENTS 约定不出 APK；
