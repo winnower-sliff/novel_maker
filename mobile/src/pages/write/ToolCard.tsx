@@ -18,9 +18,11 @@ export default function ToolCard({ msg }: { msg: ChatMessageRow }) {
   const brief = typeof meta.brief === 'string' ? meta.brief : ''
   return (
     <div className="px-4 py-1">
+      {/* 卡片视觉高约 34px：点击区上下各向外延伸 4px，正好填满外层 py-1 的留白（与相邻卡不重叠），命中高度 42px。
+          定位以 padding box 为准，所以写 -5px（含 1px 边框） */}
       <button
         type="button"
-        className={`w-full rounded-xl border px-3 py-2 text-left ${ok ? 'border-orange-100 bg-white/70' : 'border-red-200 bg-red-50'}`}
+        className={`relative w-full rounded-xl border px-3 py-2 text-left after:absolute after:inset-x-0 after:-inset-y-[5px] after:content-[''] ${ok ? 'border-orange-100 bg-white/70' : 'border-red-200 bg-red-50'}`}
         onClick={() => setOpen(!open)}
       >
         <div className="flex items-center gap-2">
