@@ -1,8 +1,10 @@
 import { create, type StoreApi, type UseBoundStore } from 'zustand'
 
 /**
- * agent 聚合条状态（全局唯一）：从组件 useState 上提——
+ * agent 实时状态（全局唯一）：从组件 useState 上提——
  * 切子页/回桌面再回来不丢进度；SSE 事件全局接线写入（App.tsx）。
+ * progress 是写手的字数进度（时间轴底部的进度条）：写手每落一张工具卡都会来一条 activity，
+ * 所以 pushAct 不能清它——清进度只认 job:progress 的 null 与任务离开运行态（App.tsx onUpdate）。
  */
 
 export interface ActItem {
@@ -43,7 +45,7 @@ export function tickerStore(jobId: string): UseBoundStore<StoreApi<TickerState>>
       chatTotal: 0,
       thinking: '',
       thinkTotal: 0,
-      pushAct: (act) => set((st) => ({ acts: [...st.acts.slice(-49), act], progress: null })), // 新工具开跑，进度归零
+      pushAct: (act) => set((st) => ({ acts: [...st.acts.slice(-49), act] })),
       setProgress: (progress) => set({ progress }),
       appendDelta: (chunk, total) =>
         set((st) =>

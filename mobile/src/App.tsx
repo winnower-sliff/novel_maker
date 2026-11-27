@@ -49,6 +49,8 @@ export default function App() {
     const unUpdate = window.api.job.onUpdate((_jobId, job) => {
       void qc.invalidateQueries({ queryKey: qk.jobs(job.bookId) })
       void qc.invalidateQueries({ queryKey: qk.messages(job.bookId) })
+      // 任务离开运行态（收工 / 失败 / 取消 / 重试重新排队）：写手的字数进度条清掉，不带到下一轮
+      if (job.state !== 'running') tickerStore(job.id).getState().setProgress(null)
       if (job.state === 'done') {
         void qc.invalidateQueries({ queryKey: qk.book(job.bookId) })
         void qc.invalidateQueries({ queryKey: qk.statusCard(job.bookId) })
