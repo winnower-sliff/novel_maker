@@ -79,6 +79,7 @@
   没有梗概（或落后于章）时，`get_write_context` / `delete_last_chapter` 之后在后台补建；删末章盖到梗概时删行待重建，不做「反合并」。
   旧的逐章压缩块（`kind=legacy`）只读保留、不再新增，仅在首次合并时当参考材料、没有 `running` 时回退注入。
   改稿（`revise_chapter` / `job:startRevise`）成功后同样走后台：按新正文重写该章纪要，再对梗概做增量合并。
+  改到子线也继承的章（在分叉点之前）时，那些线的梗概行删掉，下次进入时整份重建；它们的合并恰好在跑，那步作废、下一步重算。
 - **写作简报**（`director/context.ts` 的 `buildStoryBrief`）：导演与写手共用同一份上下文——钉选设定 → 前情梗概 → 人物现状 → 未闭合伏笔 → 本章出场人物人设 → 相关设定卡 → 近 8 章纪要 → 已批准的本章计划。
   写手动笔前传本章大纲作 focus，会多带出场人物的人设（`characters.data`，最多 6 人）与相关设定卡（非钉选里本章提到的，带完整 `data`，最多 5 张）；`books.styleSample` 作「文风范例」放在写手提示末尾。
 - **agent 循环**（`agent/loop.ts`）：`maxTurns` 30；每轮重建系统提示，注入书的基础信息、红线、正负词、文风与记忆简报（前情梗概 + 主要人物名单），稳定内容在前、动态在后（DeepSeek 前缀缓存按前缀命中），防长程遗忘。流式拦截工具 `finish` / `write_chapter_draft` / `commit_chapter` / `revise_chapter` / `spawn_subagent` 内联在 loop.ts；
