@@ -1,5 +1,5 @@
 import type { ChatMessage, Job, JobPayload } from '../shared/types.js'
-import { interceptorDefs, runAgentLoop } from './agent/loop.js'
+import { interceptorDefs, type LoopOpts, runAgentLoop } from './agent/loop.js'
 import { toolDefs } from './agent/tools.js'
 import {
   emitJob,
@@ -225,12 +225,16 @@ function thinkSaver(jobId: string): Saver {
   return fn
 }
 
-/** 生成进度（正文/改章字数，聚合条显示）：实时推给前端，并节流喂狗——长章输出期间也算有进展 */
-function progressRelay(jobId: string): (p: { phase: 'draft' | 'revise'; chars: number }) => void {
-  let lastSave = 0
+/**
+ * 生成进度（写手已写字数）：实时推给前端，并落进任务 payload——断线重连、重开应用后前端以服务端为准补回。
+ * p=null 是写手收工：清掉 payload 里的进度。每次都喂狗（交稿 / 回改就是真实进展）。
+ * 不走 persist 的 3 秒节流：进度是离散事件，隔得近的末次会被节流吞掉，落盘的就是旧值。
+ */
+function progressRelay(jobId: string): NonNullable<LoopOpts['onProgress']> {
   return (p) => {
+    if (p) updateJob(jobId, { payload: { progress: p }, watchdogAt: Date.now() })
+    else updateJob(jobId, { payload: { progress: undefined } })
     emitJobProgress(jobId, p)
-    lastSave = persist(jobId, undefined, lastSave)
   }
 }
 
@@ -330,7 +334,14 @@ async function runAgentChapterJob(
 ): Promise<Job | null> {
   const book = getBook(job.bookId)
   if (!book) throw new Error('书不存在')
-  updateJob(job.id, { state: 'running', step: 'agent', watchdogAt: Date.now(), error: '' })
+  // 重试沿用同一个任务：开跑先清掉上一轮写手的进度，免得进度条一上来就报旧字数
+  updateJob(job.id, {
+    state: 'running',
+    step: 'agent',
+    watchdogAt: Date.now(),
+    error: '',
+    payload: { progress: undefined }
+  })
   const chapterNo = effectiveChapters(job.lineId).length + 1
   const task = direction.text
     ? `写第 ${chapterNo} 章。作者给出的倾向：${direction.text}。据此定具体走向，按写章任务纪律自主完成全流程。`
@@ -617,6 +628,8 @@ async function runChatJob(job: Job, signal: AbortSignal): Promise<Job | null> {
     // chat 白话链路开思考（思考折叠区 UI）；写章/改章链路保持默认 disabled
     thinking: 'enabled',
     say: agentSay(job.id, job.bookId),
+    // 聊天里也能派写手整章重写（revise_chapter 的 brief）：同样报字数进度
+    onProgress: progressRelay(job.id),
     onTurn: () => {
       updateJob(job.id, { watchdogAt: Date.now() })
       cs.reset()

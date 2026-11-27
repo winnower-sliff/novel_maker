@@ -364,12 +364,13 @@ try {
 
   const rows = await invoke('message:list', book.id)
   const cardsA = cardsOf(jobA.id, rows)
+  // 派写手先落一张带任务简报的卡，写手的每一步跟在后面（幻觉出的 save_card 被系统拒掉，不落卡），交回再落一张
   ok(
     cardsA.map((m) => m.meta.tool).join(',') ===
-      'get_write_context,write_chapter_draft,write_chapter_draft,write_chapter_draft,read_last_draft,commit_chapter,finish',
+      'get_write_context,write_chapter_draft,write_chapter_draft,write_chapter_draft,get_character,submit_draft,submit_draft,submit_draft,revise_draft,revise_draft,submit_draft,finish,write_chapter_draft,read_last_draft,commit_chapter,finish',
     `工具卡序列（${cardsA.map((m) => m.meta.tool).join(',')}）`
   )
-  const [shortCard, longCard, goodCard] = cardsA.filter(
+  const [shortCard, longCard, dispatchCard, doneCard] = cardsA.filter(
     (m) => m.meta.tool === 'write_chapter_draft'
   )
   ok(
@@ -380,14 +381,60 @@ try {
   )
   ok(longCard?.meta?.ok === false && longCard.content.includes('超过上限'), '简报超长被拒')
   ok(
-    goodCard?.meta?.ok === true &&
-      goodCard.meta.summary === `派写手《潮汐灯塔》${nonspace(DRAFT_FIXED)} 字（自检通过）`,
-    `派写手卡带字数与自检结论（${goodCard?.meta?.summary}）`
+    dispatchCard?.meta?.ok === true &&
+      dispatchCard.meta.summary === '写《潮汐灯塔》' &&
+      dispatchCard.meta.brief === `${GOOD_BRIEF.slice(0, 120)}…` &&
+      dispatchCard.content === GOOD_BRIEF,
+    `派写手卡在写手动笔前就上墙：卡面露简报前 120 字，详情是全文（${dispatchCard?.meta?.summary}）`
   )
   ok(
-    !rows.some((m) => ['submit_draft', 'revise_draft', 'save_card'].includes(m.meta?.tool)),
-    '写手的工具调用不落卡（对作者不可见）'
+    doneCard?.meta?.ok === true &&
+      doneCard.meta.summary === `写手交稿《潮汐灯塔》${n3 - 6} 字（自检通过）` &&
+      doneCard.content === `自检通过。\n纪要：${RECEIPT_SUMMARY}`,
+    `写手交稿卡带字数与自检结论，详情只有自检与纪要（${doneCard?.meta?.summary}）`
   )
+
+  // 写手的工具卡：带累计字数，详情一律不带正文（给写手的原句上下文、草稿开头结尾都不进时间轴）
+  {
+    const writerCards = cardsA.slice(cardsA.indexOf(dispatchCard) + 1, cardsA.indexOf(doneCard))
+    const texts = rows.map((m) => m.content).join('\n')
+    ok(
+      !rows.some((m) => m.meta?.tool === 'save_card') &&
+        writerCards.map((m) => m.meta.words).join(',') ===
+          `0,${n1},${n2},${n3},${n3},${n3 - 6},${n3 - 6},${n3 - 6}`,
+      `写手的卡带累计字数，越权的 save_card 不落卡（${writerCards.map((m) => m.meta.words).join(',')}）`
+    )
+    const [readCard, seg1, , back, miss, fixed, recheck, receiptCard] = writerCards
+    ok(
+      readCard?.meta?.summary === '读人物「林岸」详情' &&
+        seg1?.meta?.summary === '交了一段' &&
+        seg1?.content ===
+          `这一段 ${n1} 字，累计 ${n1} 字。正文不入聊天，定稿入书后在成品卡里看全文。`,
+      '查人设与分段交稿各落一张卡，详情说明字数、不露正文'
+    )
+    ok(
+      back?.meta?.ok === false &&
+        back?.meta?.summary === '自检退回（第 1/2 次）' &&
+        back?.content ===
+          '自检发现问题，退回写手自己改（最多 2 次）：\n· 负向词：「忽然」是本书禁用词，共 3 处',
+      '自检退回卡：只报负向词与处数，不带原句'
+    )
+    ok(
+      miss?.meta?.ok === false &&
+        miss?.meta?.summary === '改稿未命中原句' &&
+        fixed?.meta?.summary === '改了 3 处' &&
+        fixed?.meta?.ok === true &&
+        recheck?.meta?.summary === '本章写完，自检通过' &&
+        receiptCard?.meta?.summary === '回执已交',
+      '回改未命中 / 改对 / 复检通过 / 交回执逐张落卡'
+    )
+    ok(
+      !texts.includes(SEGS[0].slice(0, 40)) &&
+        !texts.includes(DRAFT_FIXED.slice(-40)) &&
+        !texts.includes('然后忽然吹灭了'),
+      '时间轴上没有任何正文片段（交稿 / 回改 / 读草稿 / 交稿卡的详情都不带）'
+    )
+  }
   ok(
     !(await invoke('card:list', lineId)).some((c) => c.title === '越权的卡'),
     '写手幻觉出的 save_card 被拒，没有越权落库'
@@ -523,16 +570,26 @@ try {
     ok(res.includes('继续往后传 from:500'), 'read_last_draft 按 from / maxChars 读草稿')
   }
 
-  // 进度：每次交稿 / 改稿按累计字数推 job:progress
+  // 进度：派写手即报 0 字，每次交稿 / 改稿报累计字数，写手收工清空；进度同时落在任务 payload 里
   {
-    const chars = events
+    const prog = events
       .filter((e) => e.channel === 'job:progress' && e.args?.[0] === jobA.id)
       .map((e) => e.args[1])
     ok(
-      chars.length === 4 &&
-        chars.every((p) => p.phase === 'draft') &&
-        chars.map((p) => p.chars).join(',') === `${n1},${n2},${n3},${n3 - 6}`,
-      `job:progress 累计字数（${chars.map((p) => p.chars).join(',')}）`
+      prog.length === 6 &&
+        prog[0]?.phase === 'draft' &&
+        prog[0].chars === 0 &&
+        prog.slice(1, 5).every((p) => p?.phase === 'draft') &&
+        prog
+          .slice(1, 5)
+          .map((p) => p.chars)
+          .join(',') === `${n1},${n2},${n3},${n3 - 6}` &&
+        prog[5] === null,
+      `job:progress 累计字数（${prog.map((p) => (p ? p.chars : '收工')).join(',')}）`
+    )
+    ok(
+      (await invoke('job:get', jobA.id)).payload.progress === undefined,
+      '写手收工后任务里不再留进度'
     )
   }
 
@@ -573,11 +630,14 @@ try {
     resultsOf(writerReqs()).some((t) => t.includes('退回次数已用完')),
     '写手看到「退回次数已用完，带着报告入书」'
   )
-  const cardB = cardsOf(jobB.id, await invoke('message:list', book.id)).find(
-    (m) => m.meta.tool === 'write_chapter_draft'
-  )
+  const cardB = cardsOf(jobB.id, await invoke('message:list', book.id))
+    .filter((m) => m.meta.tool === 'write_chapter_draft')
+    .at(-1)
   ok(
-    cardB?.meta?.summary === `派写手《超轮之章》${nonspace(DRAFT)} 字（自检仍有 1 个 major）`,
+    cardB?.meta?.summary === `写手交稿《超轮之章》${nonspace(DRAFT)} 字（自检有 1 处要改）` &&
+      String(cardB?.content).startsWith(
+        '自检有 1 处要改：\n· 负向词：「忽然」是本书禁用词，共 3 处\n写手没有交回执就结束了'
+      ),
     `卡片如实标注（${cardB?.meta?.summary}）`
   )
 
@@ -601,13 +661,10 @@ try {
   const cardsC = cardsOf(jobC.id, await invoke('message:list', book.id))
   ok(
     (await invoke('book:get', book.id)).chapters.length === 2 &&
-      cardsC.some(
-        (m) =>
-          m.meta.tool === 'write_chapter_draft' &&
-          m.meta.ok === false &&
-          m.meta.summary === '写手没有交稿'
-      ),
-    '写手没交稿：失败卡回给主智能体，没有入书'
+      cardsC.map((m) => `${m.meta.tool}:${m.meta.summary}:${m.meta.ok}`).join(',') ===
+        'read_last_draft:没有草稿:false,write_chapter_draft:写《没交的章》:true,write_chapter_draft:写手没有交稿:false,finish:收工:true' &&
+      cardsC[2]?.content === '写手没有交出正文，这一章没有写成。',
+    '写手没交稿：派写手卡之后是失败卡（详情是给作者的话），没有入书'
   )
   push(
     'main',
@@ -641,6 +698,16 @@ try {
     push('writer', call('submit_draft', { text: DRAFT }))
     const jobE = await invoke('job:startWrite', book.id)
     await withTimeout(arrived.promise, 30_000, '写手请求没有到达桩')
+    // 写手动笔中：进度落在任务 payload 里（手机断线重连后以它为准补回进度条）
+    {
+      const mid = await invoke('job:get', jobE.id)
+      ok(
+        mid.state === 'running' &&
+          mid.payload.progress?.phase === 'draft' &&
+          mid.payload.progress.chars === 0,
+        `写手动笔中，任务里记着进度 0 字（${JSON.stringify(mid.payload.progress)}）`
+      )
+    }
     ok((await invoke('job:cancel', jobE.id)).state === 'cancelled', '取消后任务立即是 cancelled')
     gate.resolve()
     push('main', call('finish', { message: '在的。' }))
@@ -650,6 +717,10 @@ try {
       '取消后的下一个任务'
     )
     ok(true, '取消后串行队列照常衔接下一个任务')
+    ok(
+      (await invoke('job:get', jobE.id)).payload.progress === undefined,
+      '取消后进度清空，不留给下一次重试'
+    )
     for (let i = 0; i < 20 && stub.aborted === 0; i++) await sleep(100)
     ok(stub.aborted >= 1, `写手在途的模型请求被真正中止（aborted=${stub.aborted}）`)
     ok((await invoke('book:get', book.id)).chapters.length === 3, '取消的章没有入书')
@@ -752,6 +823,7 @@ try {
   // ── ⑦ brief 整章重写：派写作子智能体看着原章改 ──
   const REWRITE_BRIEF = '改成老周的视角：他站在灯室里目送林岸从暗门离开，盐帮的人随后赶到塔门口。'
   const writerBefore = writerReqs().length
+  const originalWords = (await invoke('chapter:get', ch1.id)).wordCount
   push(
     'main',
     call('revise_chapter', {
@@ -767,11 +839,8 @@ try {
     call('submit_draft', { text: `${REWRITE_PARAS[1]}\n\n${REWRITE_PARAS[2]}`, done: true }),
     call('finish', { summary: '重写完成。' })
   )
-  await waitJob(
-    (await invoke('job:startChat', book.id, '第 1 章换成老周的视角重写')).id,
-    (j) => j.state === 'done',
-    'brief 整章重写'
-  )
+  const rwJob = await invoke('job:startChat', book.id, '第 1 章换成老周的视角重写')
+  await waitJob(rwJob.id, (j) => j.state === 'done', 'brief 整章重写')
   now = await invoke('chapter:get', ch1.id)
   ok(now.content === NEW_TEXT, '整章重写后正文替换为新稿')
   const rewriteReq = writerReqs()[writerBefore]
@@ -787,6 +856,30 @@ try {
     resultsOf(mainReqs()).some((t) => t.includes('整章重写并替换')),
     '改章卡：整章重写并替换'
   )
+  // 整章重写同样对作者可见：派写手卡（修改要求全文）→ 写手的卡 → 重写完成的卡；进度相位是 revise
+  {
+    const cards = cardsOf(rwJob.id, await invoke('message:list', book.id))
+    const [dispatchCard, , , , doneCard] = cards
+    ok(
+      cards.map((m) => `${m.meta.tool}:${m.meta.summary}`).join(',') ===
+        'revise_chapter:重写《潮汐灯塔》,submit_draft:交了一段,submit_draft:本章写完，自检通过,finish:回执已交,revise_chapter:重写《潮汐灯塔》,finish:收工' &&
+        dispatchCard?.meta?.brief === REWRITE_BRIEF &&
+        dispatchCard?.content === REWRITE_BRIEF &&
+        doneCard?.content ===
+          `整章重写完成：现在 ${nonspace(NEW_TEXT)} 字（原章 ${originalWords} 字），本章纪要与前情梗概会在后台按新正文刷新。\n自检通过。\n纪要：重写完成。`,
+      `整章重写的工具卡序列（${cards.map((m) => m.meta.summary).join(' / ')}）`
+    )
+    const prog = events
+      .filter((e) => e.channel === 'job:progress' && e.args?.[0] === rwJob.id)
+      .map((e) => e.args[1])
+    ok(
+      prog.length === 4 &&
+        prog.slice(0, 3).every((p) => p?.phase === 'revise') &&
+        prog.map((p) => (p ? p.chars : '收工')).join(',') ===
+          `0,${nonspace(REWRITE_PARAS[0])},${nonspace(NEW_TEXT)},收工`,
+      `整章重写的进度相位是 revise（${prog.map((p) => (p ? p.chars : '收工')).join(',')}）`
+    )
+  }
 
   console.log(`\n[写作子智能体冒烟] ${passed} 通过 / ${failed} 失败`)
 } catch (err) {

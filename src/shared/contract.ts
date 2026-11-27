@@ -326,8 +326,11 @@ export interface EventContract {
   'job:update': [jobId: string, job: Job]
   /** agent 工具卡实时推送（每次工具调用一条） */
   'job:activity': [jobId: string, act: { tool: string; summary: string; ok: boolean }]
-  /** 生成进度（正文/改章字数——正文不进聊天流，聚合条只报进度） */
-  'job:progress': [jobId: string, p: { phase: 'draft' | 'revise'; chars: number }]
+  /**
+   * 生成进度（写手已写字数——正文不进聊天流，时间轴只报进度）；null = 写手收工，收起进度。
+   * 同一份进度落在 job.payload.progress，断线重连后以它为准
+   */
+  'job:progress': [jobId: string, p: { phase: 'draft' | 'revise'; chars: number } | null]
   /** 导演白话流式增量（chat 气泡）；total=累计长度，失配即全量补拉 */
   'job:delta': [jobId: string, kind: 'text' | 'thinking', chunk: string, total: number]
   /** 聊天流新消息落库（agent 运行中实时推，前端精确追加不整页重拉） */

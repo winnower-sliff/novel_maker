@@ -12,6 +12,8 @@ import { READ_TOOLS, type ToolInterceptor, type ToolResult, toolDefs } from './t
  * 主智能体决定给它什么（任务简报）；人设 / 设定 / 前文 / 范文它带着记忆简报、缺的自己查。
  * 本文件组装它的提示与工具，并主持交稿：分段累计 → 自检退回 → 回执（原句核对）。
  * 它不落库：正文与沉淀线索都回给主智能体，由主智能体入书、沉淀（作者保留最终决定权）。
+ * 作者在聊天时间轴上看得到它的每一步工具卡（查资料 / 交稿 / 回改 / 回执，带累计字数）；
+ * 卡片详情一律不带正文——正文不进聊天流，入书后才以成品卡出现。
  */
 
 /** 身份行：冒烟桩按它把写作子智能体的调用路由到独立队列，改了要同步 scripts/smoke-m3-stub.mjs */
@@ -178,6 +180,8 @@ export interface WriterOutcome {
   content: string
   report: LintReport
   receipt: WriterReceipt
+  /** 作者在「写手交稿」工具卡里看到的：自检结论与纪要，不带正文 */
+  card: string
 }
 
 const RECEIPT_LABEL: Record<ReceiptList, string> = {
@@ -314,7 +318,9 @@ export function receiptData(title: string, targetWords: number, outcome: WriterO
 export function receiptSummary(title: string, outcome: WriterOutcome): string {
   const { report } = outcome
   const majors = report.issues.filter((i) => i.level === 'major').length
-  return `派写手《${title}》${report.wordCount} 字（${report.pass ? '自检通过' : `自检仍有 ${majors} 个 major`}）`
+  return `写手交稿《${title}》${report.wordCount} 字（${
+    report.pass ? '自检通过' : `自检有 ${majors} 处要改`
+  }）`
 }
 
 // ── 交稿主持 ─────────────────────────────────────────────────────────────────
@@ -415,6 +421,13 @@ const FINISH_RECEIPT: ToolDef = {
   }
 }
 
+/** 负向词在正文里的全部出现位置（单字负向词由调用方按 lint 口径先滤掉） */
+function occurrences(text: string, w: string): number[] {
+  const spots: number[] = []
+  for (let at = text.indexOf(w); at >= 0; at = text.indexOf(w, at + w.length)) spots.push(at)
+  return spots
+}
+
 /**
  * 退回时给写手看的问题清单。负向词补全全部出现位置：
  * lint 对每个负向词只报首处，重复出现会让写手改一处又被退一次，白白耗掉退回次数。
@@ -426,19 +439,36 @@ function issuesForWriter(report: LintReport, text: string, banned: string[]): st
   for (const word of banned) {
     const w = word.trim()
     if (w.length < 2) continue // 与 lint 同口径：单字负向词不查
-    const spots: string[] = []
-    for (let at = text.indexOf(w); at >= 0; at = text.indexOf(w, at + w.length)) {
-      spots.push(
-        `  ${spots.length + 1}. …${text.slice(Math.max(0, at - 15), at + w.length + 15).replace(/\s+/g, ' ')}…`
-      )
-    }
+    const spots = occurrences(text, w)
     if (spots.length) {
       lines.push(
-        `[major/负向词]「${w}」是本书禁用词，共 ${spots.length} 处，都要换掉：\n${spots.join('\n')}`
+        `[major/负向词]「${w}」是本书禁用词，共 ${spots.length} 处，都要换掉：\n${spots
+          .map(
+            (at, i) =>
+              `  ${i + 1}. …${text.slice(Math.max(0, at - 15), at + w.length + 15).replace(/\s+/g, ' ')}…`
+          )
+          .join('\n')}`
       )
     }
   }
   return lines.join('\n')
+}
+
+/**
+ * 同一份自检结论给作者看的版本（工具卡详情）：只留规则与改法、负向词报处数，
+ * 不带正文原句——正文不进聊天流，入书后才在成品卡里出现。
+ */
+function issuesForAuthor(report: LintReport, text: string, banned: string[]): string[] {
+  const lines = report.issues
+    .filter((i) => i.rule !== '负向词')
+    .map((i) => `${i.rule}：${i.advice}`)
+  for (const word of banned) {
+    const w = word.trim()
+    if (w.length < 2) continue
+    const count = occurrences(text, w).length
+    if (count) lines.push(`负向词：「${w}」是本书禁用词，共 ${count} 处`)
+  }
+  return lines
 }
 
 /** 接缝参考：新章看本线末章；重写旧章看它前面那一章（不一定是末章） */
@@ -459,13 +489,19 @@ export interface WriterRun {
     slot: 'writer'
     maxTokens: number
     intercept: ToolInterceptor
+    /** 作者可见：每调一个清单内的工具落一张工具卡，带上累计字数 */
+    cardMeta: () => Record<string, unknown>
   }
   session: WriterSession
+  /** 进度相位：新章是 draft，整章重写是 revise */
+  phase: 'draft' | 'revise'
 }
 
 export interface WriterSession {
   /** 收尾：写手没调 finish 就结束（跑满轮数 / 只说了句话）也要给出确定的结果 */
   settle: (childText: string) => WriterOutcome | { ok: false; summary: string; data: string }
+  /** 草稿现有字数 */
+  words: () => number
 }
 
 /** 写作子智能体的提示、工具与交稿主持。每次派写手新建一份，草稿只在内存里，不落库 */
@@ -499,32 +535,57 @@ export function createWriter(
     return r
   }
   const issues = (r: LintReport): string => issuesForWriter(r, content, book.negativeWords)
+  /** 作者侧的工具卡：详情换成说明（不带正文），meta 带累计字数 */
+  const author = (r: ToolResult, card: string): ToolResult => ({
+    ...r,
+    card,
+    cardMeta: { words: words() }
+  })
 
   /** 自检闸：有 major 且还能退回就退回给写手改；通过或退回次数用完则放行（带着报告） */
   const gate = (): ToolResult | null => {
-    if (!content.trim()) return refuse('还没有正文', '先 submit_draft 交正文。')
+    if (!content.trim())
+      return author(
+        refuse('还没有正文', '先 submit_draft 交正文。'),
+        '写手还没交正文，系统让它先交。'
+      )
     const r = lint()
     if (r.pass || returns >= MAX_RETURNS) return null
     returns++
-    return refuse(
-      `自检退回（第 ${returns}/${MAX_RETURNS} 次）`,
-      `自检退回（第 ${returns}/${MAX_RETURNS} 次），以下问题要改：\n${issues(r)}\n\n用 revise_draft 就地修改（find=原句逐字引文，replace=改后文本），改完再 submit_draft 传 done:true 复检。`
+    return author(
+      refuse(
+        `自检退回（第 ${returns}/${MAX_RETURNS} 次）`,
+        `自检退回（第 ${returns}/${MAX_RETURNS} 次），以下问题要改：\n${issues(r)}\n\n用 revise_draft 就地修改（find=原句逐字引文，replace=改后文本），改完再 submit_draft 传 done:true 复检。`
+      ),
+      [
+        `自检发现问题，退回写手自己改（最多 ${MAX_RETURNS} 次）：`,
+        ...issuesForAuthor(r, content, book.negativeWords).map((l) => `· ${l}`)
+      ].join('\n')
     )
   }
   const passed = (): ToolResult => {
     const r = report as LintReport
     const majors = r.issues.filter((i) => i.level === 'major').length
     return majors
-      ? {
-          ok: true,
-          summary: `已收稿 ${words()} 字（自检仍有 ${majors} 个 major）`,
-          data: `已收稿 ${words()} 字。自检仍有 ${majors} 个 major 问题，退回次数已用完——带着报告入书：\n${issues(r)}\n现在调用 finish 提交回执。`
-        }
-      : {
-          ok: true,
-          summary: `已收稿 ${words()} 字（自检通过）`,
-          data: `已收稿 ${words()} 字，自检通过。现在调用 finish 提交回执。`
-        }
+      ? author(
+          {
+            ok: true,
+            summary: `本章写完，自检有 ${majors} 处要改`,
+            data: `已收稿 ${words()} 字。自检仍有 ${majors} 个 major 问题，退回次数已用完——带着报告入书：\n${issues(r)}\n现在调用 finish 提交回执。`
+          },
+          [
+            '退回次数已用完，带着这些问题交稿：',
+            ...issuesForAuthor(r, content, book.negativeWords).map((l) => `· ${l}`)
+          ].join('\n')
+        )
+      : author(
+          {
+            ok: true,
+            summary: '本章写完，自检通过',
+            data: `已收稿 ${words()} 字，自检通过。现在调用 finish 提交回执。`
+          },
+          '自检通过。'
+        )
   }
 
   const intercept: ToolInterceptor = async (name, toolInput) => {
@@ -533,9 +594,9 @@ export function createWriter(
         abort()
         const piece = typeof toolInput.text === 'string' ? toolInput.text.trim() : ''
         if (toolInput.text !== undefined && !piece) {
-          return refuse(
-            '这一段是空的',
-            'submit_draft 的 text 是空白；只传 done:true 表示本章写完。'
+          return author(
+            refuse('这一段是空的', 'submit_draft 的 text 是空白；只传 done:true 表示本章写完。'),
+            '写手交了一段空白，系统让它重交。'
           )
         }
         if (piece) {
@@ -544,11 +605,14 @@ export function createWriter(
           progress()
         }
         if (toolInput.done !== true) {
-          return {
-            ok: true,
-            summary: `已收一段（累计 ${words()} 字）`,
-            data: `已累计 ${words()} 字。末尾：…${content.slice(-150)}\n继续交下一段；本章写完时传 done:true。`
-          }
+          return author(
+            {
+              ok: true,
+              summary: '交了一段',
+              data: `已累计 ${words()} 字。末尾：…${content.slice(-150)}\n继续交下一段；本章写完时传 done:true。`
+            },
+            `这一段 ${piece.replace(/\s/g, '').length} 字，累计 ${words()} 字。正文不入聊天，定稿入书后在成品卡里看全文。`
+          )
         }
         const fail = gate()
         return fail ?? passed()
@@ -557,38 +621,56 @@ export function createWriter(
         abort()
         const find = typeof toolInput.find === 'string' ? toolInput.find : ''
         if (!find) {
-          return refuse(
-            '缺少原句',
-            'revise_draft 要传 find（草稿里的原句，逐字照抄）和 replace（改后文本，空串=删除）。'
+          return author(
+            refuse(
+              '缺少原句',
+              'revise_draft 要传 find（草稿里的原句，逐字照抄）和 replace（改后文本，空串=删除）。'
+            ),
+            '写手的改稿没说要改哪句，系统让它重发。'
           )
         }
-        if (!content) return refuse('还没有正文', '先 submit_draft 交正文。')
+        if (!content)
+          return author(
+            refuse('还没有正文', '先 submit_draft 交正文。'),
+            '写手还没交正文就想改，系统让它先交。'
+          )
         const r = replaceLiteral(
           content,
           find,
           typeof toolInput.replace === 'string' ? toolInput.replace : ''
         )
         if (!r.hits) {
-          return refuse(
-            '改稿未命中原句',
-            `草稿里找不到「${clip(find, 60)}」。草稿现有 ${words()} 字，逐字照抄其中的原句（不改字、不用省略号拼接两处）。\n开头：${content.slice(0, 300)}\n结尾：…${content.slice(-300)}`
+          return author(
+            refuse(
+              '改稿未命中原句',
+              `草稿里找不到「${clip(find, 60)}」。草稿现有 ${words()} 字，逐字照抄其中的原句（不改字、不用省略号拼接两处）。\n开头：${content.slice(0, 300)}\n结尾：…${content.slice(-300)}`
+            ),
+            '写手要改的原句在草稿里没对上，系统让它对照草稿重改。'
           )
         }
         content = r.next
         stale = true
         progress()
-        return {
-          ok: true,
-          summary: `改了 ${r.hits} 处（现 ${words()} 字）`,
-          data: `已替换 ${r.hits} 处，现在 ${words()} 字。改完 submit_draft 传 done:true 复检，或直接 finish。`
-        }
+        return author(
+          {
+            ok: true,
+            summary: `改了 ${r.hits} 处`,
+            data: `已替换 ${r.hits} 处，现在 ${words()} 字。改完 submit_draft 传 done:true 复检，或直接 finish。`
+          },
+          `按自检意见就地改了 ${r.hits} 处，现在 ${words()} 字。`
+        )
       }
       case 'finish': {
         abort()
         const fail = gate()
         if (fail) return fail
         receipt = parseReceipt(toolInput, content)
-        return { ok: true, summary: '回执已交', data: '回执已收到，任务结束。' }
+        return author(
+          { ok: true, summary: '回执已交', data: '回执已收到，任务结束。' },
+          rewriting
+            ? '写手改完了。'
+            : '写手交了回执：本章纪要，以及人物状态 / 伏笔 / 设定的线索，交给导演定稿入书。'
+        )
       }
       default:
         return null
@@ -612,11 +694,15 @@ export function createWriter(
       slot: 'writer',
       // 一段 1500 字要一口气出完，工具循环默认的 4000 不够
       maxTokens: 8000,
-      intercept
+      intercept,
+      cardMeta: () => ({ words: words() })
     },
+    phase: rewriting ? 'revise' : 'draft',
     session: {
+      words,
       settle(childText) {
         let note = ''
+        let cardNote = ''
         if (!content.trim()) {
           // 写手没走交稿工具、把正文当普通回复吐了：够一章的长度就收下，免得主智能体白跑一趟
           const prose = childText.trim()
@@ -629,6 +715,7 @@ export function createWriter(
           }
           content = prose
           note = '写手没有走交稿工具，直接输出了正文：已按其输出整章收稿，没有经过退回自检。'
+          cardNote = '写手没有分段交稿，也没经过自检退回，直接按它输出的整章收稿。'
         }
         if (!receipt) {
           receipt = {
@@ -641,11 +728,31 @@ export function createWriter(
               note ||
               '写手没有提交回执就结束了（多半是跑满轮数）：纪要与沉淀线索为空。纪要自己写；要沉淀的线索用 read_last_draft 读草稿后自己找原句。'
           }
+          if (!cardNote) cardNote = '写手没有交回执就结束了，本章纪要由导演补写。'
         } else if (note) {
           receipt.note = note
         }
         if (stale || !report) lint()
-        return { ok: true, content, report: report as LintReport, receipt }
+        const final = report as LintReport
+        const majors = final.issues.filter((i) => i.level === 'major').length
+        return {
+          ok: true,
+          content,
+          report: final,
+          receipt,
+          card: [
+            final.pass
+              ? '自检通过。'
+              : [
+                  `自检有 ${majors} 处要改：`,
+                  ...issuesForAuthor(final, content, book.negativeWords).map((l) => `· ${l}`)
+                ].join('\n'),
+            cardNote,
+            receipt.summary ? `纪要：${receipt.summary}` : ''
+          ]
+            .filter(Boolean)
+            .join('\n')
+        }
       }
     }
   }

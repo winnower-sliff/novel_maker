@@ -236,21 +236,54 @@ try {
     }
   }
 
-  // 工具卡消息序列
+  // 工具卡消息序列：派写手先落一张带任务简报的卡，写手的每一步（查人设 / 交稿 / 回改 / 回执）跟在后面，
+  // 整章交回再落一张「写手交稿」卡
   let msgs = await invoke('message:list', book.id)
   const tools = msgs.filter((m) => m.meta?.kind === 'tool').map((m) => m.meta.tool)
   ok(
     tools.join(',') ===
-      'get_write_context,write_chapter_draft,commit_chapter,patch_character_state,save_foreshadow,save_card,finish',
+      'get_write_context,write_chapter_draft,get_character,submit_draft,submit_draft,revise_draft,submit_draft,finish,write_chapter_draft,commit_chapter,patch_character_state,save_foreshadow,save_card,finish',
     `工具卡序列（${tools.join(',')}）`
   )
-  const draftCard = msgs.find(
+  const draftCards = msgs.filter(
     (m) => m.meta?.kind === 'tool' && m.meta.tool === 'write_chapter_draft'
   )
+  const [dispatchCard, doneCard] = draftCards
+  const excerpt = dispatchCard?.meta?.brief
   ok(
-    (draftCard?.meta?.summary ?? '').includes('字'),
-    `write_chapter_draft 卡带字数（${draftCard?.meta?.summary}）`
+    draftCards.length === 2 &&
+      typeof excerpt === 'string' &&
+      excerpt.length === 121 &&
+      excerpt.endsWith('…') &&
+      dispatchCard.content.length > 120 &&
+      dispatchCard.content.startsWith(excerpt.slice(0, 120)),
+    `派写手卡：卡面露任务简报前 120 字，详情是全文（${dispatchCard?.meta?.summary}）`
   )
+  ok(
+    (doneCard?.meta?.summary ?? '').includes('字') &&
+      doneCard?.meta?.brief === undefined &&
+      String(doneCard?.content ?? '').includes('自检通过') &&
+      !String(doneCard?.content ?? '').includes(ch.content.slice(0, 40)),
+    `写手交稿卡带字数与自检结论、详情不带正文（${doneCard?.meta?.summary}）`
+  )
+  // 写手的卡（夹在派写手卡与交稿卡之间）带累计字数；所有工具卡的详情都不带没入书的正文
+  {
+    const writerCards = msgs.slice(msgs.indexOf(dispatchCard) + 1, msgs.indexOf(doneCard))
+    const text = msgs
+      .filter((m) => m.meta?.kind === 'tool')
+      .map((m) => m.content)
+      .join('\n')
+    ok(
+      writerCards.length === 6 &&
+        writerCards.every((m) => typeof m.meta.words === 'number') &&
+        writerCards.at(-1)?.meta?.words === ch.content.replace(/\s/g, '').length,
+      `写手的每张卡带累计字数，收工那张等于入书字数（${writerCards.at(-1)?.meta.words}）`
+    )
+    ok(
+      !text.includes(ch.content.slice(0, 40)) && !text.includes(ch.content.slice(-40)),
+      '工具卡详情不带没入书的正文'
+    )
+  }
 
   // 节点消息：chapter（走向卡已废除，无 cards 节点）
   const steps = msgs.filter((m) => m.meta?.kind === 'job').map((m) => m.meta.step)

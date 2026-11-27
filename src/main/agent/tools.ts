@@ -33,6 +33,10 @@ export interface ToolResult {
   summary: string
   /** 给 LLM 看的详细结果 */
   data: string
+  /** 工具卡展开后的详情，缺省用 data：正文这类不该进聊天流的内容，在这里换成给作者看的说明 */
+  card?: string
+  /** 并进工具卡 meta 的附加字段（如累计字数 words、任务简报 brief） */
+  cardMeta?: Record<string, unknown>
 }
 
 /**

@@ -28,19 +28,22 @@ import {
   toolDefs
 } from './tools.js'
 import {
+  BRIEF_MAX,
   briefProblem,
   briefTooLong,
   createWriter,
   receiptData,
   receiptSummary,
-  type WriterReceipt
+  type WriterReceipt,
+  type WriterRun
 } from './writer.js'
 
 /**
  * M6 agent 主循环：自由 LLM 工具循环（用户拍板「全面 agent 化」）。
  * - 普通工具（CRUD）走 execTool；主智能体的拦截工具在本文件：
  *   write_chapter_draft（派写作子智能体）/ read_last_draft / commit_chapter（落章）/ finish（收工）等。
- * - 同一个循环也是子智能体的运行器（runSubagent）：嵌套跑在父任务之下，对作者不可见。
+ * - 同一个循环也是子智能体的运行器（runSubagent）：嵌套跑在父任务之下；调查员对作者不可见，
+ *   写作子智能体只落工具卡（见 subagentSay）。
  * - 工具卡=messages 表独立行（meta={kind:'tool',jobId,name,summary}），聊天流即工作日志。
  * - 每轮系统提示重新注入红线/正负词/文风（防长程遗忘）。
  */
@@ -115,8 +118,11 @@ export interface LoopOpts {
   onTurn?: () => void
   /** 本轮流式输出中途断线、将从头重试时回调（jobs 层借此清空已推给前端的半截内容） */
   onRestart?: () => void
-  /** 生成进度（正文/改章字数计数，聚合条显示；正文不进聊天流） */
-  onProgress?: (p: { phase: 'draft' | 'revise'; chars: number }) => void
+  /**
+   * 生成进度（写手已写字数）：实时推给前端并落进任务 payload。
+   * null = 写手收工（不论成败），进度条收起。
+   */
+  onProgress?: (p: { phase: 'draft' | 'revise'; chars: number } | null) => void
   /** 落一条 assistant 消息（agent 白话/工具卡） */
   say: (content: string, meta?: Record<string, unknown>) => void
   /** 落章后回调（note chapter 消息/recap 进 payload/前情梗概合并/审计排队——jobs.ts 注入） */
@@ -491,15 +497,20 @@ export interface SubagentSpec {
   /** 每轮输出预算；不传用循环默认值 */
   maxTokens?: number
   intercept?: ToolInterceptor
+  /**
+   * 作者可见（缺省不可见）：每调一个清单内的工具落一张工具卡，返回值并进卡片 meta（写手带累计字数）
+   */
+  cardMeta?: () => Record<string, unknown>
 }
 
-/** 子智能体的宿主：父任务的取消信号、看门狗喂狗与进度出口，嵌套循环原样透传 */
+/** 子智能体的宿主：父任务的取消信号、看门狗喂狗、进度出口与工具卡出口，嵌套循环原样透传 */
 export interface SubagentHost {
   jobId: string
   bookId: string
   signal?: AbortSignal
   onTurn?: () => void
   onProgress?: LoopOpts['onProgress']
+  say?: LoopOpts['say']
 }
 
 /** 调查翻十几轮资料、写手分段交稿带两轮回改都够用；再多多半是在打转 */
@@ -507,8 +518,23 @@ const SUBAGENT_MAX_TURNS = 12
 const SUBAGENT_LABEL = { research: '调查员', write: '写作子智能体' } as const
 
 /**
+ * 子智能体的工具卡出口。缺省对作者不可见（调查员、没给 cardMeta 的规格）；
+ * 给了的每调一个清单内的工具落一张卡——白话与思考照旧不进时间轴（正文更不进），
+ * 清单外的工具是模型幻觉、系统当面拒掉就算完，不给作者看。
+ */
+function subagentSay(spec: SubagentSpec, host: SubagentHost): LoopOpts['say'] {
+  const say = host.say
+  if (!spec.cardMeta || !say) return () => {}
+  const allowed = new Set(spec.tools.map((t) => t.name))
+  return (content, meta) => {
+    if (meta?.kind !== 'tool' || !allowed.has(String(meta.tool))) return
+    say(content, { ...meta, ...spec.cardMeta?.() })
+  }
+}
+
+/**
  * 子智能体运行器：调查员与写手共用一套嵌套循环。
- * - 对作者不可见（say 空操作；要给作者看的由父循环的工具卡代劳）
+ * - 默认对作者不可见（say 空操作）；要给作者看的由 subagentSay 落工具卡
  * - 透传父循环的取消信号与喂狗：子循环卡死，父任务的看门狗照杀
  * - 只能调自己清单里的工具：模型幻觉出清单外的写工具也拒
  */
@@ -524,7 +550,7 @@ async function runSubagent(spec: SubagentSpec, host: SubagentHost): Promise<Loop
     system: spec.system,
     slot: spec.slot,
     maxTokens: spec.maxTokens,
-    say: () => {},
+    say: subagentSay(spec, host),
     signal: host.signal,
     onTurn: host.onTurn,
     onProgress: host.onProgress,
@@ -536,6 +562,37 @@ async function runSubagent(spec: SubagentSpec, host: SubagentHost): Promise<Loop
     )
   }
   return child
+}
+
+/**
+ * 派写作子智能体并主持进度条：动笔即报 0 字，收工（不论成败、含取消）清进度——
+ * 写手交完稿后导演还要定稿、沉淀，这时进度条不能再显示「写手已写 N 字」。
+ */
+async function runWriter(writer: WriterRun, host: SubagentHost): Promise<LoopResult> {
+  host.onProgress?.({ phase: writer.phase, chars: 0 })
+  try {
+    return await runSubagent(writer.spec, host)
+  } finally {
+    host.onProgress?.(null)
+  }
+}
+
+/** 任务简报在卡面上直接露出的字数（全文进卡片详情，点开看） */
+const BRIEF_EXCERPT = 120
+
+/**
+ * 「派写手」卡在动笔前就上墙：作者先看到导演给了写手什么任务，写手的工具卡跟在它后面，
+ * 而不是等整章写完才补一张派写手的卡。
+ */
+function sayDispatch(opts: LoopOpts, tool: string, summary: string, brief: string): void {
+  opts.say(brief.slice(0, BRIEF_MAX), {
+    kind: 'tool',
+    jobId: opts.jobId,
+    tool,
+    summary,
+    ok: true,
+    brief: brief.length > BRIEF_EXCERPT ? `${brief.slice(0, BRIEF_EXCERPT)}…` : brief
+  })
 }
 
 export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
@@ -570,13 +627,14 @@ export async function runAgentLoop(opts: LoopOpts): Promise<LoopResult> {
   const historyLen = opts.history.length
   let taskNote = '' // 并入 task 消息尾部的历次〔前情工作纪要〕
   const signal = opts.signal
-  // 派子智能体时的宿主：取消信号、喂狗与进度出口都挂在父任务上
+  // 派子智能体时的宿主：取消信号、喂狗、进度与工具卡出口都挂在父任务上
   const subHost: SubagentHost = {
     jobId,
     bookId,
     signal,
     onTurn: opts.onTurn,
-    onProgress: opts.onProgress
+    onProgress: opts.onProgress,
+    say: opts.say
   }
 
   /** 取消检查：jobs 层 abort（作者取消/看门狗）后不再发起任何调用、不再执行任何工具 */
@@ -750,13 +808,15 @@ ${rows}
           }
         }
       }
-      // 工具卡（作者可见的工作日志；content 截 2000 字防膨胀，全文走 resultBlocks 给 LLM）
-      opts.say(result.data.slice(0, 2000), {
+      // 工具卡（作者可见的工作日志）：详情缺省用结果数据、截 2000 字防膨胀（全文走 resultBlocks 给 LLM）；
+      // 工具可以用 card 换成给作者看的说明（写手的交稿卡不带正文），cardMeta 并进 meta（累计字数 / 任务简报）
+      opts.say((result.card ?? result.data).slice(0, 2000), {
         kind: 'tool',
         jobId,
         tool: tu.name,
         summary: result.summary,
-        ok: result.ok
+        ok: result.ok,
+        ...result.cardMeta
       })
       resultBlocks.push({
         type: 'tool_result',
@@ -814,6 +874,7 @@ ${rows}
           input.targetWords > 0
             ? Math.trunc(input.targetWords)
             : b.targetWords
+        sayDispatch(opts, name, `写《${title}》`, brief)
         const styleRefs = await genStyleRefs(b, { title, text: brief }, signal)
         const writer = createWriter({
           book: b,
@@ -827,9 +888,16 @@ ${rows}
           signal,
           onProgress: opts.onProgress
         })
-        const child = await runSubagent(writer.spec, subHost)
+        const child = await runWriter(writer, subHost)
         const outcome = writer.session.settle(child.text)
-        if (!outcome.ok) return { ok: false, summary: outcome.summary, data: outcome.data }
+        if (!outcome.ok) {
+          return {
+            ok: false,
+            summary: outcome.summary,
+            data: outcome.data,
+            card: '写手没有交出正文，这一章没有写成。'
+          }
+        }
         lastDraft = {
           title,
           brief,
@@ -840,7 +908,8 @@ ${rows}
         return {
           ok: true,
           summary: receiptSummary(title, outcome),
-          data: receiptData(title, targetWords, outcome)
+          data: receiptData(title, targetWords, outcome),
+          card: outcome.card
         }
       }
       case 'read_last_draft': {
@@ -865,7 +934,9 @@ ${rows}
         return {
           ok: true,
           summary: `读草稿第 ${from + 1}-${end} 字`,
-          data: `${lastDraft.content.slice(from, end)}${more}`
+          data: `${lastDraft.content.slice(from, end)}${more}`,
+          // 草稿是没入书的正文：只回给导演核对，工具卡详情换成说明
+          card: `导演在核对写手交的草稿（第 ${from + 1}-${end} 字，共 ${total} 字）。正文不入聊天，定稿入书后在成品卡里看全文。`
         }
       }
       case 'commit_chapter': {
@@ -977,6 +1048,7 @@ ${rows}
           const tooLong = briefTooLong(brief)
           if (tooLong) return { ok: false, summary: '重写要求不合格', data: tooLong }
           // 重写不查字数（加长/缩短都是常见的改稿要求），写手看着原章改
+          sayDispatch(opts, name, `重写《${chapter.title}》`, brief)
           const writer = createWriter({
             book: b,
             lineId: chapter.lineId,
@@ -986,9 +1058,16 @@ ${rows}
             signal,
             onProgress: opts.onProgress
           })
-          const child = await runSubagent(writer.spec, subHost)
+          const child = await runWriter(writer, subHost)
           const outcome = writer.session.settle(child.text)
-          if (!outcome.ok) return { ok: false, summary: '重写没有完成', data: outcome.data }
+          if (!outcome.ok) {
+            return {
+              ok: false,
+              summary: '重写没有完成',
+              data: outcome.data,
+              card: '写手没有交出重写后的正文，原章保持不变。'
+            }
+          }
           const clean = stripHtmlComments(outcome.content)
           throwIfAborted()
           store.replaceChapterContent(chapterId, clean)
@@ -996,7 +1075,8 @@ ${rows}
           return {
             ok: true,
             summary: `重写《${chapter.title}》`,
-            data: `《${chapter.title}》已按「${briefOf(instruction)}」整章重写并替换（${outcome.report.wordCount} 字，原章 ${chapter.wordCount} 字），本章纪要与前情梗概会在后台按新正文刷新。lint：${lintNote(outcome.report)}`
+            data: `《${chapter.title}》已按「${briefOf(instruction)}」整章重写并替换（${outcome.report.wordCount} 字，原章 ${chapter.wordCount} 字），本章纪要与前情梗概会在后台按新正文刷新。lint：${lintNote(outcome.report)}`,
+            card: `整章重写完成：现在 ${outcome.report.wordCount} 字（原章 ${chapter.wordCount} 字），本章纪要与前情梗概会在后台按新正文刷新。\n${outcome.card}`
           }
         }
         const segment = typeof input.segment === 'string' ? input.segment : undefined

@@ -45,7 +45,8 @@ export interface JobProgress {
   chars: number
 }
 
-export function emitJobProgress(jobId: string, p: JobProgress): void {
+/** 生成进度；p=null 表示写手收工，前端收起进度条 */
+export function emitJobProgress(jobId: string, p: JobProgress | null): void {
   if (!globalSink || globalSink.isClosed()) return
   globalSink.send('job:progress', jobId, p)
 }
