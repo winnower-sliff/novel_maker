@@ -90,6 +90,20 @@ const deferred = () => {
   d.promise = new Promise((r) => (d.resolve = r))
   return d
 }
+/** 带超时的等待：计时器用完即清，否则进程收尾时要空等到点才能自然退出 */
+const withTimeout = async (promise, ms, message) => {
+  let timer
+  try {
+    return await Promise.race([
+      promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), ms)
+      })
+    ])
+  } finally {
+    clearTimeout(timer)
+  }
+}
 
 const llm = createServer((req, res) => {
   if (req.method === 'GET') {
@@ -626,12 +640,7 @@ try {
     push('main', call('write_chapter_draft', { brief: GOOD_BRIEF, title: '被取消的章' }))
     push('writer', call('submit_draft', { text: DRAFT }))
     const jobE = await invoke('job:startWrite', book.id)
-    await Promise.race([
-      arrived.promise,
-      sleep(30_000).then(() => {
-        throw new Error('写手请求没有到达桩')
-      })
-    ])
+    await withTimeout(arrived.promise, 30_000, '写手请求没有到达桩')
     ok((await invoke('job:cancel', jobE.id)).state === 'cancelled', '取消后任务立即是 cancelled')
     gate.resolve()
     push('main', call('finish', { message: '在的。' }))
